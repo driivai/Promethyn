@@ -1,0 +1,7 @@
+# Default owners for everything in the repository.
+*                                   @driivai/maintainers
+
+# The protocol specification and the load-bearing safety module require review
+# from a specification owner (see GOVERNANCE.md).
+/spec/                              @driivai/spec-owners
+/src/prometheus_protocol/gate/      @driivai/spec-owners
