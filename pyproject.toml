@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=77.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "prometheus-protocol"
+version = "0.1.0"
+description = "A verifiable, reversible, self-improving learning runtime."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Driiv AI" }]
+keywords = [
+    "verifiable",
+    "reproducible",
+    "evaluation",
+    "skills",
+    "promotion-gate",
+    "held-out",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Software Development :: Quality Assurance",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "build>=1.0"]
+
+[project.scripts]
+prometheus-protocol = "prometheus_protocol.cli.main:main"
+
+[project.urls]
+Homepage = "https://github.com/driivai/promethyn"
+Source = "https://github.com/driivai/promethyn"
+Issues = "https://github.com/driivai/promethyn/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra"
