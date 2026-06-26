@@ -93,3 +93,75 @@ Enforcement: tier-dependent Beta priors and the log-likelihood-ratio fusion in
 
 Tests: `tests/conformance/test_verifier_trust.py::test_i7_unaudited_verifier_has_zero_weight`
 and `::test_trust_is_earned_through_calibration`.
+
+## Swarm invariants
+
+These govern the swarm reasoning front-end (see `spec/swarm.md`). They are the
+structural wall between proposing and asserting truth or authorizing action.
+
+### INV-SWARM-1. The wall
+
+> There is no code path from a `Proposal` or a `TestPlan` to
+> `Executor.execute`. The executor accepts only an approved `GateDecision`.
+
+Enforcement: `Executor.execute(decision: GateDecision)` has no overload taking a
+proposal or test plan; it rejects a non-`GateDecision` argument and refuses an
+unapproved decision (`swarm/executor.py`).
+
+Tests: `tests/conformance/test_swarm_invariants.py::test_inv1_*`.
+
+### INV-SWARM-2. Debate selects, never certifies
+
+> `DebateLayer.select` returns a `TestPlan` with no verdict, confidence, or
+> approval field. The only producer of a `Judgment` is the verifier bank, and
+> of a `GateDecision`, the gate.
+
+Enforcement: the `TestPlan` types carry no truth field, and no swarm module
+constructs a `Judgment` or `GateDecision` (`swarm/debate.py`, `swarm/models.py`).
+
+Tests: `tests/conformance/test_swarm_invariants.py::test_inv2_*`.
+
+### INV-SWARM-3. Mandatory roles
+
+> Every assembled swarm contains a non-removable `Skeptic` and
+> `PolicyReviewer`. Configs that omit or forbid them still yield them; removal
+> raises.
+
+Enforcement: `RoleSynthesisEngine.assemble` injects them unconditionally and
+`Swarm.remove` refuses a mandatory id (`swarm/synthesis.py`).
+
+Tests: `tests/conformance/test_swarm_invariants.py::test_inv3_*`.
+
+### INV-SWARM-4. Skeptic veto wired to verification
+
+> A skeptic falsification check is included in the test plan for the criticized
+> proposal, and a proposal whose check fails cannot become an approved
+> `GateDecision` or reach the executor.
+
+Enforcement: the debate layer maps skeptic checks onto their target's
+verification requests; a failing check yields a `FAIL` judgment, which the
+action gate denies (`swarm/debate.py`, `swarm/runtime.py`, `gate/authorization.py`).
+
+Tests: `tests/conformance/test_swarm_invariants.py::test_inv4_*`.
+
+### INV-SWARM-5. Reuse, no fork
+
+> The swarm imports the verifier bank, gate, ledger, memory, and provider from
+> their existing modules and defines no duplicate ledger, gate, or verifier
+> type.
+
+Enforcement: the swarm depends on the existing grounding modules and adds no
+parallel grounding type (verified by import and AST checks).
+
+Tests: `tests/conformance/test_swarm_invariants.py::test_inv5_*`.
+
+### INV-SWARM-6. Firewall preserved
+
+> Swarm role inputs exclude held-out task labels and verifier internals, and the
+> held-out promotion firewall is unchanged.
+
+Enforcement: a role receives only a `TaskPacket` and a proposer-side
+`ProposerContext`; the promotion firewall in `gate/promotion.py` is untouched.
+
+Tests: `tests/conformance/test_swarm_invariants.py::test_inv6_*` and the
+unchanged `tests/conformance/test_firewall.py`.
