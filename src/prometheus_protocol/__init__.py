@@ -39,6 +39,7 @@ from prometheus_protocol.core.models import (
     Verdict,
 )
 from prometheus_protocol.forge.miner import LessonForge
+from prometheus_protocol.gate.authorization import ActionGate
 from prometheus_protocol.gate.promotion import (
     FirewallError,
     GateDecision,
@@ -65,6 +66,24 @@ from prometheus_protocol.verifier.store import (
     TrustStore,
 )
 from prometheus_protocol.verifier.trust import TrustStats
+from prometheus_protocol.swarm.debate import DebateLayer
+from prometheus_protocol.swarm.executor import Executor, RecordingExecutor
+from prometheus_protocol.swarm.models import (
+    ExecutionResult,
+    FalsificationCheck,
+    Proposal,
+    Provenance,
+    TaskPacket,
+    TestPlan,
+    VerifiedProposal,
+)
+from prometheus_protocol.swarm.roles import Role
+from prometheus_protocol.swarm.runtime import SwarmRuntime
+from prometheus_protocol.swarm.synthesis import (
+    RoleSynthesisEngine,
+    Swarm,
+    SwarmConfig,
+)
 
 __version__ = "0.1.0"
 
@@ -106,6 +125,7 @@ __all__ = [
     "LessonForge",
     "PromotionGate",
     "GateDecision",
+    "ActionGate",
     "InMemoryTier",
     "MockProvider",
     "MockSolution",
@@ -121,4 +141,20 @@ __all__ = [
     "TaskOutcome",
     "build_orchestrator",
     "build_provider",
+    # swarm reasoning front-end
+    "TaskPacket",
+    "Proposal",
+    "Provenance",
+    "FalsificationCheck",
+    "TestPlan",
+    "VerifiedProposal",
+    "ExecutionResult",
+    "Role",
+    "RoleSynthesisEngine",
+    "Swarm",
+    "SwarmConfig",
+    "DebateLayer",
+    "SwarmRuntime",
+    "Executor",
+    "RecordingExecutor",
 ]
