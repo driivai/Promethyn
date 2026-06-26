@@ -46,6 +46,7 @@ class Config:
 
     registry_dir: Path = Path(".prometheus/skills")
     ledger_path: Path = Path(".prometheus/ledger.db")
+    trust_store_path: Path = Path(".prometheus/trust.db")
 
     verifier_timeout_s: float = 5.0
     verifier_memory_mb: int = 256
@@ -66,6 +67,9 @@ class Config:
             api_key=env.get("PROM_API_KEY"),
             registry_dir=Path(env.get("PROM_REGISTRY_DIR", ".prometheus/skills")),
             ledger_path=Path(env.get("PROM_LEDGER_PATH", ".prometheus/ledger.db")),
+            trust_store_path=Path(
+                env.get("PROM_TRUST_STORE_PATH", ".prometheus/trust.db")
+            ),
             verifier_timeout_s=_as_float(env.get("PROM_VERIFIER_TIMEOUT_S"), 5.0),
             verifier_memory_mb=_as_int(env.get("PROM_VERIFIER_MEMORY_MB"), 256),
             verifier_cpu_seconds=_as_int(env.get("PROM_VERIFIER_CPU_SECONDS"), 5),

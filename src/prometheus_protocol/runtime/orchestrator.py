@@ -28,10 +28,11 @@ from prometheus_protocol.core.interfaces import (
     Registry,
     Verifier,
 )
-from prometheus_protocol.core.models import Attempt, Skill, Task
+from prometheus_protocol.core.models import Attempt, Skill, Task, Verdict
 from prometheus_protocol.forge.miner import LessonForge
 from prometheus_protocol.gate.promotion import GateDecision
 from prometheus_protocol.memory.tiers import MemoryTier
+from prometheus_protocol.verifier.bank import VerifierBank
 
 
 @dataclass(frozen=True)
@@ -88,6 +89,7 @@ class Orchestrator:
         forge: LessonForge | None = None,
         config: Config | None = None,
         memory: MemoryTier | None = None,
+        bank: VerifierBank | None = None,
     ) -> None:
         self.provider = provider
         self.verifier = verifier
@@ -97,6 +99,10 @@ class Orchestrator:
         self.forge = forge or LessonForge()
         self.config = config or Config()
         self.memory = memory
+        # The bank fuses verifier evidence into a judgment. A lone hard verifier
+        # never changes the verdict, so the default bank preserves outcomes; it
+        # auto-registers each verifier from the tier on its evidence.
+        self.bank = bank if bank is not None else VerifierBank()
 
     # -- core step ---------------------------------------------------------
 
@@ -132,6 +138,11 @@ class Orchestrator:
                 prompt=task.prompt, entry_point=task.entry_point, skills=skills
             )
             evidence = self.verifier.verify(code=code, task=task)
+            # Route the verdict through the bank; its judgment is the pass
+            # criterion the loop and gate consult. A pass requires a PASS
+            # verdict (ABSTAIN, like the old timeout, is not a pass).
+            judgment = self.bank.judge([evidence])
+            passed = judgment.verdict == Verdict.PASS
             attempt = Attempt(
                 task_id=task.id,
                 split=task.split,
@@ -139,13 +150,12 @@ class Orchestrator:
                 code=code,
                 evidence=evidence,
                 skills_used=tuple(skill.id for skill in skills),
+                judgment=judgment,
             )
             self.ledger.record_attempt(attempt, cycle=cycle, kind=kind)
             if self.memory is not None:
-                self.memory.set(f"cycle:{cycle}", task.id, evidence.passed)
-            outcomes.append(
-                TaskOutcome(task.id, task.split, evidence.passed, attempt)
-            )
+                self.memory.set(f"cycle:{cycle}", task.id, passed)
+            outcomes.append(TaskOutcome(task.id, task.split, passed, attempt))
         return RunReport(tuple(outcomes))
 
     # -- high-level operations --------------------------------------------
