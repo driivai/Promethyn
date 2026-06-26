@@ -44,6 +44,20 @@ in `spec/invariants.md` is a major version bump.
   hard verifier this preserves every existing pass/fail outcome; the machinery
   is now load-bearing and ready for advisory verifiers.
 - Each attempt's fused verdict and calibrated confidence are recorded for audit.
+- Swarm reasoning front-end (`swarm/`): a typed proposal/test-plan contract that
+  enforces the wall between proposing and asserting truth; mandatory,
+  non-removable `Skeptic` and `PolicyReviewer` roles; role synthesis, debate
+  selection, and a runtime that routes proposals through the existing verifier
+  bank (judgment), gate (authorization), and ledger; and a no-op recording
+  `Executor` that accepts only an approved `GateDecision` (no real side-effects
+  this sprint). Documented in `spec/swarm.md`.
+- Action-authorization gate (`gate/authorization.py`, `ActionGate`): turns a
+  judgment into a `GateDecision`, reusing the existing gate package.
+- Invariants INV-SWARM-1 … INV-SWARM-6, with conformance coverage.
+- New public API: `TaskPacket`, `Proposal`, `Provenance`, `FalsificationCheck`,
+  `TestPlan`, `VerifiedProposal`, `ExecutionResult`, `Role`,
+  `RoleSynthesisEngine`, `Swarm`, `SwarmConfig`, `DebateLayer`, `SwarmRuntime`,
+  `Executor`, `RecordingExecutor`, and `ActionGate`.
 
 ### Changed
 - `Evidence` gained optional fields for verifier-trust fusion (`verifier_id`,
@@ -57,3 +71,10 @@ in `spec/invariants.md` is a major version bump.
   `.prometheus/trust.db`) for the persisted trust store. Additive; existing
   configurations are unaffected. The orchestrator's constructor gained an
   optional `bank` argument with a behaviour-preserving default.
+- `GateDecision` was generalised from a promotion-only result to a general gate
+  decision: its fields are now `approved`, `subject_id`, `rate_before`,
+  `rate_after`, `judgment`, and `reason`. The historical `promoted` and
+  `skill_id` are retained as read-only properties, so the promotion path and its
+  tests are unchanged. The constructor now takes `approved`/`subject_id` (the
+  type was introduced earlier in this unreleased line and has no external
+  consumers).
