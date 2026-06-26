@@ -25,3 +25,20 @@ in `spec/invariants.md` is a major version bump.
 - Unit, integration, and conformance test suites.
 - Repository hygiene guard and CI (compile, hygiene, tests, build) across
   Python 3.10–3.12.
+- Verifier-trust ranking: a calibrated trust model with tier-dependent priors
+  (`verifier/trust.py`), trust-weighted log-odds evidence fusion
+  (`verifier/aggregate.py`), a `TrustStore` port with in-memory and SQLite
+  adapters (`verifier/store.py`), and a `VerifierBank` that fuses verdicts into
+  a `Judgment`, calibrates lower-trust verifiers against authoritative
+  references, and ranks verifiers by trustworthiness (`verifier/bank.py`).
+- New public API: `VerifierBank`, `RankEntry`, `TrustStore`,
+  `InMemoryTrustStore`, `SqliteTrustStore`, `TrustStats`, `Verdict`, `Tier`,
+  `AUTHORITATIVE_TIERS`, and `Judgment`.
+- Invariants I6 (authoritative dominance) and I7 (earned weight), with
+  conformance coverage.
+
+### Changed
+- `Evidence` gained optional fields for verifier-trust fusion (`verifier_id`,
+  `verdict`, `tier`, `cost`, `latency_ms`, `detail`). The change is additive and
+  backward compatible: all new fields have defaults, and `verdict` is derived
+  from `passed` when not supplied. Pre-1.0 additive change; no major bump.
