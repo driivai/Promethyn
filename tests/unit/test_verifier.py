@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from prometheus_protocol.core.models import Case, Task
+from prometheus_protocol.core.models import Case, Task, Tier, Verdict
+from prometheus_protocol.verifier.bank import VerifierBank
 from prometheus_protocol.verifier.runner import SubprocessVerifier
 
 
@@ -76,3 +77,54 @@ def test_memory_limit_contains_a_large_allocation():
         task=task,
     )
     assert not evidence.passed
+
+
+# -- tier-tagged evidence ---------------------------------------------------
+
+
+def test_emits_tier_tagged_evidence_on_pass():
+    verifier = SubprocessVerifier(memory_mb=0)
+    task = _task("inc", [Case(args=(1,), expected=2)])
+    evidence = verifier.verify(code="def inc(n):\n    return n + 1\n", task=task)
+    assert evidence.verdict == Verdict.PASS
+    assert evidence.tier == Tier.HARD
+    assert evidence.verifier_id == "subprocess-tests"
+    assert evidence.latency_ms is not None and evidence.latency_ms >= 0.0
+
+
+def test_emits_fail_verdict_when_tests_fail():
+    verifier = SubprocessVerifier(memory_mb=0)
+    task = _task("inc", [Case(args=(1,), expected=2)])
+    evidence = verifier.verify(code="def inc(n):\n    return 0\n", task=task)
+    assert evidence.verdict == Verdict.FAIL
+    assert evidence.tier == Tier.HARD
+
+
+def test_abstains_on_timeout():
+    # An infrastructure failure (the check could not run) is ABSTAIN, not FAIL.
+    verifier = SubprocessVerifier(timeout_s=1.0, cpu_seconds=5, memory_mb=0)
+    task = _task("spin", [Case(args=(1,), expected=1)])
+    evidence = verifier.verify(
+        code="def spin(n):\n    while True:\n        pass\n", task=task
+    )
+    assert evidence.verdict == Verdict.ABSTAIN
+    assert evidence.timed_out is True
+    assert not evidence.passed
+
+
+def test_bank_judges_runner_evidence_with_hard_confidence():
+    verifier = SubprocessVerifier(memory_mb=0)
+    bank = VerifierBank()
+    bank.register(verifier.verifier_id, verifier.tier)
+
+    task = _task("inc", [Case(args=(1,), expected=2)])
+    passing = verifier.verify(code="def inc(n):\n    return n + 1\n", task=task)
+    judgment = bank.judge([passing])
+    assert judgment.verdict == passing.verdict == Verdict.PASS
+    assert judgment.authoritative is True
+    assert 0.90 < judgment.confidence < 1.0
+
+    failing = verifier.verify(code="def inc(n):\n    return 0\n", task=task)
+    fail_judgment = bank.judge([failing])
+    assert fail_judgment.verdict == failing.verdict == Verdict.FAIL
+    assert 0.90 < fail_judgment.confidence < 1.0
