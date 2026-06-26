@@ -36,9 +36,24 @@ in `spec/invariants.md` is a major version bump.
   `AUTHORITATIVE_TIERS`, and `Judgment`.
 - Invariants I6 (authoritative dominance) and I7 (earned weight), with
   conformance coverage.
+- The runtime now routes verification through the verifier bank: the subprocess
+  runner emits tier-tagged `Evidence` (a stable `verifier_id`, `Tier.HARD`, a
+  three-way verdict — PASS, FAIL, or ABSTAIN for infrastructure failures, plus
+  cost/latency and a truncated detail log), and the orchestrator and promotion
+  gate consult the bank's fused `Judgment` as the pass criterion. For the lone
+  hard verifier this preserves every existing pass/fail outcome; the machinery
+  is now load-bearing and ready for advisory verifiers.
+- Each attempt's fused verdict and calibrated confidence are recorded for audit.
 
 ### Changed
 - `Evidence` gained optional fields for verifier-trust fusion (`verifier_id`,
   `verdict`, `tier`, `cost`, `latency_ms`, `detail`). The change is additive and
   backward compatible: all new fields have defaults, and `verdict` is derived
   from `passed` when not supplied. Pre-1.0 additive change; no major bump.
+- `Attempt` gained an optional `judgment` field (default `None`); the ledger
+  records it inside the existing JSON evidence column, so there is no table
+  schema change. Additive and backward compatible.
+- `Config` gained `trust_store_path` (env `PROM_TRUST_STORE_PATH`, default
+  `.prometheus/trust.db`) for the persisted trust store. Additive; existing
+  configurations are unaffected. The orchestrator's constructor gained an
+  optional `bank` argument with a behaviour-preserving default.
