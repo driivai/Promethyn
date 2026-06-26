@@ -26,13 +26,17 @@ from prometheus_protocol.core.interfaces import (
     Verifier,
 )
 from prometheus_protocol.core.models import (
+    AUTHORITATIVE_TIERS,
     SPLIT_HELDOUT,
     SPLIT_TRAIN,
     Attempt,
     Case,
     Evidence,
+    Judgment,
     Skill,
     Task,
+    Tier,
+    Verdict,
 )
 from prometheus_protocol.forge.miner import LessonForge
 from prometheus_protocol.gate.promotion import (
@@ -53,7 +57,14 @@ from prometheus_protocol.runtime.orchestrator import (
     RunReport,
     TaskOutcome,
 )
+from prometheus_protocol.verifier.bank import RankEntry, VerifierBank
 from prometheus_protocol.verifier.runner import SubprocessVerifier
+from prometheus_protocol.verifier.store import (
+    InMemoryTrustStore,
+    SqliteTrustStore,
+    TrustStore,
+)
+from prometheus_protocol.verifier.trust import TrustStats
 
 __version__ = "0.1.0"
 
@@ -69,6 +80,11 @@ __all__ = [
     "Case",
     "SPLIT_TRAIN",
     "SPLIT_HELDOUT",
+    # verifier-trust domain
+    "Verdict",
+    "Tier",
+    "AUTHORITATIVE_TIERS",
+    "Judgment",
     # interfaces
     "Provider",
     "Verifier",
@@ -78,6 +94,13 @@ __all__ = [
     "MemoryTier",
     # implementations
     "SubprocessVerifier",
+    # verifier-trust ranking
+    "VerifierBank",
+    "RankEntry",
+    "TrustStore",
+    "InMemoryTrustStore",
+    "SqliteTrustStore",
+    "TrustStats",
     "SqliteLedger",
     "MarkdownSkillRegistry",
     "LessonForge",

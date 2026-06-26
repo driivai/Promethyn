@@ -60,3 +60,36 @@ no randomness and no network. (A live model provider is not bound by this
 claim.)
 
 Tests: the conformance suite asserts exact rates rather than ranges.
+
+## I6. Authoritative dominance
+
+> A soft-tier verdict can never override a hard-tier verdict; it may only
+> inform calibration.
+
+When any authoritative verdict (hard or human) is present, the fused result is
+decided by the authoritative reference. Advisory verifiers (soft, consistency)
+contribute no weight to that result; their verdicts are recorded only as
+calibration samples against the reference.
+
+Enforcement: the verifier bank fuses the reference tier's verdicts for the
+result and feeds advisory verdicts solely into trust updates
+(`verifier/bank.py`).
+
+Tests: `tests/conformance/test_verifier_trust.py::test_i6_soft_cannot_override_hard`.
+
+## I7. Earned weight
+
+> An un-audited verifier carries zero aggregation weight until calibrated
+> against trusted references.
+
+A verifier with a non-informative prior (soft or consistency tier) and no
+calibration evidence has a Youden index of 0 and contributes a
+log-likelihood ratio of exactly 0 to fusion — it cannot move a verdict.
+Authoritative tiers are trusted by construction through their priors; advisory
+tiers must earn weight by agreeing with authoritative references.
+
+Enforcement: tier-dependent Beta priors and the log-likelihood-ratio fusion in
+`verifier/trust.py` and `verifier/aggregate.py`.
+
+Tests: `tests/conformance/test_verifier_trust.py::test_i7_unaudited_verifier_has_zero_weight`
+and `::test_trust_is_earned_through_calibration`.
