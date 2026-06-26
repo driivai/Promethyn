@@ -8,6 +8,7 @@ gate, runtime); the models are the wire format that flows between them.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
 
 # Allowed values for ``Task.split``. The whole safety story of the protocol
@@ -15,6 +16,38 @@ from typing import Any
 SPLIT_TRAIN = "train"
 SPLIT_HELDOUT = "heldout"
 SPLITS = (SPLIT_TRAIN, SPLIT_HELDOUT)
+
+
+class Verdict(str, Enum):
+    """A single verifier's call on one attempt.
+
+    ``ABSTAIN`` means the verifier declined to judge; it never contributes to
+    fusion or calibration. The values are strings so verdicts serialise
+    transparently (for example into the experience ledger's JSON column).
+    """
+
+    PASS = "pass"
+    FAIL = "fail"
+    ABSTAIN = "abstain"
+
+
+class Tier(str, Enum):
+    """How much a verifier is trusted by construction.
+
+    ``HARD`` and ``HUMAN`` are *authoritative*: their verdict decides the
+    result and serves as the reference that calibrates everything else.
+    ``SOFT`` and ``CONSISTENCY`` are advisory: they must earn trust by agreeing
+    with authoritative references before they carry any weight.
+    """
+
+    HARD = "hard"
+    HUMAN = "human"
+    SOFT = "soft"
+    CONSISTENCY = "consistency"
+
+
+# Tiers whose verdicts are authoritative (decide the result, calibrate others).
+AUTHORITATIVE_TIERS = frozenset({Tier.HARD, Tier.HUMAN})
 
 
 @dataclass(frozen=True)
@@ -73,7 +106,16 @@ class Skill:
 
 @dataclass(frozen=True)
 class Evidence:
-    """The hard pass/fail outcome produced by the verifier for one attempt."""
+    """The outcome produced by one verifier for one attempt.
+
+    Contract note (additive, pre-1.0): the trailing fields below were added to
+    let multiple verifiers' verdicts be fused and ranked. They all have
+    defaults, so every existing construction keeps working unchanged. When
+    ``verdict`` is left unset it is derived from ``passed`` in ``__post_init__``
+    (``PASS``/``FAIL``), so callers that only set ``passed`` still get a
+    well-defined verdict. ``tier`` stays ``None`` unless supplied; the verifier
+    bank requires a tier on any non-abstaining evidence it is given.
+    """
 
     passed: bool
     total: int
@@ -83,6 +125,18 @@ class Evidence:
     stderr: str = ""
     duration_s: float = 0.0
     timed_out: bool = False
+    # --- verifier-trust fields (additive) ---
+    verifier_id: str = ""
+    verdict: Verdict | None = None
+    tier: Tier | None = None
+    cost: float | None = None
+    latency_ms: float | None = None
+    detail: str = ""
+
+    def __post_init__(self) -> None:
+        if self.verdict is None:
+            derived = Verdict.PASS if self.passed else Verdict.FAIL
+            object.__setattr__(self, "verdict", derived)
 
 
 @dataclass(frozen=True)
@@ -99,3 +153,23 @@ class Attempt:
     code: str
     evidence: Evidence
     skills_used: tuple[str, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class Judgment:
+    """The fused result of weighing several verifiers' evidence.
+
+    ``confidence`` is in [0, 1] and reads as certainty in the reported
+    ``verdict``. ``authoritative`` is True when the verdict comes from a
+    hard/human reference (and is therefore binding); False when it comes from
+    advisory verifiers only. ``contributing`` lists the verifier ids that
+    decided the verdict. ``conflict`` is True when an authoritative verifier
+    disagreed with the chosen reference verdict.
+    """
+
+    verdict: Verdict
+    confidence: float
+    authoritative: bool
+    contributing: tuple[str, ...] = ()
+    conflict: bool = False
+    detail: str = ""
