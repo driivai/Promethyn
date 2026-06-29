@@ -90,6 +90,7 @@ class Orchestrator:
         config: Config | None = None,
         memory: MemoryTier | None = None,
         bank: VerifierBank | None = None,
+        advisors: Sequence[Verifier] = (),
     ) -> None:
         self.provider = provider
         self.verifier = verifier
@@ -103,6 +104,10 @@ class Orchestrator:
         # never changes the verdict, so the default bank preserves outcomes; it
         # auto-registers each verifier from the tier on its evidence.
         self.bank = bank if bank is not None else VerifierBank()
+        # Advisory (e.g. soft model-judge) verifiers run alongside the
+        # authoritative verifier. They modulate fused confidence and accrue
+        # calibration, but never decide the verdict.
+        self.advisors: tuple[Verifier, ...] = tuple(advisors)
 
     # -- core step ---------------------------------------------------------
 
@@ -138,10 +143,14 @@ class Orchestrator:
                 prompt=task.prompt, entry_point=task.entry_point, skills=skills
             )
             evidence = self.verifier.verify(code=code, task=task)
-            # Route the verdict through the bank; its judgment is the pass
+            # Gather advisory verdicts (if any) for the same outcome. The
+            # authoritative verifier still decides; advisors only inform
+            # confidence and accrue calibration.
+            advisory_evidence = [a.verify(code=code, task=task) for a in self.advisors]
+            # Route the verdicts through the bank; its judgment is the pass
             # criterion the loop and gate consult. A pass requires a PASS
             # verdict (ABSTAIN, like the old timeout, is not a pass).
-            judgment = self.bank.judge([evidence])
+            judgment = self.bank.judge([evidence, *advisory_evidence])
             passed = judgment.verdict == Verdict.PASS
             attempt = Attempt(
                 task_id=task.id,

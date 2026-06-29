@@ -8,7 +8,7 @@ is made by configuration rather than by code edits.
 from __future__ import annotations
 
 from prometheus_protocol.core.config import PROVIDER_REMOTE, Config
-from prometheus_protocol.core.interfaces import Provider
+from prometheus_protocol.core.interfaces import Provider, Verifier
 from prometheus_protocol.forge.miner import LessonForge
 from prometheus_protocol.gate.promotion import PromotionGate
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
@@ -18,6 +18,7 @@ from prometheus_protocol.provider.remote import RemoteModelProvider
 from prometheus_protocol.registry.markdown_registry import MarkdownSkillRegistry
 from prometheus_protocol.runtime.orchestrator import Orchestrator
 from prometheus_protocol.verifier.bank import VerifierBank
+from prometheus_protocol.verifier.model_judge import ModelJudgeVerifier
 from prometheus_protocol.verifier.runner import SubprocessVerifier
 from prometheus_protocol.verifier.store import InMemoryTrustStore, SqliteTrustStore
 
@@ -38,6 +39,30 @@ def build_provider(
 
         solution_book = build_solution_book()
     return MockProvider(book=solution_book)
+
+
+def build_judge_provider(
+    config: Config, solution_book: SolutionBook | None = None
+) -> Provider:
+    """Provider for the soft model-judge.
+
+    Uses an independent judge model when ``judge_model`` is set on a remote
+    provider (reduces correlated error: the same model producing and grading
+    inflates agreement); otherwise reuses the actor provider.
+    """
+
+    if (
+        config.provider == PROVIDER_REMOTE
+        and config.judge_model
+        and config.judge_model != config.model
+    ):
+        return RemoteModelProvider(
+            api_base=config.api_base or "",
+            model=config.judge_model,
+            api_key=config.api_key,
+            timeout_s=config.request_timeout_s,
+        )
+    return build_provider(config, solution_book)
 
 
 def build_orchestrator(
@@ -64,6 +89,14 @@ def build_orchestrator(
     bank = VerifierBank(trust_store)
     bank.register(verifier.verifier_id, verifier.tier)
 
+    # Optional soft model-judge advisor (off by default). The bank calibrates it
+    # against the hard reference; it never decides a verdict.
+    advisors: list[Verifier] = []
+    if config.enable_model_judge:
+        judge = ModelJudgeVerifier(build_judge_provider(config, solution_book))
+        bank.register(judge.verifier_id, judge.tier)
+        advisors.append(judge)
+
     return Orchestrator(
         provider=build_provider(config, solution_book),
         verifier=verifier,
@@ -74,4 +107,5 @@ def build_orchestrator(
         config=config,
         memory=memory if memory is not None else InMemoryTier(),
         bank=bank,
+        advisors=advisors,
     )

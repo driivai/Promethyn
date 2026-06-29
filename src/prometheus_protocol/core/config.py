@@ -44,6 +44,13 @@ class Config:
     model: str | None = None
     api_key: str | None = None
 
+    # Soft model-judge advisor. Off by default: it issues model calls and the
+    # offline default provider cannot meaningfully judge. ``judge_model``, when
+    # set (remote provider), runs the judge on a different model than the actor
+    # to reduce correlated error; otherwise the judge reuses the actor provider.
+    enable_model_judge: bool = False
+    judge_model: str | None = None
+
     registry_dir: Path = Path(".prometheus/skills")
     ledger_path: Path = Path(".prometheus/ledger.db")
     trust_store_path: Path = Path(".prometheus/trust.db")
@@ -65,6 +72,8 @@ class Config:
             api_base=env.get("PROM_API_BASE"),
             model=env.get("PROM_MODEL"),
             api_key=env.get("PROM_API_KEY"),
+            enable_model_judge=_as_bool(env.get("PROM_ENABLE_MODEL_JUDGE"), False),
+            judge_model=env.get("PROM_JUDGE_MODEL"),
             registry_dir=Path(env.get("PROM_REGISTRY_DIR", ".prometheus/skills")),
             ledger_path=Path(env.get("PROM_LEDGER_PATH", ".prometheus/ledger.db")),
             trust_store_path=Path(
