@@ -58,6 +58,13 @@ class SqliteLedger(Ledger):
 
     def record_attempt(self, attempt: Attempt, *, cycle: int, kind: str) -> int:
         evidence = dict(asdict(attempt.evidence))
+        # Record the fused judgment (verdict + calibrated confidence) additively
+        # inside the existing JSON column, so no table schema change is needed.
+        if attempt.judgment is not None:
+            evidence["judgment"] = {
+                "verdict": attempt.judgment.verdict,
+                "confidence": attempt.judgment.confidence,
+            }
         cur = self._conn.execute(
             """
             INSERT INTO attempts (

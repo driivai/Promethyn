@@ -32,3 +32,28 @@ def orchestrator(config):
 @pytest.fixture
 def benchmark():
     return build_benchmark()
+
+
+@pytest.fixture
+def swarm_runtime():
+    """A swarm runtime wired entirely from existing grounding components."""
+
+    from prometheus_protocol.gate.authorization import ActionGate
+    from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
+    from prometheus_protocol.provider.mock import MockProvider
+    from prometheus_protocol.swarm.debate import DebateLayer
+    from prometheus_protocol.swarm.executor import RecordingExecutor
+    from prometheus_protocol.swarm.runtime import SwarmRuntime
+    from prometheus_protocol.swarm.synthesis import RoleSynthesisEngine
+    from prometheus_protocol.verifier.bank import VerifierBank
+    from prometheus_protocol.verifier.store import InMemoryTrustStore
+
+    return SwarmRuntime(
+        synthesis=RoleSynthesisEngine(),
+        debate=DebateLayer(),
+        bank=VerifierBank(InMemoryTrustStore()),
+        gate=ActionGate(),
+        executor=RecordingExecutor(),
+        ledger=SqliteLedger(":memory:"),
+        provider=MockProvider(),
+    )

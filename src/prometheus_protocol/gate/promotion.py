@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from typing import Callable, Sequence
 
 from prometheus_protocol.core.interfaces import Gate
-from prometheus_protocol.core.models import Skill, Task
+from prometheus_protocol.core.models import Judgment, Skill, Task
 
 
 class FirewallError(AssertionError):
@@ -42,12 +42,30 @@ def assert_disjoint(
 
 @dataclass(frozen=True)
 class GateDecision:
-    """The outcome of scoring one candidate skill."""
+    """A gate's decision — the only object that authorizes action or promotion.
 
-    skill_id: str
-    promoted: bool
-    rate_before: float
-    rate_after: float
+    ``approved`` is the single load-bearing field (the executor and the runtime
+    check it). The promotion path also records the held-out rates and keeps the
+    historical ``promoted``/``skill_id`` aliases; the action-authorization path
+    records the subject it authorizes and the judgment it rests on.
+    """
+
+    approved: bool
+    subject_id: str = ""
+    rate_before: float | None = None
+    rate_after: float | None = None
+    judgment: Judgment | None = None
+    reason: str = ""
+
+    @property
+    def promoted(self) -> bool:
+        """Backward-compatible alias used by the promotion path."""
+        return self.approved
+
+    @property
+    def skill_id(self) -> str:
+        """Backward-compatible alias used by the promotion path."""
+        return self.subject_id
 
 
 # A scorer runs the held-out tasks with a candidate skill in context and
@@ -77,8 +95,8 @@ class PromotionGate(Gate):
         rate_after = score_fn(list(heldout_tasks), candidate)
         promoted = (rate_after - rate_before) > self.threshold
         return GateDecision(
-            skill_id=candidate.id,
-            promoted=promoted,
+            approved=promoted,
+            subject_id=candidate.id,
             rate_before=rate_before,
             rate_after=rate_after,
         )

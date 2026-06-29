@@ -17,7 +17,9 @@ from prometheus_protocol.provider.mock import MockProvider, SolutionBook
 from prometheus_protocol.provider.remote import RemoteModelProvider
 from prometheus_protocol.registry.markdown_registry import MarkdownSkillRegistry
 from prometheus_protocol.runtime.orchestrator import Orchestrator
+from prometheus_protocol.verifier.bank import VerifierBank
 from prometheus_protocol.verifier.runner import SubprocessVerifier
+from prometheus_protocol.verifier.store import InMemoryTrustStore, SqliteTrustStore
 
 
 def build_provider(
@@ -45,17 +47,31 @@ def build_orchestrator(
     memory: MemoryTier | None = None,
 ) -> Orchestrator:
     config = config or Config()
+
+    verifier = SubprocessVerifier(
+        timeout_s=config.verifier_timeout_s,
+        memory_mb=config.verifier_memory_mb,
+        cpu_seconds=config.verifier_cpu_seconds,
+    )
+
+    # Persist trust alongside the ledger; use an in-memory store when the ledger
+    # is itself in-memory (tests). Register the verifier so its hard-tier prior
+    # applies from the first judgment.
+    if str(config.ledger_path) == ":memory:":
+        trust_store = InMemoryTrustStore()
+    else:
+        trust_store = SqliteTrustStore(config.trust_store_path)
+    bank = VerifierBank(trust_store)
+    bank.register(verifier.verifier_id, verifier.tier)
+
     return Orchestrator(
         provider=build_provider(config, solution_book),
-        verifier=SubprocessVerifier(
-            timeout_s=config.verifier_timeout_s,
-            memory_mb=config.verifier_memory_mb,
-            cpu_seconds=config.verifier_cpu_seconds,
-        ),
+        verifier=verifier,
         registry=MarkdownSkillRegistry(config.registry_dir),
         gate=PromotionGate(threshold=config.gate_threshold),
         ledger=SqliteLedger(config.ledger_path),
         forge=LessonForge(),
         config=config,
         memory=memory if memory is not None else InMemoryTier(),
+        bank=bank,
     )

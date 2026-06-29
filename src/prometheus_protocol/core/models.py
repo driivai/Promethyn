@@ -145,6 +145,8 @@ class Attempt:
 
     ``skills_used`` records which skills were in context when the proposal was
     produced; this is what makes ablation and audit possible after the fact.
+    ``judgment`` is the fused verdict the verifier bank reached for this
+    attempt, when one was computed (optional, for audit).
     """
 
     task_id: str
@@ -153,6 +155,7 @@ class Attempt:
     code: str
     evidence: Evidence
     skills_used: tuple[str, ...] = field(default_factory=tuple)
+    judgment: "Judgment | None" = None
 
 
 @dataclass(frozen=True)
