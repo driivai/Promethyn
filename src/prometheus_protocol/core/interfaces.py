@@ -33,6 +33,17 @@ class Provider(ABC):
         """Return source code defining a function named ``entry_point``."""
         raise NotImplementedError
 
+    def assess(self, *, prompt: str, system: str | None = None) -> str:
+        """Return a free-form completion for an advisory assessment.
+
+        Optional capability used by advisory judges (for example the
+        model-judge verifier) that ask the model to grade an outcome rather
+        than to propose one. The default raises ``NotImplementedError``;
+        providers that can issue such a request override it. A judge treats an
+        unsupported provider as "no opinion" (ABSTAIN).
+        """
+        raise NotImplementedError("this provider does not support assessment")
+
 
 class Verifier(ABC):
     """Runs candidate code against a task's hidden cases and returns evidence."""

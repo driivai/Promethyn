@@ -59,6 +59,7 @@ from prometheus_protocol.runtime.orchestrator import (
     TaskOutcome,
 )
 from prometheus_protocol.verifier.bank import RankEntry, VerifierBank
+from prometheus_protocol.verifier.model_judge import ModelJudgeVerifier
 from prometheus_protocol.verifier.runner import SubprocessVerifier
 from prometheus_protocol.verifier.store import (
     InMemoryTrustStore,
@@ -113,6 +114,7 @@ __all__ = [
     "MemoryTier",
     # implementations
     "SubprocessVerifier",
+    "ModelJudgeVerifier",
     # verifier-trust ranking
     "VerifierBank",
     "RankEntry",

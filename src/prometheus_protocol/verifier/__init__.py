@@ -8,6 +8,7 @@ trustworthiness.
 
 from prometheus_protocol.verifier.aggregate import fuse, p_pass, total_log_odds
 from prometheus_protocol.verifier.bank import RankEntry, VerifierBank
+from prometheus_protocol.verifier.model_judge import ModelJudgeVerifier
 from prometheus_protocol.verifier.runner import SubprocessVerifier
 from prometheus_protocol.verifier.store import (
     InMemoryTrustStore,
@@ -25,6 +26,7 @@ from prometheus_protocol.verifier.trust import (
 
 __all__ = [
     "SubprocessVerifier",
+    "ModelJudgeVerifier",
     "VerifierBank",
     "RankEntry",
     "TrustStore",

@@ -29,6 +29,12 @@ _DEFAULT_SYSTEM_PROMPT = (
     "source code, defining exactly the requested function, and nothing else."
 )
 
+_DEFAULT_ASSESS_SYSTEM_PROMPT = (
+    "You are a strict, independent reviewer. Decide whether the candidate "
+    "solution satisfies the task. Reply with exactly one word: PASS, FAIL, or "
+    "ABSTAIN. Answer ABSTAIN if you cannot decide."
+)
+
 
 class ProviderError(RuntimeError):
     """Raised when the remote endpoint cannot be reached or returns bad data."""
@@ -86,6 +92,21 @@ class RemoteModelProvider(Provider):
         except (KeyError, IndexError, TypeError) as exc:
             raise ProviderError(f"unexpected response shape: {exc}") from exc
         return _extract_code(content)
+
+    def assess(self, *, prompt: str, system: str | None = None) -> str:
+        payload = {
+            "model": self.model,
+            "temperature": 0,
+            "messages": [
+                {"role": "system", "content": system or _DEFAULT_ASSESS_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+        }
+        data = self._post("/chat/completions", payload)
+        try:
+            return data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise ProviderError(f"unexpected response shape: {exc}") from exc
 
     def _post(self, path: str, payload: dict) -> dict:
         url = self.api_base + path
