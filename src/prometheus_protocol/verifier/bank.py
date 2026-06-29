@@ -19,7 +19,7 @@ from prometheus_protocol.core.models import (
     Tier,
     Verdict,
 )
-from prometheus_protocol.verifier.aggregate import fuse
+from prometheus_protocol.verifier.aggregate import fuse, p_pass, total_log_odds
 from prometheus_protocol.verifier.store import InMemoryTrustStore, TrustStore
 from prometheus_protocol.verifier.trust import (
     TrustStats,
@@ -142,16 +142,27 @@ class VerifierBank:
         has_human = any(stats.tier == Tier.HUMAN for _, stats in authoritative)
         ref_tier = Tier.HUMAN if has_human else Tier.HARD
         reference = [(e, s) for (e, s) in authoritative if s.tier == ref_tier]
+        # Every non-reference verifier: lower-tier authoritative ones and all
+        # advisory ones. These are calibrated against the reference and inform
+        # confidence, but never the verdict.
+        others = [(e, s) for (e, s) in authoritative if s.tier != ref_tier] + advisory
 
-        # Fuse the reference verdicts against their current (pre-calibration)
-        # trust to get the binding verdict and its confidence.
-        contributions = [(s, e.verdict) for (e, s) in reference]
-        ref_verdict, confidence = fuse(contributions)
+        # The verdict is decided by the authoritative reference alone — an
+        # advisory verdict can never override it (I6).
+        ref_contributions = [(s, e.verdict) for (e, s) in reference]
+        ref_verdict, _ = fuse(ref_contributions)
 
-        # Calibrate everyone who is not part of the reference: lower-tier
-        # authoritative verifiers and every advisory verifier. A soft verdict
-        # is calibration signal only; it never changes the result.
-        for e, s in [(e, s) for (e, s) in authoritative if s.tier != ref_tier] + advisory:
+        # Confidence additionally reflects every non-reference verifier, each
+        # weighted by the trust it has earned: an agreeing advisor raises
+        # confidence, a dissenting one lowers it, while the verdict stays put.
+        # An un-audited verifier contributes a log-LR of ~0 (I7), so it moves
+        # confidence negligibly until it has earned weight through calibration.
+        all_contributions = ref_contributions + [(s, e.verdict) for (e, s) in others]
+        probability = p_pass(total_log_odds(all_contributions))
+        confidence = probability if ref_verdict == Verdict.PASS else 1.0 - probability
+
+        # Calibrate each non-reference verifier against the reference verdict.
+        for e, s in others:
             self._store.put(
                 e.verifier_id,
                 updated(s, predicted=e.verdict, actual=ref_verdict),

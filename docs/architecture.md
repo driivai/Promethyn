@@ -79,6 +79,12 @@ It is split along the same port/adapter lines as the rest of the system:
   `Judgment`, calibrates lower-trust verifiers against the authoritative
   reference, flags when an advisory-only judgment should be escalated, and
   ranks verifiers.
+- `verifier/model_judge.py` — `ModelJudgeVerifier`, the first soft verifier: an
+  untrusted advisor that asks the model (through the provider boundary, via
+  `Provider.assess`) whether a candidate satisfies the task. It runs no code,
+  is blind to the hidden cases, and returns `Tier.SOFT` evidence. It is wired in
+  behind `Config.enable_model_judge` (off by default) and registered alongside
+  the hard verifier; the bank calibrates it against the hard reference.
 
 Two safety properties are load-bearing and enforced in code (see invariants I6
 and I7): an advisory verdict can never override an authoritative one (it is
@@ -86,6 +92,14 @@ calibration signal only), and an un-audited verifier carries zero weight until
 it has been calibrated against trusted references. Hard verifiers are
 authoritative and also serve as the reference that calibrates soft ones; a
 human reference, when present, outranks and calibrates the hard tier.
+
+When a calibrated soft verifier is present, the hard verdict still decides the
+result, but the fused **confidence** reflects the advisor: agreement raises it,
+disagreement lowers it (and is surfaced for audit) without ever changing the
+verdict. A fresh, un-audited soft verifier contributes ~zero, so it earns
+influence only through calibration. An independent judge model
+(`Config.judge_model`) is recommended for a real deployment: the same model
+producing and grading a solution inflates agreement (correlated error).
 
 ## Configuration
 
