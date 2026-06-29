@@ -8,6 +8,17 @@ in `spec/invariants.md` is a major version bump.
 ## [Unreleased]
 
 ### Added
+- Soft model-judge verifier (`verifier/model_judge.py`, `ModelJudgeVerifier`): an
+  untrusted advisor that asks the model (via the provider) whether a candidate
+  satisfies a task and returns `Tier.SOFT` evidence (PASS/FAIL/ABSTAIN). It runs
+  no code, is blind to hidden cases, and abstains on any provider error.
+  Registered alongside the hard verifier behind `Config.enable_model_judge`
+  (default **off**); the bank calibrates it against the hard reference. With an
+  optional independent judge model (`Config.judge_model` / `PROM_JUDGE_MODEL`) it
+  can grade with a different model than the actor, reducing correlated error.
+- `Provider.assess(prompt, system)`: optional, additive provider capability for
+  advisory grading (default raises `NotImplementedError`; the remote provider
+  overrides it with a judging request).
 - Initial open-core scaffold of the Prometheus Protocol runtime.
 - Core models, service interfaces, and environment-driven configuration.
 - Vendor-neutral provider boundary: a configuration-driven remote provider over
@@ -60,6 +71,14 @@ in `spec/invariants.md` is a major version bump.
   `Executor`, `RecordingExecutor`, and `ActionGate`.
 
 ### Changed
+- The verifier bank's fused **confidence** now reflects calibrated
+  non-reference verifiers (e.g. a soft model-judge), so confidence becomes
+  informative — agreement raises it, disagreement lowers it. The **verdict** is
+  unchanged: it is still decided by the authoritative reference (I6), and an
+  un-audited verifier contributes ~zero (I7). No verdict or pass-rate changes.
+- `Config` gained `enable_model_judge` (env `PROM_ENABLE_MODEL_JUDGE`, default
+  off) and `judge_model` (env `PROM_JUDGE_MODEL`); `Orchestrator` gained an
+  optional `advisors` argument. All additive with behaviour-preserving defaults.
 - `Evidence` gained optional fields for verifier-trust fusion (`verifier_id`,
   `verdict`, `tier`, `cost`, `latency_ms`, `detail`). The change is additive and
   backward compatible: all new fields have defaults, and `verdict` is derived
