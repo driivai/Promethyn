@@ -19,6 +19,7 @@ from prometheus_protocol.provider.mock import MockProvider, SolutionBook
 from prometheus_protocol.provider.remote import RemoteModelProvider
 from prometheus_protocol.registry.markdown_registry import MarkdownSkillRegistry
 from prometheus_protocol.runtime.orchestrator import Orchestrator
+from prometheus_protocol.sandbox import build_sandbox
 from prometheus_protocol.verifier.bank import VerifierBank
 from prometheus_protocol.verifier.model_judge import ModelJudgeVerifier
 from prometheus_protocol.verifier.runner import SubprocessVerifier
@@ -81,6 +82,8 @@ def build_orchestrator(
         timeout_s=config.verifier_timeout_s,
         memory_mb=config.verifier_memory_mb,
         cpu_seconds=config.verifier_cpu_seconds,
+        max_processes=config.verifier_max_processes,
+        sandbox=build_sandbox(config.sandbox),
     )
 
     # Persist trust alongside the ledger; use an in-memory store when the ledger

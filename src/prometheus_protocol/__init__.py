@@ -57,6 +57,16 @@ from prometheus_protocol.provider.mock import MockProvider, MockSolution
 from prometheus_protocol.provider.remote import ProviderError, RemoteModelProvider
 from prometheus_protocol.registry.markdown_registry import MarkdownSkillRegistry
 from prometheus_protocol.runtime.factory import build_orchestrator, build_provider
+from prometheus_protocol.sandbox import (
+    ContainerSandbox,
+    Limits,
+    NamespaceSandbox,
+    NullSandbox,
+    Sandbox,
+    SandboxResult,
+    UnsafeLocalSandbox,
+    build_sandbox,
+)
 from prometheus_protocol.runtime.orchestrator import (
     CycleReport,
     Orchestrator,
@@ -168,4 +178,13 @@ __all__ = [
     "SwarmRuntime",
     "Executor",
     "RecordingExecutor",
+    # sandbox isolation
+    "Sandbox",
+    "SandboxResult",
+    "Limits",
+    "NamespaceSandbox",
+    "ContainerSandbox",
+    "UnsafeLocalSandbox",
+    "NullSandbox",
+    "build_sandbox",
 ]
