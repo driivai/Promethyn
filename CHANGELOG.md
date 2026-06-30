@@ -29,6 +29,29 @@ in `spec/invariants.md` is a major version bump.
   `Config.sandbox` / `verifier_max_processes`. The swarm executor stays a no-op:
   this layer isolates the code the verifier already ran and grants no new
   execution capability.
+- Provider-backed swarm roles: the swarm's roles now reason via the model
+  provider instead of returning deterministic placeholders. Each role builds a
+  role-specific prompt from the `TaskPacket` and proposer-side context only,
+  calls the provider, and strictly validates the reply into typed proposals; a
+  malformed reply (or a missing provider) yields no proposal (graceful
+  degradation — nothing unvalidated crosses the wall). Code generation reuses the
+  actor's `propose_solution`; open-ended reasoning uses a new additive
+  `Provider.generate(prompt, system)`. Role prompt builders/parsers live in
+  `swarm/prompts.py` (public: `build_reasoning_prompt`, `build_skeptic_prompt`,
+  `parse_reasoning`, `parse_cases`). Documented in `docs/swarm-roles.md`.
+- Executable Skeptic falsification checks: in the code domain the Skeptic asks
+  the model for concrete input/output cases and attaches them as an executable
+  check, which the runtime runs through the existing HARD subprocess verifier
+  against the criticized proposal's code. A failing case is real FAIL evidence
+  (the action cannot be approved and never reaches the executor, INV-SWARM-4); a
+  check that cannot run ABSTAINs (no block, no calibration sample). The Skeptic's
+  veto is wired to real verification rather than to model opinion.
+- `Config.max_role_calls` (env `PROM_MAX_ROLE_CALLS`, default 16): a per-task cap
+  on swarm provider calls so a run cannot make unbounded calls.
+- `build_swarm_runtime(...)`: a composition root that wires model-backed roles,
+  the reused bank/gate/firewall, a no-op recording executor, and a HARD code
+  verifier for executable checks. Deterministic offline swarm fixtures in
+  `prometheus_protocol._examples.swarm_tasks`.
 - Operability hardening for findings F1–F5 from the end-to-end shakeout
   (`docs/shakeout-report.md`):
   - **(F1)** The CLI now reports known errors — a misconfigured provider, an
@@ -114,6 +137,15 @@ in `spec/invariants.md` is a major version bump.
   `Executor`, `RecordingExecutor`, and `ActionGate`.
 
 ### Changed
+- Swarm role/model surface, all additive and behaviour-preserving by default:
+  roles take an optional injected `provider` (the `propose(packet, context)`
+  signature is unchanged, so INV-SWARM-6 holds); `TaskPacket` gained
+  `entry_point` (proposer-visible code-domain metadata, never a held-out label);
+  `FalsificationCheck` gained `entry_point` and `cases` for executable checks;
+  `SwarmRuntime` gained an optional `code_verifier`; `RoleSynthesisEngine` gained
+  `provider`/`max_role_calls`; `Provider` gained `generate`; `MockProvider` gained
+  a deterministic `responder`. The verifier bank's fusion, the gate, the held-out
+  firewall, the proposer/judge wall, and the no-op executor are unchanged.
 - **(F3)** The subprocess verifier now returns `ABSTAIN` for a task with no test
   cases (nothing to verify) instead of `FAIL` (a confident failure). An ABSTAIN
   is not a pass and never feeds calibration. Verdicts for every non-empty case

@@ -56,7 +56,11 @@ from prometheus_protocol.memory.tiers import InMemoryTier, MemoryTier
 from prometheus_protocol.provider.mock import MockProvider, MockSolution
 from prometheus_protocol.provider.remote import ProviderError, RemoteModelProvider
 from prometheus_protocol.registry.markdown_registry import MarkdownSkillRegistry
-from prometheus_protocol.runtime.factory import build_orchestrator, build_provider
+from prometheus_protocol.runtime.factory import (
+    build_orchestrator,
+    build_provider,
+    build_swarm_runtime,
+)
 from prometheus_protocol.sandbox import (
     ContainerSandbox,
     Limits,
@@ -92,6 +96,12 @@ from prometheus_protocol.swarm.models import (
     TaskPacket,
     TestPlan,
     VerifiedProposal,
+)
+from prometheus_protocol.swarm.prompts import (
+    build_reasoning_prompt,
+    build_skeptic_prompt,
+    parse_cases,
+    parse_reasoning,
 )
 from prometheus_protocol.swarm.roles import Role
 from prometheus_protocol.swarm.runtime import SwarmRuntime
@@ -162,6 +172,7 @@ __all__ = [
     "TaskOutcome",
     "build_orchestrator",
     "build_provider",
+    "build_swarm_runtime",
     # swarm reasoning front-end
     "TaskPacket",
     "Proposal",
@@ -178,6 +189,11 @@ __all__ = [
     "SwarmRuntime",
     "Executor",
     "RecordingExecutor",
+    # provider-backed role prompts
+    "build_reasoning_prompt",
+    "build_skeptic_prompt",
+    "parse_reasoning",
+    "parse_cases",
     # sandbox isolation
     "Sandbox",
     "SandboxResult",

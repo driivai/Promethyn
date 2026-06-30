@@ -10,8 +10,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from prometheus_protocol.core.interfaces import Ledger, Provider
-from prometheus_protocol.core.models import Attempt, Evidence, Tier, Verdict
+from prometheus_protocol.core.interfaces import Ledger, Provider, Verifier
+from prometheus_protocol.core.models import Attempt, Evidence, Task, Tier, Verdict
 from prometheus_protocol.gate.authorization import ActionGate
 from prometheus_protocol.memory.tiers import MemoryTier
 from prometheus_protocol.swarm.checks import predicate_holds
@@ -68,6 +68,7 @@ class SwarmRuntime:
         ledger: Ledger,
         provider: Provider | None = None,
         memory: MemoryTier | None = None,
+        code_verifier: Verifier | None = None,
         verifier_id: str = CHECK_VERIFIER_ID,
         tier: Tier = Tier.HARD,
     ) -> None:
@@ -79,6 +80,10 @@ class SwarmRuntime:
         self.ledger = ledger
         self.provider = provider
         self.memory = memory
+        # Runs the Skeptic's executable falsification cases as real HARD
+        # verification. When absent, executable checks ABSTAIN (no veto, no
+        # spurious pass) and only structural checks apply.
+        self.code_verifier = code_verifier
         self.verifier_id = verifier_id
         self.tier = tier
         # Register the check runner so its hard-tier prior applies.
@@ -126,32 +131,83 @@ class SwarmRuntime:
         if not requests:
             # Nothing to verify -> no opinion. An unverified proposal can never
             # be authorized.
-            return Evidence(
-                passed=False,
-                total=0,
-                passed_count=0,
-                failures=("no verification requested",),
-                verifier_id=self.verifier_id,
-                verdict=Verdict.ABSTAIN,
-                tier=self.tier,
-                detail="no verification requested",
-            )
-        failures = tuple(
-            f"{request.check.id}: {request.check.description}"
-            for request in requests
-            if not predicate_holds(request.check, entry.proposal)
-        )
+            return self._abstain("no verification requested")
+
+        # Two check kinds: structural predicates (evaluated in-process) and
+        # executable cases (run by the HARD code verifier). Aggregation is a
+        # conjunction: the proposal passes only if every check that *could run*
+        # passed, so any failing check is a hard veto; if nothing could run the
+        # result ABSTAINs (never a silent pass).
+        executable = [r.check for r in requests if r.check.cases]
+        structural = [r for r in requests if not r.check.cases]
+
+        ran = 0
+        failures: list[str] = []
+
+        for request in structural:
+            ran += 1
+            if not predicate_holds(request.check, entry.proposal):
+                failures.append(f"{request.check.id}: {request.check.description}")
+
+        if executable:
+            evidence = self._run_executable_checks(entry.proposal, executable)
+            if evidence is not None and evidence.verdict != Verdict.ABSTAIN:
+                ran += 1
+                if evidence.verdict != Verdict.PASS:
+                    failures.append(f"executable: {evidence.detail or 'cases failed'}")
+
+        if ran == 0:
+            return self._abstain("no runnable check (executable checks abstained)")
+
         verdict = Verdict.PASS if not failures else Verdict.FAIL
         return Evidence(
             passed=(verdict == Verdict.PASS),
-            total=len(requests),
-            passed_count=len(requests) - len(failures),
-            failures=failures,
+            total=ran,
+            passed_count=ran - len(failures),
+            failures=tuple(failures),
             verifier_id=self.verifier_id,
             verdict=verdict,
             tier=self.tier,
             detail="; ".join(failures),
         )
+
+    def _abstain(self, detail: str) -> Evidence:
+        return Evidence(
+            passed=False,
+            total=0,
+            passed_count=0,
+            failures=(detail,),
+            verifier_id=self.verifier_id,
+            verdict=Verdict.ABSTAIN,
+            tier=self.tier,
+            detail=detail,
+        )
+
+    def _run_executable_checks(self, proposal, checks) -> Evidence | None:
+        """Run pooled executable cases through the HARD code verifier.
+
+        Returns the verifier's Evidence (PASS/FAIL/ABSTAIN), or ``None`` when no
+        code verifier is wired or there is nothing runnable — both treated as
+        ABSTAIN by the caller.
+        """
+
+        if self.code_verifier is None:
+            return None
+        entry_point = next((c.entry_point for c in checks if c.entry_point), "")
+        cases = tuple(case for check in checks for case in check.cases)
+        if not entry_point or not cases:
+            return None
+        task = Task(
+            id=f"swarm/{proposal.id}",
+            entry_point=entry_point,
+            prompt="",
+            split="train",
+            cases=cases,
+        )
+        try:
+            return self.code_verifier.verify(code=proposal.content, task=task)
+        except Exception:
+            return None
 
     def _record(
         self,

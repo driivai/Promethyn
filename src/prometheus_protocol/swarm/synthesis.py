@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Sequence
 
+from prometheus_protocol.core.interfaces import Provider
 from prometheus_protocol.swarm.models import Proposal, TaskPacket
 from prometheus_protocol.swarm.roles import (
     PolicyReviewer,
@@ -18,6 +19,54 @@ from prometheus_protocol.swarm.roles import (
     Skeptic,
     default_optional_roles,
 )
+
+# Modest default cap on provider calls per swarm task (mirrors Config default).
+DEFAULT_MAX_ROLE_CALLS = 16
+
+
+class _CallBudget:
+    """A per-task counter of provider calls. ``limit <= 0`` means unlimited."""
+
+    def __init__(self, limit: int = DEFAULT_MAX_ROLE_CALLS) -> None:
+        self.limit = limit
+        self.used = 0
+
+    def reset(self) -> None:
+        self.used = 0
+
+    def take(self) -> bool:
+        if self.limit > 0 and self.used >= self.limit:
+            return False
+        self.used += 1
+        return True
+
+
+class _BudgetedProvider(Provider):
+    """Wraps a provider so every generation/proposal call draws on a budget.
+
+    When the budget is exhausted the call returns an empty string, so the
+    calling role simply produces no further proposal (graceful degradation) and
+    a task can never make unbounded provider calls.
+    """
+
+    def __init__(self, inner: Provider, budget: _CallBudget) -> None:
+        self._inner = inner
+        self._budget = budget
+
+    def propose_solution(self, *, prompt, entry_point, skills=()):
+        if not self._budget.take():
+            return ""
+        return self._inner.propose_solution(
+            prompt=prompt, entry_point=entry_point, skills=skills
+        )
+
+    def generate(self, *, prompt, system=None):
+        if not self._budget.take():
+            return ""
+        return self._inner.generate(prompt=prompt, system=system)
+
+    def assess(self, *, prompt, system=None):
+        return self._inner.assess(prompt=prompt, system=system)
 
 
 @dataclass(frozen=True)
@@ -82,21 +131,30 @@ class RoleSynthesisEngine:
         self,
         optional_roles: Sequence[Role] | None = None,
         *,
+        provider: Provider | None = None,
+        max_role_calls: int = DEFAULT_MAX_ROLE_CALLS,
         skeptic: Role | None = None,
         policy_reviewer: Role | None = None,
     ) -> None:
+        # One budget shared by the engine's default roles, reset per task.
+        self._budget = _CallBudget(max_role_calls)
+        budgeted = (
+            _BudgetedProvider(provider, self._budget) if provider is not None else None
+        )
         self._optional = (
             list(optional_roles)
             if optional_roles is not None
-            else default_optional_roles()
+            else default_optional_roles(budgeted)
         )
-        self._skeptic = skeptic if skeptic is not None else Skeptic()
+        self._skeptic = skeptic if skeptic is not None else Skeptic(budgeted)
         self._policy_reviewer = (
             policy_reviewer if policy_reviewer is not None else PolicyReviewer()
         )
 
     def assemble(self, packet: TaskPacket, config: SwarmConfig | None = None) -> Swarm:
         config = config or SwarmConfig()
+        # Fresh per-task budget so a task cannot make unbounded provider calls.
+        self._budget.reset()
         optional = [
             role
             for role in self._optional

@@ -13,7 +13,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 
-from prometheus_protocol.core.models import Judgment
+from prometheus_protocol.core.models import Case, Judgment
 
 # Allowed proposal kinds. Only ``proposed_action`` is ever routed to the gate
 # and the executor; the rest are reasoning artifacts that are judged but never
@@ -44,13 +44,21 @@ def content_hash(text: str) -> str:
 
 @dataclass(frozen=True)
 class TaskPacket:
-    """The task handed to the swarm. The only input roles ever receive."""
+    """The task handed to the swarm. The only input roles ever receive.
+
+    ``entry_point``, when set, marks a code-domain task: the function name a
+    proposed action must define, so the proposer can generate code and the
+    Skeptic can attach executable falsification checks for it. It is
+    proposer-visible task metadata (the same the actor already receives), never
+    a held-out label — the hidden cases stay on the verifier side (INV-SWARM-6).
+    """
 
     goal: str
     context: str = ""
     constraints: tuple[str, ...] = ()
     budget: int = 0
     risk_class: str = "low"
+    entry_point: str = ""
 
     def __post_init__(self) -> None:
         if self.risk_class not in RISK_CLASSES:
@@ -71,13 +79,23 @@ class Provenance:
 class FalsificationCheck:
     """A concrete check that, if it fails, proves a proposal wrong.
 
-    ``predicate`` names a deterministic predicate evaluated at verification time
-    by the runtime. The check itself carries no verdict.
+    A check is one of two kinds, and carries no verdict either way:
+
+    * **Structural** (``cases`` empty): ``predicate`` names a deterministic
+      predicate the runtime evaluates in-process against the proposal.
+    * **Executable** (``cases`` non-empty): ``cases`` are concrete
+      input/output expectations the runtime runs through the existing HARD
+      subprocess verifier against the criticized proposal's code, calling
+      ``entry_point``. A failing case is real FAIL evidence; cases that cannot
+      run (no entry point, or none parsed) ABSTAIN. This is how the Skeptic's
+      veto is wired to real verification rather than to model opinion.
     """
 
     id: str
     description: str
     predicate: str
+    entry_point: str = ""
+    cases: tuple[Case, ...] = ()
 
 
 @dataclass(frozen=True)
