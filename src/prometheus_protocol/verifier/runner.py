@@ -1,24 +1,19 @@
 """Subprocess verifier: run candidate code against hidden cases.
 
 ============================  SECURITY NOTICE  ============================
-This is NOT a real sandbox. It runs candidate code in a child Python
-process with a wall-clock timeout and POSIX resource limits (CPU time,
-address space, file size). Those limits bound accidental runaway code; they
-do NOT contain hostile code. A determined payload can still read the
-filesystem, open sockets, or exhaust shared resources.
-
-Before running UNTRUSTED code you MUST run this inside a real isolation
-boundary (a locked-down container, microVM, or seccomp/namespace jail) with
-no network and a read-only, throwaway filesystem. Treat the limits here as
-defence in depth, never as the only line of defence.
+Candidate code is executed through an isolating :class:`Sandbox` (the
+configured adapter; default = an isolating one). The sandbox denies network,
+constrains the filesystem to a writable workspace over a read-only root, and
+bounds resources; see ``docs/sandbox.md`` and the INV-SANDBOX conformance
+tests. The historical no-isolation path remains available only as the
+explicitly opt-in ``UnsafeLocalSandbox`` (``PROM_ALLOW_UNSAFE_EXEC=1``); it is
+for trusted/mock dev examples, never for untrusted code.
 =========================================================================
 """
 
 from __future__ import annotations
 
 import json
-import os
-import subprocess
 import sys
 import tempfile
 import time
@@ -26,6 +21,7 @@ from pathlib import Path
 
 from prometheus_protocol.core.interfaces import Verifier
 from prometheus_protocol.core.models import Evidence, Task, Tier, Verdict
+from prometheus_protocol.sandbox import Limits, Sandbox, build_sandbox
 
 # The harness that runs inside the child process. It imports the candidate as
 # a module, calls the entry point for each hidden case, and writes a JSON
@@ -90,32 +86,6 @@ main()
 '''
 
 
-def _resource_limits(cpu_seconds: int, memory_mb: int):
-    """Build a ``preexec_fn`` that applies POSIX rlimits, or ``None``.
-
-    Returns ``None`` on non-POSIX platforms (where ``preexec_fn`` and the
-    ``resource`` module are unavailable).
-    """
-
-    if os.name != "posix":
-        return None
-
-    import resource
-
-    def _apply() -> None:
-        if cpu_seconds > 0:
-            resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds))
-        # Address-space caps can prevent the interpreter from starting if set
-        # too low, so they are opt-in: a non-positive value disables them.
-        if memory_mb > 0:
-            nbytes = memory_mb * 1024 * 1024
-            resource.setrlimit(resource.RLIMIT_AS, (nbytes, nbytes))
-        # Cap accidental large writes to ten megabytes.
-        resource.setrlimit(resource.RLIMIT_FSIZE, (10 * 1024 * 1024, 10 * 1024 * 1024))
-
-    return _apply
-
-
 class SubprocessVerifier(Verifier):
     """Default verifier. See the module-level security notice.
 
@@ -139,12 +109,27 @@ class SubprocessVerifier(Verifier):
         timeout_s: float = 5.0,
         memory_mb: int = 256,
         cpu_seconds: int = 5,
+        max_processes: int = 64,
+        sandbox: Sandbox | None = None,
     ) -> None:
         self.timeout_s = timeout_s
         self.memory_mb = memory_mb
         self.cpu_seconds = cpu_seconds
+        self.max_processes = max_processes
+        # The isolation boundary candidate code runs through. Defaults to the
+        # configured/auto adapter (an isolating one); never the unsafe runner
+        # unless explicitly opted in via PROM_ALLOW_UNSAFE_EXEC.
+        self.sandbox = sandbox if sandbox is not None else build_sandbox()
         self.verifier_id = self.VERIFIER_ID
         self.tier = self.TIER
+
+    def _limits(self) -> Limits:
+        return Limits(
+            wall_time_s=self.timeout_s,
+            cpu_time_s=self.cpu_seconds,
+            memory_bytes=self.memory_mb * 1024 * 1024 if self.memory_mb > 0 else 0,
+            max_processes=self.max_processes,
+        )
 
     def _evidence(
         self,
@@ -189,30 +174,39 @@ class SubprocessVerifier(Verifier):
             (tmp_path / "_runner.py").write_text(runner, encoding="utf-8")
 
             started = time.monotonic()
-            try:
-                proc = subprocess.run(
-                    [sys.executable, "-I", "_runner.py"],
-                    cwd=tmp,
-                    capture_output=True,
-                    text=True,
-                    timeout=self.timeout_s,
-                    preexec_fn=_resource_limits(self.cpu_seconds, self.memory_mb),
+            sb = self.sandbox.run(
+                argv=[sys.executable, "-I", "_runner.py"],
+                workspace=tmp,
+                limits=self._limits(),
+            )
+            duration = time.monotonic() - started
+
+            if not sb.started_ok:
+                # Isolation could not start: we could not verify. ABSTAIN — no
+                # opinion, no calibration sample, never a pass or a fail.
+                return self._evidence(
+                    verdict=Verdict.ABSTAIN,
+                    total=total,
+                    passed_count=0,
+                    failures=(f"sandbox did not start: {sb.detail}",),
+                    stdout=sb.stdout,
+                    stderr=sb.stderr,
+                    duration_s=duration,
+                    timed_out=False,
                 )
-            except subprocess.TimeoutExpired as exc:
-                duration = time.monotonic() - started
+            if sb.timed_out:
                 # The check could not run to completion: no opinion (ABSTAIN).
                 return self._evidence(
                     verdict=Verdict.ABSTAIN,
                     total=total,
                     passed_count=0,
                     failures=(f"timed out after {self.timeout_s}s",),
-                    stdout=_clip(exc.stdout),
-                    stderr=_clip(exc.stderr),
+                    stdout=sb.stdout,
+                    stderr=sb.stderr,
                     duration_s=duration,
                     timed_out=True,
                 )
 
-            duration = time.monotonic() - started
             result = _read_result(result_path)
             if result is None:
                 # Harness crash / killed before writing a verdict: ABSTAIN.
@@ -221,11 +215,11 @@ class SubprocessVerifier(Verifier):
                     total=total,
                     passed_count=0,
                     failures=(
-                        f"no verdict produced (exit code {proc.returncode}); "
+                        f"no verdict produced (exit code {sb.exit_status}); "
                         "the child may have been killed by a resource limit",
                     ),
-                    stdout=_clip(proc.stdout),
-                    stderr=_clip(proc.stderr),
+                    stdout=sb.stdout,
+                    stderr=sb.stderr,
                     duration_s=duration,
                     timed_out=False,
                 )
@@ -243,8 +237,8 @@ class SubprocessVerifier(Verifier):
                     total=reported_total,
                     passed_count=passed_count,
                     failures=failures or ("no cases to verify",),
-                    stdout=_clip(proc.stdout),
-                    stderr=_clip(proc.stderr),
+                    stdout=sb.stdout,
+                    stderr=sb.stderr,
                     duration_s=duration,
                     timed_out=False,
                 )
@@ -254,8 +248,8 @@ class SubprocessVerifier(Verifier):
                 total=reported_total,
                 passed_count=passed_count,
                 failures=failures,
-                stdout=_clip(proc.stdout),
-                stderr=_clip(proc.stderr),
+                stdout=sb.stdout,
+                stderr=sb.stderr,
                 duration_s=duration,
                 timed_out=False,
             )

@@ -58,6 +58,13 @@ class Config:
     verifier_timeout_s: float = 5.0
     verifier_memory_mb: int = 256
     verifier_cpu_seconds: int = 5
+    verifier_max_processes: int = 64
+
+    # Sandbox adapter for executing untrusted candidate code: "auto" (pick the
+    # best available isolating adapter), "namespace", "container", or "unsafe"
+    # (the unsafe direct runner, which additionally requires
+    # PROM_ALLOW_UNSAFE_EXEC=1). Default is an isolating adapter.
+    sandbox: str = "auto"
 
     gate_threshold: float = 0.0
     retrieval_k: int = 5
@@ -87,6 +94,8 @@ class Config:
             verifier_timeout_s=_as_float(env.get("PROM_VERIFIER_TIMEOUT_S"), 5.0),
             verifier_memory_mb=_as_int(env.get("PROM_VERIFIER_MEMORY_MB"), 256),
             verifier_cpu_seconds=_as_int(env.get("PROM_VERIFIER_CPU_SECONDS"), 5),
+            verifier_max_processes=_as_int(env.get("PROM_VERIFIER_MAX_PROCESSES"), 64),
+            sandbox=env.get("PROM_SANDBOX", "auto"),
             gate_threshold=_as_float(env.get("PROM_GATE_THRESHOLD"), 0.0),
             retrieval_k=_as_int(env.get("PROM_RETRIEVAL_K"), 5),
             max_role_calls=_as_int(env.get("PROM_MAX_ROLE_CALLS"), 16),

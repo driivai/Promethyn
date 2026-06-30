@@ -33,7 +33,24 @@ jobs:
       - name: Repository hygiene
         run: python scripts/check_hygiene.py
 
+      - name: Enable unprivileged user namespaces (for the namespace sandbox)
+        # Ubuntu 24.04 runners restrict unprivileged user namespaces via
+        # AppArmor; lift it so the daemonless namespace adapter can isolate.
+        # Tolerant of kernels/images without these knobs.
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+
+      - name: Sandbox conformance (isolation must run, not skip)
+        env:
+          PROM_REQUIRE_SANDBOX: "1"
+        run: python -m pytest -q tests/conformance -k sandbox
+
       - name: Test
+        env:
+          # Fail rather than skip the sandbox conformance tests if the isolation
+          # runtime is missing, so green here always means isolation was proven.
+          PROM_REQUIRE_SANDBOX: "1"
         run: python -m pytest -q
 
       - name: Build

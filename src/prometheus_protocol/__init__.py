@@ -61,6 +61,16 @@ from prometheus_protocol.runtime.factory import (
     build_provider,
     build_swarm_runtime,
 )
+from prometheus_protocol.sandbox import (
+    ContainerSandbox,
+    Limits,
+    NamespaceSandbox,
+    NullSandbox,
+    Sandbox,
+    SandboxResult,
+    UnsafeLocalSandbox,
+    build_sandbox,
+)
 from prometheus_protocol.runtime.orchestrator import (
     CycleReport,
     Orchestrator,
@@ -184,4 +194,13 @@ __all__ = [
     "build_skeptic_prompt",
     "parse_reasoning",
     "parse_cases",
+    # sandbox isolation
+    "Sandbox",
+    "SandboxResult",
+    "Limits",
+    "NamespaceSandbox",
+    "ContainerSandbox",
+    "UnsafeLocalSandbox",
+    "NullSandbox",
+    "build_sandbox",
 ]

@@ -8,6 +8,27 @@ in `spec/invariants.md` is a major version bump.
 ## [Unreleased]
 
 ### Added
+- Sandbox isolation for untrusted candidate code (`sandbox/`). A `Sandbox` port
+  (`Sandbox`, `SandboxResult`, `Limits`) plus adapters: a daemonless
+  `NamespaceSandbox` (Linux user/mount/network/PID namespaces + read-only root
+  with a writable workspace + dropped capabilities + no-new-privileges +
+  rlimits), a production `ContainerSandbox` (Docker/Podman with `--network none`,
+  read-only root, memory/CPU/pids limits, `--cap-drop ALL`, no-new-privileges,
+  non-root, digest-pinnable image), and an explicitly-named `UnsafeLocalSandbox`
+  (the prior no-isolation runner, opt-in only via `PROM_ALLOW_UNSAFE_EXEC=1`).
+  The verifier now executes every candidate through the configured sandbox
+  (`Config.sandbox` / `PROM_SANDBOX`, default `auto` = an isolating adapter);
+  legitimate verdicts and the held-out rate are unchanged (parity), and a
+  sandbox-start failure is ABSTAIN. New invariants INV-SANDBOX-1…5 in
+  `spec/invariants.md` with adversarial conformance tests
+  (`tests/conformance/test_sandbox.py`) that run hostile network/filesystem/
+  resource/privilege code and assert containment; CI sets `PROM_REQUIRE_SANDBOX=1`
+  so they run, not skip. Documented in `docs/sandbox.md` and `SECURITY.md`. New
+  public API: `Sandbox`, `SandboxResult`, `Limits`, `NamespaceSandbox`,
+  `ContainerSandbox`, `UnsafeLocalSandbox`, `NullSandbox`, `build_sandbox`, and
+  `Config.sandbox` / `verifier_max_processes`. The swarm executor stays a no-op:
+  this layer isolates the code the verifier already ran and grants no new
+  execution capability.
 - Provider-backed swarm roles: the swarm's roles now reason via the model
   provider instead of returning deterministic placeholders. Each role builds a
   role-specific prompt from the `TaskPacket` and proposer-side context only,

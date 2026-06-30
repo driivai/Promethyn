@@ -20,6 +20,7 @@ from prometheus_protocol.provider.mock import MockProvider, SolutionBook
 from prometheus_protocol.provider.remote import RemoteModelProvider
 from prometheus_protocol.registry.markdown_registry import MarkdownSkillRegistry
 from prometheus_protocol.runtime.orchestrator import Orchestrator
+from prometheus_protocol.sandbox import build_sandbox
 from prometheus_protocol.swarm.debate import DebateLayer
 from prometheus_protocol.swarm.executor import RecordingExecutor
 from prometheus_protocol.swarm.runtime import SwarmRuntime
@@ -86,6 +87,8 @@ def build_orchestrator(
         timeout_s=config.verifier_timeout_s,
         memory_mb=config.verifier_memory_mb,
         cpu_seconds=config.verifier_cpu_seconds,
+        max_processes=config.verifier_max_processes,
+        sandbox=build_sandbox(config.sandbox),
     )
 
     # Persist trust alongside the ledger; use an in-memory store when the ledger
@@ -156,6 +159,8 @@ def build_swarm_runtime(
         timeout_s=config.verifier_timeout_s,
         memory_mb=config.verifier_memory_mb,
         cpu_seconds=config.verifier_cpu_seconds,
+        max_processes=config.verifier_max_processes,
+        sandbox=build_sandbox(config.sandbox),
     )
     _LOG.info("swarm runtime built (max_role_calls=%d)", config.max_role_calls)
     return SwarmRuntime(
