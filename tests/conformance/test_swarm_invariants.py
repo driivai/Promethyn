@@ -129,8 +129,11 @@ def test_inv3_mandatory_roles_are_present_and_non_removable():
 
 
 def test_inv4_skeptic_check_is_in_the_test_plan_for_the_proposal():
+    from prometheus_protocol._examples.swarm_tasks import build_swarm_provider
+
     packet = TaskPacket(goal="g", budget=5)
-    proposals = RoleSynthesisEngine().assemble(packet).propose(packet)
+    engine = RoleSynthesisEngine(provider=build_swarm_provider())
+    proposals = engine.assemble(packet).propose(packet)
     plan = DebateLayer().select(proposals, packet.budget)
     action = next(e for e in plan.entries if e.proposal.kind == KIND_PROPOSED_ACTION)
     assert any(req.requested_by == "skeptic" for req in action.verification_requests)

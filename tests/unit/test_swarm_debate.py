@@ -13,12 +13,16 @@ from prometheus_protocol.swarm.models import (
 )
 from prometheus_protocol.swarm.synthesis import RoleSynthesisEngine
 from prometheus_protocol.swarm.models import TaskPacket
+from prometheus_protocol._examples.swarm_tasks import build_swarm_provider
 
 _TRUTH_FIELDS = {"verdict", "confidence", "approved", "approval", "judgment"}
 
 
 def _proposals(packet: TaskPacket):
-    return RoleSynthesisEngine().assemble(packet).propose(packet)
+    # Roles reason via a deterministic mock provider (planner -> action,
+    # analyst -> hypothesis), so selection is reproducible.
+    engine = RoleSynthesisEngine(provider=build_swarm_provider())
+    return engine.assemble(packet).propose(packet)
 
 
 def test_testplan_carries_no_truth_or_approval_field():
