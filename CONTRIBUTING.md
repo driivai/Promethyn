@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for your interest in improving Prometheus Protocol. This document
+Thanks for your interest in improving Promethyn. This document
 covers the legal and mechanical requirements for contributions.
 
 ## Contributor License Agreement (required)

@@ -1,4 +1,4 @@
-# Prometheus Protocol — Invariants
+# Promethyn — Invariants
 
 These are formal claims a conforming implementation must uphold. Each is
 checked by code; the relevant tests are noted.

@@ -1,4 +1,4 @@
-# Prometheus Protocol
+# Promethyn
 
 A verifiable, reversible, self-improving learning runtime.
 
@@ -16,6 +16,9 @@ enforced in code, not just documentation.
 > (`prometheus-protocol`). It has no third-party runtime dependencies.
 
 ## Install
+
+Promethyn installs as the Python package `prometheus_protocol` (distribution
+`prometheus-protocol`):
 
 ```bash
 python -m pip install -e ".[dev]"

@@ -1,4 +1,4 @@
-# Prometheus Protocol — Swarm Reasoning Front-End
+# Promethyn — Swarm Reasoning Front-End
 
 Status: draft (v0.1, structural skeleton). This document is the authoritative
 design for the swarm. It builds the typed wall, the mandatory roles, the reuse

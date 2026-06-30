@@ -1,6 +1,6 @@
 # Governance
 
-This document describes how decisions are made for Prometheus Protocol.
+This document describes how decisions are made for Promethyn.
 
 For the boundary between the open-source project and commercial products, see
 `docs/open-core-boundary.md`.
