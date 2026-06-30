@@ -1,4 +1,4 @@
-"""Prometheus Protocol — a verifiable, reversible, self-improving runtime.
+"""Promethyn — a verifiable, reversible, self-improving runtime.
 
 THIS MODULE IS THE OPEN-CORE LINE.
 
