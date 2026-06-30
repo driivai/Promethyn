@@ -26,6 +26,7 @@ import logging
 import os
 import sys
 import tempfile
+from importlib.metadata import PackageNotFoundError, version as _dist_version
 from pathlib import Path
 from typing import Sequence
 
@@ -62,7 +63,7 @@ def _cmd_demo(args: argparse.Namespace) -> int:
         )
         orch = build_orchestrator(config)
 
-        print("Prometheus Protocol — offline demo (simulated provider)\n")
+        print("Promethyn — offline demo (simulated provider)\n")
         baseline = orch.baseline(benchmark.heldout)
         _print_run("Held-out baseline      ", baseline)
 
@@ -119,7 +120,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
     config = Config.from_env()
     _LOG.info("status: reading state (read-only)")
 
-    print("Prometheus Protocol — status\n")
+    print("Promethyn — status\n")
     print(f"provider     : {config.provider}")
     if config.provider != "mock":
         print(f"model        : {config.model or '(unset)'}")
@@ -195,10 +196,29 @@ def _print_trust_ranking(trust_store_path: Path | str) -> None:
         )
 
 
+def _product_version() -> str:
+    """Resolve the installed version for the ``--version`` banner.
+
+    Looks up the distribution (``prometheus-protocol``), not the import package,
+    so this adds no new reference to the package identifier.
+    """
+
+    try:
+        return _dist_version("prometheus-protocol")
+    except PackageNotFoundError:
+        return "0.0.0+local"
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="prometheus-protocol",
-        description="A verifiable, reversible, self-improving learning runtime.",
+        description="Promethyn: a verifiable, reversible, self-improving learning runtime.",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"Promethyn {_product_version()}",
+        help="show the Promethyn product name and version, then exit",
     )
     parser.add_argument(
         "-v",

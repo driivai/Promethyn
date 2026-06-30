@@ -2,7 +2,7 @@
 
 ## The untrusted-code requirement
 
-Prometheus Protocol executes proposed code in its verifier. The reference
+Promethyn executes proposed code in its verifier. The reference
 verifier (`src/prometheus_protocol/verifier/runner.py`) applies a wall-clock
 timeout and POSIX resource limits and runs each candidate in an isolated
 interpreter — but **it is not a sandbox**. Those measures bound accidental

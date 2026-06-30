@@ -1,4 +1,4 @@
-# Prometheus Protocol — Specification
+# Promethyn — Specification
 
 Status: draft (v0.1). This document defines the open protocol. The reference
 implementation lives in `src/prometheus_protocol/`; conformance tests live in
@@ -6,7 +6,7 @@ implementation lives in `src/prometheus_protocol/`; conformance tests live in
 
 ## 1. Overview
 
-Prometheus Protocol is a verifiable, reversible, self-improving learning
+Promethyn is a verifiable, reversible, self-improving learning
 runtime. A frozen proposer suggests solutions to tasks; a sandboxed verifier
 returns a hard pass/fail; failures are mined into reusable markdown *skills*;
 and a promotion gate, guarded by a held-out firewall, decides which skills are

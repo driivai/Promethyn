@@ -41,7 +41,7 @@ in `spec/invariants.md` is a major version bump.
 - `Provider.assess(prompt, system)`: optional, additive provider capability for
   advisory grading (default raises `NotImplementedError`; the remote provider
   overrides it with a judging request).
-- Initial open-core scaffold of the Prometheus Protocol runtime.
+- Initial open-core scaffold of the Promethyn runtime.
 - Core models, service interfaces, and environment-driven configuration.
 - Vendor-neutral provider boundary: a configuration-driven remote provider over
   the chat-completions request shape, and a deterministic offline simulated
