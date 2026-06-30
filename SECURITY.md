@@ -2,18 +2,33 @@
 
 ## The untrusted-code requirement
 
-Promethyn executes proposed code in its verifier. The reference
-verifier (`src/prometheus_protocol/verifier/runner.py`) applies a wall-clock
-timeout and POSIX resource limits and runs each candidate in an isolated
-interpreter — but **it is not a sandbox**. Those measures bound accidental
-runaway code; they do not contain hostile code.
+Promethyn executes proposed code in its verifier — model-generated candidate
+solutions, and the swarm Skeptic's executable cases the verifier runs. That
+untrusted code now runs **inside an isolating sandbox** (`sandbox/`): the
+default verifier executes every candidate through an adapter that denies the
+network, constrains the filesystem to a writable workspace over a read-only
+root, drops capabilities and sets no-new-privileges, and bounds resources
+(memory, CPU time, processes, wall clock). The isolation is proven by
+adversarial conformance tests (INV-SANDBOX-1…5 in `spec/invariants.md`,
+`tests/conformance/test_sandbox.py`) that run hostile code and assert
+containment.
 
-> Before running untrusted code, you MUST run the verifier inside a real
-> isolation boundary — a locked-down container, microVM, or seccomp/namespace
-> jail — with no network access and a read-only, disposable filesystem.
+The historical no-isolation path (a child interpreter with only a timeout and
+rlimits) survives as the explicitly-named `UnsafeLocalSandbox`. It is **not a
+sandbox** and is selectable only with `PROM_ALLOW_UNSAFE_EXEC=1`; it is for
+offline development against trusted/mock examples, never for untrusted code, and
+it logs a warning whenever it runs.
 
-Treat the built-in limits as defence in depth only. See
-`docs/security-model.md` for the full model.
+> Choose the isolating adapter that matches your platform (`PROM_SANDBOX`): the
+> container adapter (Docker/Podman, the most robust — pin the image by digest)
+> or the daemonless namespace adapter. Where no isolating runtime is available
+> the default refuses to run candidate code (it abstains) rather than running it
+> unsandboxed. See `docs/sandbox.md` for the threat model and requirements, and
+> `docs/security-model.md` for the full model.
+
+**Live execution (tool side-effects) is still NOT enabled**: the swarm executor
+remains a no-op recorder. This layer sandboxes the code the verifier already
+runs; it does not grant any new execution capability.
 
 ## Supported versions
 

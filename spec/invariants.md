@@ -165,3 +165,71 @@ Enforcement: a role receives only a `TaskPacket` and a proposer-side
 
 Tests: `tests/conformance/test_swarm_invariants.py::test_inv6_*` and the
 unchanged `tests/conformance/test_firewall.py`.
+
+## Sandbox invariants
+
+Untrusted candidate code (model-generated solutions, and the Skeptic's
+executable cases the verifier runs) executes only inside an isolating
+`Sandbox`. The guarantee is a trusted-core safety property; the specific
+isolation mechanism is a swappable adapter (`sandbox/`). Each invariant is
+proven by an adversarial test that runs hostile code through a real isolating
+adapter (`tests/conformance/test_sandbox.py`); those tests skip when the
+isolation runtime is absent locally and FAIL rather than skip under
+`PROM_REQUIRE_SANDBOX=1` (set in CI).
+
+### INV-SANDBOX-1. Network denied
+
+> Candidate code cannot reach the network. An outbound connection attempt fails
+> inside the sandbox and the host is unaffected.
+
+Enforcement: an isolating adapter runs the candidate with no network (a network
+namespace with no interfaces, or `--network none`).
+
+Tests: `tests/conformance/test_sandbox.py::test_inv_sandbox_1_network_is_denied`.
+
+### INV-SANDBOX-2. Filesystem constrained
+
+> Candidate code may read and write only its workspace. It cannot write outside
+> the workspace, cannot modify read-only paths, and cannot read sensitive host
+> paths.
+
+Enforcement: a read-only root filesystem with a single writable workspace bind,
+and sensitive host directories hidden (`sandbox/_bootstrap.py`, or the
+container's read-only root + tmpfs workspace).
+
+Tests: `tests/conformance/test_sandbox.py::test_inv_sandbox_2_filesystem_is_constrained`.
+
+### INV-SANDBOX-3. Resources bounded
+
+> A memory bomb, an infinite loop, and a process bomb each hit a limit and
+> terminate without impacting the host.
+
+Enforcement: POSIX rlimits (address space, CPU time, process count) and a
+wall-clock bound; the sandbox reaps the whole process tree on exit. The
+`SandboxResult` flags the breach.
+
+Tests: `tests/conformance/test_sandbox.py::test_inv_sandbox_3_*`.
+
+### INV-SANDBOX-4. Least privilege
+
+> Candidate code runs unprivileged: no-new-privileges is set and capabilities
+> are dropped, so a privilege-escalation attempt fails.
+
+Enforcement: `PR_SET_NO_NEW_PRIVS`, a full capability drop after setup
+(`sandbox/_bootstrap.py`), or `--cap-drop ALL --security-opt no-new-privileges`
+with a non-root user (container adapter).
+
+Tests: `tests/conformance/test_sandbox.py::test_inv_sandbox_4_least_privilege`.
+
+### INV-SANDBOX-5. The sandbox is mandatory
+
+> The default configuration executes candidate code only through an isolating
+> adapter. The unsafe direct runner is reachable only with the explicit
+> `PROM_ALLOW_UNSAFE_EXEC=1` opt-in; absent any isolating runtime, the default
+> path refuses to run candidate code (it ABSTAINs) rather than running it in the
+> clear.
+
+Enforcement: `sandbox/factory.py` selection (`auto` never returns the unsafe
+runner; a `NullSandbox` backstop yields `started_ok=False` → ABSTAIN).
+
+Tests: `tests/conformance/test_sandbox.py::test_inv_sandbox_5_*`.
