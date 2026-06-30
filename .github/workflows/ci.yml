@@ -33,7 +33,16 @@ jobs:
       - name: Repository hygiene
         run: python scripts/check_hygiene.py
 
+      - name: Sandbox conformance (isolation must run, not skip)
+        env:
+          PROM_REQUIRE_SANDBOX: "1"
+        run: python -m pytest -q tests/conformance -k sandbox
+
       - name: Test
+        env:
+          # Fail rather than skip the sandbox conformance tests if the isolation
+          # runtime is missing, so green here always means isolation was proven.
+          PROM_REQUIRE_SANDBOX: "1"
         run: python -m pytest -q
 
       - name: Build
