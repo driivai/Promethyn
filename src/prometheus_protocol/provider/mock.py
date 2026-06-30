@@ -16,10 +16,15 @@ says nothing about the quality of any real model.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 from prometheus_protocol.core.interfaces import Provider
 from prometheus_protocol.core.models import Skill
+
+# A deterministic stand-in for open-ended generation. Given (prompt, system) it
+# returns scripted text, so swarm reasoning roles produce reproducible proposals
+# offline. ``None`` means "no scripted generation" (generation returns "").
+Responder = Callable[[str, "str | None"], str]
 
 
 @dataclass(frozen=True)
@@ -36,8 +41,14 @@ SolutionBook = Mapping[str, MockSolution]
 class MockProvider(Provider):
     """Offline simulation of a proposer. See module docstring."""
 
-    def __init__(self, book: SolutionBook | None = None) -> None:
+    def __init__(
+        self,
+        book: SolutionBook | None = None,
+        *,
+        responder: Responder | None = None,
+    ) -> None:
         self._book: dict[str, MockSolution] = dict(book or {})
+        self._responder = responder
 
     def propose_solution(
         self,
@@ -52,6 +63,14 @@ class MockProvider(Provider):
         if _has_relevant_skill(prompt, skills):
             return solution.improved
         return solution.baseline
+
+    def generate(self, *, prompt: str, system: str | None = None) -> str:
+        # Deterministic, offline generation for swarm reasoning roles. Without a
+        # responder there is no scripted output, so generation is empty (a role
+        # then produces no proposal — graceful degradation).
+        if self._responder is None:
+            return ""
+        return self._responder(prompt, system)
 
 
 def _has_relevant_skill(prompt: str, skills: Sequence[Skill]) -> bool:

@@ -38,9 +38,9 @@ def benchmark():
 def swarm_runtime():
     """A swarm runtime wired entirely from existing grounding components."""
 
+    from prometheus_protocol._examples.swarm_tasks import build_swarm_provider
     from prometheus_protocol.gate.authorization import ActionGate
     from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
-    from prometheus_protocol.provider.mock import MockProvider
     from prometheus_protocol.swarm.debate import DebateLayer
     from prometheus_protocol.swarm.executor import RecordingExecutor
     from prometheus_protocol.swarm.runtime import SwarmRuntime
@@ -48,12 +48,14 @@ def swarm_runtime():
     from prometheus_protocol.verifier.bank import VerifierBank
     from prometheus_protocol.verifier.store import InMemoryTrustStore
 
+    # Roles reason via a deterministic mock provider (scripted role outputs).
+    provider = build_swarm_provider()
     return SwarmRuntime(
-        synthesis=RoleSynthesisEngine(),
+        synthesis=RoleSynthesisEngine(provider=provider),
         debate=DebateLayer(),
         bank=VerifierBank(InMemoryTrustStore()),
         gate=ActionGate(),
         executor=RecordingExecutor(),
         ledger=SqliteLedger(":memory:"),
-        provider=MockProvider(),
+        provider=provider,
     )

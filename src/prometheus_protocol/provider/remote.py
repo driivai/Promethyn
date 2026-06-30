@@ -39,6 +39,11 @@ _DEFAULT_ASSESS_SYSTEM_PROMPT = (
     "ABSTAIN. Answer ABSTAIN if you cannot decide."
 )
 
+_DEFAULT_GENERATE_SYSTEM_PROMPT = (
+    "You are a careful reasoning assistant. Answer the request directly and "
+    "concisely, following any output format the request specifies."
+)
+
 
 class ProviderError(RuntimeError):
     """Raised when the remote endpoint cannot be reached or returns bad data."""
@@ -98,11 +103,17 @@ class RemoteModelProvider(Provider):
         return _extract_code(content)
 
     def assess(self, *, prompt: str, system: str | None = None) -> str:
+        return self._complete(prompt, system or _DEFAULT_ASSESS_SYSTEM_PROMPT)
+
+    def generate(self, *, prompt: str, system: str | None = None) -> str:
+        return self._complete(prompt, system or _DEFAULT_GENERATE_SYSTEM_PROMPT)
+
+    def _complete(self, prompt: str, system: str) -> str:
         payload = {
             "model": self.model,
             "temperature": 0,
             "messages": [
-                {"role": "system", "content": system or _DEFAULT_ASSESS_SYSTEM_PROMPT},
+                {"role": "system", "content": system},
                 {"role": "user", "content": prompt},
             ],
         }

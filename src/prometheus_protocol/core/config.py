@@ -62,6 +62,11 @@ class Config:
     gate_threshold: float = 0.0
     retrieval_k: int = 5
 
+    # Swarm cost control: the maximum number of role/provider generation calls a
+    # single swarm task may make. Modest by default so a run cannot make
+    # unbounded provider calls; raise it for wider role panels.
+    max_role_calls: int = 16
+
     request_timeout_s: float = 30.0
 
     @classmethod
@@ -84,5 +89,6 @@ class Config:
             verifier_cpu_seconds=_as_int(env.get("PROM_VERIFIER_CPU_SECONDS"), 5),
             gate_threshold=_as_float(env.get("PROM_GATE_THRESHOLD"), 0.0),
             retrieval_k=_as_int(env.get("PROM_RETRIEVAL_K"), 5),
+            max_role_calls=_as_int(env.get("PROM_MAX_ROLE_CALLS"), 16),
             request_timeout_s=_as_float(env.get("PROM_REQUEST_TIMEOUT_S"), 30.0),
         )
