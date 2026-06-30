@@ -16,6 +16,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Sequence
 
@@ -29,6 +30,8 @@ from prometheus_protocol.sandbox.base import (
 
 _BOOTSTRAP = Path(__file__).with_name("_bootstrap.py")
 _MARKER = "sandbox-bootstrap:"
+# Cached result of the functional availability probe (per process).
+_AVAILABLE_CACHE: bool | None = None
 _UNSHARE_FLAGS = (
     "--user",
     "--map-root-user",
@@ -49,18 +52,40 @@ class NamespaceSandbox(Sandbox):
 
     @classmethod
     def available(cls) -> bool:
-        unshare = shutil.which("unshare")
-        if unshare is None:
+        """Whether a full isolated run actually works here (cached).
+
+        This is a *functional* probe — it runs a trivial candidate through the
+        complete bootstrap (namespaces + mounts + cap drop), not merely a check
+        that ``unshare`` starts — so a host where unprivileged user namespaces
+        start but mounts are restricted is correctly reported as unavailable.
+        """
+
+        global _AVAILABLE_CACHE
+        if _AVAILABLE_CACHE is None:
+            _AVAILABLE_CACHE = cls._probe_available()
+        return _AVAILABLE_CACHE
+
+    @classmethod
+    def _probe_available(cls) -> bool:
+        if shutil.which("unshare") is None:
             return False
         try:
-            probe = subprocess.run(
-                [unshare, *_UNSHARE_FLAGS, "true"],
-                capture_output=True,
-                timeout=15,
-            )
-        except (OSError, subprocess.SubprocessError):
+            with tempfile.TemporaryDirectory(prefix="prom-sbprobe-") as ws:
+                Path(ws, "_probe.py").write_text(
+                    "print('sandbox-ok')", encoding="utf-8"
+                )
+                result = cls().run(
+                    argv=[sys.executable, "-I", "_probe.py"],
+                    workspace=ws,
+                    limits=Limits(wall_time_s=20, memory_bytes=0),
+                )
+        except Exception:
             return False
-        return probe.returncode == 0
+        return (
+            result.started_ok
+            and result.exit_status == 0
+            and "sandbox-ok" in result.stdout
+        )
 
     def run(
         self,

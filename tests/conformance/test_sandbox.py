@@ -19,6 +19,7 @@ import pytest
 
 from prometheus_protocol.core.errors import ConfigError
 from prometheus_protocol.sandbox import (
+    ContainerSandbox,
     Limits,
     NamespaceSandbox,
     UnsafeLocalSandbox,
@@ -196,11 +197,14 @@ def test_inv_sandbox_5_default_path_is_isolating():
     sandbox = build_sandbox(env={})
     assert sandbox.isolating
     assert sandbox.name != UnsafeLocalSandbox.name
-    # When an isolating runtime exists, auto picks it (here, in CI).
+    # auto prefers a functioning isolating adapter (namespace, then container);
+    # absent any, it returns the NullSandbox backstop (still refuses unsafe).
     if NamespaceSandbox.available():
         assert sandbox.name == NamespaceSandbox.name
+    elif ContainerSandbox.available():
+        assert sandbox.name == ContainerSandbox.name
     else:
-        assert isinstance(sandbox, NullSandbox)  # refuses to run unsandboxed
+        assert isinstance(sandbox, NullSandbox)
 
 
 def test_inv_sandbox_5_unsafe_requires_explicit_optin():
