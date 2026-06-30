@@ -2,8 +2,12 @@
 
 A diagnostic run of the full pipeline (mock provider, offline, deterministic)
 against happy-path and adversarial inputs. Findings are recorded here; repros
-live under `tests/shakeout/`. Substantive behaviour was **not** changed in this
-PR — real bugs are left red (xfail) and tracked.
+live under `tests/shakeout/`. The diagnostic PR changed no substantive
+behaviour — real bugs were left red (xfail) and tracked.
+
+**Update — operability hardening:** findings **F1–F5 are now fixed**; their
+repros have been turned green (see the CHANGELOG, Unreleased). F6–F9 remain open
+and tracked below.
 
 ## Triage summary
 
@@ -56,6 +60,8 @@ Fast at toy scale. Each task is one subprocess spawn; verification is **serial**
 ### MAJOR
 
 #### F1 — Unhandled errors surface as raw Python tracebacks at the CLI
+- **Status:** ✅ fixed — `main()` catches known errors and prints a clean
+  `error: <msg>` line (non-zero exit); `-vv` surfaces the traceback.
 - **Category:** operability / DX
 - **Repro:** `PROM_PROVIDER=remote prometheus-protocol baseline` with no
   `PROM_API_BASE`.
@@ -73,6 +79,8 @@ Fast at toy scale. Each task is one subprocess spawn; verification is **serial**
 - **Repro test:** `tests/shakeout/test_shakeout_cli.py` (xfail).
 
 #### F2 — Corrupt or locked state file crashes with a raw `sqlite3.DatabaseError`
+- **Status:** ✅ fixed — the ledger/trust-store adapters raise a typed
+  `StateError` (in `core/errors.py`) naming the file, with recovery advice.
 - **Category:** robustness / operability
 - **Repro:** write non-database bytes to the trust-store / ledger path, then
   construct `SqliteTrustStore(path)` / `SqliteLedger(path)`.
@@ -88,6 +96,8 @@ Fast at toy scale. Each task is one subprocess spawn; verification is **serial**
 ### MINOR
 
 #### F3 — A task with no test cases returns FAIL instead of ABSTAIN
+- **Status:** ✅ fixed — the runner returns ABSTAIN for `total == 0`; non-empty
+  verdicts and benchmark rates are unchanged (parity tested).
 - **Category:** correctness / robustness
 - **Repro:** `SubprocessVerifier().verify(code=..., task=Task(..., cases=()))`.
 - **Observed:** `verdict == FAIL` (`passed == False`).
@@ -99,6 +109,8 @@ Fast at toy scale. Each task is one subprocess spawn; verification is **serial**
 - **Repro test:** `tests/shakeout/test_shakeout_verifier.py` (xfail).
 
 #### F4 — No `status` view; trust ranking and skills are never surfaced
+- **Status:** ✅ fixed — added a read-only `status` command rendering the
+  verifier ranking (with calibration counts) and the promoted skills.
 - **Category:** DX / observability
 - **Observed:** CLI commands are `demo / baseline / cycle / audit`. There is no
   `status` (the brief's mental model was `baseline / learn / ablate / status`);
@@ -111,6 +123,8 @@ Fast at toy scale. Each task is one subprocess spawn; verification is **serial**
   registry contents; consider `learn`/`ablate` aliases. (Feature ⇒ finding.)
 
 #### F5 — No structured logging anywhere in the runtime
+- **Status:** ✅ fixed — `logging` added at the CLI/factory/orchestrator/provider
+  seams with a `-v`/`-vv` flag (and `PROM_LOG_LEVEL`); default WARNING.
 - **Category:** operability
 - **Observed:** `grep -rn "import logging" src/` → nothing. A failed or partial
   run yields only a traceback (or silence); there is no run log to debug from.

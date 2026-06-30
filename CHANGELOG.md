@@ -8,6 +8,28 @@ in `spec/invariants.md` is a major version bump.
 ## [Unreleased]
 
 ### Added
+- Operability hardening for findings F1–F5 from the end-to-end shakeout
+  (`docs/shakeout-report.md`):
+  - **(F1)** The CLI now reports known errors — a misconfigured provider, an
+    unreadable state file — as a single `error: <message>` line on stderr with a
+    non-zero exit, instead of a raw Python traceback. Unexpected exceptions still
+    propagate; `-vv` surfaces the full traceback of a handled error.
+  - **(F2)** New typed domain errors (`core/errors.py`): `PrometheusError`
+    (base), `StateError`, and `ConfigError`. The SQLite ledger and trust-store
+    adapters now wrap an open of a corrupt or locked file in a `StateError` that
+    names the offending path and suggests recovery, rather than leaking a raw
+    `sqlite3.DatabaseError`. `PrometheusError`, `StateError`, and `ConfigError`
+    are part of the public API.
+  - **(F4)** New read-only `status` CLI command: shows the configured storage,
+    the promoted skills in the registry, and the verifier trust ranking
+    (`bank.rank()`) with per-verifier reliability and calibration sample counts.
+    It runs nothing, verifies nothing, and creates no state that is not already
+    present.
+  - **(F5)** Structured `logging` at the CLI, factory, orchestrator, and remote
+    provider seams: lifecycle events (run start/finish, verifier registration,
+    per-task judgment, gate decisions, promotions) at INFO/DEBUG. A `-v`/`-vv`
+    flag (or `PROM_LOG_LEVEL`) selects verbosity; the default is WARNING. No
+    control flow changed, and secrets (the API key) are never logged.
 - Soft model-judge verifier (`verifier/model_judge.py`, `ModelJudgeVerifier`): an
   untrusted advisor that asks the model (via the provider) whether a candidate
   satisfies a task and returns `Tier.SOFT` evidence (PASS/FAIL/ABSTAIN). It runs
@@ -71,6 +93,11 @@ in `spec/invariants.md` is a major version bump.
   `Executor`, `RecordingExecutor`, and `ActionGate`.
 
 ### Changed
+- **(F3)** The subprocess verifier now returns `ABSTAIN` for a task with no test
+  cases (nothing to verify) instead of `FAIL` (a confident failure). An ABSTAIN
+  is not a pass and never feeds calibration. Verdicts for every non-empty case
+  set are unchanged (parity is covered by tests), so pass rates on the example
+  benchmark are identical.
 - The verifier bank's fused **confidence** now reflects calibrated
   non-reference verifiers (e.g. a soft model-judge), so confidence becomes
   informative — agreement raises it, disagreement lowers it. The **verdict** is
