@@ -2,6 +2,9 @@
 
 This document describes how decisions are made for Prometheus Protocol.
 
+For the boundary between the open-source project and commercial products, see
+`docs/open-core-boundary.md`.
+
 ## Roles
 
 - **Maintainers** review and merge changes, triage issues, and keep CI green.
