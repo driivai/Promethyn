@@ -16,13 +16,17 @@ The request is deterministic where the endpoint allows it (temperature 0).
 from __future__ import annotations
 
 import json
+import logging
 import urllib.error
 import urllib.request
 from typing import Sequence
 
 from prometheus_protocol.core.config import Config
+from prometheus_protocol.core.errors import ConfigError
 from prometheus_protocol.core.interfaces import Provider
 from prometheus_protocol.core.models import Skill
+
+_LOG = logging.getLogger(__name__)
 
 _DEFAULT_SYSTEM_PROMPT = (
     "You write small, correct Python functions. Reply with only the function "
@@ -53,9 +57,9 @@ class RemoteModelProvider(Provider):
         system_prompt: str = _DEFAULT_SYSTEM_PROMPT,
     ) -> None:
         if not api_base:
-            raise ValueError("api_base is required (set PROM_API_BASE)")
+            raise ConfigError("api_base is required (set PROM_API_BASE)")
         if not model:
-            raise ValueError("model is required (set PROM_MODEL)")
+            raise ConfigError("model is required (set PROM_MODEL)")
         self.api_base = api_base.rstrip("/")
         self.model = model
         self.api_key = api_key
@@ -110,6 +114,8 @@ class RemoteModelProvider(Provider):
 
     def _post(self, path: str, payload: dict) -> dict:
         url = self.api_base + path
+        # Endpoint and model only — the API key is never logged.
+        _LOG.debug("POST %s (model=%s)", url, self.model)
         body = json.dumps(payload).encode("utf-8")
         headers = {"Content-Type": "application/json"}
         if self.api_key:

@@ -17,6 +17,7 @@ One learning cycle is:
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Sequence
 
@@ -33,6 +34,8 @@ from prometheus_protocol.forge.miner import LessonForge
 from prometheus_protocol.gate.promotion import GateDecision
 from prometheus_protocol.memory.tiers import MemoryTier
 from prometheus_protocol.verifier.bank import VerifierBank
+
+_LOG = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -136,6 +139,7 @@ class Orchestrator:
         cycle: int = 0,
         kind: str = "run",
     ) -> RunReport:
+        _LOG.info("run %r (cycle %d): %d task(s)", kind, cycle, len(tasks))
         outcomes: list[TaskOutcome] = []
         for task in tasks:
             skills = self._skills_for(task, extra_skills, exclude_ids)
@@ -152,6 +156,12 @@ class Orchestrator:
             # verdict (ABSTAIN, like the old timeout, is not a pass).
             judgment = self.bank.judge([evidence, *advisory_evidence])
             passed = judgment.verdict == Verdict.PASS
+            _LOG.debug(
+                "task %s: verdict=%s confidence=%.3f",
+                task.id,
+                judgment.verdict.value,
+                judgment.confidence,
+            )
             attempt = Attempt(
                 task_id=task.id,
                 split=task.split,
@@ -165,7 +175,9 @@ class Orchestrator:
             if self.memory is not None:
                 self.memory.set(f"cycle:{cycle}", task.id, passed)
             outcomes.append(TaskOutcome(task.id, task.split, passed, attempt))
-        return RunReport(tuple(outcomes))
+        report = RunReport(tuple(outcomes))
+        _LOG.info("run %r complete: %.0f%% passed", kind, report.pass_rate * 100)
+        return report
 
     # -- high-level operations --------------------------------------------
 
@@ -222,6 +234,11 @@ class Orchestrator:
                 rate_before=rate_before,
             )
             decisions.append(decision)
+            _LOG.debug(
+                "gate: skill %s %s",
+                candidate.id,
+                "promoted" if decision.promoted else "rejected",
+            )
             if decision.promoted:
                 self.registry.add(candidate)
                 self.ledger.record_promotion(
@@ -232,6 +249,12 @@ class Orchestrator:
                     rate_after=decision.rate_after,
                 )
                 promoted.append(candidate.id)
+                _LOG.info(
+                    "promoted skill %s (%.0f%% -> %.0f%%)",
+                    candidate.id,
+                    decision.rate_before * 100,
+                    decision.rate_after * 100,
+                )
 
         post_rate = self.run_split(
             heldout_tasks, cycle=cycle, kind="heldout-after"
