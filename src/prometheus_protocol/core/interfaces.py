@@ -44,6 +44,19 @@ class Provider(ABC):
         """
         raise NotImplementedError("this provider does not support assessment")
 
+    def generate(self, *, prompt: str, system: str | None = None) -> str:
+        """Return a free-form completion for open-ended reasoning.
+
+        Optional capability used by swarm reasoning roles to produce a typed
+        proposal (a hypothesis, option, forecast, critique, or — for non-code
+        domains — an action) from a role-specific prompt. The default raises
+        ``NotImplementedError``; providers that can issue such a request
+        override it. A role treats an unsupported provider, or any failure, as
+        "no proposal" (it degrades gracefully and never crosses the wall with an
+        unvalidated object).
+        """
+        raise NotImplementedError("this provider does not support generation")
+
 
 class Verifier(ABC):
     """Runs candidate code against a task's hidden cases and returns evidence."""
