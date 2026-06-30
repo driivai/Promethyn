@@ -123,6 +123,8 @@ containerise it. See `docs/security-model.md` and `SECURITY.md`.
 See `CONTRIBUTING.md` (a Contributor License Agreement is required) and
 `GOVERNANCE.md`.
 
+Open-core boundary and commercial split: `docs/open-core-boundary.md`.
+
 ## License
 
 Apache-2.0. See `LICENSE`.

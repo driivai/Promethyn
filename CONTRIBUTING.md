@@ -58,6 +58,10 @@ needs conformance tests under `tests/conformance/`.
 contains a banned tooling or vendor token. Describe work by its engineering
 outcome and keep the codebase neutral.
 
+The hygiene gate and the conformance gate are conditions of acceptance for any
+contribution; see `docs/open-core-boundary.md` for the open/commercial boundary
+they protect.
+
 ## Changing an invariant or the protocol
 
 Changes to `spec/invariants.md` or the protocol have a higher bar; see
