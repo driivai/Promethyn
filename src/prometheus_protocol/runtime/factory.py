@@ -7,6 +7,8 @@ is made by configuration rather than by code edits.
 
 from __future__ import annotations
 
+import logging
+
 from prometheus_protocol.core.config import PROVIDER_REMOTE, Config
 from prometheus_protocol.core.interfaces import Provider, Verifier
 from prometheus_protocol.forge.miner import LessonForge
@@ -21,6 +23,8 @@ from prometheus_protocol.verifier.bank import VerifierBank
 from prometheus_protocol.verifier.model_judge import ModelJudgeVerifier
 from prometheus_protocol.verifier.runner import SubprocessVerifier
 from prometheus_protocol.verifier.store import InMemoryTrustStore, SqliteTrustStore
+
+_LOG = logging.getLogger(__name__)
 
 
 def build_provider(
@@ -88,6 +92,9 @@ def build_orchestrator(
         trust_store = SqliteTrustStore(config.trust_store_path)
     bank = VerifierBank(trust_store)
     bank.register(verifier.verifier_id, verifier.tier)
+    _LOG.info(
+        "registered verifier %s (tier=%s)", verifier.verifier_id, verifier.tier.value
+    )
 
     # Optional soft model-judge advisor (off by default). The bank calibrates it
     # against the hard reference; it never decides a verdict.
@@ -96,7 +103,15 @@ def build_orchestrator(
         judge = ModelJudgeVerifier(build_judge_provider(config, solution_book))
         bank.register(judge.verifier_id, judge.tier)
         advisors.append(judge)
+        _LOG.info(
+            "registered advisor %s (tier=%s)", judge.verifier_id, judge.tier.value
+        )
 
+    _LOG.info(
+        "orchestrator built (provider=%s, ledger=%s)",
+        config.provider,
+        config.ledger_path,
+    )
     return Orchestrator(
         provider=build_provider(config, solution_book),
         verifier=verifier,
