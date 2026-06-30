@@ -122,9 +122,10 @@ class SubprocessVerifier(Verifier):
     Emits tier-tagged :class:`Evidence`: it is an authoritative hard check, so
     its verdict is PASS when every case passes, FAIL when the tests run and the
     candidate fails (a wrong answer or an exception raised inside a case), and
-    ABSTAIN when the check could not run at all (timeout or harness crash). An
-    ABSTAIN is a genuine "no opinion": it must not be counted as a pass and must
-    not feed calibration.
+    ABSTAIN when there was nothing to decide — the check could not run at all
+    (timeout or harness crash) or the task had no cases to verify. An ABSTAIN is
+    a genuine "no opinion": it must not be counted as a pass and must not feed
+    calibration.
     """
 
     #: Stable identifier this verifier reports in every Evidence it emits.
@@ -232,7 +233,22 @@ class SubprocessVerifier(Verifier):
             passed_count = int(result.get("passed", 0))
             reported_total = int(result.get("total", total))
             failures = tuple(str(f) for f in result.get("failures", ()))
-            all_passed = passed_count == reported_total and reported_total > 0
+            if reported_total == 0:
+                # There were no cases to run, so the check has no opinion: this
+                # is ABSTAIN, not a confident failure. (An ABSTAIN is not a pass
+                # and never feeds calibration.) For any non-empty case set the
+                # verdict below is unchanged.
+                return self._evidence(
+                    verdict=Verdict.ABSTAIN,
+                    total=reported_total,
+                    passed_count=passed_count,
+                    failures=failures or ("no cases to verify",),
+                    stdout=_clip(proc.stdout),
+                    stderr=_clip(proc.stderr),
+                    duration_s=duration,
+                    timed_out=False,
+                )
+            all_passed = passed_count == reported_total
             return self._evidence(
                 verdict=Verdict.PASS if all_passed else Verdict.FAIL,
                 total=reported_total,
