@@ -18,6 +18,11 @@ is an implementation detail and may change without notice.
 from __future__ import annotations
 
 from prometheus_protocol.core.config import Config
+from prometheus_protocol.core.errors import (
+    ConfigError,
+    PrometheusError,
+    StateError,
+)
 from prometheus_protocol.core.interfaces import (
     Gate,
     Ledger,
@@ -92,6 +97,10 @@ __all__ = [
     "__version__",
     # configuration
     "Config",
+    # domain errors
+    "PrometheusError",
+    "StateError",
+    "ConfigError",
     # models
     "Task",
     "Skill",
