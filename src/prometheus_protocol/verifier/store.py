@@ -11,6 +11,7 @@ import sqlite3
 from abc import ABC, abstractmethod
 from pathlib import Path
 
+from prometheus_protocol.core.errors import StateError
 from prometheus_protocol.core.models import Tier
 from prometheus_protocol.verifier.trust import TrustStats
 
@@ -66,10 +67,19 @@ class SqliteTrustStore(TrustStore):
         self.path = str(path)
         if self.path != ":memory:":
             Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(self.path)
-        self._conn.row_factory = sqlite3.Row
-        self._conn.executescript(_SCHEMA)
-        self._conn.commit()
+        conn = sqlite3.connect(self.path)
+        try:
+            conn.row_factory = sqlite3.Row
+            conn.executescript(_SCHEMA)
+            conn.commit()
+        except sqlite3.DatabaseError as exc:
+            conn.close()
+            raise StateError(
+                f"could not open verifier trust store {self.path!r}: {exc}. "
+                "The file may be corrupt or locked by another process; "
+                "remove or repair it, then retry."
+            ) from exc
+        self._conn = conn
 
     def get(self, verifier_id: str) -> TrustStats | None:
         row = self._conn.execute(
