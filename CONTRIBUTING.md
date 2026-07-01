@@ -37,6 +37,21 @@ Common types: `feat`, `fix`, `docs`, `test`, `refactor`, `chore`, `ci`.
 Keep summaries imperative and scoped, e.g.
 `feat(gate): tighten promotion threshold handling`.
 
+## Pull request descriptions
+
+Keep pull request descriptions free of automated tool-attribution footers. Some
+authoring tools append an attribution line to the pull request body when the
+pull request is created; if one appears, remove it before requesting review so
+the description covers only the change itself.
+
+The project's tool-settings file already requests that this line be suppressed.
+That request is honored for pull requests opened from a local checkout, but the
+hosted integration that opens pull requests from remote sessions currently
+injects the footer server-side without reading the repository's settings, so it
+must be stripped by hand after the pull request is opened until that gap is
+closed. This mirrors the commit-message rule: metadata stays neutral and
+describes the work, not the tooling that produced it.
+
 ## Before you open a pull request
 
 Run the same checks CI runs:
