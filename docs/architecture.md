@@ -54,6 +54,16 @@ lists exactly what is supported. Underscore-prefixed modules (for example
 3. Each candidate goes to `gate`, which enforces the firewall, scores it on
    the held-out split, and (on success) writes it to `registry` and `ledger`.
 
+## Audit and observability
+
+The ledger is the audit substrate: every attempt, judgment, gate decision,
+pending hold, human decision, and execution is recorded. The fused judgment
+(verdict + calibrated confidence) is promoted to first-class, indexed columns
+alongside the JSON source of record, so the chain is SQL-queryable — including
+"executed actions below confidence X" and the authoritative-PASS-with-low-
+confidence case (surfaced for review, not auto-escalated). See
+[`docs/observability.md`](observability.md).
+
 ## Verifier-trust ranking
 
 A single task can be checked by more than one verifier — a sandboxed test

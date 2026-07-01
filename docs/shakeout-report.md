@@ -6,7 +6,10 @@ live under `tests/shakeout/`. The diagnostic PR changed no substantive
 behaviour — real bugs were left red (xfail) and tracked.
 
 **Update — operability hardening:** findings **F1–F5 are now fixed**; their
-repros have been turned green (see the CHANGELOG, Unreleased). F6–F9 remain open
+repros have been turned green (see the CHANGELOG, Unreleased).
+
+**Update — audit observability:** **F6 is now resolved** (verdict/confidence are
+first-class, queryable columns; see `docs/observability.md`). F7–F9 remain open
 and tracked below.
 
 ## Triage summary
@@ -131,18 +134,20 @@ Fast at toy scale. Each task is one subprocess spawn; verification is **serial**
 - **Recommended action:** add `logging` at the orchestrator/factory/provider
   seams (a `-v/--verbose` CLI flag). (Design ⇒ finding.)
 
-#### F6 — Judgment confidence is not SQL-queryable (lives in a JSON column)
+#### F6 — Judgment confidence is now SQL-queryable (RESOLVED)
 - **Category:** observability
-- **Repro:** `SELECT id FROM attempts WHERE confidence > 0.9` →
-  `sqlite3.OperationalError: no such column: confidence`.
-- **Observed:** verdict/confidence are recoverable only by parsing the JSON
-  `evidence` column (`row['evidence']['judgment']['confidence']`).
-- **Expected (eventually):** first-class columns for analytics. Known limitation;
-  it bites anyone wanting SQL-level confidence analytics.
-- **Recommended action:** an additive `confidence REAL` / `verdict TEXT` column
-  with a migration, when analytics are needed. (Schema change ⇒ finding.)
-- **Repro test:** `tests/shakeout/test_shakeout_ledger.py` (characterisation,
-  passing — a tripwire if a column is added).
+- **Status:** **resolved.** Verdict and calibrated confidence are promoted to
+  first-class, indexed columns on `attempts` and `executions`, written alongside
+  the JSON that stays the source of record. `SELECT id FROM attempts WHERE
+  confidence > 0.9` now works, and the executed-action audit queries filter on
+  confidence directly.
+- **What shipped:** `ledger.executions_below_confidence(x)`,
+  `authoritative_pass_below(x)`, `human_decisions()`; CLI
+  `audit --executed-below/--auth-pass-below/--human-log`; and an idempotent
+  `migrate` that backfills historical JSON rows. Verdict/escalation semantics are
+  unchanged — this is observability only. See `docs/observability.md`.
+- **Repro test:** `tests/shakeout/test_shakeout_ledger.py` (now characterises the
+  resolved behaviour) and `tests/unit/test_ledger_observability.py`.
 
 #### F7 — Verification is serial; no batching/parallelism
 - **Category:** performance
