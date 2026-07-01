@@ -176,3 +176,33 @@ class Judgment:
     contributing: tuple[str, ...] = ()
     conflict: bool = False
     detail: str = ""
+
+
+# Minimal, explicit tool set the executor may act on. Only in-sandbox code
+# execution is supported: this sprint adds no network or external connectors.
+ACTION_PYTHON_CODE = "python_code"
+EXECUTABLE_ACTION_KINDS = frozenset({ACTION_PYTHON_CODE})
+
+
+@dataclass(frozen=True)
+class ExecutableAction:
+    """A concrete, side-effecting action authorized for sandboxed execution.
+
+    Like any proposer-side content, an action carries no verdict and no
+    approval; it becomes executable only when wrapped in an *approved*
+    ``GateDecision``. ``kind`` names the (minimal, explicit) tool; ``code`` is
+    the program run inside the sandbox; ``entry_point`` is optional code-domain
+    metadata. The executor refuses any unknown kind, and every side-effect runs
+    through the sandbox — nothing here reaches the world outside isolation.
+    """
+
+    kind: str
+    code: str
+    entry_point: str = ""
+
+    def __post_init__(self) -> None:
+        if self.kind not in EXECUTABLE_ACTION_KINDS:
+            raise ValueError(
+                f"unknown action kind {self.kind!r}; expected one of "
+                f"{sorted(EXECUTABLE_ACTION_KINDS)}"
+            )

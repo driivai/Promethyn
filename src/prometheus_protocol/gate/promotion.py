@@ -20,7 +20,15 @@ from dataclasses import dataclass
 from typing import Callable, Sequence
 
 from prometheus_protocol.core.interfaces import Gate
-from prometheus_protocol.core.models import Judgment, Skill, Task
+from prometheus_protocol.core.models import ExecutableAction, Judgment, Skill, Task
+
+# The three action-authorization outcomes. ``approve`` executes; ``route`` holds
+# the action for a human (a pending action); ``block`` denies it terminally.
+# ``approved`` stays the single load-bearing field the executor checks — only an
+# ``approve`` outcome sets it True — so the wall is unchanged.
+OUTCOME_APPROVE = "approve"
+OUTCOME_ROUTE = "route"
+OUTCOME_BLOCK = "block"
 
 
 class FirewallError(AssertionError):
@@ -56,6 +64,12 @@ class GateDecision:
     rate_after: float | None = None
     judgment: Judgment | None = None
     reason: str = ""
+    # Action-authorization extensions (additive; the promotion path leaves them
+    # unset). ``outcome`` distinguishes route from block for a non-approved
+    # action; ``action`` is the payload an approved decision authorizes for
+    # sandboxed execution. Both default to the legacy shape.
+    outcome: str = ""
+    action: ExecutableAction | None = None
 
     @property
     def promoted(self) -> bool:
@@ -66,6 +80,19 @@ class GateDecision:
     def skill_id(self) -> str:
         """Backward-compatible alias used by the promotion path."""
         return self.subject_id
+
+    @property
+    def effective_outcome(self) -> str:
+        """The action-authorization outcome, derived when not set explicitly.
+
+        A decision built without an explicit outcome (the promotion path, or a
+        legacy caller) reads as ``approve`` when approved and ``block``
+        otherwise, so ``approved`` remains the single source of truth.
+        """
+
+        if self.outcome:
+            return self.outcome
+        return OUTCOME_APPROVE if self.approved else OUTCOME_BLOCK
 
 
 # A scorer runs the held-out tasks with a candidate skill in context and
