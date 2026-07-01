@@ -26,8 +26,29 @@ from prometheus_protocol.gate.promotion import (
 )
 
 
+#: Default time-to-live for a pending human hold (24h). Mirrors Config.
+_DEFAULT_TTL_SECONDS = 86_400
+
+
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _parse_iso(timestamp: str) -> datetime:
+    """Parse an ISO-8601 timestamp, tolerating a trailing ``Z`` and naive values.
+
+    A naive timestamp is read as UTC so a duration comparison always has a
+    timezone on both sides. (``datetime.fromisoformat`` before 3.11 rejects the
+    ``Z`` suffix that the tests use.)
+    """
+
+    text = timestamp.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    parsed = datetime.fromisoformat(text)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 def _action_to_dict(action: ExecutableAction) -> dict:
@@ -71,9 +92,16 @@ class PendingActionService:
     an ISO-8601 string.
     """
 
-    def __init__(self, ledger: Ledger, *, clock: Callable[[], str] | None = None) -> None:
+    def __init__(
+        self,
+        ledger: Ledger,
+        *,
+        clock: Callable[[], str] | None = None,
+        ttl_seconds: int = _DEFAULT_TTL_SECONDS,
+    ) -> None:
         self._ledger = ledger
         self._clock = clock or _utc_now_iso
+        self._ttl_seconds = ttl_seconds
 
     # -- holding -----------------------------------------------------------
 
@@ -145,11 +173,22 @@ class PendingActionService:
 
         This is the sole construction of an *approving* decision from a held
         action: the human is the authority. The ledger write happens first, so
-        no execution can follow an unrecorded approval.
+        no execution can follow an unrecorded approval. Approval re-checks the
+        hold at decision time — a lapsed (past-TTL) or already-resolved hold
+        cannot be approved — closing the stale-approval race.
         """
 
-        pending = self._require_pending(pending_id)
         timestamp = now or self._clock()
+        pending = self._require_pending(pending_id)
+        # Stale-approval guard: a hold past its TTL cannot be approved, even if a
+        # sweep has not run yet. Expire it on the spot (audited) and refuse, so no
+        # execution can follow a lapsed approval.
+        if self._is_lapsed(pending, now=timestamp):
+            self._expire(pending_id, now=timestamp)
+            raise ValueError(
+                f"pending action {pending_id} has expired (TTL {self._ttl_seconds}s) "
+                "and can no longer be approved"
+            )
         self._ledger.resolve_pending_action(
             pending_id,
             status=PendingStatus.APPROVED.value,
@@ -189,6 +228,45 @@ class PendingActionService:
             decision_reason=reason,
         )
 
+    # -- expiry ------------------------------------------------------------
+
+    def sweep(self, *, now: str | None = None) -> list[PendingAction]:
+        """Expire every pending action older than the TTL. Idempotent.
+
+        A lapsed hold transitions pending -> EXPIRED in the ledger (an audited
+        transition) and can never be approved or executed thereafter. Running
+        the sweep again is a no-op — an already-decided hold is not re-touched.
+        Returns the actions expired by this call.
+        """
+
+        timestamp = now or self._clock()
+        expired: list[PendingAction] = []
+        for row in self._ledger.pending_actions(status=PendingStatus.PENDING.value):
+            pending = self._from_row(row)
+            if self._is_lapsed(pending, now=timestamp):
+                self._expire(pending.id, now=timestamp)
+                refreshed = self.get(pending.id)
+                if refreshed is not None:
+                    expired.append(refreshed)
+        return expired
+
+    def _is_lapsed(self, pending: PendingAction, *, now: str) -> bool:
+        if self._ttl_seconds <= 0:
+            return False  # expiry disabled: holds live until decided
+        elapsed = (_parse_iso(now) - _parse_iso(pending.created_at)).total_seconds()
+        return elapsed >= self._ttl_seconds
+
+    def _expire(self, pending_id: int, *, now: str) -> None:
+        # Reuses the single resolver, which only ever transitions a still-pending
+        # row — so this is idempotent and never overwrites a human decision.
+        self._ledger.resolve_pending_action(
+            pending_id,
+            status=PendingStatus.EXPIRED.value,
+            decided_by="system:sweep",
+            decided_at=now,
+            decision_reason=f"expired after {self._ttl_seconds}s TTL",
+        )
+
     def _require_pending(self, pending_id: int) -> PendingAction:
         pending = self.get(pending_id)
         if pending is None:
@@ -201,8 +279,14 @@ class PendingActionService:
 
     @staticmethod
     def _from_row(row: dict) -> PendingAction:
+        # A human_decision records an actual human approve/reject. A system
+        # expiry is a transition audited in the row (status/decided_at/reason),
+        # not a human decision, so it is not surfaced here.
         human_decision = None
-        if row.get("decided_by"):
+        if row["status"] in (
+            PendingStatus.APPROVED.value,
+            PendingStatus.REJECTED.value,
+        ) and row.get("decided_by"):
             human_decision = HumanDecision(
                 decision=row["status"],
                 identity=row["decided_by"],

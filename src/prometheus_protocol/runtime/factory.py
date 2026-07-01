@@ -209,4 +209,5 @@ def build_execution_controller(
         gate=ActionGate(escalate_below=config.escalate_below, route_high_risk=True),
         executor=SandboxExecutor(sandbox=build_sandbox(config.sandbox), limits=limits),
         ledger=ledger if ledger is not None else SqliteLedger(config.ledger_path),
+        ttl_seconds=config.pending_ttl_seconds,
     )

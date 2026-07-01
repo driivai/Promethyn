@@ -76,6 +76,12 @@ class Config:
     # verifier bank's escalate_below default.
     escalate_below: float = 0.75
 
+    # How long a pending (human-hold) action stays approvable before it lapses.
+    # A `sweep` transitions holds older than this to EXPIRED, and approval
+    # re-checks it at decision time; an expired hold can never execute. Default
+    # is 24h; set to 0 to disable expiry (holds live until decided).
+    pending_ttl_seconds: int = 86_400
+
     # Swarm cost control: the maximum number of role/provider generation calls a
     # single swarm task may make. Modest by default so a run cannot make
     # unbounded provider calls; raise it for wider role panels.
@@ -106,6 +112,7 @@ class Config:
             gate_threshold=_as_float(env.get("PROM_GATE_THRESHOLD"), 0.0),
             retrieval_k=_as_int(env.get("PROM_RETRIEVAL_K"), 5),
             escalate_below=_as_float(env.get("PROM_ESCALATE_BELOW"), 0.75),
+            pending_ttl_seconds=_as_int(env.get("PROM_PENDING_TTL"), 86_400),
             max_role_calls=_as_int(env.get("PROM_MAX_ROLE_CALLS"), 16),
             request_timeout_s=_as_float(env.get("PROM_REQUEST_TIMEOUT_S"), 30.0),
         )

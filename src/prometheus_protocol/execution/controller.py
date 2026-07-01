@@ -19,7 +19,11 @@ from typing import Callable
 from prometheus_protocol.core.interfaces import Ledger
 from prometheus_protocol.core.models import ExecutableAction, Judgment
 from prometheus_protocol.execution.models import PendingAction
-from prometheus_protocol.execution.pending import PendingActionService, _utc_now_iso
+from prometheus_protocol.execution.pending import (
+    _DEFAULT_TTL_SECONDS,
+    PendingActionService,
+    _utc_now_iso,
+)
 from prometheus_protocol.gate.authorization import ActionGate
 from prometheus_protocol.gate.promotion import (
     OUTCOME_APPROVE,
@@ -49,12 +53,15 @@ class ExecutionController:
         ledger: Ledger,
         pending: PendingActionService | None = None,
         clock: Callable[[], str] | None = None,
+        ttl_seconds: int = _DEFAULT_TTL_SECONDS,
     ) -> None:
         self._gate = gate
         self._executor = executor
         self._ledger = ledger
         self._clock = clock or _utc_now_iso
-        self._pending = pending or PendingActionService(ledger, clock=self._clock)
+        self._pending = pending or PendingActionService(
+            ledger, clock=self._clock, ttl_seconds=ttl_seconds
+        )
 
     @property
     def pending(self) -> PendingActionService:
@@ -107,6 +114,11 @@ class ExecutionController:
         """Record a human rejection. The action is never executed."""
 
         self._pending.reject(pending_id, identity=identity, reason=reason)
+
+    def sweep(self, *, now: str | None = None) -> list[PendingAction]:
+        """Expire lapsed pending actions (delegates to the pending service)."""
+
+        return self._pending.sweep(now=now)
 
     def _execute(self, decision: GateDecision, *, source: str) -> ExecutionResult:
         result = self._executor.execute(decision)
