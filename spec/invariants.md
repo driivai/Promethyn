@@ -233,3 +233,70 @@ Enforcement: `sandbox/factory.py` selection (`auto` never returns the unsafe
 runner; a `NullSandbox` backstop yields `started_ok=False` → ABSTAIN).
 
 Tests: `tests/conformance/test_sandbox.py::test_inv_sandbox_5_*`.
+
+## Execution invariants
+
+Turning execution on: an approved action performs real side-effects, but only
+inside the sandbox and only under the right authority. Low-confidence or
+high-risk actions halt and route to a human; blocked actions never execute;
+every path is recorded. Execution reuses the same `Sandbox` port as the verifier
+(`sandbox/`), so the isolation guarantees above hold for side-effects too. The
+conformance tests prove the fail-closed, approved-only, halt, and audit
+properties without an isolation runtime, and additionally prove real in-sandbox
+execution when the runtime is present (skipping otherwise, FAILing under
+`PROM_REQUIRE_SANDBOX=1`). This sprint turns the executor real and adds the human
+halt; it does not change the bank fusion, the firewall, the proposer/judge wall,
+or verdict semantics.
+
+### INV-EXEC-1. The sandbox is mandatory for execution
+
+> The executor performs no side-effect outside the sandbox. If no isolating
+> sandbox is available, execution refuses (fail-closed) — it does not run the
+> action unsandboxed.
+
+Enforcement: `SandboxExecutor` runs every action through the configured
+isolating `Sandbox`; a non-isolating adapter is refused before it runs anything,
+and a sandbox that does not start yields a refusal rather than a clear-text run
+(`execution/executor.py`).
+
+Tests: `tests/conformance/test_execution.py::test_inv_exec_1_*` (the refusal and
+network-denied-during-execution cases; the positive case runs under the isolation
+runtime).
+
+### INV-EXEC-2. Approved-only
+
+> The executor accepts only an approved `GateDecision`. A raw proposal, a blocked
+> decision, or a still-pending (unapproved) action cannot reach execution.
+
+Enforcement: `Executor.execute` takes only a `GateDecision` and refuses one that
+is not approved; the controller never calls the executor for a routed action
+(`execution/executor.py`, `execution/controller.py`).
+
+Tests: `tests/conformance/test_execution.py::test_inv_exec_2_*`.
+
+### INV-EXEC-3. The human halt (load-bearing)
+
+> A low-confidence or high-risk action becomes a pending action and never
+> executes without a recorded human approval; a rejected pending action never
+> executes. There is no code path from a routed action to the executor without a
+> recorded approval.
+
+Enforcement: the action gate routes such actions to `route`; the controller
+holds them as pending actions and executes only via `approve`, which writes the
+human decision to the ledger before the executor is called
+(`gate/authorization.py`, `execution/pending.py`, `execution/controller.py`).
+
+Tests: `tests/conformance/test_execution.py::test_inv_exec_3_*` and
+`tests/conformance/test_execution_routing.py`.
+
+### INV-EXEC-4. Audit completeness
+
+> Every executed action and every human decision is recorded in the ledger chain
+> and can be read back end to end.
+
+Enforcement: the controller records each execution (auto-approved, human-approved,
+or blocked) and the pending service records each human decision, both in the
+ledger (`ledger/sqlite_ledger.py`).
+
+Tests: `tests/conformance/test_execution.py::test_inv_exec_4_*`; the end-to-end
+milestone is `tests/integration/test_live_execution.py`.
