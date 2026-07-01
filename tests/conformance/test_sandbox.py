@@ -132,10 +132,10 @@ def test_inv_sandbox_3_cpu_time_is_bounded():
 
 _FORKBOMB = """
 import os, time
-# A bounded burst of long-lived children. Where the kernel honours RLIMIT_NPROC
-# for this (unprivileged) process the fork is refused; everywhere the sandbox
-# still reaps the whole tree on exit (unshare --kill-child) so the host is
-# unaffected.
+# A bounded burst of long-lived children. Where a cgroup pids.max is in force the
+# cgroup itself refuses the fork; where only RLIMIT_NPROC applies the kernel
+# refuses it for this (unprivileged) process; everywhere the sandbox still reaps
+# the whole tree on exit (unshare --kill-child) so the host is unaffected.
 n = 0
 try:
     for _ in range(64):
@@ -151,8 +151,9 @@ except OSError:
 def test_inv_sandbox_3_processes_are_bounded_and_contained():
     with _candidate(_FORKBOMB, max_processes=16, wall_time_s=8) as (res, _ws):
         assert res.started_ok
-        # Containment: the process bomb was either capped by RLIMIT_NPROC, or
-        # terminated by the wall clock — never left to run unbounded.
+        # Universal property (true on every host): the process bomb was capped by
+        # a resource lever or terminated by the wall clock — never left to run
+        # unbounded, and its tree is reaped on exit.
         bounded = (
             res.pids_exceeded
             or "PIDS-BOUNDED" in res.stdout
@@ -160,6 +161,12 @@ def test_inv_sandbox_3_processes_are_bounded_and_contained():
             or res.exit_status == 0  # completed; its tree is reaped on exit
         )
         assert bounded
+        # Stronger property where the cgroup lever is present: the cgroup itself
+        # denied a fork — proven by its unforgeable pids.events "max" counter, not
+        # merely the per-uid rlimit. This asserts the harder guarantee, so a host
+        # with cgroups cannot pass on the weaker rlimit path alone.
+        if res.limiter == "cgroup":
+            assert res.pids_exceeded, "cgroup lever active but pids cap not recorded"
     # The host is unaffected: it can still create and reap a process.
     pid = os.fork()
     if pid == 0:
