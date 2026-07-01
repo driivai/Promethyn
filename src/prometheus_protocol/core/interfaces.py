@@ -200,11 +200,38 @@ class Ledger(ABC):
         exit_status: int | None,
         detail: str,
         created_at: str,
+        judgment: dict | None = None,
     ) -> int:
-        """Record one executor outcome (executed, refused, or blocked)."""
+        """Record one executor outcome (executed, refused, or blocked).
+
+        ``judgment`` is the fused Judgment the action rested on; it is stored as
+        JSON and promoted to queryable verdict/confidence columns.
+        """
         raise NotImplementedError
 
     @abstractmethod
     def executions(self) -> list[dict]:
         """Return recorded executions in insertion order."""
+        raise NotImplementedError
+
+    # -- audit queries (additive observability; read-only) --------------------
+
+    @abstractmethod
+    def executions_below_confidence(self, threshold: float) -> list[dict]:
+        """Executed actions whose fused confidence is below ``threshold``."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def authoritative_pass_below(self, threshold: float) -> list[dict]:
+        """Executed authoritative-PASS actions with fused confidence below ``threshold``."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def human_decisions(self) -> list[dict]:
+        """The decision log: pending actions a human or the sweep resolved."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def backfill(self) -> dict:
+        """Idempotently fill judgment columns for historical rows from their JSON."""
         raise NotImplementedError

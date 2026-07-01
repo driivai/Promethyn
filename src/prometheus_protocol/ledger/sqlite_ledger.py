@@ -31,7 +31,11 @@ CREATE TABLE IF NOT EXISTS attempts (
     passed_count INTEGER NOT NULL,
     skills_used  TEXT    NOT NULL,
     code         TEXT    NOT NULL,
-    evidence     TEXT    NOT NULL
+    evidence     TEXT    NOT NULL,
+    -- Judgment promoted to queryable columns; the evidence JSON above stays the
+    -- source of record. NULL when the attempt carried no fused judgment.
+    verdict      TEXT,
+    confidence   REAL
 );
 
 CREATE TABLE IF NOT EXISTS promotions (
@@ -68,13 +72,62 @@ CREATE TABLE IF NOT EXISTS executions (
     sandbox     TEXT    NOT NULL,
     exit_status INTEGER,
     detail      TEXT    NOT NULL,
-    created_at  TEXT    NOT NULL
+    created_at  TEXT    NOT NULL,
+    -- Judgment promoted to queryable columns; the judgment JSON is the source of
+    -- record. NULL for rows written before observability (nothing to backfill).
+    verdict       TEXT,
+    confidence    REAL,
+    authoritative INTEGER,
+    judgment      TEXT    -- JSON: the Judgment the executed action rested on
 );
 """
 
 # Terminal states a pending action can settle into. ``pending`` is the only
 # non-terminal state; once decided it is never re-opened.
 _PENDING_STATUS = "pending"
+
+# Judgment columns promoted for querying, per table. Ensured on open (added to
+# ledgers that predate them) so the write path can always populate them.
+_JUDGMENT_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "attempts": [("verdict", "TEXT"), ("confidence", "REAL")],
+    "executions": [
+        ("verdict", "TEXT"),
+        ("confidence", "REAL"),
+        ("authoritative", "INTEGER"),
+        ("judgment", "TEXT"),
+    ],
+}
+
+# Indexes for the range/equality audit queries.
+_INDEXES = """
+CREATE INDEX IF NOT EXISTS idx_attempts_confidence   ON attempts(confidence);
+CREATE INDEX IF NOT EXISTS idx_attempts_verdict      ON attempts(verdict);
+CREATE INDEX IF NOT EXISTS idx_executions_confidence ON executions(confidence);
+CREATE INDEX IF NOT EXISTS idx_executions_verdict    ON executions(verdict);
+"""
+
+
+def _load_json(text: str | None):
+    """Best-effort JSON decode; returns ``None`` on empty or malformed input."""
+
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except (ValueError, TypeError):
+        return None
+
+
+def _judgment_from_evidence(evidence_json: str | None) -> dict | None:
+    """Extract ``{verdict, confidence}`` from an attempt's evidence JSON, or None."""
+
+    evidence = _load_json(evidence_json)
+    judgment = evidence.get("judgment") if isinstance(evidence, dict) else None
+    if not isinstance(judgment, dict):
+        return None
+    if "verdict" not in judgment or "confidence" not in judgment:
+        return None
+    return judgment
 
 
 class SqliteLedger(Ledger):
@@ -97,6 +150,25 @@ class SqliteLedger(Ledger):
                 "remove or repair it, then retry."
             ) from exc
         self._conn = conn
+        # Forward, additive schema sync: add the judgment columns to ledgers that
+        # predate them and (re)create the indexes. Cheap and idempotent, so it is
+        # safe on every open; the data backfill is separate (``backfill``).
+        self.migration_added_columns = self._ensure_judgment_columns()
+
+    def _ensure_judgment_columns(self) -> list[str]:
+        added: list[str] = []
+        for table, columns in _JUDGMENT_COLUMNS.items():
+            existing = {
+                row["name"] for row in self._conn.execute(f"PRAGMA table_info({table})")
+            }
+            for name, decl in columns:
+                if name not in existing:
+                    # table/column names are internal constants, not user input.
+                    self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+                    added.append(f"{table}.{name}")
+        self._conn.executescript(_INDEXES)
+        self._conn.commit()
+        return added
 
     def record_attempt(self, attempt: Attempt, *, cycle: int, kind: str) -> int:
         evidence = dict(asdict(attempt.evidence))
@@ -107,12 +179,17 @@ class SqliteLedger(Ledger):
                 "verdict": attempt.judgment.verdict,
                 "confidence": attempt.judgment.confidence,
             }
+        # Promote the same judgment to columns alongside the JSON — they are
+        # written from one source, so they cannot diverge.
+        verdict = attempt.judgment.verdict.value if attempt.judgment is not None else None
+        confidence = attempt.judgment.confidence if attempt.judgment is not None else None
         cur = self._conn.execute(
             """
             INSERT INTO attempts (
                 cycle, kind, task_id, split, entry_point,
-                passed, total, passed_count, skills_used, code, evidence
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                passed, total, passed_count, skills_used, code, evidence,
+                verdict, confidence
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 cycle,
@@ -126,6 +203,8 @@ class SqliteLedger(Ledger):
                 json.dumps(list(attempt.skills_used)),
                 attempt.code,
                 json.dumps(evidence),
+                verdict,
+                confidence,
             ),
         )
         self._conn.commit()
@@ -249,13 +328,23 @@ class SqliteLedger(Ledger):
         exit_status: int | None,
         detail: str,
         created_at: str,
+        judgment: dict | None = None,
     ) -> int:
+        # The judgment JSON is the source of record; verdict/confidence/
+        # authoritative are promoted from it into queryable columns, from the
+        # same object, so they cannot diverge.
+        verdict = judgment.get("verdict") if judgment else None
+        confidence = judgment.get("confidence") if judgment else None
+        authoritative = (
+            int(bool(judgment.get("authoritative"))) if judgment else None
+        )
         cur = self._conn.execute(
             """
             INSERT INTO executions (
                 subject_id, source, executed, refused, sandbox,
-                exit_status, detail, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                exit_status, detail, created_at,
+                verdict, confidence, authoritative, judgment
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 subject_id,
@@ -266,6 +355,10 @@ class SqliteLedger(Ledger):
                 exit_status,
                 detail,
                 created_at,
+                verdict,
+                confidence,
+                authoritative,
+                json.dumps(judgment) if judgment is not None else None,
             ),
         )
         self._conn.commit()
@@ -274,6 +367,104 @@ class SqliteLedger(Ledger):
     def executions(self) -> list[dict]:
         rows = self._conn.execute("SELECT * FROM executions ORDER BY id").fetchall()
         return [self._execution_row(row) for row in rows]
+
+    # -- audit queries (read-only) -----------------------------------------
+
+    def executions_below_confidence(self, threshold: float) -> list[dict]:
+        """Executed actions whose fused confidence is below ``threshold``."""
+
+        rows = self._conn.execute(
+            "SELECT * FROM executions "
+            "WHERE executed = 1 AND confidence IS NOT NULL AND confidence < ? "
+            "ORDER BY id",
+            (float(threshold),),
+        ).fetchall()
+        return [self._execution_row(row) for row in rows]
+
+    def authoritative_pass_below(self, threshold: float) -> list[dict]:
+        """Executed authoritative-PASS actions with fused confidence below ``threshold``.
+
+        The escalation blind spot: an authoritative PASS binds the verdict, so it
+        is not escalated for low confidence, yet it may have run with weak fused
+        confidence. This surfaces exactly those executed actions for review — it
+        does not change what escalates (that stays gated to non-authoritative
+        verdicts).
+        """
+
+        rows = self._conn.execute(
+            "SELECT * FROM executions "
+            "WHERE executed = 1 AND verdict = 'pass' AND authoritative = 1 "
+            "AND confidence IS NOT NULL AND confidence < ? ORDER BY id",
+            (float(threshold),),
+        ).fetchall()
+        return [self._execution_row(row) for row in rows]
+
+    def human_decisions(self) -> list[dict]:
+        """The decision log: pending actions a human or the sweep resolved."""
+
+        rows = self._conn.execute(
+            "SELECT * FROM pending_actions WHERE decided_by IS NOT NULL ORDER BY id"
+        ).fetchall()
+        return [self._pending_row(row) for row in rows]
+
+    # -- backfill ----------------------------------------------------------
+
+    def backfill(self) -> dict:
+        """Fill judgment columns for historical rows from their JSON. Idempotent.
+
+        Only rows whose columns are still NULL are touched, so re-running is a
+        no-op. Rows with malformed or missing JSON are left NULL and counted,
+        never fatal.
+        """
+
+        report = {
+            "added_columns": list(self.migration_added_columns),
+            "attempts": self._backfill_attempts(),
+            "executions": self._backfill_executions(),
+        }
+        self._conn.commit()
+        return report
+
+    def _backfill_attempts(self) -> dict:
+        rows = self._conn.execute(
+            "SELECT id, evidence FROM attempts WHERE verdict IS NULL"
+        ).fetchall()
+        filled = skipped = 0
+        for row in rows:
+            judgment = _judgment_from_evidence(row["evidence"])
+            if judgment is None:
+                skipped += 1
+                continue
+            self._conn.execute(
+                "UPDATE attempts SET verdict = ?, confidence = ? WHERE id = ?",
+                (str(judgment["verdict"]), judgment["confidence"], row["id"]),
+            )
+            filled += 1
+        return {"filled": filled, "skipped": skipped}
+
+    def _backfill_executions(self) -> dict:
+        rows = self._conn.execute(
+            "SELECT id, judgment FROM executions "
+            "WHERE verdict IS NULL AND judgment IS NOT NULL"
+        ).fetchall()
+        filled = skipped = 0
+        for row in rows:
+            judgment = _load_json(row["judgment"])
+            if not isinstance(judgment, dict) or "verdict" not in judgment:
+                skipped += 1
+                continue
+            self._conn.execute(
+                "UPDATE executions "
+                "SET verdict = ?, confidence = ?, authoritative = ? WHERE id = ?",
+                (
+                    str(judgment["verdict"]),
+                    judgment.get("confidence"),
+                    int(bool(judgment.get("authoritative"))),
+                    row["id"],
+                ),
+            )
+            filled += 1
+        return {"filled": filled, "skipped": skipped}
 
     def close(self) -> None:
         self._conn.close()
@@ -298,4 +489,8 @@ class SqliteLedger(Ledger):
         record = dict(row)
         record["executed"] = bool(record["executed"])
         record["refused"] = bool(record["refused"])
+        if record.get("authoritative") is not None:
+            record["authoritative"] = bool(record["authoritative"])
+        if record.get("judgment"):
+            record["judgment"] = _load_json(record["judgment"])
         return record
