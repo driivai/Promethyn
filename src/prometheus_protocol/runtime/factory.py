@@ -10,11 +10,14 @@ from __future__ import annotations
 import logging
 
 from prometheus_protocol.core.config import PROVIDER_REMOTE, Config
-from prometheus_protocol.core.interfaces import Provider, Verifier
+from prometheus_protocol.core.interfaces import Ledger, Provider, Verifier
+from prometheus_protocol.execution.controller import ExecutionController
+from prometheus_protocol.execution.executor import SandboxExecutor
 from prometheus_protocol.forge.miner import LessonForge
 from prometheus_protocol.gate.authorization import ActionGate
 from prometheus_protocol.gate.promotion import PromotionGate
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
+from prometheus_protocol.sandbox import Limits
 from prometheus_protocol.memory.tiers import InMemoryTier, MemoryTier
 from prometheus_protocol.provider.mock import MockProvider, SolutionBook
 from prometheus_protocol.provider.remote import RemoteModelProvider
@@ -175,4 +178,35 @@ def build_swarm_runtime(
         provider=provider,
         memory=memory,
         code_verifier=code_verifier,
+    )
+
+
+def build_execution_controller(
+    config: Config | None = None, *, ledger: Ledger | None = None
+) -> ExecutionController:
+    """Wire the live-execution path: routing gate -> human hold -> sandbox executor.
+
+    The action gate runs in routing mode (low-confidence and high-risk actions
+    halt for a human), and the executor runs every side-effect through the
+    configured isolating sandbox — fail-closed if none is available. The bank,
+    the firewall, the proposer/judge wall, and verdict semantics are untouched:
+    this only turns the executor real and adds the human halt.
+    """
+
+    config = config or Config()
+    limits = Limits(
+        wall_time_s=config.verifier_timeout_s,
+        cpu_time_s=config.verifier_cpu_seconds,
+        memory_bytes=(
+            config.verifier_memory_mb * 1024 * 1024
+            if config.verifier_memory_mb > 0
+            else 0
+        ),
+        max_processes=config.verifier_max_processes,
+    )
+    _LOG.info("execution controller built (escalate_below=%.2f)", config.escalate_below)
+    return ExecutionController(
+        gate=ActionGate(escalate_below=config.escalate_below, route_high_risk=True),
+        executor=SandboxExecutor(sandbox=build_sandbox(config.sandbox), limits=limits),
+        ledger=ledger if ledger is not None else SqliteLedger(config.ledger_path),
     )

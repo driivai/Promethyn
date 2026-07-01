@@ -16,6 +16,7 @@ from prometheus_protocol.execution.controller import (
     ExecutionController,
     SubmitOutcome,
 )
+from prometheus_protocol.execution.executor import SandboxExecutor
 from prometheus_protocol.execution.models import (
     HumanDecision,
     PendingAction,
@@ -26,6 +27,7 @@ from prometheus_protocol.execution.pending import PendingActionService
 __all__ = [
     "ExecutionController",
     "SubmitOutcome",
+    "SandboxExecutor",
     "PendingActionService",
     "PendingAction",
     "PendingStatus",
