@@ -173,11 +173,22 @@ class PendingActionService:
 
         This is the sole construction of an *approving* decision from a held
         action: the human is the authority. The ledger write happens first, so
-        no execution can follow an unrecorded approval.
+        no execution can follow an unrecorded approval. Approval re-checks the
+        hold at decision time — a lapsed (past-TTL) or already-resolved hold
+        cannot be approved — closing the stale-approval race.
         """
 
-        pending = self._require_pending(pending_id)
         timestamp = now or self._clock()
+        pending = self._require_pending(pending_id)
+        # Stale-approval guard: a hold past its TTL cannot be approved, even if a
+        # sweep has not run yet. Expire it on the spot (audited) and refuse, so no
+        # execution can follow a lapsed approval.
+        if self._is_lapsed(pending, now=timestamp):
+            self._expire(pending_id, now=timestamp)
+            raise ValueError(
+                f"pending action {pending_id} has expired (TTL {self._ttl_seconds}s) "
+                "and can no longer be approved"
+            )
         self._ledger.resolve_pending_action(
             pending_id,
             status=PendingStatus.APPROVED.value,
