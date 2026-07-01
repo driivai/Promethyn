@@ -149,19 +149,71 @@ def _cmd_status(args: argparse.Namespace) -> int:
 
 
 def _cmd_audit(args: argparse.Namespace) -> int:
+    """Summarise or query the experience ledger. Strictly read-only."""
+
     config = Config.from_env()
     if config.ledger_path != Path(":memory:") and not Path(config.ledger_path).exists():
         print(f"no ledger found at {config.ledger_path}")
         return 1
     ledger = SqliteLedger(config.ledger_path)
     try:
-        attempts = ledger.attempts()
-        promotions = ledger.promotions()
+        if args.executed_below is not None:
+            _print_executions(
+                ledger.executions_below_confidence(args.executed_below),
+                f"executed actions below confidence {args.executed_below:.2f}",
+            )
+        elif args.auth_pass_below is not None:
+            _print_executions(
+                ledger.authoritative_pass_below(args.auth_pass_below),
+                f"authoritative PASS executed below confidence "
+                f"{args.auth_pass_below:.2f} "
+                "(escalation blind spot — surfaced for review, not auto-escalated)",
+            )
+        elif args.human_log:
+            _print_human_log(ledger.human_decisions())
+        else:
+            _print_audit_summary(config, ledger)
     finally:
         ledger.close()
+    return 0
+
+
+def _print_executions(rows: list[dict], title: str) -> None:
+    print(f"Promethyn — {title}\n")
+    if not rows:
+        print("  (none)")
+        return
+    for row in rows:
+        conf = "n/a" if row.get("confidence") is None else f"{row['confidence']:.2f}"
+        print(
+            f"  #{row['id']}  {row['subject_id']}  "
+            f"[{row.get('verdict')} conf={conf} auth={row.get('authoritative')}]  "
+            f"{row['source']}  executed={row['executed']}"
+        )
+
+
+def _print_human_log(rows: list[dict]) -> None:
+    print("Promethyn — human-decision log (approve / reject / expire)\n")
+    if not rows:
+        print("  (none)")
+        return
+    for row in rows:
+        print(
+            f"  #{row['id']}  {row['subject_id']}  {row['status']}  "
+            f"by {row.get('decided_by')} at {row.get('decided_at')}"
+        )
+        if row.get("decision_reason"):
+            print(f"      reason: {row['decision_reason']}")
+
+
+def _print_audit_summary(config: Config, ledger: SqliteLedger) -> None:
+    attempts = ledger.attempts()
+    promotions = ledger.promotions()
+    executions = ledger.executions()
     print(f"ledger      : {config.ledger_path}")
     print(f"attempts    : {len(attempts)}")
     print(f"promotions  : {len(promotions)}")
+    print(f"executions  : {len(executions)}")
     for promotion in promotions:
         print(
             f"  cycle {promotion['cycle']}: {promotion['action']} "
@@ -169,6 +221,30 @@ def _cmd_audit(args: argparse.Namespace) -> int:
             f"({promotion['rate_before'] * 100:.0f}% -> "
             f"{promotion['rate_after'] * 100:.0f}%)"
         )
+    print("\nQueries:  audit --executed-below X | --auth-pass-below X | --human-log")
+
+
+def _cmd_migrate(args: argparse.Namespace) -> int:
+    """Backfill judgment columns for historical ledger rows. Idempotent.
+
+    Opening the ledger already ensures the columns exist; this fills them for
+    rows written before observability, so history is queryable too.
+    """
+
+    config = Config.from_env()
+    if config.ledger_path == Path(":memory:") or not Path(config.ledger_path).exists():
+        print(f"no ledger found at {config.ledger_path}")
+        return 1
+    ledger = SqliteLedger(config.ledger_path)
+    try:
+        report = ledger.backfill()
+    finally:
+        ledger.close()
+    added = report["added_columns"]
+    print(f"columns ensured : {', '.join(added) if added else '(already present)'}")
+    attempts, executions = report["attempts"], report["executions"]
+    print(f"attempts        : backfilled {attempts['filled']}, skipped {attempts['skipped']}")
+    print(f"executions      : backfilled {executions['filled']}, skipped {executions['skipped']}")
     return 0
 
 
@@ -365,7 +441,22 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("baseline", help="run the example benchmark once")
     sub.add_parser("cycle", help="run one learning cycle")
     sub.add_parser("status", help="show storage, skills, and verifier ranking (read-only)")
-    sub.add_parser("audit", help="summarise the experience ledger")
+    audit = sub.add_parser(
+        "audit", help="summarise or query the experience ledger (read-only)"
+    )
+    audit.add_argument(
+        "--executed-below", type=float, default=None, metavar="X",
+        help="list executed actions whose fused confidence is below X",
+    )
+    audit.add_argument(
+        "--auth-pass-below", type=float, default=None, metavar="X",
+        help="list executed authoritative-PASS actions with confidence below X",
+    )
+    audit.add_argument(
+        "--human-log", action="store_true",
+        help="show the human-decision log (approve / reject / expire)",
+    )
+    sub.add_parser("migrate", help="backfill judgment columns for historical ledger rows")
     sub.add_parser("pending", help="list actions halted for human approval (read-only)")
     sub.add_parser("sweep", help="expire pending actions older than the configured TTL")
     approve = sub.add_parser(
@@ -392,6 +483,7 @@ _COMMANDS = {
     "cycle": _cmd_cycle,
     "status": _cmd_status,
     "audit": _cmd_audit,
+    "migrate": _cmd_migrate,
     "pending": _cmd_pending,
     "sweep": _cmd_sweep,
     "approve": _cmd_approve,
