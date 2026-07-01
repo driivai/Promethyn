@@ -1,22 +1,21 @@
-"""Shakeout characterisation for F6 (passing tripwire).
+"""Shakeout characterisation for F6 (now resolved).
 
-Judgment confidence/verdict live in the ledger's JSON ``evidence`` column, so
-they cannot be filtered in SQL. This test documents the limitation and trips if
-a first-class column is ever added (update it then). See
+Judgment verdict/confidence were once only in the ledger's JSON ``evidence``
+column and could not be filtered in SQL (F6). They are now promoted to
+first-class, indexed, queryable columns alongside the JSON — which stays the
+source of record — so an operator can WHERE-clause on confidence. This test
+tripped when the column was added (as its predecessor instructed) and now
+characterises the resolved behaviour. See ``docs/observability.md`` and
 ``docs/shakeout-report.md`` (F6).
 """
 
 from __future__ import annotations
 
-import sqlite3
-
-import pytest
-
 from prometheus_protocol.core.models import Attempt, Evidence, Judgment, Tier, Verdict
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
 
 
-def test_confidence_is_not_a_queryable_column_but_is_in_json():
+def test_confidence_is_a_queryable_column_matching_the_json():
     ledger = SqliteLedger(":memory:")
     try:
         evidence = Evidence(
@@ -33,12 +32,18 @@ def test_confidence_is_not_a_queryable_column_but_is_in_json():
             row[1]
             for row in ledger._conn.execute("PRAGMA table_info(attempts)").fetchall()
         ]
-        assert "confidence" not in columns  # known limitation (F6)
-        with pytest.raises(sqlite3.OperationalError):
-            ledger._conn.execute("SELECT id FROM attempts WHERE confidence > 0.9")
+        assert "confidence" in columns and "verdict" in columns  # F6 resolved
 
-        # ...but it is recoverable by parsing the JSON evidence column.
-        recovered = ledger.attempts()[0]["evidence"]["judgment"]["confidence"]
-        assert recovered == 0.95
+        # It is now SQL-filterable directly...
+        rows = ledger._conn.execute(
+            "SELECT id FROM attempts WHERE confidence > 0.9"
+        ).fetchall()
+        assert len(rows) == 1
+
+        # ...and the column equals the JSON, which stays the source of record.
+        row = ledger.attempts()[0]
+        assert row["confidence"] == 0.95
+        assert row["evidence"]["judgment"]["confidence"] == 0.95
+        assert row["verdict"] == row["evidence"]["judgment"]["verdict"] == "pass"
     finally:
         ledger.close()
