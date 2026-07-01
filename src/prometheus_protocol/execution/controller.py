@@ -22,6 +22,7 @@ from prometheus_protocol.execution.models import PendingAction
 from prometheus_protocol.execution.pending import (
     _DEFAULT_TTL_SECONDS,
     PendingActionService,
+    _judgment_to_dict,
     _utc_now_iso,
 )
 from prometheus_protocol.gate.authorization import ActionGate
@@ -32,6 +33,14 @@ from prometheus_protocol.gate.promotion import (
 )
 from prometheus_protocol.swarm.executor import Executor
 from prometheus_protocol.swarm.models import ExecutionResult
+
+
+def _judgment_or_none(decision: GateDecision) -> dict | None:
+    """The decision's judgment as a ledger dict, or None when it carries none."""
+
+    return (
+        _judgment_to_dict(decision.judgment) if decision.judgment is not None else None
+    )
 
 
 @dataclass(frozen=True)
@@ -101,6 +110,7 @@ class ExecutionController:
             exit_status=None,
             detail=decision.reason,
             created_at=self._clock(),
+            judgment=_judgment_or_none(decision),
         )
         return SubmitOutcome(outcome=outcome, decision=decision)
 
@@ -131,5 +141,6 @@ class ExecutionController:
             exit_status=result.exit_status,
             detail=result.detail,
             created_at=self._clock(),
+            judgment=_judgment_or_none(decision),
         )
         return result
