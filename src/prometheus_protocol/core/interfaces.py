@@ -142,3 +142,69 @@ class Ledger(ABC):
     @abstractmethod
     def promotions(self) -> list[dict]:
         raise NotImplementedError
+
+    # -- execution audit (live-execution: pending human holds + executions) ---
+    #
+    # The execution subsystem records its full chain here so the halt-and-route
+    # decision, the human's approve/reject, and every executed action are all
+    # re-readable from the ledger alone (INV-EXEC-4).
+
+    @abstractmethod
+    def record_pending_action(
+        self,
+        *,
+        subject_id: str,
+        risk_class: str,
+        reason: str,
+        verdict: str,
+        confidence: float,
+        action: dict,
+        judgment: dict,
+        created_at: str,
+    ) -> int:
+        """Record a routed action awaiting a human decision; return its id."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def resolve_pending_action(
+        self,
+        pending_id: int,
+        *,
+        status: str,
+        decided_by: str,
+        decided_at: str,
+        decision_reason: str = "",
+    ) -> None:
+        """Record a human's approve/reject (or an expiry) for a pending action."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def pending_actions(self, *, status: str | None = None) -> list[dict]:
+        """Return pending actions in insertion order, optionally filtered."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def pending_action(self, pending_id: int) -> dict | None:
+        """Return one pending action by id, or ``None`` if there is no such id."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def record_execution(
+        self,
+        *,
+        subject_id: str,
+        source: str,
+        executed: bool,
+        refused: bool,
+        sandbox_name: str,
+        exit_status: int | None,
+        detail: str,
+        created_at: str,
+    ) -> int:
+        """Record one executor outcome (executed, refused, or blocked)."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def executions(self) -> list[dict]:
+        """Return recorded executions in insertion order."""
+        raise NotImplementedError

@@ -168,8 +168,20 @@ class VerifiedProposal:
 
 @dataclass(frozen=True)
 class ExecutionResult:
-    """The executor's record of acting on an approved decision."""
+    """The executor's record of acting on an approved decision.
+
+    The trailing fields are additive and describe a *real* execution: whether
+    the executor ``refused`` (fail-closed) rather than run unsandboxed, whether
+    isolation ``started_ok``, the ``sandbox_name`` that ran it, the process
+    ``exit_status``, and captured ``stdout``. A no-op recorder leaves them at
+    their defaults.
+    """
 
     executed: bool
     subject_id: str
     detail: str = ""
+    refused: bool = False
+    started_ok: bool = True
+    sandbox_name: str = ""
+    exit_status: int | None = None
+    stdout: str = ""
