@@ -46,6 +46,15 @@ class SandboxResult:
     all? When it is ``False`` the candidate did not run under isolation (a
     missing runtime, a failed setup), and the caller must treat the run as "could
     not verify" (ABSTAIN) — never as a pass or a fail.
+
+    ``candidate_started`` is the stronger, *definite* signal: the candidate
+    command actually began executing under isolation. It is set only when the
+    adapter has positive confirmation the candidate ran (for the namespace
+    adapter, an unforgeable token the bootstrap emits right before ``execv``), so
+    ``started_ok=True`` with ``candidate_started=False`` — a setup step that
+    crashed after starting but before running the candidate — stays a harness
+    fault. A candidate that ran and then crashed (``candidate_started=True``, no
+    verdict produced) is the candidate's own fault, not the harness's.
     """
 
     stdout: str = ""
@@ -56,6 +65,7 @@ class SandboxResult:
     pids_exceeded: bool = False
     output_truncated: bool = False
     started_ok: bool = True
+    candidate_started: bool = False
     detail: str = ""
 
 

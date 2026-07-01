@@ -78,12 +78,16 @@ class UnsafeLocalSandbox(Sandbox):
             err, _ = clip(exc.stderr, limits.max_output_bytes)
             return SandboxResult(
                 stdout=out, stderr=err, timed_out=True, started_ok=True,
+                candidate_started=True,
                 output_truncated=truncated, detail=f"wall-time limit {limits.wall_time_s}s",
             )
         out, truncated = clip(proc.stdout, limits.max_output_bytes)
         err, _ = clip(proc.stderr, limits.max_output_bytes)
+        # The unsafe runner execs the candidate directly, with no fallible setup
+        # step: a completed subprocess run means the candidate definitely started.
         return SandboxResult(
             stdout=out, stderr=err, exit_status=proc.returncode,
+            candidate_started=True,
             output_truncated=truncated, started_ok=True,
         )
 

@@ -13,6 +13,7 @@ unprivileged-user-namespaces-capable Linux kernel).
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -30,6 +31,10 @@ from prometheus_protocol.sandbox.base import (
 
 _BOOTSTRAP = Path(__file__).with_name("_bootstrap.py")
 _MARKER = "sandbox-bootstrap:"
+# The bootstrap writes this to the status pipe once the candidate is about to
+# run (see ``_bootstrap.py``). Its presence is the definite candidate-started
+# signal; its absence means setup failed before the candidate ran.
+_STARTED_TOKEN = b"prom-candidate-started"
 # Cached result of the functional availability probe (per process).
 _AVAILABLE_CACHE: bool | None = None
 _UNSHARE_FLAGS = (
@@ -98,64 +103,100 @@ class NamespaceSandbox(Sandbox):
         if self.unshare is None:
             return SandboxResult(started_ok=False, detail="unshare not found")
 
-        command = [
-            self.unshare,
-            *_UNSHARE_FLAGS,
-            sys.executable,
-            "-I",
-            str(_BOOTSTRAP),
-            str(workspace),
-            str(limits.memory_bytes),
-            str(limits.cpu_time_s),
-            str(limits.max_processes),
-            str(FSIZE_BYTES),
-            "--",
-            *argv,
-        ]
+        # A status pipe carries a definite "candidate started" token from the
+        # bootstrap. The write end is inherited by the child and closed on exec,
+        # so the candidate never sees the fd and cannot forge or suppress it.
+        status_r, status_w = os.pipe()
         try:
-            proc = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                timeout=limits.wall_time_s,
-                input=stdin or None,
+            os.set_inheritable(status_w, True)
+            command = [
+                self.unshare,
+                *_UNSHARE_FLAGS,
+                sys.executable,
+                "-I",
+                str(_BOOTSTRAP),
+                str(workspace),
+                str(limits.memory_bytes),
+                str(limits.cpu_time_s),
+                str(limits.max_processes),
+                str(FSIZE_BYTES),
+                str(status_w),
+                "--",
+                *argv,
+            ]
+            try:
+                proc = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    timeout=limits.wall_time_s,
+                    input=stdin or None,
+                    pass_fds=(status_w,),
+                )
+            except subprocess.TimeoutExpired as exc:
+                os.close(status_w)
+                status_w = -1
+                out, truncated = clip(exc.stdout, limits.max_output_bytes)
+                err, _ = clip(exc.stderr, limits.max_output_bytes)
+                return SandboxResult(
+                    stdout=out,
+                    stderr=err,
+                    exit_status=None,
+                    timed_out=True,
+                    output_truncated=truncated,
+                    started_ok=True,
+                    candidate_started=self._candidate_started(status_r),
+                    detail=f"wall-time limit {limits.wall_time_s}s",
+                )
+            except OSError as exc:
+                return SandboxResult(started_ok=False, detail=f"could not launch sandbox: {exc}")
+
+            os.close(status_w)
+            status_w = -1
+            candidate_started = self._candidate_started(status_r)
+
+            # Did isolation start? The bootstrap exits 127 with a marker if FS
+            # setup or exec failed before the candidate ran.
+            started_ok = not (proc.returncode == 127 and _MARKER in (proc.stderr or ""))
+            out, truncated = clip(proc.stdout, limits.max_output_bytes)
+            err, _ = clip(proc.stderr, limits.max_output_bytes)
+            rc = proc.returncode
+            # Best-effort breach flags. A child killed by SIGKILL (-9) under the
+            # address-space cap, or a Python MemoryError, signals memory pressure;
+            # a fork that hit RLIMIT_NPROC reports as a resource-temporarily-
+            # unavailable.
+            memory_exceeded = rc in (-9, 137) or "MemoryError" in (err or "")
+            pids_exceeded = (
+                "BlockingIOError" in (err or "")
+                or "Resource temporarily unavailable" in (err or "")
             )
-        except subprocess.TimeoutExpired as exc:
-            out, truncated = clip(exc.stdout, limits.max_output_bytes)
-            err, _ = clip(exc.stderr, limits.max_output_bytes)
             return SandboxResult(
                 stdout=out,
                 stderr=err,
-                exit_status=None,
-                timed_out=True,
+                exit_status=rc,
+                memory_exceeded=memory_exceeded,
+                pids_exceeded=pids_exceeded,
                 output_truncated=truncated,
-                started_ok=True,
-                detail=f"wall-time limit {limits.wall_time_s}s",
+                started_ok=started_ok,
+                candidate_started=candidate_started,
+                detail="" if started_ok else "sandbox setup failed",
             )
-        except OSError as exc:
-            return SandboxResult(started_ok=False, detail=f"could not launch sandbox: {exc}")
+        finally:
+            os.close(status_r)
+            if status_w != -1:
+                os.close(status_w)
 
-        # Did isolation start? The bootstrap exits 127 with a marker if FS setup
-        # or exec failed before the candidate ran.
-        started_ok = not (proc.returncode == 127 and _MARKER in (proc.stderr or ""))
-        out, truncated = clip(proc.stdout, limits.max_output_bytes)
-        err, _ = clip(proc.stderr, limits.max_output_bytes)
-        rc = proc.returncode
-        # Best-effort breach flags. A child killed by SIGKILL (-9) under the
-        # address-space cap, or a Python MemoryError, signals memory pressure; a
-        # fork that hit RLIMIT_NPROC reports as a resource-temporarily-unavailable.
-        memory_exceeded = rc in (-9, 137) or "MemoryError" in (err or "")
-        pids_exceeded = (
-            "BlockingIOError" in (err or "")
-            or "Resource temporarily unavailable" in (err or "")
-        )
-        return SandboxResult(
-            stdout=out,
-            stderr=err,
-            exit_status=rc,
-            memory_exceeded=memory_exceeded,
-            pids_exceeded=pids_exceeded,
-            output_truncated=truncated,
-            started_ok=started_ok,
-            detail="" if started_ok else "sandbox setup failed",
-        )
+    @staticmethod
+    def _candidate_started(status_r: int) -> bool:
+        """Read the status pipe: did the candidate definitely begin executing?
+
+        All write ends are closed by the time this is called (the child has
+        exited and the parent closed its own), so the read returns promptly with
+        the token or at EOF.
+        """
+
+        try:
+            data = os.read(status_r, 64)
+        except OSError:
+            return False
+        return _STARTED_TOKEN in data

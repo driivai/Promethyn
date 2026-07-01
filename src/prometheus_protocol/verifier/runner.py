@@ -89,13 +89,17 @@ main()
 class SubprocessVerifier(Verifier):
     """Default verifier. See the module-level security notice.
 
-    Emits tier-tagged :class:`Evidence`: it is an authoritative hard check, so
-    its verdict is PASS when every case passes, FAIL when the tests run and the
-    candidate fails (a wrong answer or an exception raised inside a case), and
-    ABSTAIN when there was nothing to decide — the check could not run at all
-    (timeout or harness crash) or the task had no cases to verify. An ABSTAIN is
-    a genuine "no opinion": it must not be counted as a pass and must not feed
-    calibration.
+    Emits tier-tagged :class:`Evidence`; it is an authoritative hard check.
+    ``PASS`` when every case passes. ``FAIL`` when the candidate itself is at
+    fault — a wrong answer, an exception raised inside a case, or the candidate
+    crashing / being killed by a resource limit on its own code (a *confirmed*
+    candidate start that produced no verdict). ``ABSTAIN`` when the check could
+    not run and the fault cannot be pinned on the candidate — isolation did not
+    start, a wall-clock timeout, the candidate was never confirmed to run, or the
+    task had no cases. The candidate-vs-harness distinction rests on the sandbox's
+    definite ``candidate_started`` signal; on doubt it stays ABSTAIN. An ABSTAIN
+    is a genuine "no opinion": never a pass or a fail, and it never feeds
+    calibration; a FAIL does.
     """
 
     #: Stable identifier this verifier reports in every Evidence it emits.
@@ -209,14 +213,32 @@ class SubprocessVerifier(Verifier):
 
             result = _read_result(result_path)
             if result is None:
-                # Harness crash / killed before writing a verdict: ABSTAIN.
+                # No verdict was written. Attribute the fault:
+                #   * the candidate definitely started (isolation confirmed) → it
+                #     crashed or was killed by a resource limit on its OWN code, a
+                #     real FAIL that feeds calibration; or
+                #   * the candidate was never confirmed to start → a harness/infra
+                #     fault we cannot pin on the candidate → ABSTAIN (no sample).
+                # Conservative on doubt: only a confirmed candidate start FAILs.
+                if sb.candidate_started:
+                    return self._evidence(
+                        verdict=Verdict.FAIL,
+                        total=total,
+                        passed_count=0,
+                        failures=(_crash_detail(sb),),
+                        stdout=sb.stdout,
+                        stderr=sb.stderr,
+                        duration_s=duration,
+                        timed_out=False,
+                    )
                 return self._evidence(
                     verdict=Verdict.ABSTAIN,
                     total=total,
                     passed_count=0,
                     failures=(
-                        f"no verdict produced (exit code {sb.exit_status}); "
-                        "the child may have been killed by a resource limit",
+                        f"no verdict produced (exit code {sb.exit_status}) and the "
+                        "candidate was not confirmed to start; treated as a harness "
+                        "fault",
                     ),
                     stdout=sb.stdout,
                     stderr=sb.stderr,
@@ -260,6 +282,20 @@ def _read_result(path: Path) -> dict | None:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
+
+
+def _crash_detail(sb) -> str:
+    """A specific reason for a candidate that crashed without a verdict."""
+
+    if sb.memory_exceeded:
+        reason = "killed by the memory limit"
+    elif sb.pids_exceeded:
+        reason = "hit the process limit"
+    else:
+        reason = "crashed or was killed by a resource limit"
+    return (
+        f"candidate {reason} without producing a verdict (exit code {sb.exit_status})"
+    )
 
 
 def _clip(text: str | None, limit: int = 4000) -> str:
