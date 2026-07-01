@@ -66,6 +66,10 @@ class SandboxResult:
     output_truncated: bool = False
     started_ok: bool = True
     candidate_started: bool = False
+    #: Which process/resource-limit lever the adapter used: ``"cgroup"`` (the
+    #: stronger, per-cgroup cap — pids.max and, on v2, memory/cpu) or ``"rlimit"``
+    #: (the POSIX rlimit fallback). Never silently weaker: a caller can tell.
+    limiter: str = "rlimit"
     detail: str = ""
 
 
