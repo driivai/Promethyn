@@ -22,6 +22,10 @@ import sys
 _SENSITIVE = ("/root", "/home")
 
 _MARKER = "sandbox-bootstrap:"
+# Written to the status pipe once isolation is set up and the candidate is about
+# to be exec'd. Unforgeable by the candidate (emitted before its code runs, on a
+# close-on-exec fd it never inherits). Kept in sync with ``namespace.py``.
+_STARTED_TOKEN = b"prom-candidate-started"
 
 _PR_CAPBSET_DROP = 24
 _CAP_LAST = 40  # capabilities are 0..40 on current kernels; dropping past the
@@ -55,10 +59,11 @@ def _drop_capabilities(libc) -> None:
 def _main() -> None:
     workspace = sys.argv[1]
     mem, cpu, nproc, fsize = (int(x) for x in sys.argv[2:6])
-    if sys.argv[6] != "--":
+    status_fd = int(sys.argv[6])
+    if sys.argv[7] != "--":
         sys.stderr.write(f"{_MARKER} malformed bootstrap args\n")
         os._exit(127)
-    cmd = sys.argv[7:]
+    cmd = sys.argv[8:]
 
     libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6", use_errno=True)
 
@@ -111,6 +116,19 @@ def _main() -> None:
         resource.setrlimit(resource.RLIMIT_FSIZE, (fsize, fsize))
 
     os.chdir(workspace)
+
+    # Isolation is fully established and we are about to hand control to the
+    # candidate. Emit a definite "candidate started" token on the status pipe —
+    # a channel the candidate cannot forge or suppress: it is written before the
+    # candidate's code runs and set close-on-exec, so the candidate never inherits
+    # the fd. A missing token means setup failed before the candidate ran (a
+    # harness fault); its presence means any later crash is the candidate's own.
+    try:
+        os.write(status_fd, _STARTED_TOKEN)
+        os.set_inheritable(status_fd, False)
+    except OSError:
+        pass
+
     try:
         os.execv(cmd[0], cmd)
     except OSError as exc:
