@@ -66,6 +66,13 @@ class Config:
     # PROM_ALLOW_UNSAFE_EXEC=1). Default is an isolating adapter.
     sandbox: str = "auto"
 
+    # Container image provenance. When set, the container adapter REFUSES to run
+    # an image referenced by a bare tag — only a digest-pinned image
+    # (``…@sha256:…``) is allowed, so a tag cannot be silently repointed after it
+    # was vetted. Off by default for dev convenience; the recommended production
+    # posture. A bare tag is always logged as a supply-chain risk regardless.
+    require_digest_pin: bool = False
+
     gate_threshold: float = 0.0
     retrieval_k: int = 5
 
@@ -109,6 +116,7 @@ class Config:
             verifier_cpu_seconds=_as_int(env.get("PROM_VERIFIER_CPU_SECONDS"), 5),
             verifier_max_processes=_as_int(env.get("PROM_VERIFIER_MAX_PROCESSES"), 64),
             sandbox=env.get("PROM_SANDBOX", "auto"),
+            require_digest_pin=_as_bool(env.get("PROM_REQUIRE_DIGEST_PIN"), False),
             gate_threshold=_as_float(env.get("PROM_GATE_THRESHOLD"), 0.0),
             retrieval_k=_as_int(env.get("PROM_RETRIEVAL_K"), 5),
             escalate_below=_as_float(env.get("PROM_ESCALATE_BELOW"), 0.75),
