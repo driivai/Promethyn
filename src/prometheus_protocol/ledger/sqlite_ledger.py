@@ -42,7 +42,39 @@ CREATE TABLE IF NOT EXISTS promotions (
     rate_before REAL    NOT NULL,
     rate_after  REAL    NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS pending_actions (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    subject_id      TEXT    NOT NULL,
+    risk_class      TEXT    NOT NULL,
+    reason          TEXT    NOT NULL,
+    verdict         TEXT    NOT NULL,
+    confidence      REAL    NOT NULL,
+    status          TEXT    NOT NULL,
+    action          TEXT    NOT NULL,   -- JSON: the ExecutableAction payload
+    judgment        TEXT    NOT NULL,   -- JSON: the Judgment it rests on
+    created_at      TEXT    NOT NULL,
+    decided_by      TEXT,
+    decided_at      TEXT,
+    decision_reason TEXT
+);
+
+CREATE TABLE IF NOT EXISTS executions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    subject_id  TEXT    NOT NULL,
+    source      TEXT    NOT NULL,   -- how the decision reached the executor
+    executed    INTEGER NOT NULL,
+    refused     INTEGER NOT NULL,
+    sandbox     TEXT    NOT NULL,
+    exit_status INTEGER,
+    detail      TEXT    NOT NULL,
+    created_at  TEXT    NOT NULL
+);
 """
+
+# Terminal states a pending action can settle into. ``pending`` is the only
+# non-terminal state; once decided it is never re-opened.
+_PENDING_STATUS = "pending"
 
 
 class SqliteLedger(Ledger):
@@ -126,6 +158,123 @@ class SqliteLedger(Ledger):
         rows = self._conn.execute("SELECT * FROM promotions ORDER BY id").fetchall()
         return [dict(row) for row in rows]
 
+    # -- execution audit ---------------------------------------------------
+
+    def record_pending_action(
+        self,
+        *,
+        subject_id: str,
+        risk_class: str,
+        reason: str,
+        verdict: str,
+        confidence: float,
+        action: dict,
+        judgment: dict,
+        created_at: str,
+    ) -> int:
+        cur = self._conn.execute(
+            """
+            INSERT INTO pending_actions (
+                subject_id, risk_class, reason, verdict, confidence,
+                status, action, judgment, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                subject_id,
+                risk_class,
+                reason,
+                verdict,
+                float(confidence),
+                _PENDING_STATUS,
+                json.dumps(action),
+                json.dumps(judgment),
+                created_at,
+            ),
+        )
+        self._conn.commit()
+        return int(cur.lastrowid)
+
+    def resolve_pending_action(
+        self,
+        pending_id: int,
+        *,
+        status: str,
+        decided_by: str,
+        decided_at: str,
+        decision_reason: str = "",
+    ) -> None:
+        # Only a still-pending action may be resolved; a decided one is never
+        # re-opened, so a human decision cannot be silently overwritten.
+        cur = self._conn.execute(
+            """
+            UPDATE pending_actions
+               SET status = ?, decided_by = ?, decided_at = ?, decision_reason = ?
+             WHERE id = ? AND status = ?
+            """,
+            (status, decided_by, decided_at, decision_reason, pending_id, _PENDING_STATUS),
+        )
+        self._conn.commit()
+        if cur.rowcount != 1:
+            raise StateError(
+                f"cannot resolve pending action {pending_id}: it does not exist "
+                "or has already been decided"
+            )
+
+    def pending_actions(self, *, status: str | None = None) -> list[dict]:
+        if status is None:
+            rows = self._conn.execute(
+                "SELECT * FROM pending_actions ORDER BY id"
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT * FROM pending_actions WHERE status = ? ORDER BY id",
+                (status,),
+            ).fetchall()
+        return [self._pending_row(row) for row in rows]
+
+    def pending_action(self, pending_id: int) -> dict | None:
+        row = self._conn.execute(
+            "SELECT * FROM pending_actions WHERE id = ?", (pending_id,)
+        ).fetchone()
+        return self._pending_row(row) if row is not None else None
+
+    def record_execution(
+        self,
+        *,
+        subject_id: str,
+        source: str,
+        executed: bool,
+        refused: bool,
+        sandbox_name: str,
+        exit_status: int | None,
+        detail: str,
+        created_at: str,
+    ) -> int:
+        cur = self._conn.execute(
+            """
+            INSERT INTO executions (
+                subject_id, source, executed, refused, sandbox,
+                exit_status, detail, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                subject_id,
+                source,
+                int(executed),
+                int(refused),
+                sandbox_name,
+                exit_status,
+                detail,
+                created_at,
+            ),
+        )
+        self._conn.commit()
+        return int(cur.lastrowid)
+
+    def executions(self) -> list[dict]:
+        rows = self._conn.execute("SELECT * FROM executions ORDER BY id").fetchall()
+        return [self._execution_row(row) for row in rows]
+
     def close(self) -> None:
         self._conn.close()
 
@@ -135,4 +284,18 @@ class SqliteLedger(Ledger):
         record["passed"] = bool(record["passed"])
         record["skills_used"] = json.loads(record["skills_used"])
         record["evidence"] = json.loads(record["evidence"])
+        return record
+
+    @staticmethod
+    def _pending_row(row: sqlite3.Row) -> dict:
+        record = dict(row)
+        record["action"] = json.loads(record["action"])
+        record["judgment"] = json.loads(record["judgment"])
+        return record
+
+    @staticmethod
+    def _execution_row(row: sqlite3.Row) -> dict:
+        record = dict(row)
+        record["executed"] = bool(record["executed"])
+        record["refused"] = bool(record["refused"])
         return record
