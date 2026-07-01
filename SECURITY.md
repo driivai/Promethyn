@@ -8,10 +8,16 @@ untrusted code now runs **inside an isolating sandbox** (`sandbox/`): the
 default verifier executes every candidate through an adapter that denies the
 network, constrains the filesystem to a writable workspace over a read-only
 root, drops capabilities and sets no-new-privileges, and bounds resources
-(memory, CPU time, processes, wall clock). The isolation is proven by
-adversarial conformance tests (INV-SANDBOX-1…5 in `spec/invariants.md`,
-`tests/conformance/test_sandbox.py`) that run hostile code and assert
-containment.
+(memory, CPU time, processes, wall clock). Resource limiting uses the strongest
+lever the host offers — a per-cgroup cap (`pids.max`, and on cgroup v2 also
+`memory.max`/`cpu.max`) where a writable cgroup is available — and falls back to
+POSIX rlimits otherwise; the rlimits always apply as a floor, so the cgroup can
+only *add* containment, never loosen it, and the lever actually used is reported
+on every result (`SandboxResult.limiter`), never silently weaker. The isolation
+is proven by adversarial conformance tests (INV-SANDBOX-1…5 in
+`spec/invariants.md`, `tests/conformance/test_sandbox.py`) that run hostile code
+and assert containment — including that a process bomb is denied by the cgroup
+itself where that lever is present.
 
 The historical no-isolation path (a child interpreter with only a timeout and
 rlimits) survives as the explicitly-named `UnsafeLocalSandbox`. It is **not a
@@ -20,11 +26,14 @@ offline development against trusted/mock examples, never for untrusted code, and
 it logs a warning whenever it runs.
 
 > Choose the isolating adapter that matches your platform (`PROM_SANDBOX`): the
-> container adapter (Docker/Podman, the most robust — pin the image by digest)
-> or the daemonless namespace adapter. Where no isolating runtime is available
-> the default refuses to run candidate code (it abstains) rather than running it
-> unsandboxed. See `docs/sandbox.md` for the threat model and requirements, and
-> `docs/security-model.md` for the full model.
+> container adapter (Docker/Podman, the most robust) or the daemonless namespace
+> adapter. **Pin the container image by digest** (`PROM_SANDBOX_IMAGE`); in
+> production set `PROM_REQUIRE_DIGEST_PIN=1` to *enforce* it — the adapter then
+> refuses a bare-tag image (fail-closed, an abstain) instead of merely warning,
+> closing the window where a tag is repointed at a substituted image. Where no
+> isolating runtime is available the default refuses to run candidate code (it
+> abstains) rather than running it unsandboxed. See `docs/sandbox.md` for the
+> threat model and requirements, and `docs/security-model.md` for the full model.
 
 **Live execution (tool side-effects) is still NOT enabled**: the swarm executor
 remains a no-op recorder. This layer sandboxes the code the verifier already
