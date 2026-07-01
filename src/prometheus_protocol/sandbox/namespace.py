@@ -28,6 +28,10 @@ from prometheus_protocol.sandbox.base import (
     SandboxResult,
     clip,
 )
+from prometheus_protocol.sandbox.cgroup import (
+    create_pids_cgroup,
+    join_current_process,
+)
 
 _BOOTSTRAP = Path(__file__).with_name("_bootstrap.py")
 _MARKER = "sandbox-bootstrap:"
@@ -107,6 +111,20 @@ class NamespaceSandbox(Sandbox):
         # bootstrap. The write end is inherited by the child and closed on exec,
         # so the candidate never sees the fd and cannot forge or suppress it.
         status_r, status_w = os.pipe()
+        # Cap the candidate process tree with the stronger cgroup lever where a
+        # writable cgroup is available; the bootstrap's POSIX rlimits stay as the
+        # floor regardless, so this only adds containment, never removes it.
+        cgroup = create_pids_cgroup(
+            pids_max=limits.max_processes,
+            memory_bytes=limits.memory_bytes,
+            cpu_seconds=limits.cpu_time_s,
+        )
+        limiter = "cgroup" if cgroup is not None else "rlimit"
+        preexec = (
+            (lambda procs=cgroup.procs_path: join_current_process(procs))
+            if cgroup is not None
+            else None
+        )
         try:
             os.set_inheritable(status_w, True)
             command = [
@@ -132,6 +150,7 @@ class NamespaceSandbox(Sandbox):
                     timeout=limits.wall_time_s,
                     input=stdin or None,
                     pass_fds=(status_w,),
+                    preexec_fn=preexec,
                 )
             except subprocess.TimeoutExpired as exc:
                 os.close(status_w)
@@ -143,9 +162,11 @@ class NamespaceSandbox(Sandbox):
                     stderr=err,
                     exit_status=None,
                     timed_out=True,
+                    pids_exceeded=(cgroup.hit_limit() if cgroup is not None else False),
                     output_truncated=truncated,
                     started_ok=True,
                     candidate_started=self._candidate_started(status_r),
+                    limiter=limiter,
                     detail=f"wall-time limit {limits.wall_time_s}s",
                 )
             except OSError as exc:
@@ -166,9 +187,13 @@ class NamespaceSandbox(Sandbox):
             # a fork that hit RLIMIT_NPROC reports as a resource-temporarily-
             # unavailable.
             memory_exceeded = rc in (-9, 137) or "MemoryError" in (err or "")
+            # The cgroup ``pids.events`` counter is the unforgeable signal that the
+            # stronger lever denied a fork; OR it in so a cgroup-enforced cap is
+            # reported even when the candidate swallowed the errno.
             pids_exceeded = (
                 "BlockingIOError" in (err or "")
                 or "Resource temporarily unavailable" in (err or "")
+                or (cgroup.hit_limit() if cgroup is not None else False)
             )
             return SandboxResult(
                 stdout=out,
@@ -179,12 +204,15 @@ class NamespaceSandbox(Sandbox):
                 output_truncated=truncated,
                 started_ok=started_ok,
                 candidate_started=candidate_started,
+                limiter=limiter,
                 detail="" if started_ok else "sandbox setup failed",
             )
         finally:
             os.close(status_r)
             if status_w != -1:
                 os.close(status_w)
+            if cgroup is not None:
+                cgroup.close()
 
     @staticmethod
     def _candidate_started(status_r: int) -> bool:

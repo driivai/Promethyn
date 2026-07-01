@@ -204,11 +204,19 @@ Tests: `tests/conformance/test_sandbox.py::test_inv_sandbox_2_filesystem_is_cons
 > A memory bomb, an infinite loop, and a process bomb each hit a limit and
 > terminate without impacting the host.
 
-Enforcement: POSIX rlimits (address space, CPU time, process count) and a
-wall-clock bound; the sandbox reaps the whole process tree on exit. The
-`SandboxResult` flags the breach.
+Enforcement: the strongest resource lever the host offers, and never a weaker one
+silently. Where a writable cgroup is available the adapter caps a scoped cgroup
+(`pids.max`, and on cgroup v2 also `memory.max`/`cpu.max`) and moves the
+candidate tree into it — a per-cgroup cap a nested process cannot bypass;
+otherwise, and always as a floor beneath the cgroup, POSIX rlimits (address
+space, CPU time, process count) apply. A wall-clock bound always holds and the
+sandbox reaps the whole process tree on exit. `SandboxResult` flags the breach
+and reports which lever was used (`limiter`), so it is never silently weaker.
 
-Tests: `tests/conformance/test_sandbox.py::test_inv_sandbox_3_*`.
+Tests: `tests/conformance/test_sandbox.py::test_inv_sandbox_3_*` — the process
+bomb asserts the **stronger** cgroup denial (the unforgeable `pids.events`
+counter) where that lever is present, and the universally-true bounded-and-reaped
+property everywhere.
 
 ### INV-SANDBOX-4. Least privilege
 

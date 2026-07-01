@@ -27,8 +27,9 @@ verifier.
   writable workspace; it cannot write outside the workspace, modify read-only
   paths, or read sensitive host directories (INV-SANDBOX-2).
 - **Exhaust host resources** — address space, CPU time, process count, and wall
-  clock are bounded, and the whole process tree is reaped on exit
-  (INV-SANDBOX-3).
+  clock are bounded (by a cgroup where available, otherwise POSIX rlimits — see
+  *Process/resource limiting* below), and the whole process tree is reaped on
+  exit (INV-SANDBOX-3).
 - **Escalate privilege** — it runs unprivileged with `no_new_privs` set and
   capabilities dropped, so setuid/`mknod`/mount escalation fails (INV-SANDBOX-4).
 
@@ -51,11 +52,20 @@ Selected by `Config.sandbox` / `PROM_SANDBOX`; the default `auto` picks the best
 ### Container (`container`) — most robust for production
 
 Runs the candidate in Docker or Podman with `--network none`, a read-only root
-plus a writable workspace bind, `--memory` / CPU quota / `--pids-limit`,
-`--cap-drop ALL`, `--security-opt no-new-privileges`, a non-root user, and the
-runtime's default seccomp profile. **Pin the image by digest** in production via
-`PROM_SANDBOX_IMAGE` (e.g. `python:3.12-slim@sha256:…`); a bare tag is accepted
-but logged as a supply-chain risk. Requires a container daemon.
+plus a writable workspace bind, `--memory` / CPU quota / `--pids-limit`
+(cgroup-backed resource bounds), `--cap-drop ALL`,
+`--security-opt no-new-privileges`, a non-root user, and the runtime's default
+seccomp profile. Requires a container daemon.
+
+**Pin the image by digest** in production via `PROM_SANDBOX_IMAGE` (e.g.
+`python:3.12-slim@sha256:…`). By default a bare tag is accepted but logged as a
+supply-chain risk. Set **`PROM_REQUIRE_DIGEST_PIN=1`** to make that posture
+enforceable: the adapter then *refuses* to run a bare-tag image — a
+could-not-verify (`started_ok=False` → the verifier ABSTAINs), checked before
+the container is created so it is deterministic. A bare tag can be silently
+repointed at a different image after it was vetted; the flag closes that
+substitution window. It is off by default for dev convenience and is the
+recommended production setting.
 
 ### Namespace (`namespace`) — daemonless default where no runtime exists
 
@@ -79,6 +89,33 @@ When no isolating adapter is available and the unsafe path was not opted into,
 the default returns a `NullSandbox` whose runs report `started_ok=False`, so the
 verifier ABSTAINs (could-not-verify) rather than executing untrusted code in the
 clear. The sandbox is mandatory by construction (INV-SANDBOX-5).
+
+## Process/resource limiting
+
+The namespace adapter bounds the candidate tree with the **strongest lever the
+host offers, and never a weaker one silently**:
+
+- **Primary — cgroup.** Where a writable cgroup is available (the cgroup v2
+  unified hierarchy with the `pids` controller delegated, or the v1 `pids`
+  controller) the adapter creates a scoped cgroup, caps it (`pids.max`, and on
+  v2 also `memory.max` and `cpu.max`), and moves the candidate tree into it
+  before it runs. A cgroup `pids.max` is a per-cgroup cap that even a privileged
+  nested process cannot bypass, and its `pids.events` counter is an unforgeable
+  record that the cap was enforced.
+- **Floor — POSIX rlimits.** The bootstrap *always* applies `RLIMIT_AS`,
+  `RLIMIT_CPU`, `RLIMIT_NPROC`, and `RLIMIT_FSIZE` regardless. So the cgroup can
+  only *add* containment; it never replaces the floor and never breaks a run.
+
+This is best-effort and fail-safe by construction: any cgroup step that fails
+returns to the rlimit floor. Which lever was used is reported on every result as
+`SandboxResult.limiter` (`"cgroup"` or `"rlimit"`) — never silently weaker, a
+caller can always tell. The container adapter's `--pids-limit` / `--memory` are
+cgroup-backed by the runtime, so it reports `"cgroup"`.
+
+The INV-SANDBOX-3 conformance test asserts the **stronger** property where the
+cgroup lever is present (the cgroup itself denied the fork, via `pids.events`)
+*and* the universally-true property everywhere (the bomb was bounded and its tree
+reaped, the host unaffected).
 
 ## Classification
 
