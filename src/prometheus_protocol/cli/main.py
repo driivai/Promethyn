@@ -32,6 +32,7 @@ from typing import Sequence
 
 from prometheus_protocol.core.config import Config
 from prometheus_protocol.core.errors import PrometheusError
+from prometheus_protocol.execution.pending import PendingActionService
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
 from prometheus_protocol.provider.remote import ProviderError
 from prometheus_protocol.registry.markdown_registry import MarkdownSkillRegistry
@@ -168,6 +169,90 @@ def _cmd_audit(args: argparse.Namespace) -> int:
     return 0
 
 
+def _open_ledger_for_pending(config: Config) -> SqliteLedger | None:
+    """Open the configured ledger for the pending-action interface, read-safe.
+
+    A ``:memory:`` or not-yet-created ledger has no pending actions to show or
+    resolve, so we report that rather than initialise state.
+    """
+
+    if config.ledger_path == Path(":memory:") or not Path(config.ledger_path).exists():
+        print(f"no ledger found at {config.ledger_path}")
+        return None
+    return SqliteLedger(config.ledger_path)
+
+
+def _cmd_pending(args: argparse.Namespace) -> int:
+    """List actions halted for human review (read-only)."""
+
+    config = Config.from_env()
+    ledger = _open_ledger_for_pending(config)
+    if ledger is None:
+        return 0
+    try:
+        pending = PendingActionService(ledger).list_pending()
+    finally:
+        ledger.close()
+    print("Promethyn — pending actions (awaiting human approval)\n")
+    if not pending:
+        print("  (none)")
+        return 0
+    for action in pending:
+        print(
+            f"  #{action.id}  {action.subject_id}  "
+            f"[{action.judgment.verdict.value} conf={action.judgment.confidence:.2f} "
+            f"risk={action.risk_class}]"
+        )
+        print(f"      reason: {action.reason}")
+    print(
+        "\nApprove with:  prometheus-protocol approve <id> --by <you>\n"
+        "Reject with :  prometheus-protocol reject <id> --by <you>"
+    )
+    return 0
+
+
+def _cmd_approve(args: argparse.Namespace) -> int:
+    return _resolve_pending(args, approve=True)
+
+
+def _cmd_reject(args: argparse.Namespace) -> int:
+    return _resolve_pending(args, approve=False)
+
+
+def _resolve_pending(args: argparse.Namespace, *, approve: bool) -> int:
+    """Record a human approve/reject for a pending action into the ledger.
+
+    Recording only: it flips the audit state (an approved action becomes
+    executable, a rejected one never executes). The verb is deliberately
+    separate from execution, which runs through the sandboxed executor.
+    """
+
+    config = Config.from_env()
+    ledger = _open_ledger_for_pending(config)
+    if ledger is None:
+        return 1
+    service = PendingActionService(ledger)
+    verb = "approve" if approve else "reject"
+    try:
+        if service.get(args.id) is None:
+            print(f"error: no pending action with id {args.id}", file=sys.stderr)
+            return 1
+        if approve:
+            service.approve(args.id, identity=args.by, reason=args.reason or "")
+        else:
+            service.reject(args.id, identity=args.by, reason=args.reason or "")
+    except ValueError as exc:
+        # Already decided: a human decision is never silently overwritten.
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        ledger.close()
+    print(f"{verb}d pending action #{args.id} as {args.by}")
+    if approve:
+        print("  the action is now approved and executable through the sandboxed executor")
+    return 0
+
+
 def _existing_dir(path: Path | str) -> bool:
     return str(path) != ":memory:" and Path(path).is_dir()
 
@@ -233,6 +318,15 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("cycle", help="run one learning cycle")
     sub.add_parser("status", help="show storage, skills, and verifier ranking (read-only)")
     sub.add_parser("audit", help="summarise the experience ledger")
+    sub.add_parser("pending", help="list actions halted for human approval (read-only)")
+    approve = sub.add_parser("approve", help="record a human approval of a pending action")
+    approve.add_argument("id", type=int, help="the pending action id (see 'pending')")
+    approve.add_argument("--by", required=True, help="the approver's identity (recorded)")
+    approve.add_argument("--reason", default="", help="optional note recorded with the decision")
+    reject = sub.add_parser("reject", help="record a human rejection of a pending action")
+    reject.add_argument("id", type=int, help="the pending action id (see 'pending')")
+    reject.add_argument("--by", required=True, help="the rejecter's identity (recorded)")
+    reject.add_argument("--reason", default="", help="optional note recorded with the decision")
     return parser
 
 
@@ -242,6 +336,9 @@ _COMMANDS = {
     "cycle": _cmd_cycle,
     "status": _cmd_status,
     "audit": _cmd_audit,
+    "pending": _cmd_pending,
+    "approve": _cmd_approve,
+    "reject": _cmd_reject,
 }
 
 
