@@ -36,7 +36,10 @@ from prometheus_protocol.execution.pending import PendingActionService
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
 from prometheus_protocol.provider.remote import ProviderError
 from prometheus_protocol.registry.markdown_registry import MarkdownSkillRegistry
-from prometheus_protocol.runtime.factory import build_orchestrator
+from prometheus_protocol.runtime.factory import (
+    build_execution_controller,
+    build_orchestrator,
+)
 from prometheus_protocol.verifier.bank import VerifierBank
 from prometheus_protocol.verifier.store import SqliteTrustStore
 
@@ -212,44 +215,89 @@ def _cmd_pending(args: argparse.Namespace) -> int:
 
 
 def _cmd_approve(args: argparse.Namespace) -> int:
-    return _resolve_pending(args, approve=True)
+    """Record a human approval, then drive the action to execution.
 
-
-def _cmd_reject(args: argparse.Namespace) -> int:
-    return _resolve_pending(args, approve=False)
-
-
-def _resolve_pending(args: argparse.Namespace, *, approve: bool) -> int:
-    """Record a human approve/reject for a pending action into the ledger.
-
-    Recording only: it flips the audit state (an approved action becomes
-    executable, a rejected one never executes). The verb is deliberately
-    separate from execution, which runs through the sandboxed executor.
+    The approval is recorded first; unless ``--no-exec`` is given, the approved
+    action is executed through the SAME gated, sandboxed, audited controller path
+    (never a shortcut around the gate or sandbox). If no isolating sandbox is
+    available it fails closed — the approval stands and the refusal is recorded,
+    but nothing runs unsandboxed.
     """
 
     config = Config.from_env()
     ledger = _open_ledger_for_pending(config)
     if ledger is None:
         return 1
-    service = PendingActionService(ledger)
-    verb = "approve" if approve else "reject"
     try:
-        if service.get(args.id) is None:
+        controller = build_execution_controller(config, ledger=ledger)
+        if controller.pending.get(args.id) is None:
             print(f"error: no pending action with id {args.id}", file=sys.stderr)
             return 1
-        if approve:
-            service.approve(args.id, identity=args.by, reason=args.reason or "")
-        else:
-            service.reject(args.id, identity=args.by, reason=args.reason or "")
-    except ValueError as exc:
-        # Already decided: a human decision is never silently overwritten.
+        if args.no_exec:
+            controller.pending.approve(args.id, identity=args.by, reason=args.reason or "")
+            print(f"approved pending action #{args.id} as {args.by} (recorded, not executed)")
+            return 0
+        result = controller.approve(args.id, identity=args.by, reason=args.reason or "")
+    except (ValueError, KeyError) as exc:
+        # Already decided, expired, or unknown id: never silently overwritten.
         print(f"error: {exc}", file=sys.stderr)
         return 1
     finally:
         ledger.close()
-    print(f"{verb}d pending action #{args.id} as {args.by}")
-    if approve:
-        print("  the action is now approved and executable through the sandboxed executor")
+    if result.refused:
+        print(
+            f"approved pending action #{args.id} as {args.by}, but execution refused "
+            f"(fail-closed): {result.detail}",
+            file=sys.stderr,
+        )
+        return 1
+    print(
+        f"approved pending action #{args.id} as {args.by} and executed in sandbox "
+        f"{result.sandbox_name!r} (exit {result.exit_status})"
+    )
+    return 0
+
+
+def _cmd_reject(args: argparse.Namespace) -> int:
+    """Record a human rejection. A rejected action is never executed."""
+
+    config = Config.from_env()
+    ledger = _open_ledger_for_pending(config)
+    if ledger is None:
+        return 1
+    service = PendingActionService(ledger, ttl_seconds=config.pending_ttl_seconds)
+    try:
+        if service.get(args.id) is None:
+            print(f"error: no pending action with id {args.id}", file=sys.stderr)
+            return 1
+        service.reject(args.id, identity=args.by, reason=args.reason or "")
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        ledger.close()
+    print(f"rejected pending action #{args.id} as {args.by}")
+    return 0
+
+
+def _cmd_sweep(args: argparse.Namespace) -> int:
+    """Expire pending actions older than the configured TTL (an audited transition)."""
+
+    config = Config.from_env()
+    ledger = _open_ledger_for_pending(config)
+    if ledger is None:
+        return 0
+    service = PendingActionService(ledger, ttl_seconds=config.pending_ttl_seconds)
+    try:
+        if config.pending_ttl_seconds <= 0:
+            print("expiry is disabled (PROM_PENDING_TTL=0); nothing to sweep")
+            return 0
+        expired = service.sweep()
+    finally:
+        ledger.close()
+    print(f"swept: {len(expired)} pending action(s) expired (TTL {config.pending_ttl_seconds}s)")
+    for action in expired:
+        print(f"  #{action.id}  {action.subject_id}")
     return 0
 
 
@@ -319,10 +367,18 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("status", help="show storage, skills, and verifier ranking (read-only)")
     sub.add_parser("audit", help="summarise the experience ledger")
     sub.add_parser("pending", help="list actions halted for human approval (read-only)")
-    approve = sub.add_parser("approve", help="record a human approval of a pending action")
+    sub.add_parser("sweep", help="expire pending actions older than the configured TTL")
+    approve = sub.add_parser(
+        "approve", help="approve a pending action and execute it through the sandbox"
+    )
     approve.add_argument("id", type=int, help="the pending action id (see 'pending')")
     approve.add_argument("--by", required=True, help="the approver's identity (recorded)")
     approve.add_argument("--reason", default="", help="optional note recorded with the decision")
+    approve.add_argument(
+        "--no-exec",
+        action="store_true",
+        help="record the approval only; do not execute (default executes through the sandbox)",
+    )
     reject = sub.add_parser("reject", help="record a human rejection of a pending action")
     reject.add_argument("id", type=int, help="the pending action id (see 'pending')")
     reject.add_argument("--by", required=True, help="the rejecter's identity (recorded)")
@@ -337,6 +393,7 @@ _COMMANDS = {
     "status": _cmd_status,
     "audit": _cmd_audit,
     "pending": _cmd_pending,
+    "sweep": _cmd_sweep,
     "approve": _cmd_approve,
     "reject": _cmd_reject,
 }
