@@ -8,6 +8,38 @@ in `spec/invariants.md` is a major version bump.
 ## [Unreleased]
 
 ### Added
+- Operational hardening of execution and sandbox fault attribution (four
+  tightenings; no verdict, gate, fusion, or INV-EXEC/INV-SANDBOX semantics
+  loosened):
+  - **Opportunistic pending-action expiry.** The execution controller sweeps
+    lapsed holds at its natural touchpoints — construction, before listing,
+    and before approving — and the `pending` CLI verb expires lapsed holds
+    before listing, so the TTL is enforced in normal operation without a
+    scheduler. The explicit `sweep` verb is unchanged (idempotent) and remains
+    the recommended scheduled path for unattended deployments
+    (`docs/operations.md` has cron/systemd recipes); the approval-time
+    stale-guard stays authoritative.
+  - **`retry-execution <id> --by <who>`** re-drives execution for a hold that
+    is approved and has never successfully executed (its execution was refused
+    fail-closed, or deferred with `approve --no-exec`), through the same
+    gated, sandboxed, fail-closed controller path. It never re-opens the
+    decision: pending/rejected/expired/already-executed holds are refused with
+    a clear error, the human decision record is untouched, and every attempt —
+    eligible or not — is recorded. The retry window reuses the TTL: a retry is
+    accepted only within `PROM_PENDING_TTL` seconds of the recorded approval
+    (`0` disables, as for pending expiry). Executions now carry a `pending_id`
+    link column (additive, ensured on open) so "never executed" is provable
+    from the ledger alone.
+  - **Container-adapter candidate-start signal (parity).** The container
+    adapter now carries the unforgeable candidate-start signal: a bootstrap
+    mounted read-only into every container consumes a fresh per-run nonce from
+    the first line of stdin (stored nowhere the candidate can read) and emits
+    nonce-keyed started/exec-failed lines on stderr. A container-run candidate
+    crash with a confirmed start classifies FAIL exactly as on the namespace
+    adapter; container harness faults stay ABSTAIN. Transport and adapter
+    wiring are proven without a daemon; real-container runs are gated
+    (`PROM_REQUIRE_CONTAINER=1` to fail rather than skip).
+
 - Sandbox isolation for untrusted candidate code (`sandbox/`). A `Sandbox` port
   (`Sandbox`, `SandboxResult`, `Limits`) plus adapters: a daemonless
   `NamespaceSandbox` (Linux user/mount/network/PID namespaces + read-only root
@@ -135,6 +167,19 @@ in `spec/invariants.md` is a major version bump.
   `TestPlan`, `VerifiedProposal`, `ExecutionResult`, `Role`,
   `RoleSynthesisEngine`, `Swarm`, `SwarmConfig`, `DebateLayer`, `SwarmRuntime`,
   `Executor`, `RecordingExecutor`, and `ActionGate`.
+
+### Fixed
+- **`started_ok` is no longer forgeable.** The namespace adapter previously
+  inferred "isolation never started" from a parseable stderr marker + exit
+  127, which a hostile candidate could print to turn its own crash (FAIL) into
+  a harness fault (ABSTAIN). Both `started_ok` and `candidate_started` now
+  rest solely on status-pipe tokens the candidate can neither write nor unsay
+  (setup-failed / started / exec-failed); the stderr marker remains for human
+  diagnostics only. Genuine setup failures and exec failures still report
+  not-started (ABSTAIN, fail-closed — an exec failure now also correctly
+  revokes the candidate-start), and an unstarted run can no longer be recorded
+  as a refusal when it in fact executed. This strengthens INV-SANDBOX /
+  INV-EXEC *enforcement*; no invariant wording changes.
 
 ### Changed
 - Swarm role/model surface, all additive and behaviour-preserving by default:

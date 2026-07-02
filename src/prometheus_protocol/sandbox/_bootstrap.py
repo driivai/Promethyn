@@ -7,8 +7,14 @@ Invoked as::
 Standard library only (it runs under ``-I``). It makes the root filesystem
 read-only with the workspace kept read-write, hides a small set of sensitive
 host directories, drops new-privilege acquisition, applies POSIX rlimits to the
-candidate, then ``execv``s the command. A setup failure exits 127 with a marker
-on stderr so the caller can report ``started_ok=False``.
+candidate, then ``execv``s the command. Every outcome is reported on the status
+pipe — a channel the candidate can neither write nor unsay (the tokens are
+written before its code runs, on a fd made close-on-exec, so the candidate
+never holds it): a setup failure writes the setup-failed token, an established
+isolation writes the started token right before exec, and a failed exec revokes
+it with the exec-failed token. The stderr marker lines remain for human
+diagnostics only; nothing load-bearing parses them, so a candidate printing
+them (plus any exit status) forges nothing.
 """
 
 import ctypes
@@ -22,10 +28,12 @@ import sys
 _SENSITIVE = ("/root", "/home")
 
 _MARKER = "sandbox-bootstrap:"
-# Written to the status pipe once isolation is set up and the candidate is about
-# to be exec'd. Unforgeable by the candidate (emitted before its code runs, on a
-# close-on-exec fd it never inherits). Kept in sync with ``namespace.py``.
+# Status-pipe tokens. Kept in sync with ``_start_signal.py`` (this file runs
+# standalone under ``-I`` and cannot import the package); a conformance test
+# asserts the copies match.
 _STARTED_TOKEN = b"prom-candidate-started"
+_EXEC_FAILED_TOKEN = b"prom-candidate-exec-failed"
+_SETUP_FAILED_TOKEN = b"prom-sandbox-setup-failed"
 
 _PR_CAPBSET_DROP = 24
 _CAP_LAST = 40  # capabilities are 0..40 on current kernels; dropping past the
@@ -56,11 +64,21 @@ def _drop_capabilities(libc) -> None:
         pass
 
 
+def _signal(status_fd: int, token: bytes) -> None:
+    """Best-effort token write to the status pipe; never raises."""
+
+    try:
+        os.write(status_fd, token)
+    except OSError:
+        pass
+
+
 def _main() -> None:
     workspace = sys.argv[1]
     mem, cpu, nproc, fsize = (int(x) for x in sys.argv[2:6])
     status_fd = int(sys.argv[6])
     if sys.argv[7] != "--":
+        _signal(status_fd, _SETUP_FAILED_TOKEN)
         sys.stderr.write(f"{_MARKER} malformed bootstrap args\n")
         os._exit(127)
     cmd = sys.argv[8:]
@@ -93,6 +111,7 @@ def _main() -> None:
         mount("", "/", "", MS_REMOUNT | MS_BIND | MS_RDONLY)  # root read-only
         mount("", workspace, "", MS_REMOUNT | MS_BIND)  # keep workspace writable
     except OSError as exc:
+        _signal(status_fd, _SETUP_FAILED_TOKEN)
         sys.stderr.write(f"{_MARKER} filesystem isolation failed: {exc}\n")
         os._exit(127)
 
@@ -123,8 +142,8 @@ def _main() -> None:
     # candidate's code runs and set close-on-exec, so the candidate never inherits
     # the fd. A missing token means setup failed before the candidate ran (a
     # harness fault); its presence means any later crash is the candidate's own.
+    _signal(status_fd, _STARTED_TOKEN)
     try:
-        os.write(status_fd, _STARTED_TOKEN)
         os.set_inheritable(status_fd, False)
     except OSError:
         pass
@@ -132,6 +151,10 @@ def _main() -> None:
     try:
         os.execv(cmd[0], cmd)
     except OSError as exc:
+        # The candidate never ran: revoke the started token on the same
+        # unforgeable channel (the fd is close-on-exec but still ours — the
+        # exec failed), so this stays a harness fault, not a candidate crash.
+        _signal(status_fd, _EXEC_FAILED_TOKEN)
         sys.stderr.write(f"{_MARKER} exec failed: {exc}\n")
         os._exit(127)
 

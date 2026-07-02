@@ -147,6 +147,8 @@ def test_opening_an_old_ledger_adds_the_columns(tmp_path):
             "attempts.verdict", "attempts.confidence",
             "executions.verdict", "executions.confidence",
             "executions.authoritative", "executions.judgment",
+            "executions.pending_id",
+            "pending_actions.execution_committed_at",
         }
         cols = {r["name"] for r in ledger._conn.execute("PRAGMA table_info(attempts)")}
         assert {"verdict", "confidence"} <= cols

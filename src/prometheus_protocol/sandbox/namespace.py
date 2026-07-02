@@ -21,6 +21,11 @@ import tempfile
 from pathlib import Path
 from typing import Sequence
 
+from prometheus_protocol.sandbox._start_signal import (
+    pipe_candidate_started,
+    pipe_exec_failed,
+    pipe_setup_failed,
+)
 from prometheus_protocol.sandbox.base import (
     FSIZE_BYTES,
     Limits,
@@ -34,11 +39,6 @@ from prometheus_protocol.sandbox.cgroup import (
 )
 
 _BOOTSTRAP = Path(__file__).with_name("_bootstrap.py")
-_MARKER = "sandbox-bootstrap:"
-# The bootstrap writes this to the status pipe once the candidate is about to
-# run (see ``_bootstrap.py``). Its presence is the definite candidate-started
-# signal; its absence means setup failed before the candidate ran.
-_STARTED_TOKEN = b"prom-candidate-started"
 # Cached result of the functional availability probe (per process).
 _AVAILABLE_CACHE: bool | None = None
 _UNSHARE_FLAGS = (
@@ -165,7 +165,9 @@ class NamespaceSandbox(Sandbox):
                     pids_exceeded=(cgroup.hit_limit() if cgroup is not None else False),
                     output_truncated=truncated,
                     started_ok=True,
-                    candidate_started=self._candidate_started(status_r),
+                    candidate_started=pipe_candidate_started(
+                        self._read_status(status_r)
+                    ),
                     limiter=limiter,
                     detail=f"wall-time limit {limits.wall_time_s}s",
                 )
@@ -174,11 +176,27 @@ class NamespaceSandbox(Sandbox):
 
             os.close(status_w)
             status_w = -1
-            candidate_started = self._candidate_started(status_r)
+            status = self._read_status(status_r)
+            candidate_started = pipe_candidate_started(status)
 
-            # Did isolation start? The bootstrap exits 127 with a marker if FS
-            # setup or exec failed before the candidate ran.
-            started_ok = not (proc.returncode == 127 and _MARKER in (proc.stderr or ""))
+            # Did isolation start, and did the candidate actually run? Decided
+            # by the status-pipe tokens ALONE — a channel the candidate cannot
+            # write — never by parsing exit codes or stderr text a hostile
+            # candidate controls. Printing the old bootstrap marker and exiting
+            # 127 therefore forges nothing: with an unrevoked started token the
+            # run is the candidate's own. Conservative on doubt: no token (the
+            # bootstrap never ran), a setup-failed token, or a revoked start
+            # (exec failed — the candidate never ran) all report not-started,
+            # which callers treat as a harness fault, never a claimed execution.
+            started_ok = candidate_started
+            if pipe_exec_failed(status):
+                detail = "candidate exec failed inside the sandbox"
+            elif pipe_setup_failed(status):
+                detail = "sandbox setup failed"
+            elif not candidate_started:
+                detail = "sandbox did not confirm candidate start"
+            else:
+                detail = ""
             out, truncated = clip(proc.stdout, limits.max_output_bytes)
             err, _ = clip(proc.stderr, limits.max_output_bytes)
             rc = proc.returncode
@@ -205,7 +223,7 @@ class NamespaceSandbox(Sandbox):
                 started_ok=started_ok,
                 candidate_started=candidate_started,
                 limiter=limiter,
-                detail="" if started_ok else "sandbox setup failed",
+                detail=detail,
             )
         finally:
             os.close(status_r)
@@ -215,16 +233,21 @@ class NamespaceSandbox(Sandbox):
                 cgroup.close()
 
     @staticmethod
-    def _candidate_started(status_r: int) -> bool:
-        """Read the status pipe: did the candidate definitely begin executing?
+    def _read_status(status_r: int) -> bytes:
+        """Drain the status pipe: the bootstrap's tokens, or empty on none.
 
         All write ends are closed by the time this is called (the child has
-        exited and the parent closed its own), so the read returns promptly with
-        the token or at EOF.
+        exited and the parent closed its own), so the loop terminates promptly
+        at EOF. Bounded: the bootstrap writes at most two short tokens.
         """
 
+        data = b""
         try:
-            data = os.read(status_r, 64)
+            while len(data) < 256:
+                chunk = os.read(status_r, 256)
+                if not chunk:
+                    break
+                data += chunk
         except OSError:
-            return False
-        return _STARTED_TOKEN in data
+            pass
+        return data

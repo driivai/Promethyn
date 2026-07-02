@@ -179,6 +179,21 @@ class Ledger(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def claim_pending_execution(self, pending_id: int, claimed_at: str) -> bool:
+        """Atomically claim the right to execute a hold; True iff this call won.
+
+        The at-most-once-execution guard: only one of any number of concurrent
+        drivers (approve and/or retry) may proceed to the executor. It must not
+        touch the human decision record.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def release_pending_execution(self, pending_id: int) -> None:
+        """Release a claim after a refused (no-side-effect) execution."""
+        raise NotImplementedError
+
+    @abstractmethod
     def pending_actions(self, *, status: str | None = None) -> list[dict]:
         """Return pending actions in insertion order, optionally filtered."""
         raise NotImplementedError
@@ -201,17 +216,26 @@ class Ledger(ABC):
         detail: str,
         created_at: str,
         judgment: dict | None = None,
+        pending_id: int | None = None,
     ) -> int:
         """Record one executor outcome (executed, refused, or blocked).
 
         ``judgment`` is the fused Judgment the action rested on; it is stored as
         JSON and promoted to queryable verdict/confidence columns.
+        ``pending_id`` links the outcome to the pending hold it resolves, when
+        it came from one — it is what makes "this approved hold has never
+        executed" answerable from the ledger alone.
         """
         raise NotImplementedError
 
     @abstractmethod
     def executions(self) -> list[dict]:
         """Return recorded executions in insertion order."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def executions_for_pending(self, pending_id: int) -> list[dict]:
+        """Return executions linked to one pending hold, in insertion order."""
         raise NotImplementedError
 
     # -- audit queries (additive observability; read-only) --------------------

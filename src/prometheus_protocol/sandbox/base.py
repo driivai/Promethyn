@@ -49,12 +49,20 @@ class SandboxResult:
 
     ``candidate_started`` is the stronger, *definite* signal: the candidate
     command actually began executing under isolation. It is set only when the
-    adapter has positive confirmation the candidate ran (for the namespace
-    adapter, an unforgeable token the bootstrap emits right before ``execv``), so
-    ``started_ok=True`` with ``candidate_started=False`` — a setup step that
-    crashed after starting but before running the candidate — stays a harness
-    fault. A candidate that ran and then crashed (``candidate_started=True``, no
-    verdict produced) is the candidate's own fault, not the harness's.
+    adapter has positive confirmation the candidate ran, so ``started_ok=True``
+    with ``candidate_started=False`` — e.g. a wall-clock timeout during setup,
+    before the candidate ran — stays a harness fault. A candidate that ran and
+    then crashed (``candidate_started=True``, no verdict produced) is the
+    candidate's own fault, not the harness's.
+
+    For the isolating adapters both flags rest on the unforgeable start signal
+    (``_start_signal.py``): tokens a bootstrap emits at the point isolation is
+    established, on a channel the candidate can neither write nor unsay — a
+    close-on-exec status pipe (namespace) or nonce-keyed stream lines whose
+    nonce the candidate can never read (container). Neither flag is ever
+    inferred from exit codes or output text a hostile candidate controls, so
+    printing a fake failure marker (with any exit status) cannot turn the
+    candidate's own crash into a harness fault.
     """
 
     stdout: str = ""

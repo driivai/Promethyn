@@ -26,6 +26,13 @@ object, so they cannot diverge (a conformance test asserts equality). The
 Columns are nullable: an attempt with no fused judgment, or an execution that
 predates observability, leaves them `NULL`.
 
+`executions` also carries a `pending_id` link (additive, ensured on open like
+the columns above): the pending hold an execution resolves, filled for
+human-approved and retried executions. It is what makes "this approved hold has
+never executed" answerable from the ledger alone (`executions_for_pending`),
+which the `retry-execution` verb's eligibility check relies on; `NULL` for
+auto-approved/blocked rows and for rows written before the link existed.
+
 ## Migration and backfill
 
 Opening the ledger ensures the columns and indexes exist (an additive, idempotent

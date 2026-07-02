@@ -55,7 +55,10 @@ Runs the candidate in Docker or Podman with `--network none`, a read-only root
 plus a writable workspace bind, `--memory` / CPU quota / `--pids-limit`
 (cgroup-backed resource bounds), `--cap-drop ALL`,
 `--security-opt no-new-privileges`, a non-root user, and the runtime's default
-seccomp profile. Requires a container daemon.
+seccomp profile. Requires a container daemon. Every run is wrapped by a small
+bootstrap mounted read-only into the container, which carries the unforgeable
+candidate-start signal (see *The unforgeable candidate-start signal* below) so
+fault attribution matches the namespace adapter.
 
 **Pin the image by digest** in production via `PROM_SANDBOX_IMAGE` (e.g.
 `python:3.12-slim@sha256:…`). By default a bare tag is accepted but logged as a
@@ -117,13 +120,50 @@ cgroup lever is present (the cgroup itself denied the fork, via `pids.events`)
 *and* the universally-true property everywhere (the bomb was bounded and its tree
 reaped, the host unaffected).
 
+## The unforgeable candidate-start signal
+
+Fault classification (below) rests on two flags a hostile candidate must not
+be able to set or clear: `started_ok` (did isolation start?) and
+`candidate_started` (did the candidate definitely begin executing?). Both are
+carried by tokens the adapter's bootstrap emits at the moment isolation is
+established — on a channel the candidate can neither read, write, nor unsay —
+and **never** inferred from exit codes or output text the candidate controls.
+A candidate that prints a fake "isolation failed" marker and exits 127 forges
+nothing: its crash stays its own (`FAIL`), not a harness fault (`ABSTAIN`).
+
+Two transports carry the same signal (`sandbox/_start_signal.py`):
+
+- **Status pipe (namespace).** The bootstrap inherits a pipe fd that is made
+  close-on-exec before the candidate runs, so the candidate never holds it. A
+  setup failure writes a setup-failed token; established isolation writes the
+  started token right before `execv`; a failed exec revokes it with an
+  exec-failed token. The bootstrap's stderr marker lines remain for human
+  diagnostics only — nothing load-bearing parses them.
+- **Nonce-keyed stream lines (container).** No fd crosses a `docker run`
+  boundary, so the host generates a fresh random nonce per run and sends it to
+  the in-container bootstrap as the first line of stdin. The bootstrap consumes
+  exactly that line before the candidate runs — the nonce is stored nowhere the
+  candidate can read (not argv, not the environment, not a file) — and emits
+  `<token>:<nonce>` lines on stderr (started, and an exec-failed revocation).
+  The candidate may print the token names, but without the nonce it cannot
+  forge the signal, and it cannot remove a line written before its code ran.
+  The adapter strips the harness's own signal lines from the reported stderr;
+  candidate output is preserved verbatim.
+
+Both adapters report the start fail-closed: no token (the bootstrap never
+ran), a setup-failed token, or a revoked start (the exec failed — the
+candidate never ran) all yield `started_ok=False`, which callers treat as a
+harness fault — never a pass, a fail, or a claimed execution.
+
 ## Classification
 
-The verdict mapping is unchanged. A candidate that cleanly fails its cases is
-`FAIL`; a sandbox/infrastructure failure (`started_ok=False`) is `ABSTAIN` (no
-calibration sample), consistent with existing ABSTAIN handling. Timeouts and OOM
-remain `ABSTAIN` for now; the sandbox makes a cleaner candidate-fault vs
-harness-fault distinction possible as a separate, deliberate follow-up.
+`PASS` when every case passes; `FAIL` when the candidate is at fault — a wrong
+answer, an exception in a case, or a crash/resource kill after its start was
+positively confirmed by the signal above; `ABSTAIN` when the check could not
+run and the fault cannot be pinned on the candidate — isolation did not start,
+a wall-clock timeout, the candidate was never confirmed to run, or the task had
+no cases. Conservative on doubt: only a confirmed candidate start `FAIL`s; an
+`ABSTAIN` is a genuine "no opinion" and never feeds calibration.
 
 ## CI
 
@@ -133,3 +173,9 @@ an otherwise-skipped sandbox test fails instead, so a CI without the runtime
 cannot pass with isolation untested. GitHub's Ubuntu runners provide
 unprivileged user namespaces and run non-root, so the namespace adapter runs
 there.
+
+The container-signal suite is layered the same way: the transport and adapter
+wiring are proven without a daemon (a stub runtime), and the real-container
+runs skip when no functioning daemon is available — or fail instead of
+skipping under `PROM_REQUIRE_CONTAINER=1`, the opt-in analogue of
+`PROM_REQUIRE_SANDBOX` for deployments that require the container path proven.

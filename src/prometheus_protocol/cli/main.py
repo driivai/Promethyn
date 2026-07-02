@@ -262,17 +262,26 @@ def _open_ledger_for_pending(config: Config) -> SqliteLedger | None:
 
 
 def _cmd_pending(args: argparse.Namespace) -> int:
-    """List actions halted for human review (read-only)."""
+    """List actions halted for human review.
+
+    Lapsed holds are expired first (the same audited transition as ``sweep``),
+    so the list never shows a hold that can no longer be approved. Nothing is
+    executed or decided here.
+    """
 
     config = Config.from_env()
     ledger = _open_ledger_for_pending(config)
     if ledger is None:
         return 0
+    service = PendingActionService(ledger, ttl_seconds=config.pending_ttl_seconds)
     try:
-        pending = PendingActionService(ledger).list_pending()
+        expired = service.sweep()
+        pending = service.list_pending()
     finally:
         ledger.close()
     print("Promethyn — pending actions (awaiting human approval)\n")
+    if expired:
+        print(f"  ({len(expired)} lapsed hold(s) expired on the way; see 'audit --human-log')")
     if not pending:
         print("  (none)")
         return 0
@@ -329,6 +338,48 @@ def _cmd_approve(args: argparse.Namespace) -> int:
         return 1
     print(
         f"approved pending action #{args.id} as {args.by} and executed in sandbox "
+        f"{result.sandbox_name!r} (exit {result.exit_status})"
+    )
+    return 0
+
+
+def _cmd_retry_execution(args: argparse.Namespace) -> int:
+    """Re-drive execution for an approved hold whose execution never happened.
+
+    Valid only for a hold that is approved and was refused (fail-closed) or
+    deferred (``approve --no-exec``): the retry runs through the same gated,
+    sandboxed controller path, fail-closes again if the sandbox is still
+    unavailable, and never touches the human decision record. Ineligible holds
+    (pending, rejected, expired, already-executed, or past the retry window)
+    are refused with a clear error — and the refused attempt is recorded.
+    """
+
+    config = Config.from_env()
+    ledger = _open_ledger_for_pending(config)
+    if ledger is None:
+        return 1
+    try:
+        controller = build_execution_controller(config, ledger=ledger)
+        if controller.pending.get(args.id) is None:
+            print(f"error: no pending action with id {args.id}", file=sys.stderr)
+            return 1
+        result = controller.retry_execution(
+            args.id, identity=args.by, reason=args.reason or ""
+        )
+    except (ValueError, KeyError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        ledger.close()
+    if result.refused:
+        print(
+            f"retry of pending action #{args.id} refused (fail-closed): "
+            f"{result.detail}",
+            file=sys.stderr,
+        )
+        return 1
+    print(
+        f"retried pending action #{args.id}: executed in sandbox "
         f"{result.sandbox_name!r} (exit {result.exit_status})"
     )
     return 0
@@ -457,7 +508,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="show the human-decision log (approve / reject / expire)",
     )
     sub.add_parser("migrate", help="backfill judgment columns for historical ledger rows")
-    sub.add_parser("pending", help="list actions halted for human approval (read-only)")
+    sub.add_parser(
+        "pending",
+        help="list actions halted for human approval (expires lapsed holds first)",
+    )
     sub.add_parser("sweep", help="expire pending actions older than the configured TTL")
     approve = sub.add_parser(
         "approve", help="approve a pending action and execute it through the sandbox"
@@ -474,6 +528,16 @@ def build_parser() -> argparse.ArgumentParser:
     reject.add_argument("id", type=int, help="the pending action id (see 'pending')")
     reject.add_argument("--by", required=True, help="the rejecter's identity (recorded)")
     reject.add_argument("--reason", default="", help="optional note recorded with the decision")
+    retry = sub.add_parser(
+        "retry-execution",
+        help=(
+            "re-drive execution for an approved hold whose execution was "
+            "refused (fail-closed) or deferred; never re-opens the decision"
+        ),
+    )
+    retry.add_argument("id", type=int, help="the pending action id (see 'audit --human-log')")
+    retry.add_argument("--by", required=True, help="who requested the retry (recorded)")
+    retry.add_argument("--reason", default="", help="optional note recorded with the retry")
     return parser
 
 
@@ -488,6 +552,7 @@ _COMMANDS = {
     "sweep": _cmd_sweep,
     "approve": _cmd_approve,
     "reject": _cmd_reject,
+    "retry-execution": _cmd_retry_execution,
 }
 
 

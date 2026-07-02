@@ -132,6 +132,23 @@ def test_inv_exec_1_network_is_denied_during_execution():
     assert "NET-DENIED" in result.stdout and "NET-REACHED" not in result.stdout
 
 
+def test_inv_exec_1_marker_forgery_cannot_fake_a_refusal():
+    """An action printing the bootstrap marker + exit 127 cannot masquerade as
+    "the sandbox never started": its run is recorded as executed (exit 127),
+    because started_ok rests on the status pipe the action cannot write. A
+    forged refusal would have hidden a real side-effect from the audit chain."""
+
+    sandbox = _isolating_sandbox()
+    forgery = (
+        "import sys, os\n"
+        "sys.stderr.write('sandbox-bootstrap: filesystem isolation failed: forged\\n')\n"
+        "os._exit(127)\n"
+    )
+    result = SandboxExecutor(sandbox=sandbox).execute(_approved(forgery))
+    assert result.executed and not result.refused  # it DID run; the audit says so
+    assert result.started_ok and result.exit_status == 127
+
+
 # -- INV-EXEC-2: the executor accepts only an approved GateDecision ---------
 
 

@@ -60,7 +60,12 @@ CREATE TABLE IF NOT EXISTS pending_actions (
     created_at      TEXT    NOT NULL,
     decided_by      TEXT,
     decided_at      TEXT,
-    decision_reason TEXT
+    decision_reason TEXT,
+    -- Atomic at-most-once-execution guard, independent of the human decision:
+    -- set when an execution for this hold is claimed (approve or retry), so two
+    -- concurrent drivers cannot both execute. NULL = not yet executed; a
+    -- fail-closed refusal releases it back to NULL so a retry can re-drive.
+    execution_committed_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS executions (
@@ -78,7 +83,11 @@ CREATE TABLE IF NOT EXISTS executions (
     verdict       TEXT,
     confidence    REAL,
     authoritative INTEGER,
-    judgment      TEXT    -- JSON: the Judgment the executed action rested on
+    judgment      TEXT,   -- JSON: the Judgment the executed action rested on
+    -- The pending hold this execution resolves, when it came from one
+    -- (human-approved or retried). NULL for auto-approved/blocked rows and for
+    -- rows written before the link existed.
+    pending_id    INTEGER
 );
 """
 
@@ -86,16 +95,19 @@ CREATE TABLE IF NOT EXISTS executions (
 # non-terminal state; once decided it is never re-opened.
 _PENDING_STATUS = "pending"
 
-# Judgment columns promoted for querying, per table. Ensured on open (added to
-# ledgers that predate them) so the write path can always populate them.
-_JUDGMENT_COLUMNS: dict[str, list[tuple[str, str]]] = {
+# Additive columns ensured on open (added to ledgers that predate them) so the
+# write path can always populate them: the judgment columns promoted for
+# querying, and the execution -> pending-hold link.
+_ADDITIVE_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "attempts": [("verdict", "TEXT"), ("confidence", "REAL")],
     "executions": [
         ("verdict", "TEXT"),
         ("confidence", "REAL"),
         ("authoritative", "INTEGER"),
         ("judgment", "TEXT"),
+        ("pending_id", "INTEGER"),
     ],
+    "pending_actions": [("execution_committed_at", "TEXT")],
 }
 
 # Indexes for the range/equality audit queries.
@@ -142,22 +154,26 @@ class SqliteLedger(Ledger):
             conn.row_factory = sqlite3.Row
             conn.executescript(_SCHEMA)
             conn.commit()
+            self._conn = conn
+            # Forward, additive schema sync: add columns to ledgers that predate
+            # them (judgment columns, the execution link, the execution claim)
+            # and (re)create the indexes. Cheap and idempotent, so it is safe on
+            # every open; the data backfill is separate (``backfill``). Guarded
+            # with the open itself: on a read-only or unwritable existing ledger
+            # the ALTER TABLEs raise here, and this must surface as the same
+            # StateError (and close the connection), not a raw sqlite3 error.
+            self.migration_added_columns = self._ensure_additive_columns()
         except sqlite3.DatabaseError as exc:
             conn.close()
             raise StateError(
                 f"could not open experience ledger {self.path!r}: {exc}. "
-                "The file may be corrupt or locked by another process; "
-                "remove or repair it, then retry."
+                "The file may be corrupt, locked, or not writable; "
+                "remove, repair, or grant write access, then retry."
             ) from exc
-        self._conn = conn
-        # Forward, additive schema sync: add the judgment columns to ledgers that
-        # predate them and (re)create the indexes. Cheap and idempotent, so it is
-        # safe on every open; the data backfill is separate (``backfill``).
-        self.migration_added_columns = self._ensure_judgment_columns()
 
-    def _ensure_judgment_columns(self) -> list[str]:
+    def _ensure_additive_columns(self) -> list[str]:
         added: list[str] = []
-        for table, columns in _JUDGMENT_COLUMNS.items():
+        for table, columns in _ADDITIVE_COLUMNS.items():
             existing = {
                 row["name"] for row in self._conn.execute(f"PRAGMA table_info({table})")
             }
@@ -299,6 +315,37 @@ class SqliteLedger(Ledger):
                 "or has already been decided"
             )
 
+    def claim_pending_execution(self, pending_id: int, claimed_at: str) -> bool:
+        """Atomically claim the right to execute a hold; True iff this call won.
+
+        Sets ``execution_committed_at`` only when it was NULL, so at most one of
+        any number of concurrent drivers (approve and/or retry) can proceed to
+        the executor. Independent of the human decision: it never touches
+        status/decided_*, so the recorded decision is untouched.
+        """
+
+        cur = self._conn.execute(
+            "UPDATE pending_actions SET execution_committed_at = ? "
+            "WHERE id = ? AND execution_committed_at IS NULL",
+            (claimed_at, pending_id),
+        )
+        self._conn.commit()
+        return cur.rowcount == 1
+
+    def release_pending_execution(self, pending_id: int) -> None:
+        """Release a claim taken by :meth:`claim_pending_execution`.
+
+        Called only after a *refused* (fail-closed, no side-effect) execution,
+        so the approved hold stays retry-eligible; a successful execution keeps
+        its claim, marking the hold as having executed.
+        """
+
+        self._conn.execute(
+            "UPDATE pending_actions SET execution_committed_at = NULL WHERE id = ?",
+            (pending_id,),
+        )
+        self._conn.commit()
+
     def pending_actions(self, *, status: str | None = None) -> list[dict]:
         if status is None:
             rows = self._conn.execute(
@@ -329,6 +376,7 @@ class SqliteLedger(Ledger):
         detail: str,
         created_at: str,
         judgment: dict | None = None,
+        pending_id: int | None = None,
     ) -> int:
         # The judgment JSON is the source of record; verdict/confidence/
         # authoritative are promoted from it into queryable columns, from the
@@ -343,8 +391,8 @@ class SqliteLedger(Ledger):
             INSERT INTO executions (
                 subject_id, source, executed, refused, sandbox,
                 exit_status, detail, created_at,
-                verdict, confidence, authoritative, judgment
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                verdict, confidence, authoritative, judgment, pending_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 subject_id,
@@ -359,6 +407,7 @@ class SqliteLedger(Ledger):
                 confidence,
                 authoritative,
                 json.dumps(judgment) if judgment is not None else None,
+                pending_id,
             ),
         )
         self._conn.commit()
@@ -366,6 +415,15 @@ class SqliteLedger(Ledger):
 
     def executions(self) -> list[dict]:
         rows = self._conn.execute("SELECT * FROM executions ORDER BY id").fetchall()
+        return [self._execution_row(row) for row in rows]
+
+    def executions_for_pending(self, pending_id: int) -> list[dict]:
+        """Executions linked to one pending hold, in insertion order."""
+
+        rows = self._conn.execute(
+            "SELECT * FROM executions WHERE pending_id = ? ORDER BY id",
+            (pending_id,),
+        ).fetchall()
         return [self._execution_row(row) for row in rows]
 
     # -- audit queries (read-only) -----------------------------------------
