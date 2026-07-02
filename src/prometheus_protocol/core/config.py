@@ -46,10 +46,16 @@ class Config:
 
     # Soft model-judge advisor. Off by default: it issues model calls and the
     # offline default provider cannot meaningfully judge. ``judge_model``, when
-    # set (remote provider), runs the judge on a different model than the actor
-    # to reduce correlated error; otherwise the judge reuses the actor provider.
+    # set, runs the judge on a model independent of the actor/roles model to
+    # reduce correlated error (the same model proposing and grading inflates
+    # agreement); otherwise the judge reuses the actor provider and the runtime
+    # logs a one-line correlated-grader notice. ``judge_api_base`` /
+    # ``judge_api_key`` optionally point the judge at a different gateway (a
+    # fully independent grading endpoint); unset, they inherit the actor's.
     enable_model_judge: bool = False
     judge_model: str | None = None
+    judge_api_base: str | None = None
+    judge_api_key: str | None = None
 
     registry_dir: Path = Path(".prometheus/skills")
     ledger_path: Path = Path(".prometheus/ledger.db")
@@ -106,6 +112,9 @@ class Config:
             api_key=env.get("PROM_API_KEY"),
             enable_model_judge=_as_bool(env.get("PROM_ENABLE_MODEL_JUDGE"), False),
             judge_model=env.get("PROM_JUDGE_MODEL"),
+            # Empty means unset for both: they then inherit the actor's endpoint.
+            judge_api_base=env.get("PROM_JUDGE_API_BASE") or None,
+            judge_api_key=env.get("PROM_JUDGE_API_KEY") or None,
             registry_dir=Path(env.get("PROM_REGISTRY_DIR", ".prometheus/skills")),
             ledger_path=Path(env.get("PROM_LEDGER_PATH", ".prometheus/ledger.db")),
             trust_store_path=Path(

@@ -19,7 +19,7 @@ from prometheus_protocol.gate.promotion import PromotionGate
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
 from prometheus_protocol.sandbox import Limits
 from prometheus_protocol.memory.tiers import InMemoryTier, MemoryTier
-from prometheus_protocol.provider.mock import MockProvider, SolutionBook
+from prometheus_protocol.provider.mock import MOCK_MODEL, MockProvider, SolutionBook
 from prometheus_protocol.provider.remote import RemoteModelProvider
 from prometheus_protocol.registry.markdown_registry import MarkdownSkillRegistry
 from prometheus_protocol.runtime.orchestrator import Orchestrator
@@ -54,26 +54,67 @@ def build_provider(
     return MockProvider(book=solution_book)
 
 
+# Emitted at most once per process: the correlated-grader notice below is a
+# posture report, not a per-build event, so repeated builds stay quiet.
+_SHARED_JUDGE_MODEL_WARNED = False
+
+
+def _actor_model(config: Config) -> str:
+    return (config.model or "") if config.provider == PROVIDER_REMOTE else MOCK_MODEL
+
+
+def _judge_shares_actor_model(config: Config) -> bool:
+    """Whether the judge would run on the same model as the actor/roles."""
+
+    return not config.judge_model or config.judge_model == _actor_model(config)
+
+
 def build_judge_provider(
     config: Config, solution_book: SolutionBook | None = None
 ) -> Provider:
     """Provider for the soft model-judge.
 
-    Uses an independent judge model when ``judge_model`` is set on a remote
-    provider (reduces correlated error: the same model producing and grading
-    inflates agreement); otherwise reuses the actor provider.
+    Uses an independent judge model whenever ``judge_model`` names one distinct
+    from the actor's (reduces correlated error: the same model producing and
+    grading inflates agreement). ``judge_api_base`` / ``judge_api_key``
+    optionally point the judge at a different gateway; unset, they inherit the
+    actor's endpoint. Otherwise the judge reuses the actor provider unchanged —
+    and says so loudly, once: a single brain proposing and grading is a
+    correlated-grader risk an operator should choose knowingly.
     """
 
-    if (
-        config.provider == PROVIDER_REMOTE
-        and config.judge_model
-        and config.judge_model != config.model
-    ):
-        return RemoteModelProvider(
-            api_base=config.api_base or "",
-            model=config.judge_model,
-            api_key=config.api_key,
-            timeout_s=config.request_timeout_s,
+    global _SHARED_JUDGE_MODEL_WARNED
+    if not _judge_shares_actor_model(config):
+        if config.provider == PROVIDER_REMOTE:
+            return RemoteModelProvider(
+                api_base=config.judge_api_base or config.api_base or "",
+                model=config.judge_model or "",
+                api_key=(
+                    config.judge_api_key
+                    if config.judge_api_key is not None
+                    else config.api_key
+                ),
+                timeout_s=config.request_timeout_s,
+            )
+        # Offline: a distinct judge identity gets its own provider instance, so
+        # routing is observable in tests. Judge behaviour is unchanged (the mock
+        # does not implement assess, so the judge abstains either way).
+        return MockProvider(model=config.judge_model or MOCK_MODEL)
+    if config.judge_api_base or config.judge_api_key:
+        # An endpoint override without an independent judge model is an active
+        # misconfiguration; unlike the posture notice below, it fires per build.
+        _LOG.warning(
+            "PROM_JUDGE_API_BASE/PROM_JUDGE_API_KEY are ignored without an "
+            "independent PROM_JUDGE_MODEL; the judge is using the actor's "
+            "provider"
+        )
+    if not _SHARED_JUDGE_MODEL_WARNED:
+        _SHARED_JUDGE_MODEL_WARNED = True
+        _LOG.warning(
+            "the soft judge shares the actor's model (%s): one model is both "
+            "proposing and grading, a correlated-grader risk; set "
+            "PROM_JUDGE_MODEL to run the judge on an independent model",
+            _actor_model(config) or "unset",
         )
     return build_provider(config, solution_book)
 
