@@ -9,6 +9,13 @@ image should be pinned by digest in production (``PROM_SANDBOX_IMAGE``); a bare
 tag is accepted but logged as a supply-chain risk, and can be *refused* outright
 by setting ``PROM_REQUIRE_DIGEST_PIN`` (fail-closed production posture).
 
+Every run is wrapped by a small bootstrap mounted read-only into the container
+that carries the unforgeable candidate-start signal (a per-run nonce over
+stdin, nonce-keyed lines on stderr — see ``_start_signal.py``), so a
+container-run candidate crash is attributed to the candidate exactly as on the
+namespace adapter, and a run whose candidate never started is never reported
+as started.
+
 It requires a running container daemon, so where none is available the
 namespace adapter is preferred. See ``docs/sandbox.md``.
 """
@@ -22,6 +29,11 @@ import subprocess
 from pathlib import Path
 from typing import Mapping, Sequence
 
+from prometheus_protocol.sandbox._start_signal import (
+    exec_failed_line,
+    interpret_stream,
+    new_nonce,
+)
 from prometheus_protocol.sandbox.base import Limits, Sandbox, SandboxResult, clip
 
 _LOG = logging.getLogger(__name__)
@@ -29,6 +41,11 @@ _LOG = logging.getLogger(__name__)
 # Overridable; production should pin by digest, e.g. python:3.12-slim@sha256:...
 _DEFAULT_IMAGE = os.environ.get("PROM_SANDBOX_IMAGE", "python:3.12-slim")
 _WORKDIR = "/workspace"
+# The in-container bootstrap that carries the unforgeable candidate-start
+# signal (see ``_start_signal.py``); staged into each run's workspace and run
+# from there (``/workspace/.prom-start.py``, invoked relative to the workdir).
+_BOOTSTRAP = Path(__file__).with_name("_container_bootstrap.py")
+_BOOTSTRAP_NAME = ".prom-start.py"
 
 
 def _runtime() -> str | None:
@@ -36,6 +53,16 @@ def _runtime() -> str | None:
         if shutil.which(candidate):
             return candidate
     return None
+
+
+def _as_text(stream) -> str | None:
+    """Coerce a subprocess stream to str; ``TimeoutExpired`` gives bytes."""
+
+    if stream is None:
+        return None
+    if isinstance(stream, bytes):
+        return stream.decode("utf-8", "replace")
+    return stream
 
 
 def is_digest_pinned(image: str) -> bool:
@@ -125,9 +152,33 @@ class ContainerSandbox(Sandbox):
         if self.runtime is None:
             return SandboxResult(started_ok=False, detail="no container runtime")
 
+        # Stage the start-signal bootstrap into the run's own workspace (already
+        # bind-mounted read-write) rather than bind-mounting the installed
+        # package file: a fresh, world-readable copy per run avoids depending on
+        # the install-path file's mode (a 0600 install, or an SELinux label on a
+        # separate mount, would otherwise make the container user unable to read
+        # it and fail every run closed). The candidate cannot subvert it — the
+        # bootstrap has exec'd the candidate away before the candidate's code
+        # runs, each run gets a fresh workspace, and the per-run nonce arrives on
+        # stdin, never from this file.
+        try:
+            staged = Path(workspace) / _BOOTSTRAP_NAME
+            shutil.copyfile(_BOOTSTRAP, staged)
+            os.chmod(staged, 0o644)
+        except OSError as exc:
+            return SandboxResult(
+                started_ok=False, detail=f"could not stage container bootstrap: {exc}"
+            )
+
         # Rewrite the interpreter path: argv[0] is the host interpreter; in the
         # image the candidate runs under the image's python with the same flags.
+        # The candidate command is wrapped by the staged bootstrap, which carries
+        # the unforgeable candidate-start signal: it consumes a fresh per-run
+        # nonce from the first line of stdin (a place the candidate can never
+        # read it back from) and emits the nonce-keyed started line on stderr
+        # right before exec'ing the candidate.
         inner_argv = ["python", *argv[1:]] if argv else ["python"]
+        nonce = new_nonce()
         command = [
             self.runtime, "run", "--rm", "--interactive",
             "--network", "none",
@@ -143,6 +194,7 @@ class ContainerSandbox(Sandbox):
             "--security-opt", "no-new-privileges",
             "--user", "65534:65534",
             self.image,
+            "python", _BOOTSTRAP_NAME, "--",
             *inner_argv,
         ]
         try:
@@ -151,27 +203,51 @@ class ContainerSandbox(Sandbox):
                 capture_output=True,
                 text=True,
                 timeout=limits.wall_time_s,
-                input=stdin or None,
+                input=f"{nonce}\n{stdin or ''}",
             )
         except subprocess.TimeoutExpired as exc:
-            out, truncated = clip(exc.stdout, limits.max_output_bytes)
-            err, _ = clip(exc.stderr, limits.max_output_bytes)
+            # CPython populates TimeoutExpired.stdout/.stderr as *bytes* even
+            # under text=True, so decode before interpreting the signal (else
+            # the started line is never seen and its stderr is dropped).
+            candidate_started, err_text = interpret_stream(
+                _as_text(exc.stderr), nonce
+            )
+            out, truncated = clip(_as_text(exc.stdout), limits.max_output_bytes)
+            err, _ = clip(err_text, limits.max_output_bytes)
             return SandboxResult(
                 stdout=out, stderr=err, timed_out=True, started_ok=True,
+                candidate_started=candidate_started,
                 output_truncated=truncated, limiter="cgroup",
                 detail=f"wall-time limit {limits.wall_time_s}s",
             )
         except OSError as exc:
             return SandboxResult(started_ok=False, detail=f"could not launch container: {exc}")
 
-        # A failure to create the container (bad image, daemon error) is a
-        # could-not-verify, not a candidate fault.
-        started_ok = not (proc.returncode == 125)
+        candidate_started, err_text = interpret_stream(proc.stderr, nonce)
+        # Fail-closed start reporting on the unforgeable signal ALONE, mirroring
+        # the namespace adapter (started_ok == candidate_started): the run is
+        # "started" only when the bootstrap's nonce-keyed started line is
+        # present and unrevoked — a signal the candidate cannot write or unsay.
+        # Never inferred from the exit code, which the candidate controls: a
+        # contained candidate that itself exits 125 is a real (started) run, and
+        # docker's own 125 "could not create container" simply produces no
+        # started line (candidate_started False) via the same path. This closes
+        # the parity gap without letting a chosen exit code fake a harness fault.
+        started_ok = candidate_started
+        if candidate_started:
+            detail = ""
+        elif exec_failed_line(nonce) in (proc.stderr or ""):
+            detail = "candidate could not be started inside the container"
+        elif proc.returncode == 125:
+            detail = "container could not start"
+        else:
+            detail = "container did not confirm candidate start"
         out, truncated = clip(proc.stdout, limits.max_output_bytes)
-        err, _ = clip(proc.stderr, limits.max_output_bytes)
+        err, _ = clip(err_text, limits.max_output_bytes)
         return SandboxResult(
             stdout=out, stderr=err, exit_status=proc.returncode,
             memory_exceeded=proc.returncode in (-9, 137),
-            output_truncated=truncated, started_ok=started_ok, limiter="cgroup",
-            detail="" if started_ok else "container could not start",
+            output_truncated=truncated, started_ok=started_ok,
+            candidate_started=candidate_started, limiter="cgroup",
+            detail=detail,
         )
