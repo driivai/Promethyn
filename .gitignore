@@ -28,5 +28,5 @@ env/
 .DS_Store
 *.swp
 
-# Local Claude Code settings (may contain secrets; never commit)
-.claude/settings.local.json
+# Per-machine local settings for coding agents (may hold secrets; never commit)
+settings.local.json
