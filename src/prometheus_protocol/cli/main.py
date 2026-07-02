@@ -343,6 +343,48 @@ def _cmd_approve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_retry_execution(args: argparse.Namespace) -> int:
+    """Re-drive execution for an approved hold whose execution never happened.
+
+    Valid only for a hold that is approved and was refused (fail-closed) or
+    deferred (``approve --no-exec``): the retry runs through the same gated,
+    sandboxed controller path, fail-closes again if the sandbox is still
+    unavailable, and never touches the human decision record. Ineligible holds
+    (pending, rejected, expired, already-executed, or past the retry window)
+    are refused with a clear error — and the refused attempt is recorded.
+    """
+
+    config = Config.from_env()
+    ledger = _open_ledger_for_pending(config)
+    if ledger is None:
+        return 1
+    try:
+        controller = build_execution_controller(config, ledger=ledger)
+        if controller.pending.get(args.id) is None:
+            print(f"error: no pending action with id {args.id}", file=sys.stderr)
+            return 1
+        result = controller.retry_execution(
+            args.id, identity=args.by, reason=args.reason or ""
+        )
+    except (ValueError, KeyError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        ledger.close()
+    if result.refused:
+        print(
+            f"retry of pending action #{args.id} refused (fail-closed): "
+            f"{result.detail}",
+            file=sys.stderr,
+        )
+        return 1
+    print(
+        f"retried pending action #{args.id}: executed in sandbox "
+        f"{result.sandbox_name!r} (exit {result.exit_status})"
+    )
+    return 0
+
+
 def _cmd_reject(args: argparse.Namespace) -> int:
     """Record a human rejection. A rejected action is never executed."""
 
@@ -486,6 +528,16 @@ def build_parser() -> argparse.ArgumentParser:
     reject.add_argument("id", type=int, help="the pending action id (see 'pending')")
     reject.add_argument("--by", required=True, help="the rejecter's identity (recorded)")
     reject.add_argument("--reason", default="", help="optional note recorded with the decision")
+    retry = sub.add_parser(
+        "retry-execution",
+        help=(
+            "re-drive execution for an approved hold whose execution was "
+            "refused (fail-closed) or deferred; never re-opens the decision"
+        ),
+    )
+    retry.add_argument("id", type=int, help="the pending action id (see 'audit --human-log')")
+    retry.add_argument("--by", required=True, help="who requested the retry (recorded)")
+    retry.add_argument("--reason", default="", help="optional note recorded with the retry")
     return parser
 
 
@@ -500,6 +552,7 @@ _COMMANDS = {
     "sweep": _cmd_sweep,
     "approve": _cmd_approve,
     "reject": _cmd_reject,
+    "retry-execution": _cmd_retry_execution,
 }
 
 

@@ -228,6 +228,102 @@ class PendingActionService:
             decision_reason=reason,
         )
 
+    # -- retrying a never-executed approval ----------------------------------
+
+    def retry_decision(
+        self,
+        pending_id: int,
+        *,
+        identity: str,
+        now: str | None = None,
+    ) -> GateDecision:
+        """The approving decision for a retry of a never-executed approval.
+
+        The one other construction of an approving decision from a held action
+        besides :meth:`approve` — and it decides nothing: it only re-materialises
+        an approval a human already recorded, for a hold whose execution was
+        refused (fail-closed) or deferred and has therefore **never** executed.
+        Anything else is refused: a still-pending hold (the halt is not
+        bypassable), a rejected or expired hold (decided-stays-decided), a hold
+        that already executed, or an approval older than the TTL (an approval
+        does not authorize execution indefinitely — the same window that bounds
+        how long a hold may wait for its decision bounds how long a decision may
+        wait for its execution; ``ttl_seconds <= 0`` disables both). The human
+        decision record itself is never touched.
+        """
+
+        timestamp = now or self._clock()
+        pending = self.get(pending_id)
+        if pending is None:
+            raise KeyError(f"no pending action with id {pending_id}")
+        if pending.status == PendingStatus.PENDING:
+            raise ValueError(
+                f"pending action {pending_id} is still pending: it needs a human "
+                "decision first (a retry cannot bypass the halt)"
+            )
+        if pending.status != PendingStatus.APPROVED:
+            raise ValueError(
+                f"pending action {pending_id} is {pending.status.value} and can "
+                "never execute"
+            )
+        executed = [
+            row
+            for row in self._ledger.executions_for_pending(pending_id)
+            if row["executed"]
+        ]
+        if executed:
+            raise ValueError(
+                f"pending action {pending_id} already executed (execution "
+                f"#{executed[0]['id']}); retry-execution is only for an approved "
+                "hold whose execution was refused or deferred"
+            )
+        # Conservative fallback for approvals recorded before executions carried
+        # the pending-hold link: an unlinked executed human approval for the same
+        # subject means "never executed" cannot be proven, so refuse.
+        for row in self._ledger.executions():
+            if (
+                row.get("pending_id") is None
+                and row["executed"]
+                and row["source"] == "human-approved"
+                and row["subject_id"] == pending.subject_id
+            ):
+                raise ValueError(
+                    f"pending action {pending_id} cannot be retried: an earlier "
+                    f"unlinked execution exists for subject {pending.subject_id!r} "
+                    "and 'never executed' cannot be proven"
+                )
+        decided = pending.human_decision
+        if decided is None or not decided.timestamp:
+            # Cannot happen through the API (an approval always records who and
+            # when); without the record the retry window is unverifiable — refuse.
+            raise ValueError(
+                f"pending action {pending_id} carries no approval record; "
+                "refusing to retry"
+            )
+        if self._ttl_seconds > 0:
+            elapsed = (
+                _parse_iso(timestamp) - _parse_iso(decided.timestamp)
+            ).total_seconds()
+            if elapsed >= self._ttl_seconds:
+                raise ValueError(
+                    f"pending action {pending_id} was approved at "
+                    f"{decided.timestamp} and its retry window "
+                    f"(TTL {self._ttl_seconds}s) has lapsed; the approval record "
+                    "is unchanged, but the action can no longer be executed"
+                )
+        detail = f"human-approved by {decided.identity} at {decided.timestamp}"
+        if decided.reason:
+            detail += f": {decided.reason}"
+        detail += f" (execution retried by {identity} at {timestamp})"
+        return GateDecision(
+            approved=True,
+            subject_id=pending.subject_id,
+            judgment=pending.judgment,
+            reason=detail,
+            outcome=OUTCOME_APPROVE,
+            action=pending.action,
+        )
+
     # -- expiry ------------------------------------------------------------
 
     def sweep(self, *, now: str | None = None) -> list[PendingAction]:
