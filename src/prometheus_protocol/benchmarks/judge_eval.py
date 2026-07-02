@@ -484,20 +484,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     reference = SubprocessVerifier(memory_mb=0)
 
     if args.live:
+        from prometheus_protocol.benchmarks.live_items import (
+            LIVE_ITEM_SET_VERSION,
+            build_live_eval_items,
+        )
         from prometheus_protocol.core.config import Config
         from prometheus_protocol.runtime.factory import build_judge_provider
 
         config = Config.from_env()
         provider = build_judge_provider(config)
         judge_model = getattr(provider, "model", "") or "unknown"
-        mode = "live provider"
+        mode = f"live provider, item set {LIVE_ITEM_SET_VERSION}"
+        items = build_live_eval_items()
     else:
         provider = ScriptedJudgeProvider(SCRIPTED_REPLIES)
         judge_model = provider.model
         mode = "offline scripted reference"
+        items = build_eval_items()
 
     judge = ModelJudgeVerifier(provider, system_prompt=EVAL_JUDGE_SYSTEM_PROMPT)
-    rows = run_judge_eval(build_eval_items(), judge=judge, reference=reference)
+    rows = run_judge_eval(items, judge=judge, reference=reference)
 
     metrics = compute_metrics(rows)
     if metrics.n_reference == 0:
