@@ -38,6 +38,12 @@ class MockSolution:
 SolutionBook = Mapping[str, MockSolution]
 
 
+#: Identity the offline provider reports when none is configured. Mirrors the
+#: remote provider's ``model`` attribute so callers (for example the judge
+#: wiring) can tell providers apart without caring which kind they hold.
+MOCK_MODEL = "mock"
+
+
 class MockProvider(Provider):
     """Offline simulation of a proposer. See module docstring."""
 
@@ -46,9 +52,11 @@ class MockProvider(Provider):
         book: SolutionBook | None = None,
         *,
         responder: Responder | None = None,
+        model: str = MOCK_MODEL,
     ) -> None:
         self._book: dict[str, MockSolution] = dict(book or {})
         self._responder = responder
+        self.model = model
 
     def propose_solution(
         self,
