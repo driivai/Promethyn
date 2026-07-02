@@ -27,3 +27,8 @@ env/
 # Editor / OS noise
 .DS_Store
 *.swp
+
+# Local secrets / tool config (NEVER commit)
+.claude/settings.local.json
+.env
+.env.*
