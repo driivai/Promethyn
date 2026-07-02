@@ -27,3 +27,6 @@ env/
 # Editor / OS noise
 .DS_Store
 *.swp
+
+# Local Claude Code settings (may contain secrets; never commit)
+.claude/settings.local.json
