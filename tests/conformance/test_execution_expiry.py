@@ -137,6 +137,88 @@ def test_ttl_zero_disables_expiry():
     assert len(spy.calls) == 1
 
 
+# -- opportunistic expiry: sweeps at runtime touchpoints ---------------------
+
+
+def test_controller_startup_sweeps_lapsed_pendings():
+    """A controller coming up expires lapsed holds with no explicit sweep call."""
+
+    ledger = SqliteLedger(":memory:")
+    seed = PendingActionService(ledger, clock=lambda: _T0, ttl_seconds=100)
+    decision = ActionGate(escalate_below=0.75, route_high_risk=True).decide(
+        _LOW, risk_class="low", subject_id="s", action=_action()
+    )
+    held = seed.hold(decision, risk_class="low")
+
+    # Time passes past the TTL; a fresh controller (startup touchpoint) sweeps.
+    controller = ExecutionController(
+        gate=ActionGate(escalate_below=0.75, route_high_risk=True),
+        executor=_SpyExecutor(),
+        ledger=ledger,
+        clock=_Clock(_T0_PLUS_200),
+        ttl_seconds=100,
+    )
+    row = ledger.pending_action(held.id)
+    assert row["status"] == "expired" and row["decided_by"] == "system:sweep"
+    assert controller.pending.list_pending() == []
+
+
+def test_listing_sweeps_lapsed_pendings():
+    clock = _Clock(_T0)
+    controller, ledger, spy = _harness(ttl=100, clock=clock)
+    held = controller.submit(judgment=_LOW, action=_action(), subject_id="s").pending
+
+    clock.now = _T0_PLUS_200
+    assert controller.list_pending() == []  # never shown as approvable
+    assert ledger.pending_action(held.id)["status"] == "expired"
+    assert spy.calls == []  # opportunistic expiry never executes anything
+
+
+def test_approving_sweeps_other_lapsed_pendings():
+    clock = _Clock(_T0)
+    controller, ledger, spy = _harness(ttl=100, clock=clock)
+    old = controller.submit(judgment=_LOW, action=_action(), subject_id="s/old").pending
+    clock.now = "2026-07-01T00:01:20Z"  # +80s: old not yet lapsed
+    fresh = controller.submit(judgment=_LOW, action=_action(), subject_id="s/new").pending
+
+    clock.now = "2026-07-01T00:02:30Z"  # +150s: old lapsed (150 > 100), fresh not (70 < 100)
+    controller.approve(fresh.id, identity="will@driivai.com")
+
+    assert len(spy.calls) == 1  # the fresh approval executed
+    assert ledger.pending_action(old.id)["status"] == "expired"  # swept on the way
+    assert ledger.pending_action(fresh.id)["status"] == "approved"
+
+
+def test_service_level_stale_guard_remains_authoritative():
+    """Bypass every opportunistic touchpoint: the decision-time guard still refuses."""
+
+    clock = _Clock(_T0)
+    controller, ledger, spy = _harness(ttl=100, clock=clock)
+    held = controller.submit(judgment=_LOW, action=_action(), subject_id="s").pending
+
+    clock.now = _T0_PLUS_200
+    # Straight at the service — no controller sweep runs on this path.
+    with pytest.raises(ValueError, match="expired"):
+        controller.pending.approve(held.id, identity="will@driivai.com")
+    assert spy.calls == []
+    assert ledger.pending_action(held.id)["status"] == "expired"
+
+
+def test_cli_pending_expires_lapsed_holds(tmp_path, monkeypatch, capsys):
+    from prometheus_protocol.cli.main import main
+
+    db = str(tmp_path / "ledger.db")
+    pid = _seed_pending(db, created_at="2020-01-01T00:00:00Z", subject="deploy/old", code="print('x')")
+    monkeypatch.setenv("PROM_LEDGER_PATH", db)
+    monkeypatch.setenv("PROM_PENDING_TTL", "1")
+
+    assert main(["pending"]) == 0
+    out = capsys.readouterr().out
+    assert "1 lapsed hold(s) expired" in out and "(none)" in out
+    row = SqliteLedger(db).pending_action(pid)
+    assert row["status"] == "expired" and row["decided_by"] == "system:sweep"
+
+
 # -- expiry blocks approval / execution -------------------------------------
 
 

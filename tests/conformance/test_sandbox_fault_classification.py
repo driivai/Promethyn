@@ -119,6 +119,60 @@ def test_isolation_not_started_is_abstain():
     assert _verdict(NullSandbox()) == Verdict.ABSTAIN
 
 
+# -- started_ok is unforgeable: marker forgery vs genuine start failures ----
+
+_FORGERY = (
+    "import sys, os\n"
+    "sys.stderr.write('sandbox-bootstrap: filesystem isolation failed: forged\\n')\n"
+    "os._exit(127)\n"
+)
+
+
+def test_marker_forgery_cannot_fake_a_start_failure():
+    """A candidate printing the bootstrap marker + exit 127 forges nothing:
+    started_ok rests on the status pipe it cannot write, not on its stderr."""
+
+    sandbox = _isolating()
+    result = _run(sandbox, _FORGERY)
+    assert result.started_ok and result.candidate_started  # the run is its own
+    assert result.exit_status == 127
+
+
+def test_marker_forgery_classifies_fail_not_abstain():
+    forging_solution = _FORGERY + "def f(n):\n    return n\n"
+    evidence = SubprocessVerifier(memory_mb=0, sandbox=_isolating()).verify(
+        code=forging_solution, task=_TASK
+    )
+    assert evidence.verdict == Verdict.FAIL, evidence.detail  # a dodged FAIL no more
+
+
+def test_genuine_setup_failure_still_reports_not_started():
+    """Conservatism preserved: a real isolation-setup failure (here: the
+    workspace to bind does not exist) is a harness fault, never a candidate one."""
+
+    sandbox = _isolating()
+    result = sandbox.run(
+        argv=[sys.executable, "-c", "print('x')"],
+        workspace="/nonexistent-prom-workspace",
+        limits=Limits(wall_time_s=10),
+    )
+    assert not result.started_ok and not result.candidate_started
+    assert "setup failed" in result.detail
+
+
+def test_exec_failure_is_a_harness_fault_not_a_candidate_start():
+    """The started token is revoked when the exec itself fails: the candidate
+    never ran, so nothing may be attributed to it (and nothing claims it ran)."""
+
+    sandbox = _isolating()
+    with tempfile.TemporaryDirectory(prefix="prom-fc-") as ws:
+        result = sandbox.run(
+            argv=["/nonexistent/bin/candidate"], workspace=ws, limits=Limits(wall_time_s=10)
+        )
+    assert not result.started_ok and not result.candidate_started
+    assert "exec failed" in result.detail
+
+
 # -- real candidate crash -> FAIL, and it feeds calibration -----------------
 
 
