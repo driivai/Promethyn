@@ -28,5 +28,9 @@ env/
 .DS_Store
 *.swp
 
-# Per-machine local settings for coding agents (may hold secrets; never commit)
-settings.local.json
+# Local secrets / tool config (NEVER commit). The settings pattern is a glob
+# (any tool's per-machine settings.local.json, wherever it lives) so this file
+# itself stays free of tool-vendor tokens (see scripts/check_hygiene.py).
+**/settings.local.json
+.env
+.env.*
