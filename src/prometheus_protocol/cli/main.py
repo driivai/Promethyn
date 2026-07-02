@@ -262,17 +262,26 @@ def _open_ledger_for_pending(config: Config) -> SqliteLedger | None:
 
 
 def _cmd_pending(args: argparse.Namespace) -> int:
-    """List actions halted for human review (read-only)."""
+    """List actions halted for human review.
+
+    Lapsed holds are expired first (the same audited transition as ``sweep``),
+    so the list never shows a hold that can no longer be approved. Nothing is
+    executed or decided here.
+    """
 
     config = Config.from_env()
     ledger = _open_ledger_for_pending(config)
     if ledger is None:
         return 0
+    service = PendingActionService(ledger, ttl_seconds=config.pending_ttl_seconds)
     try:
-        pending = PendingActionService(ledger).list_pending()
+        expired = service.sweep()
+        pending = service.list_pending()
     finally:
         ledger.close()
     print("Promethyn — pending actions (awaiting human approval)\n")
+    if expired:
+        print(f"  ({len(expired)} lapsed hold(s) expired on the way; see 'audit --human-log')")
     if not pending:
         print("  (none)")
         return 0
@@ -457,7 +466,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="show the human-decision log (approve / reject / expire)",
     )
     sub.add_parser("migrate", help="backfill judgment columns for historical ledger rows")
-    sub.add_parser("pending", help="list actions halted for human approval (read-only)")
+    sub.add_parser(
+        "pending",
+        help="list actions halted for human approval (expires lapsed holds first)",
+    )
     sub.add_parser("sweep", help="expire pending actions older than the configured TTL")
     approve = sub.add_parser(
         "approve", help="approve a pending action and execute it through the sandbox"
