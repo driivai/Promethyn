@@ -106,29 +106,65 @@ optionally `PROM_JUDGE_API_BASE` / `PROM_JUDGE_API_KEY` for a fully
 independent grading endpoint). When the judge and actor share a model, the
 runtime logs a one-line correlated-grader notice rather than staying silent.
 
+Live runs use the **extended item set** (`benchmarks/live_items.py`, version
+`live-v1`, 48 items), not the ten-item scripted-reference set: fifteen tasks,
+weighted toward plausible-but-wrong candidates, because false-PASS measurement
+lives on candidates that *look* right. Composition: 16 correct, 26
+plausible-but-wrong (off-by-one, missed edge cases, right-shape-wrong-logic),
+6 clearly-wrong. Ground truth is decided by the HARD verifier executing every
+candidate in the sandbox — never hand-labelled; the design-intent categories
+above are documentation, not authority. The set was validated in-sandbox on
+2026-07-02: all 48 items received an authoritative PASS/FAIL reference
+(16 PASS / 32 FAIL), none abstained.
+
+The two-run comparison (report both, side by side):
+
 ```
-PROM_PROVIDER=remote PROM_API_BASE=<gateway> PROM_MODEL=<actor-model> \
-PROM_JUDGE_MODEL=<judge-model> \
+# RUN A — correlated: the judge shares the actor's model.
+#         The correlated-grader notice fires; capture it.
+PROM_PROVIDER=remote PROM_API_BASE=<gateway> PROM_API_KEY=<key> \
+PROM_MODEL=<actor-model> \
+python -m prometheus_protocol.benchmarks.judge_eval --live
+
+# RUN B — independent: the judge runs on a distinct model.
+PROM_PROVIDER=remote PROM_API_BASE=<gateway> PROM_API_KEY=<key> \
+PROM_MODEL=<actor-model> PROM_JUDGE_MODEL=<judge-model-A> \
 python -m prometheus_protocol.benchmarks.judge_eval --live
 ```
 
-For the same-model vs different-model comparison, run the eval twice — once
-with `PROM_JUDGE_MODEL` equal to the actor's model, once distinct — and compare
-the two false-PASS rates. (The bundled candidates are fixed fixtures, so the
-per-item attribution split is meaningful in the scripted mode; across live
-runs, the config is what varies the actor-judge relationship.)
+Name models in this report by NEUTRAL identifiers only (`actor-model`,
+`judge-model-A`); keep the identifier-to-model mapping in the operator's env
+or private notes, never in the repo. Record the run date, the item-set
+version, whether the two models were genuinely distinct (and whether they are
+from different families — a same-family pair weakens the decorrelation
+result), and the approximate model-call count (one judge call per item per
+run). If a run is truncated, report the actual N — never extrapolate. All 48
+items carry the neutral `bundled-fixture` attribution (no live actor produced
+them), so the per-item actor-identity split is intentionally not meaningful in
+live runs; the correlated-vs-independent signal is the *across-run* comparison.
 
 ### Live results
 
-_Not yet recorded. Regenerate with the command above against your provider
-config and paste the output here; note the actor model, judge model, and
-whether the endpoints differ._
+_Not yet recorded — blocked on credentials._ Attempted 2026-07-02 against item
+set `live-v1` (48 items): the execution environment provided no live inference
+credential (no `PROM_API_BASE`/`PROM_API_KEY`, and no independent judge
+credential), so neither run was possible. Nothing was substituted: the mock
+provider's output is not presented as live numbers. The blocked path was
+exercised end-to-end for honesty: the harness ran all 48 items, the HARD
+reference decided every one, the credential-less judge abstained on all 48,
+every rate rendered as `-` (never a fabricated 0%), the correlated-grader
+notice fired as documented, and a pre-existing trust store was byte-identical
+after the run. Regenerate with the two commands above once credentials are
+available and replace this section with the two tables.
 
 ## Caveats
 
-* The bundled eval set is ten small, single-function tasks: big enough to
-  exercise every metric, far too small to characterise a real judge. Live runs
-  should extend the item set before the numbers are treated as load-bearing.
+* The scripted-reference set is ten small, single-function tasks: big enough
+  to exercise every metric, far too small to characterise a real judge. Live
+  runs use the 48-item `live-v1` set — sized for a *directional*
+  correlated-vs-independent comparison and first real quality numbers, still a
+  single-run, single-domain measurement: sufficient to compare judge configs,
+  not yet sufficient to certify a domain for advisory-only verification.
 * Confidence buckets use fixed 0.2-wide edges; with few items per bucket,
   bucket accuracy is noisy. The `unstated` row exists because a judge that
   states no confidence is itself a calibration finding, not an error.
