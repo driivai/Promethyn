@@ -143,28 +143,100 @@ items carry the neutral `bundled-fixture` attribution (no live actor produced
 them), so the per-item actor-identity split is intentionally not meaningful in
 live runs; the correlated-vs-independent signal is the *across-run* comparison.
 
-### Live results
+### Live results — first run, 2026-07-04 (pipeline validation)
 
-_Not yet recorded — blocked on credentials._ Attempted 2026-07-02 against item
-set `live-v1` (48 items): the execution environment provided no live inference
-credential (no `PROM_API_BASE`/`PROM_API_KEY`, and no independent judge
-credential), so neither run was possible. Nothing was substituted: the mock
-provider's output is not presented as live numbers. The blocked path was
-exercised end-to-end for honesty: the harness ran all 48 items, the HARD
-reference decided every one, the credential-less judge abstained on all 48,
-every rate rendered as `-` (never a fabricated 0%), the correlated-grader
-notice fired as documented, and a pre-existing trust store was byte-identical
-after the run. Regenerate with the two commands above once credentials are
-available and replace this section with the two tables.
+**One-line honest summary: the live measurement pipeline works end-to-end; the
+numbers themselves say nothing yet — both judges scored 100% on every axis, so
+the item set was too easy to tell a correlated judge from an independent one.**
+
+Provenance: dispatched via the `judge-eval-live` workflow on hosted runners
+(open egress); the auth preflight passed and both runs completed. Item set
+`live-v1` (48 items); ground truth HARD-verified in the real sandbox — 48/48
+authoritative (16 PASS / 32 FAIL), zero reference abstains. The actor and the
+judge were genuinely distinct open-weight models **from different families**,
+named here only by the neutral identifiers `actor-model` and `judge-model-A`
+(the mapping lives in the operator's dispatch inputs, not in this repo).
+Approximate cost: one judge call per item per run, ~96 calls total plus one
+preflight request. (A first attempt on 2026-07-02 was blocked on credentials —
+see history — and was resolved by running through the repo-secret workflow.)
+
+**Run A — correlated (judge shares the actor's model, `actor-model`):**
+
+| metric | value |
+|---|---|
+| judge decided / abstained | 48 / 0 |
+| agreement (of decided) | 48/48 = 100.0% |
+| false-PASS (judge PASS where reference FAIL) | 0/32 = 0.0% |
+| false-FAIL (judge FAIL where reference PASS) | 0/16 = 0.0% |
+
+| confidence | n | correct | accuracy |
+|---|---|---|---|
+| [0.00, 0.20) | 0 | 0 | - |
+| [0.20, 0.40) | 1 | 1 | 100.0% |
+| [0.40, 0.60) | 0 | 0 | - |
+| [0.60, 0.80) | 0 | 0 | - |
+| [0.80, 1.00] | 44 | 44 | 100.0% |
+| unstated | 3 | 3 | 100.0% |
+
+**Run B — independent (distinct judge model, `judge-model-A`):**
+
+| metric | value |
+|---|---|
+| judge decided / abstained | 47 / 1 |
+| agreement (of decided) | 47/47 = 100.0% |
+| false-PASS (judge PASS where reference FAIL) | 0/31 = 0.0% |
+| false-FAIL (judge FAIL where reference PASS) | 0/16 = 0.0% |
+
+| confidence | n | correct | accuracy |
+|---|---|---|---|
+| [0.00, 0.20) | 0 | 0 | - |
+| [0.20, 0.40) | 0 | 0 | - |
+| [0.40, 0.60) | 0 | 0 | - |
+| [0.60, 0.80) | 0 | 0 | - |
+| [0.80, 1.00] | 45 | 45 | 100.0% |
+| unstated | 2 | 2 | 100.0% |
+
+**False-PASS delta (the decorrelation metric): Run A 0.0% vs Run B 0.0% —
+delta 0.0 points.**
+
+#### Interpretation
+
+*What was proven.* The full live pipeline works end-to-end: repo-secret
+credentials, runner egress, the harness, both models, both runs, and real
+sandboxed HARD ground truth. This run is a **pipeline validation**.
+
+*What was NOT proven.* Nothing about decorrelation. Both judges scored 100% on
+every axis, so there is no false-PASS delta to interpret — a **ceiling
+effect**. The `live-v1` set is insufficiently difficult to discriminate
+between judges: its plausible-but-wrong candidates were caught by both, so the
+metric cannot separate correlated from independent grading at this difficulty.
+A 0.0% false-PASS rate here is uninformative, not reassuring — it bounds
+nothing about how either judge behaves on candidates hard enough to fool a
+grader.
+
+*The one genuine finding.* The independent judge's abstain rate was 1/48: its
+output parsed cleanly under the strict one-word verdict contract, so the
+earlier concern that a reasoning-styled judge would wrap its verdicts
+unparseably did not materialize.
+
+*Honest caveat.* These numbers support **no** claim about judge quality,
+decorrelation value, or domain readiness. A harder item set (judge-eval v2) is
+required before the false-PASS metric is meaningful. It remains possible that
+even with harder items the code-domain delta is ~0 — that would itself be a
+real finding, and it would be recorded the same way.
+
+*Load-bearing-ness.* N=48, single run per arm, pipeline-validation only.
 
 ## Caveats
 
 * The scripted-reference set is ten small, single-function tasks: big enough
   to exercise every metric, far too small to characterise a real judge. Live
-  runs use the 48-item `live-v1` set — sized for a *directional*
-  correlated-vs-independent comparison and first real quality numbers, still a
-  single-run, single-domain measurement: sufficient to compare judge configs,
-  not yet sufficient to certify a domain for advisory-only verification.
+  runs use the 48-item `live-v1` set, which was *sized* for a directional
+  correlated-vs-independent comparison — but the first live run showed it is
+  **too easy to discriminate between judges** (both scored 100%; see Live
+  results). A harder judge-eval v2 set is required before the false-PASS
+  metric carries weight, and either way a single-run, single-domain
+  measurement cannot certify a domain for advisory-only verification.
 * Confidence buckets use fixed 0.2-wide edges; with few items per bucket,
   bucket accuracy is noisy. The `unstated` row exists because a judge that
   states no confidence is itself a calibration finding, not an error.
