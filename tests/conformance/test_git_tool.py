@@ -241,6 +241,78 @@ def test_base_branch_is_refused_even_when_approved(tmp_path):
     assert "main" in _branches(tmp_path)
 
 
+# -- Phase 2: the real delete, still behind every safeguard -------------------
+
+
+def _real_controller(repo, sandbox, ledger=None):
+    return ExecutionController(
+        gate=ActionGate(escalate_below=0.75, route_high_risk=True),
+        executor=GitBranchDeleteExecutor(
+            repo_path=repo, sandbox=sandbox, allow_delete=True
+        ),
+        ledger=ledger if ledger is not None else SqliteLedger(":memory:"),
+    )
+
+
+def test_approved_merged_branch_really_deletes_in_the_sandbox(tmp_path):
+    sandbox = _sandbox()
+    _make_repo(tmp_path)
+    tool = GitTool(repo_path=tmp_path, sandbox=sandbox)
+    controller = _real_controller(tmp_path, sandbox)
+
+    outcome = _submit(controller, tool, "risky-experiment")
+    assert outcome.outcome == OUTCOME_APPROVE
+    assert outcome.execution.executed and outcome.execution.exit_status == 0
+    assert "risky-experiment" not in _branches(tmp_path)  # really gone
+    # The merged branch's history is untouched: its commits stay on main.
+    assert "work" in _git(tmp_path, "log", "--format=%s", "main")
+
+
+def test_denied_hold_never_deletes_even_with_deletes_enabled(tmp_path):
+    sandbox = _sandbox()
+    _make_repo(tmp_path)
+    tool = GitTool(repo_path=tmp_path, sandbox=sandbox)
+    controller = _real_controller(tmp_path, sandbox)
+
+    outcome = _submit(controller, tool, "merged-cleanup")
+    controller.reject(outcome.pending.id, identity="reviewer", reason="keep")
+    assert "merged-cleanup" in _branches(tmp_path)  # survived the real executor
+
+
+def test_human_approved_hold_executes_the_real_delete(tmp_path):
+    sandbox = _sandbox()
+    _make_repo(tmp_path)
+    tool = GitTool(repo_path=tmp_path, sandbox=sandbox)
+    ledger = SqliteLedger(":memory:")
+    controller = _real_controller(tmp_path, sandbox, ledger)
+
+    outcome = _submit(controller, tool, "merged-cleanup")
+    result = controller.approve(
+        outcome.pending.id, identity="reviewer", reason="loss accepted"
+    )
+    assert result.executed and "merged-cleanup" not in _branches(tmp_path)
+    decisions = ledger.human_decisions()
+    assert decisions and decisions[0]["decided_by"] == "reviewer"
+
+
+def test_fail_closed_when_isolation_cannot_start(tmp_path):
+    _sandbox()  # still require the runtime context for parity of gating
+    _make_repo(tmp_path)
+    tool = GitTool(repo_path=tmp_path, sandbox=_sandbox())
+    controller = ExecutionController(
+        gate=ActionGate(escalate_below=0.75, route_high_risk=True),
+        executor=GitBranchDeleteExecutor(
+            repo_path=tmp_path, sandbox=NullSandbox(), allow_delete=True
+        ),
+        ledger=SqliteLedger(":memory:"),
+    )
+    outcome = _submit(controller, tool, "risky-experiment")
+    assert outcome.outcome == OUTCOME_APPROVE  # judged safe on real evidence
+    assert outcome.execution.refused and not outcome.execution.executed
+    assert not outcome.execution.started_ok
+    assert "risky-experiment" in _branches(tmp_path)  # fail-closed: survived
+
+
 # -- regression: the in-sandbox code executor refuses the git kind ------------
 
 

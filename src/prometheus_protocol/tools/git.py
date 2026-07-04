@@ -23,9 +23,10 @@ irreversible :class:`ExecutableAction` that exists only behind the gate:
 
 The delete executor is bound to one repository at construction: the action
 carries only a branch name, so no action can point the tool at another repo.
-The base branch can never be deleted. Deletes are DISABLED at this layer for
-now (a dry-run records intent); the halt must be demonstrated before the real
-mutation is enabled.
+The base branch can never be deleted. Real deletion is an explicit opt-in
+(``allow_delete=True``, off by default) enabled only after the halt was proven
+with the dry-run; even opted in, it runs solely inside the sandbox on an
+approved decision, and fail-closed if isolation does not start.
 """
 
 from __future__ import annotations
@@ -195,12 +196,15 @@ class GitBranchDeleteExecutor(Executor):
     It accepts only an *approved* :class:`GateDecision` whose action kind is
     the git delete; everything else is refused or a type error, exactly like
     the in-sandbox code executor. It is fail-closed: no isolating sandbox, no
-    delete. It is bound to one repository at construction, and it refuses the
-    base branch and any unsafe branch name regardless of approval.
+    delete, and a sandbox that does not start refuses rather than degrades. It
+    is bound to one repository at construction, and it refuses the base branch
+    and any unsafe branch name regardless of approval.
 
-    Deletes are currently DISABLED at this layer: the op is a dry-run that
-    records intent without mutating the repository. The halt must be proven
-    before the real mutation is switched on.
+    Real deletion is an explicit opt-in: with ``allow_delete=False`` (the
+    default) the op is a dry-run that records intent without mutating the
+    repository. The opt-in exists because the halt was proven first, and it is
+    meant for a caller-controlled demo/scratch repository — the constructor
+    pins the repo precisely so nothing else can be touched.
     """
 
     def __init__(
@@ -210,9 +214,11 @@ class GitBranchDeleteExecutor(Executor):
         sandbox: Sandbox | None = None,
         base_branch: str = "main",
         git_path: str | None = None,
+        allow_delete: bool = False,
     ) -> None:
         self.repo_path = str(Path(repo_path).resolve())
         self.base_branch = base_branch
+        self.allow_delete = allow_delete
         self._sandbox = sandbox if sandbox is not None else build_sandbox()
         self._git = git_path or shutil.which("git") or "git"
 
@@ -251,19 +257,53 @@ class GitBranchDeleteExecutor(Executor):
                 "execute unsandboxed",
             )
 
-        # Deletes are disabled at this layer: record the intent, mutate nothing.
+        if not self.allow_delete:
+            # Deletes not opted in: record the intent, mutate nothing.
+            return ExecutionResult(
+                executed=False,
+                subject_id=decision.subject_id,
+                detail=(
+                    f"dry-run (deletes disabled): would delete branch {branch!r} "
+                    f"in {self.repo_path}"
+                ),
+                refused=False,
+                started_ok=True,
+                sandbox_name=self._sandbox.name,
+                exit_status=None,
+                stdout="",
+            )
+
+        result = self._sandbox.run(
+            argv=[self._git, "-C", ".", "branch", "-D", branch],
+            workspace=self.repo_path,
+            limits=_LIMITS,
+        )
+        if not result.started_ok:
+            # Fail-closed: isolation did not start, so the delete did NOT run,
+            # and it is never retried unsandboxed.
+            return self._refuse(
+                decision,
+                f"sandbox did not start: {result.detail}",
+                started_ok=False,
+            )
+        deleted = result.exit_status == 0
         return ExecutionResult(
-            executed=False,
+            executed=deleted,
             subject_id=decision.subject_id,
             detail=(
-                f"dry-run (deletes disabled): would delete branch {branch!r} "
-                f"in {self.repo_path}"
+                f"deleted branch {branch!r} in sandbox {self._sandbox.name!r} "
+                f"(exit {result.exit_status}, network denied)"
+                if deleted
+                else (
+                    f"delete of branch {branch!r} ran in sandbox but failed "
+                    f"(exit {result.exit_status}): {(result.stderr or '').strip()}"
+                )
             ),
             refused=False,
             started_ok=True,
             sandbox_name=self._sandbox.name,
-            exit_status=None,
-            stdout="",
+            exit_status=result.exit_status,
+            stdout=result.stdout,
         )
 
     def _refuse(
