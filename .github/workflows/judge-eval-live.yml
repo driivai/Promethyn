@@ -22,6 +22,10 @@ on:
         description: "Independent judge model id for Run B"
         required: true
         default: tencent/hy3-preview
+      item_set:
+        description: "Committed item set to evaluate (live-v2 is the harder, discriminating set)"
+        required: true
+        default: live-v2
 
 permissions:
   contents: read
@@ -93,11 +97,11 @@ jobs:
           PROM_JUDGE_MODEL: ${{ inputs.actor_model }}
         run: |
           echo "=== RUN A (correlated): actor=${PROM_MODEL} judge=${PROM_JUDGE_MODEL} ==="
-          python -m prometheus_protocol.benchmarks.judge_eval --live
+          python -m prometheus_protocol.benchmarks.judge_eval --live --item-set "${{ inputs.item_set }}"
 
       - name: "Run B — independent (distinct judge model)"
         env:
           PROM_JUDGE_MODEL: ${{ inputs.judge_model }}
         run: |
           echo "=== RUN B (independent): actor=${PROM_MODEL} judge=${PROM_JUDGE_MODEL} ==="
-          python -m prometheus_protocol.benchmarks.judge_eval --live
+          python -m prometheus_protocol.benchmarks.judge_eval --live --item-set "${{ inputs.item_set }}"

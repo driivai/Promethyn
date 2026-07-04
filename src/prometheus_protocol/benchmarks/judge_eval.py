@@ -474,6 +474,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="judge via the configured provider (PROM_PROVIDER=remote, "
         "PROM_JUDGE_MODEL, ...) instead of the offline scripted reference",
     )
+    parser.add_argument(
+        "--item-set",
+        choices=("live-v1", "live-v2"),
+        default="live-v2",
+        help="which committed item set a --live run evaluates (ignored in the "
+        "offline scripted mode, which always uses its ten-item reference set)",
+    )
     args = parser.parse_args(argv)
 
     # The HARD reference executes candidates under the mandatory isolating
@@ -484,10 +491,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     reference = SubprocessVerifier(memory_mb=0)
 
     if args.live:
-        from prometheus_protocol.benchmarks.live_items import (
-            LIVE_ITEM_SET_VERSION,
-            build_live_eval_items,
-        )
+        # Both committed sets share the same loader contract; the flag only
+        # selects which module supplies it.
+        if args.item_set == "live-v1":
+            from prometheus_protocol.benchmarks.live_items import (
+                LIVE_ITEM_SET_VERSION,
+                build_live_eval_items,
+            )
+        else:
+            from prometheus_protocol.benchmarks.live_items_v2 import (
+                LIVE_ITEM_SET_VERSION,
+                build_live_eval_items,
+            )
         from prometheus_protocol.core.config import Config
         from prometheus_protocol.runtime.factory import build_judge_provider
 
