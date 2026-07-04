@@ -106,16 +106,21 @@ optionally `PROM_JUDGE_API_BASE` / `PROM_JUDGE_API_KEY` for a fully
 independent grading endpoint). When the judge and actor share a model, the
 runtime logs a one-line correlated-grader notice rather than staying silent.
 
-Live runs use the **extended item set** (`benchmarks/live_items.py`, version
-`live-v1`, 48 items), not the ten-item scripted-reference set: fifteen tasks,
-weighted toward plausible-but-wrong candidates, because false-PASS measurement
-lives on candidates that *look* right. Composition: 16 correct, 26
-plausible-but-wrong (off-by-one, missed edge cases, right-shape-wrong-logic),
-6 clearly-wrong. Ground truth is decided by the HARD verifier executing every
-candidate in the sandbox — never hand-labelled; the design-intent categories
-above are documentation, not authority. The set was validated in-sandbox on
-2026-07-02: all 48 items received an authoritative PASS/FAIL reference
-(16 PASS / 32 FAIL), none abstained.
+Live runs default to the **harder discriminating set**
+(`benchmarks/live_items_v2.py`, version `live-v2`, 82 items), built after
+`live-v1`'s ceiling effect: its plausible-but-wrong candidates are the subtle
+kind a competent judge can miss (boundary operators inside merge conditions,
+zip truncation, sentinel filters that eat legitimate data, banker's-rounding
+traps, keep-first-vs-keep-last and stability violations, standard-library
+parsing surprises). Composition: 31 correct (including two
+correct-but-suspicious-looking idioms as false-FAIL bait), 45
+subtle-plausible-wrong, 6 clearly-wrong controls; 31 PASS / 51 FAIL.
+Validated in-sandbox on 2026-07-04: all 82 items authoritative, zero abstains.
+The earlier `live-v1` set (48 items; 16 PASS / 32 FAIL, validated 2026-07-02)
+stays committed and selectable via `--item-set live-v1` (a workflow input on
+the live dispatch). Ground truth for both sets is decided by the HARD verifier
+executing every candidate in the sandbox — never hand-labelled; design-intent
+categories are documentation, not authority.
 
 The two-run comparison (report both, side by side):
 
