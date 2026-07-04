@@ -1,13 +1,22 @@
 name: judge-eval-live
 
-# The LIVE two-run judge-quality evaluation. Manual dispatch ONLY: it spends
+# The LIVE two-arm judge-quality evaluation. Manual dispatch ONLY: it spends
 # real money and uses a live API key, so it must never run on push or PR.
 # Results are PRINTED to the Actions log and nothing is committed — recording
 # numbers in docs/judge-quality.md is a separate, reviewed PR.
 #
-#   Run A (correlated):  the judge shares the actor's model — the
-#                        correlated-grader notice fires in the log.
-#   Run B (independent): the judge runs on a distinct model.
+#   run-a-correlated:  the judge shares the actor's model — the
+#                      correlated-grader notice fires in the log.
+#   run-b-independent: the judge runs on a distinct model.
+#
+# The arms are two INDEPENDENT PARALLEL JOBS (no `needs`, no matrix, no
+# fail-fast): a slow or failing arm can never cancel the other, so a single
+# dispatch yields whatever each arm can produce. The first live-v2 dispatch
+# proved why — both arms ran as steps of one 30-minute job; the independent
+# (reasoning-capable) judge was still working at the wall and the job kill
+# threw away a nearly finished Run B while Run A had been done for 16 minutes.
+# The measurement itself (env, invocation, item-set selection) is byte-for-byte
+# what the single-job version ran, so results stay comparable across dispatches.
 #
 # The offline, credential-free check lives in judge-eval.yml and is unchanged.
 
@@ -31,9 +40,92 @@ permissions:
   contents: read
 
 jobs:
-  judge-eval-live:
+  run-a-correlated:
     runs-on: ubuntu-latest
+    # Ample: the correlated arm completed in ~7 minutes on live-v2 (82 items).
     timeout-minutes: 30
+    env:
+      PROM_PROVIDER: remote
+      PROM_API_BASE: https://openrouter.ai/api/v1
+      PROM_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      PROM_MODEL: ${{ inputs.actor_model }}
+      # Judge calls to a busy gateway can be slow; the default is 30s.
+      PROM_REQUEST_TIMEOUT_S: "60"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install (editable + dev extra)
+        run: python -m pip install -e ".[dev]"
+
+      - name: Enable unprivileged user namespaces (for the namespace sandbox)
+        # Ubuntu 24.04 runners restrict unprivileged user namespaces via
+        # AppArmor; lift it so the daemonless namespace adapter can isolate.
+        # Tolerant of kernels/images without these knobs. The eval's ground
+        # truth is the HARD verifier running candidates in this sandbox.
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+
+      - name: Auth preflight (never echoes the key)
+        run: |
+          if [ -z "${PROM_API_KEY}" ]; then
+            echo "::error::OPENROUTER_API_KEY secret is empty or unset"
+            exit 1
+          fi
+          status=$(curl -sS -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer ${PROM_API_KEY}" \
+            "${PROM_API_BASE}/models")
+          case "$status" in
+            200)
+              echo "auth preflight OK (HTTP 200)"
+              ;;
+            401)
+              echo "::error::live provider rejected the key (HTTP 401)"
+              exit 1
+              ;;
+            *)
+              echo "::error::unexpected preflight response (HTTP ${status})"
+              exit 1
+              ;;
+          esac
+
+      - name: "Run A — correlated (judge shares the actor's model)"
+        env:
+          PROM_JUDGE_MODEL: ${{ inputs.actor_model }}
+        run: |
+          set -o pipefail
+          echo "=== RUN A (correlated): actor=${PROM_MODEL} judge=${PROM_JUDGE_MODEL} ==="
+          python -m prometheus_protocol.benchmarks.judge_eval --live --item-set "${{ inputs.item_set }}" | tee eval-run.log
+
+      - name: Grep-able result summary
+        # Parses (never recomputes) the table the harness printed; one line to
+        # copy into the results doc. Purely additive observability.
+        run: |
+          fp=$(awk -F'|' '/^\| false-PASS/ {gsub(/ /, "", $3); print $3}' eval-run.log)
+          ff=$(awk -F'|' '/^\| false-FAIL/ {gsub(/ /, "", $3); print $3}' eval-run.log)
+          ag=$(awk -F'|' '/^\| agreement \(of decided\)/ {gsub(/ /, "", $3); print $3}' eval-run.log)
+          ab=$(grep -o 'judge abstained : [0-9]*' eval-run.log | grep -o '[0-9]*$')
+          if [ -n "$fp" ] && [ -n "$ff" ] && [ -n "$ag" ] && [ -n "$ab" ]; then
+            echo "JUDGE-EVAL-RESULT arm=A item_set=${{ inputs.item_set }} false_pass=${fp} false_fail=${ff} abstain=${ab} agreement=${ag}"
+          else
+            echo "::notice::summary parse incomplete — read the table in the step above"
+          fi
+
+  run-b-independent:
+    runs-on: ubuntu-latest
+    # DELIBERATELY GENEROUS — do not re-tighten. The independent judge is a
+    # reasoning-capable model and is expected to be slow: the first live-v2
+    # dispatch had it still judging at ~23 minutes when the old shared
+    # 30-minute job timeout cancelled it. 82 items at a slow arm's pace need
+    # clear headroom; an hour costs runner minutes, a cancelled arm costs the
+    # whole measurement.
+    timeout-minutes: 60
     env:
       PROM_PROVIDER: remote
       PROM_API_BASE: https://openrouter.ai/api/v1
@@ -92,16 +184,24 @@ jobs:
             echo "::warning::judge_model equals actor_model — Run B will NOT be an independent comparison"
           fi
 
-      - name: "Run A — correlated (judge shares the actor's model)"
-        env:
-          PROM_JUDGE_MODEL: ${{ inputs.actor_model }}
-        run: |
-          echo "=== RUN A (correlated): actor=${PROM_MODEL} judge=${PROM_JUDGE_MODEL} ==="
-          python -m prometheus_protocol.benchmarks.judge_eval --live --item-set "${{ inputs.item_set }}"
-
       - name: "Run B — independent (distinct judge model)"
         env:
           PROM_JUDGE_MODEL: ${{ inputs.judge_model }}
         run: |
+          set -o pipefail
           echo "=== RUN B (independent): actor=${PROM_MODEL} judge=${PROM_JUDGE_MODEL} ==="
-          python -m prometheus_protocol.benchmarks.judge_eval --live --item-set "${{ inputs.item_set }}"
+          python -m prometheus_protocol.benchmarks.judge_eval --live --item-set "${{ inputs.item_set }}" | tee eval-run.log
+
+      - name: Grep-able result summary
+        # Parses (never recomputes) the table the harness printed; one line to
+        # copy into the results doc. Purely additive observability.
+        run: |
+          fp=$(awk -F'|' '/^\| false-PASS/ {gsub(/ /, "", $3); print $3}' eval-run.log)
+          ff=$(awk -F'|' '/^\| false-FAIL/ {gsub(/ /, "", $3); print $3}' eval-run.log)
+          ag=$(awk -F'|' '/^\| agreement \(of decided\)/ {gsub(/ /, "", $3); print $3}' eval-run.log)
+          ab=$(grep -o 'judge abstained : [0-9]*' eval-run.log | grep -o '[0-9]*$')
+          if [ -n "$fp" ] && [ -n "$ff" ] && [ -n "$ag" ] && [ -n "$ab" ]; then
+            echo "JUDGE-EVAL-RESULT arm=B item_set=${{ inputs.item_set }} false_pass=${fp} false_fail=${ff} abstain=${ab} agreement=${ag}"
+          else
+            echo "::notice::summary parse incomplete — read the table in the step above"
+          fi
