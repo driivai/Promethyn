@@ -1,0 +1,103 @@
+name: judge-eval-live
+
+# The LIVE two-run judge-quality evaluation. Manual dispatch ONLY: it spends
+# real money and uses a live API key, so it must never run on push or PR.
+# Results are PRINTED to the Actions log and nothing is committed — recording
+# numbers in docs/judge-quality.md is a separate, reviewed PR.
+#
+#   Run A (correlated):  the judge shares the actor's model — the
+#                        correlated-grader notice fires in the log.
+#   Run B (independent): the judge runs on a distinct model.
+#
+# The offline, credential-free check lives in judge-eval.yml and is unchanged.
+
+on:
+  workflow_dispatch:
+    inputs:
+      actor_model:
+        description: "Actor model id (Run A judges with this same model)"
+        required: true
+        default: deepseek/deepseek-v4-flash
+      judge_model:
+        description: "Independent judge model id for Run B"
+        required: true
+        default: tencent/hy3-preview
+
+permissions:
+  contents: read
+
+jobs:
+  judge-eval-live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PROM_PROVIDER: remote
+      PROM_API_BASE: https://openrouter.ai/api/v1
+      PROM_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      PROM_MODEL: ${{ inputs.actor_model }}
+      # Judge calls to a busy gateway can be slow; the default is 30s.
+      PROM_REQUEST_TIMEOUT_S: "60"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install (editable + dev extra)
+        run: python -m pip install -e ".[dev]"
+
+      - name: Enable unprivileged user namespaces (for the namespace sandbox)
+        # Ubuntu 24.04 runners restrict unprivileged user namespaces via
+        # AppArmor; lift it so the daemonless namespace adapter can isolate.
+        # Tolerant of kernels/images without these knobs. The eval's ground
+        # truth is the HARD verifier running candidates in this sandbox.
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+
+      - name: Auth preflight (never echoes the key)
+        run: |
+          if [ -z "${PROM_API_KEY}" ]; then
+            echo "::error::OPENROUTER_API_KEY secret is empty or unset"
+            exit 1
+          fi
+          status=$(curl -sS -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer ${PROM_API_KEY}" \
+            "${PROM_API_BASE}/models")
+          case "$status" in
+            200)
+              echo "auth preflight OK (HTTP 200)"
+              ;;
+            401)
+              echo "::error::live provider rejected the key (HTTP 401)"
+              exit 1
+              ;;
+            *)
+              echo "::error::unexpected preflight response (HTTP ${status})"
+              exit 1
+              ;;
+          esac
+
+      - name: Guard input sanity
+        # Run B is only "independent" if the two models differ.
+        run: |
+          if [ "${{ inputs.actor_model }}" = "${{ inputs.judge_model }}" ]; then
+            echo "::warning::judge_model equals actor_model — Run B will NOT be an independent comparison"
+          fi
+
+      - name: "Run A — correlated (judge shares the actor's model)"
+        env:
+          PROM_JUDGE_MODEL: ${{ inputs.actor_model }}
+        run: |
+          echo "=== RUN A (correlated): actor=${PROM_MODEL} judge=${PROM_JUDGE_MODEL} ==="
+          python -m prometheus_protocol.benchmarks.judge_eval --live
+
+      - name: "Run B — independent (distinct judge model)"
+        env:
+          PROM_JUDGE_MODEL: ${{ inputs.judge_model }}
+        run: |
+          echo "=== RUN B (independent): actor=${PROM_MODEL} judge=${PROM_JUDGE_MODEL} ==="
+          python -m prometheus_protocol.benchmarks.judge_eval --live
