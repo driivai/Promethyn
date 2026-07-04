@@ -1,0 +1,108 @@
+name: judge-eval
+
+# Guards the judge-quality measurement apparatus (no model credentials needed):
+#   1. The offline scripted reference run must exit 0 and match the committed
+#      report byte-for-byte — the published numbers are provably the harness's
+#      real output, never hand-edited.
+#   2. Every item in the live measurement set must receive an authoritative
+#      PASS/FAIL reference from the HARD verifier in the real sandbox, with no
+#      abstains — the validity precondition for load-bearing percentages stays
+#      true as the set evolves (this also fails if isolation is unavailable,
+#      because a fail-closed reference abstains on every item).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  judge-eval:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install (editable + dev extra)
+        run: python -m pip install -e ".[dev]"
+
+      - name: Enable unprivileged user namespaces (for the namespace sandbox)
+        # Ubuntu 24.04 runners restrict unprivileged user namespaces via
+        # AppArmor; lift it so the daemonless namespace adapter can isolate.
+        # Tolerant of kernels/images without these knobs.
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+
+      - name: Offline reference run matches the committed report
+        run: |
+          python - <<'EOF'
+          import re
+          import subprocess
+          import sys
+
+          run = subprocess.run(
+              [sys.executable, "-m", "prometheus_protocol.benchmarks.judge_eval"],
+              capture_output=True, text=True,
+          )
+          if run.returncode != 0:
+              sys.stderr.write(run.stderr)
+              sys.exit("offline judge-eval reference run failed")
+          doc = open("docs/judge-quality.md", encoding="utf-8").read()
+          blocks = re.findall(r"```\n(.*?)```", doc, re.S)
+          reference = next(
+              (b for b in blocks if b.startswith("# Judge-quality evaluation")),
+              None,
+          )
+          if reference is None:
+              sys.exit("docs/judge-quality.md has no embedded reference-run block")
+          if reference != run.stdout:
+              sys.exit(
+                  "docs/judge-quality.md reference run does not match the "
+                  "harness output — regenerate the report"
+              )
+          print("reference run matches the committed report byte-for-byte")
+          EOF
+
+      - name: Live item set has authoritative ground truth for every item
+        run: |
+          python - <<'EOF'
+          import sys
+
+          from prometheus_protocol.benchmarks.live_items import (
+              LIVE_ITEM_SET_VERSION,
+              build_live_eval_items,
+          )
+          from prometheus_protocol.core.models import Verdict
+          from prometheus_protocol.verifier.runner import SubprocessVerifier
+
+          reference = SubprocessVerifier(memory_mb=0)
+          items = build_live_eval_items()
+          undecided = []
+          decided = {Verdict.PASS: 0, Verdict.FAIL: 0}
+          for item in items:
+              verdict = reference.verify(code=item.code, task=item.task).verdict
+              if verdict in decided:
+                  decided[verdict] += 1
+              else:
+                  undecided.append(item.item_id)
+          if len(items) < 40:
+              sys.exit(f"item set shrank below the 40-item floor ({len(items)})")
+          if undecided:
+              sys.exit(
+                  f"{len(undecided)} item(s) without authoritative ground truth "
+                  f"(reference abstained — missing sandbox or bad item): "
+                  f"{', '.join(undecided)}"
+              )
+          print(
+              f"{LIVE_ITEM_SET_VERSION}: {len(items)} items, all authoritative "
+              f"({decided[Verdict.PASS]} PASS / {decided[Verdict.FAIL]} FAIL)"
+          )
+          EOF
