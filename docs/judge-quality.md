@@ -232,6 +232,90 @@ real finding, and it would be recorded the same way.
 
 *Load-bearing-ness.* N=48, single run per arm, pipeline-validation only.
 
+### Live results — live-v2 (both arms), 2026-07-04
+
+**One-line honest summary: on the discriminating set, the independent-family
+judge let zero bad candidates through while the correlated judge passed two —
+the first live evidence of the correlated-grader blind spot — with a clear
+direction but small-sample, directional magnitudes.**
+
+Provenance: dispatched via the `judge-eval-live` workflow; both arms completed
+as **independent parallel jobs** (the workflow was split after an earlier
+dispatch's shared 30-minute timeout cancelled the slow independent arm — that
+partial dispatch's completed correlated arm is cited under run-to-run variance
+below). Item set `live-v2` (82 items; 31 PASS / 51 FAIL); ground truth
+HARD-verified in the real sandbox, authoritative on every judged item. The
+actor and the judge were genuinely distinct open-weight models **from
+different families**, named here only as `actor-model` and `judge-model-A`
+(the mapping lives in the operator's dispatch inputs, not in this repo).
+Approximate cost: ~164 judge calls across both arms.
+
+**Run A — correlated (judge shares the actor's model, `actor-model`):**
+
+| metric | value |
+|---|---|
+| judge decided / abstained | 82 / 0 |
+| agreement (of decided) | 80/82 = 97.6% |
+| false-PASS (judge PASS where reference FAIL) | 2/51 = 3.9% |
+| false-FAIL (judge FAIL where reference PASS) | 0/31 = 0.0% |
+| calibration, high-confidence bucket [0.80, 1.00] | 77/79 correct |
+
+**Run B — independent (distinct-family judge, `judge-model-A`):**
+
+| metric | value |
+|---|---|
+| judge decided / abstained | 80 / 2 |
+| agreement (of decided) | 76/80 = 95.0% |
+| false-PASS (judge PASS where reference FAIL) | 0/49 = 0.0% |
+| false-FAIL (judge FAIL where reference PASS) | 4/31 = 12.9% |
+| calibration, high-confidence bucket [0.80, 1.00] | 73/77 correct |
+
+(Full per-bucket calibration tables are in each arm's Actions log.)
+
+**False-PASS delta: Run A 3.9% vs Run B 0.0%.**
+
+#### Interpretation
+
+*The finding.* The independent-family judge produced **zero false-PASSes** in
+this run, against the correlated judge's ~3.9% — measured decorrelation in
+the code domain, and the first live evidence that a model grading its own
+family's output has a blind spot for that output's mistakes. This overturns
+the v1 ceiling-effect null: the harder live-v2 set discriminated, exactly as
+it was built to.
+
+*The error-profile shift (the more important framing).* This is **not**
+simply "the independent judge is better" — its agreement is actually lower
+(95.0% vs 97.6%). It traded false-PASS for false-FAIL: 0% false-PASS but
+12.9% false-FAIL, against the correlated judge's 3.9% false-PASS and 0%
+false-FAIL. The independent judge is *stricter*: it let no bad code through —
+the safety-critical direction — at the cost of over-rejecting some good code.
+For a grounding judge that trade is favorable: a false-PASS means bad code
+passes (the dangerous error); a false-FAIL means good code gets a second look
+(the safe one). Independence shifted the error mass toward the safe side.
+
+*Caveats — read these with the finding, not after it.*
+
+* **Small sample.** The false-PASS denominators are ~50, so a two-item swing
+  moves the rate ~4 points. The *same* correlated config measured 7.8% on one
+  dispatch and 3.9% on the next — live-model run-to-run variance at exactly
+  the scale of the effect. These percentages are **directional, not
+  precise**: the honest statement is that the independent judge's false-PASS
+  was zero *in this run* and the direction of the shift is safety-favorable —
+  not that independence "halves" or "eliminates" anything.
+* **B abstained on 2 items** (mild reasoning-format parse loss at harder
+  items), so its false-PASS denominator is 49, not 51.
+* **Single run per arm, N=82, one model pair.** Not domain certification.
+
+*What this supports.* Defaulting real runs to an independent-family judge is
+now evidence-supported rather than merely principled. And the correlated
+judge's non-zero false-PASS is a concrete floor under the rule that a
+self-grading soft judge cannot bear much unbacked authority.
+
+*What this does not support.* Any precise effect size; any claim of domain
+readiness; or weakening, let alone dropping, the HARD backstop. In this
+domain the backstop caught what both judges are for — that is why these
+numbers could be measured at all.
+
 ## Caveats
 
 * The scripted-reference set is ten small, single-function tasks: big enough
@@ -239,9 +323,10 @@ real finding, and it would be recorded the same way.
   runs use the 48-item `live-v1` set, which was *sized* for a directional
   correlated-vs-independent comparison — but the first live run showed it is
   **too easy to discriminate between judges** (both scored 100%; see Live
-  results). A harder judge-eval v2 set is required before the false-PASS
-  metric carries weight, and either way a single-run, single-domain
-  measurement cannot certify a domain for advisory-only verification.
+  results). The harder `live-v2` set was built in response and **did
+  discriminate** (see the live-v2 results). Either way, a single-run,
+  single-domain measurement cannot certify a domain for advisory-only
+  verification.
 * Confidence buckets use fixed 0.2-wide edges; with few items per bucket,
   bucket accuracy is noisy. The `unstated` row exists because a judge that
   states no confidence is itself a calibration finding, not an error.
