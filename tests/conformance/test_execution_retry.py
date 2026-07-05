@@ -462,8 +462,14 @@ def test_cli_retry_execution_fail_closes_without_a_sandbox(tmp_path, monkeypatch
     )
     monkeypatch.setenv("PROM_LEDGER_PATH", db)
     monkeypatch.setenv("PROM_PENDING_TTL", "0")
-    # No isolating runtime available -> the controller's SandboxExecutor refuses.
-    monkeypatch.setenv("PROM_SANDBOX", "container")  # no daemon here -> fail-closed
+    # Force a DETERMINISTIC fail-closed refusal: with digest pinning required,
+    # the container adapter refuses its bare-tag default image before the
+    # runtime is even probed — the same started_ok=False refusal on every
+    # host. (Selecting "container" alone is not enough: a host WITH a working
+    # daemon — CI runners included — then races the image pull against the
+    # wall clock and can report an execution instead of a refusal.)
+    monkeypatch.setenv("PROM_SANDBOX", "container")
+    monkeypatch.setenv("PROM_REQUIRE_DIGEST_PIN", "1")
 
     assert main(["approve", str(pid), "--by", "will@driivai.com", "--no-exec"]) == 0
     capsys.readouterr()
