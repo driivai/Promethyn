@@ -92,6 +92,80 @@ recording; nothing forked for the domain:
 An ABSTAIN-grounded judgment is non-authoritative and cannot pass the gate —
 fail-closed carries over to the domain unchanged (tested).
 
+## The learn loop: verified SQL wins become a promoted, reversible skill
+
+`python -m prometheus_protocol.benchmarks.sql_learn_demo` closes the LEARN
+loop for the domain through the **shared promotion pipeline** — the same
+`Orchestrator` sequencing, the same `LessonForge`, the same `PromotionGate`
+behind the same held-out firewall (`gate/promotion.py` has a **zero-line
+diff** in this change), the same markdown skill registry and ledger the code
+domain uses. The model stays frozen throughout: a promoted skill changes the
+*context* a proposal is made in, never any weights.
+
+### Held-out semantics, mirrored exactly
+
+`SqlTask` carries the same validated `split` partition as the code `Task`
+(`train` / `heldout`, same constants, same meaning): the forge may learn from
+`train` failures only (it refuses anything else), and `heldout` tasks exist
+solely for the gate's firewalled generalisation check. Invariant **I1** is
+stated over task *ids* and is therefore domain-general; the SQL conformance
+suite re-proves both halves on SQL tasks — the unmodified gate raises
+`FirewallError` on an id overlap before a single query is scored, and the
+unmodified forge refuses held-out SQL attempts. One deliberate ergonomic
+difference, documented rather than hidden: `split` defaults to `train`
+(`SqlTask` predates learning and has verifier-only uses, e.g. ad-hoc
+verification); the default is the fail-safe direction — held-out membership
+is always an explicit authorial act, and nothing can *implicitly* join the
+privileged held-out set.
+
+The sql-v1 corpus is explicitly partitioned (18 train / 14 held-out), with
+concept families spanning both splits so a mined lesson can be tested on
+held-out members it never saw. Two families carry mining labels:
+`sql-distinct-shortcut` (dedup asks; the trap is a missing DISTINCT) and
+`sql-null-absence` (absence asks; the trap is `= NULL` / NULL in aggregates).
+
+### One cycle, both gate outcomes, then a rollback (verbatim, 2026-07-06)
+
+```
+[learn] corpus: 5 train / 5 held-out tasks
+[learn] firewall: train and held-out id sets verified disjoint
+[learn] held-out baseline rate: 20%
+[learn] train run: 4/5 verified failures -> forge mines from them (train split only)
+[learn]   candidate skill-sql-distinct-shortcut (triggers: each once, distinct)
+[learn]   candidate skill-sql-null-absence (triggers: never, no manager, missing)
+[gate] skill-sql-distinct-shortcut: held-out 20% -> 20% : REFUSED (no held-out improvement — the lesson fits its training tasks only)
+[gate] skill-sql-null-absence: held-out 20% -> 60% : PROMOTED
+[learn] held-out rate after promotion: 60%
+[learn] promoted skill on disk: skill-sql-null-absence.md (versioned markdown row — reviewable, deletable)
+[learn] rollback: removed skill-sql-null-absence; held-out rate restored to 20%
+[audit] promotions ledger (in order):
+[audit]   #1 promote skill-sql-null-absence: 20% -> 60%
+[audit]   #2 rollback skill-sql-null-absence: 60% -> 20%
+[demo] learn loop closed: earned promotion, overfit refused, rollback exact
+```
+
+Every pass/fail above is the HARD verifier executing queries in the sandbox;
+both gate decisions are the unmodified `PromotionGate`. Promotion is earned
+the same way as in code: repeated verified train failures mine the candidate,
+and only a measured held-out improvement promotes it. The overfit candidate is
+a deliberate construction — its held-out members' improved queries are the
+same wrong queries, simulating a lesson that fixed only what it was mined
+from — and its cluster name sorts first, so it is scored against the clean
+baseline **before** anything has been promoted (see the honest limits below
+for why that ordering is load-bearing).
+
+### What a promoted SQL skill actually is
+
+A markdown lesson (`Skill`) mined from verified train failures: a title,
+trigger phrases, guidance prose, and provenance listing the train tasks it
+came from — never a held-out task. Its value claim is exactly its measured
+held-out lift, nothing more. It is scoped by retrieval relevance (its
+triggers and domain-prefixed cluster tag occur in SQL absence-asks and in no
+code-benchmark prompt — pinned by unit test, and conformance shows the code
+baseline bit-identical with the SQL skill sitting in the registry). It is
+reversible by construction: one registry row to delete, one ledger `rollback`
+record, and the pre-promotion held-out rate returns exactly.
+
 ## Honest limits
 
 * **Result equivalence cannot distinguish a lucky-wrong query from a right
@@ -107,10 +181,33 @@ fail-closed carries over to the domain unchanged (tested).
   say when order matters; a mislabeled task grades with the wrong semantics.
 * **The task model resisted, mildly.** The code-domain `Task` (entry point,
   hidden cases) did not fit SQL; the domain carries its own `SqlTask`. What
-  proved domain-general is the *Evidence* contract the bank consumes — the
-  port boundary sat exactly where the architecture claimed it would. SQL
-  tasks are not yet wired into the promotion/held-out learning loop; when
-  they are, `SqlTask` needs a split field and the firewall applies as-is.
+  proved domain-general is the *Evidence* contract the bank consumes — and,
+  with the learn loop closed, the `LearnableTask` port (`id`, `prompt`,
+  `split`, `cluster`): the promotion pipeline runs both domains through the
+  same classes, and the only generalisation the wiring needed was treating
+  `entry_point` as optional code-domain metadata in the orchestrator and the
+  forge's provenance renderer.
+* **Skill scoping is retrieval relevance, not a hard wall.** A promoted SQL
+  skill stays out of code-domain proposals because its triggers and tags
+  occur in no code prompt (pinned by test), not because the registry enforces
+  a domain boundary. A trigger phrase that crossed domains would cross with
+  it. A structural scope field is a possible follow-up; today the honest
+  statement is "scoped in measured practice".
+* **Multi-candidate cycles score against a cycle-start baseline.** The shared
+  `run_cycle` promotes candidates sequentially: after one promotion, later
+  candidates are scored with the promoted skill retrievable from the registry
+  while `rate_before` still dates from the cycle start, so a worthless later
+  candidate could inherit an earlier promotion's lift. This is pre-existing
+  shared-pipeline behaviour that the single-cluster code benchmark never
+  exercises; the SQL demo sidesteps it deterministically (the refusal
+  candidate sorts first) rather than silently re-engineering the pipeline.
+  Fixing it (re-basing the rate between promotions) is a flagged follow-up
+  that would touch the code domain's promotion accounting too.
+* **The lesson book is a simulation.** As in the code domain, the frozen
+  provider's improved-when-relevant behaviour is scripted; the demo measures
+  the *pipeline* (mining, firewall, earned promotion, refusal, rollback), not
+  any real model's ability to learn SQL. The verifier's verdicts are the only
+  part that grades real execution.
 * **Harder domains stay out.** SQL still has executable ground truth. Domains
   whose truth is not executable (prose quality, policy judgment) need
   verifiers this sprint says nothing about.
