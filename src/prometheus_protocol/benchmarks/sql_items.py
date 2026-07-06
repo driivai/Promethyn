@@ -27,10 +27,16 @@ import sys
 from dataclasses import dataclass
 from typing import Sequence
 
-from prometheus_protocol.core.models import Verdict
+from prometheus_protocol.core.models import SPLIT_HELDOUT, SPLIT_TRAIN, Verdict
 from prometheus_protocol.verifier.sql import SqlTask, SqlVerifier
 
 SQL_TASK_SET_VERSION = "sql-v1 (32 tasks)"
+
+# Failure-concept clusters (the learn loop's mining labels). Each labelled
+# cluster spans BOTH splits — train members are what a lesson can be mined
+# from, held-out members are what proves (or refutes) that it generalises.
+CLUSTER_DISTINCT = "sql-distinct-shortcut"  # dedup asks; the trap is a missing DISTINCT
+CLUSTER_NULL = "sql-null-absence"  # absence asks; the trap is = NULL / NULL in aggregates
 
 _SHOP_SCHEMA = """
 CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT NOT NULL, city TEXT);
@@ -107,135 +113,183 @@ class SqlProbe:
     note: str
 
 
-def _shop(task_id: str, prompt: str, ref: str, *, ordered: bool = False) -> SqlTask:
+def _shop(task_id: str, prompt: str, ref: str, *, split: str,
+          ordered: bool = False, cluster: str | None = None) -> SqlTask:
     return SqlTask(id=task_id, prompt=prompt, schema_sql=_SHOP_SCHEMA,
-                   fixture_sql=_SHOP_FIXTURE, reference_query=ref, ordered=ordered)
+                   fixture_sql=_SHOP_FIXTURE, reference_query=ref,
+                   split=split, ordered=ordered, cluster=cluster)
 
 
-def _hr(task_id: str, prompt: str, ref: str, *, ordered: bool = False) -> SqlTask:
+def _hr(task_id: str, prompt: str, ref: str, *, split: str,
+        ordered: bool = False, cluster: str | None = None) -> SqlTask:
     return SqlTask(id=task_id, prompt=prompt, schema_sql=_HR_SCHEMA,
-                   fixture_sql=_HR_FIXTURE, reference_query=ref, ordered=ordered)
+                   fixture_sql=_HR_FIXTURE, reference_query=ref,
+                   split=split, ordered=ordered, cluster=cluster)
 
 
-def _ev(task_id: str, prompt: str, ref: str, *, ordered: bool = False) -> SqlTask:
+def _ev(task_id: str, prompt: str, ref: str, *, split: str,
+        ordered: bool = False, cluster: str | None = None) -> SqlTask:
     return SqlTask(id=task_id, prompt=prompt, schema_sql=_EVENTS_SCHEMA,
-                   fixture_sql=_EVENTS_FIXTURE, reference_query=ref, ordered=ordered)
+                   fixture_sql=_EVENTS_FIXTURE, reference_query=ref,
+                   split=split, ordered=ordered, cluster=cluster)
 
 
 def build_sql_tasks() -> tuple[SqlTask, ...]:
+    """The sql-v1 tasks, explicitly partitioned into train and held-out.
+
+    The partition is by concept family: where several tasks share a failure
+    concept (the labelled clusters above, plus unlabelled families like
+    ordered asks or boundary conditions), the family spans BOTH splits so a
+    lesson mined from the train members can be tested for generalisation on
+    held-out members it never saw. The split is corpus metadata — the
+    reliability run below verifies references and probes on every task
+    regardless of split.
+    """
+
     return (
         _shop("sql/01-distinct-cities",
               "List the distinct non-NULL cities customers live in.",
-              "SELECT DISTINCT city FROM customers WHERE city IS NOT NULL"),
+              "SELECT DISTINCT city FROM customers WHERE city IS NOT NULL",
+              split=SPLIT_HELDOUT, cluster=CLUSTER_DISTINCT),
         _shop("sql/02-orders-per-status",
               "For each order status, how many orders have it?",
-              "SELECT status, COUNT(*) FROM orders GROUP BY status"),
+              "SELECT status, COUNT(*) FROM orders GROUP BY status",
+              split=SPLIT_TRAIN),
         _shop("sql/03-paid-revenue",
               "What is the total value of paid orders?",
-              "SELECT SUM(total) FROM orders WHERE status = 'paid'"),
+              "SELECT SUM(total) FROM orders WHERE status = 'paid'",
+              split=SPLIT_TRAIN),
         _shop("sql/04-customers-with-orders",
               "Names of customers who have placed at least one order (each once).",
               "SELECT DISTINCT c.name FROM customers c "
-              "JOIN orders o ON o.customer_id = c.id"),
+              "JOIN orders o ON o.customer_id = c.id",
+              split=SPLIT_TRAIN, cluster=CLUSTER_DISTINCT),
         _shop("sql/05-customers-without-orders",
               "Names of customers who have never placed an order.",
               "SELECT c.name FROM customers c "
-              "LEFT JOIN orders o ON o.customer_id = c.id WHERE o.id IS NULL"),
+              "LEFT JOIN orders o ON o.customer_id = c.id WHERE o.id IS NULL",
+              split=SPLIT_HELDOUT, cluster=CLUSTER_NULL),
         _shop("sql/06-top3-orders",
               "The ids and totals of the three largest orders, largest first.",
               "SELECT id, total FROM orders ORDER BY total DESC LIMIT 3",
-              ordered=True),
+              split=SPLIT_TRAIN, ordered=True),
         _shop("sql/07-avg-paid-per-city",
               "Average paid-order total per customer city (paid orders only).",
               "SELECT c.city, AVG(o.total) FROM customers c "
               "JOIN orders o ON o.customer_id = c.id "
-              "WHERE o.status = 'paid' GROUP BY c.city"),
+              "WHERE o.status = 'paid' GROUP BY c.city",
+              split=SPLIT_HELDOUT),
         _shop("sql/08-qty-per-product",
               "Total quantity sold per product.",
-              "SELECT product, SUM(qty) FROM order_items GROUP BY product"),
+              "SELECT product, SUM(qty) FROM order_items GROUP BY product",
+              split=SPLIT_TRAIN),
         _shop("sql/09-revenue-per-order",
               "The line-item revenue (quantity times price) of each order id.",
-              "SELECT order_id, SUM(qty * price) FROM order_items GROUP BY order_id"),
+              "SELECT order_id, SUM(qty * price) FROM order_items GROUP BY order_id",
+              split=SPLIT_HELDOUT),
         _shop("sql/10-early-orders",
               "How many orders were created on day 10 or earlier?",
-              "SELECT COUNT(*) FROM orders WHERE created_day <= 10"),
+              "SELECT COUNT(*) FROM orders WHERE created_day <= 10",
+              split=SPLIT_TRAIN),
         _shop("sql/11-busy-statuses",
               "Which statuses appear on more than one order?",
-              "SELECT status FROM orders GROUP BY status HAVING COUNT(*) > 1"),
+              "SELECT status FROM orders GROUP BY status HAVING COUNT(*) > 1",
+              split=SPLIT_HELDOUT),
         _shop("sql/12-order-counts-with-zero",
               "Every customer's name with their order count, including zero.",
               "SELECT c.name, COUNT(o.id) FROM customers c "
-              "LEFT JOIN orders o ON o.customer_id = c.id GROUP BY c.name"),
+              "LEFT JOIN orders o ON o.customer_id = c.id GROUP BY c.name",
+              split=SPLIT_HELDOUT),
         _hr("sql/13-above-average",
             "Names of employees earning strictly more than the overall average salary.",
             "SELECT name FROM employees "
-            "WHERE salary > (SELECT AVG(salary) FROM employees)"),
+            "WHERE salary > (SELECT AVG(salary) FROM employees)",
+            split=SPLIT_TRAIN),
         _hr("sql/14-empty-departments",
             "Names of departments with no employees.",
             "SELECT d.name FROM departments d "
-            "LEFT JOIN employees e ON e.dept_id = d.id WHERE e.id IS NULL"),
+            "LEFT JOIN employees e ON e.dept_id = d.id WHERE e.id IS NULL",
+            split=SPLIT_HELDOUT),
         _hr("sql/15-headcount-per-department",
             "Each department name with its employee count, including empty ones.",
             "SELECT d.name, COUNT(e.id) FROM departments d "
-            "LEFT JOIN employees e ON e.dept_id = d.id GROUP BY d.name"),
+            "LEFT JOIN employees e ON e.dept_id = d.id GROUP BY d.name",
+            split=SPLIT_TRAIN),
         _hr("sql/16-no-manager",
             "Names of employees who have no manager.",
-            "SELECT name FROM employees WHERE manager_id IS NULL"),
+            "SELECT name FROM employees WHERE manager_id IS NULL",
+            split=SPLIT_TRAIN, cluster=CLUSTER_NULL),
         _hr("sql/17-max-salary-per-dept",
             "The highest salary in each department id (employees with a department only).",
             "SELECT dept_id, MAX(salary) FROM employees "
-            "WHERE dept_id IS NOT NULL GROUP BY dept_id"),
+            "WHERE dept_id IS NOT NULL GROUP BY dept_id",
+            split=SPLIT_TRAIN),
         _hr("sql/18-managers",
             "Names of employees who manage at least one other employee (each once).",
             "SELECT DISTINCT m.name FROM employees m "
-            "JOIN employees e ON e.manager_id = m.id"),
+            "JOIN employees e ON e.manager_id = m.id",
+            split=SPLIT_TRAIN, cluster=CLUSTER_DISTINCT),
         _hr("sql/19-second-highest-salary",
             "The second-highest DISTINCT salary.",
             "SELECT MAX(salary) FROM employees "
-            "WHERE salary < (SELECT MAX(salary) FROM employees)"),
+            "WHERE salary < (SELECT MAX(salary) FROM employees)",
+            split=SPLIT_HELDOUT),
         _hr("sql/20-engineering-payroll",
             "The total salary of the department named 'Engineering'.",
             "SELECT SUM(e.salary) FROM employees e "
-            "JOIN departments d ON d.id = e.dept_id WHERE d.name = 'Engineering'"),
+            "JOIN departments d ON d.id = e.dept_id WHERE d.name = 'Engineering'",
+            split=SPLIT_TRAIN),
         _hr("sql/21-names-alphabetical",
             "All employee names in alphabetical order.",
-            "SELECT name FROM employees ORDER BY name", ordered=True),
+            "SELECT name FROM employees ORDER BY name",
+            split=SPLIT_HELDOUT, ordered=True),
         _hr("sql/22-distinct-salaries",
             "How many distinct salary values are there?",
-            "SELECT COUNT(DISTINCT salary) FROM employees"),
+            "SELECT COUNT(DISTINCT salary) FROM employees",
+            split=SPLIT_TRAIN),
         _ev("sql/23-events-per-kind",
             "How many events of each kind are there?",
-            "SELECT kind, COUNT(*) FROM events GROUP BY kind"),
+            "SELECT kind, COUNT(*) FROM events GROUP BY kind",
+            split=SPLIT_TRAIN),
         _ev("sql/24-duration-per-user",
             "Total recorded duration per user, for users with at least one "
             "recorded (non-missing) duration.",
             "SELECT user_id, SUM(duration) FROM events "
-            "WHERE duration IS NOT NULL GROUP BY user_id"),
+            "WHERE duration IS NOT NULL GROUP BY user_id",
+            split=SPLIT_TRAIN, cluster=CLUSTER_NULL),
         _ev("sql/25-busy-days",
             "Which days had more than two events?",
-            "SELECT day FROM events GROUP BY day HAVING COUNT(*) > 2"),
+            "SELECT day FROM events GROUP BY day HAVING COUNT(*) > 2",
+            split=SPLIT_TRAIN),
         _ev("sql/26-login-users",
             "The distinct users who have a 'login' event.",
-            "SELECT DISTINCT user_id FROM events WHERE kind = 'login'"),
+            "SELECT DISTINCT user_id FROM events WHERE kind = 'login'",
+            split=SPLIT_HELDOUT, cluster=CLUSTER_DISTINCT),
         _ev("sql/27-latest-day-per-user",
             "Each user's most recent event day.",
-            "SELECT user_id, MAX(day) FROM events GROUP BY user_id"),
+            "SELECT user_id, MAX(day) FROM events GROUP BY user_id",
+            split=SPLIT_TRAIN),
         _ev("sql/28-first-two-events",
             "The ids and days of the first two events, ordered by day then id.",
-            "SELECT id, day FROM events ORDER BY day, id LIMIT 2", ordered=True),
+            "SELECT id, day FROM events ORDER BY day, id LIMIT 2",
+            split=SPLIT_HELDOUT, ordered=True),
         _ev("sql/29-day5-count",
             "How many events happened on day 5 exactly?",
-            "SELECT COUNT(*) FROM events WHERE day = 5"),
+            "SELECT COUNT(*) FROM events WHERE day = 5",
+            split=SPLIT_HELDOUT),
         _ev("sql/30-both-kinds",
             "Users who have BOTH a 'login' and a 'purchase' event.",
             "SELECT user_id FROM events WHERE kind = 'login' "
-            "INTERSECT SELECT user_id FROM events WHERE kind = 'purchase'"),
+            "INTERSECT SELECT user_id FROM events WHERE kind = 'purchase'",
+            split=SPLIT_TRAIN),
         _ev("sql/31-avg-call-duration",
             "The average duration of 'call' events, ignoring missing durations.",
-            "SELECT AVG(duration) FROM events WHERE kind = 'call'"),
+            "SELECT AVG(duration) FROM events WHERE kind = 'call'",
+            split=SPLIT_HELDOUT, cluster=CLUSTER_NULL),
         _ev("sql/32-distinct-kind-days",
             "The distinct (kind, day) pairs that occur.",
-            "SELECT DISTINCT kind, day FROM events"),
+            "SELECT DISTINCT kind, day FROM events",
+            split=SPLIT_HELDOUT, cluster=CLUSTER_DISTINCT),
     )
 
 
