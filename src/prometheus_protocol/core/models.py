@@ -178,10 +178,16 @@ class Judgment:
     detail: str = ""
 
 
-# Minimal, explicit tool set the executor may act on. Only in-sandbox code
-# execution is supported: this sprint adds no network or external connectors.
+# Minimal, explicit tool set the executor may act on: in-sandbox code
+# execution, plus exactly one narrow external connector — deleting a branch of
+# a caller-pinned local git repository. The git action carries only the branch
+# name; the repository is bound at executor construction, so an action cannot
+# point the tool anywhere else. Each kind is handled by its own executor
+# adapter behind the same wall, and an executor refuses every kind it does not
+# explicitly support.
 ACTION_PYTHON_CODE = "python_code"
-EXECUTABLE_ACTION_KINDS = frozenset({ACTION_PYTHON_CODE})
+ACTION_GIT_DELETE_BRANCH = "git_delete_branch"
+EXECUTABLE_ACTION_KINDS = frozenset({ACTION_PYTHON_CODE, ACTION_GIT_DELETE_BRANCH})
 
 
 @dataclass(frozen=True)
