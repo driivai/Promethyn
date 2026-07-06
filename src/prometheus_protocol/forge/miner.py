@@ -15,20 +15,32 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Mapping, Sequence
 
-from prometheus_protocol.core.models import SPLIT_TRAIN, Attempt, Skill, Task
+from prometheus_protocol.core.interfaces import LearnableTask
+from prometheus_protocol.core.models import SPLIT_TRAIN, Attempt, Skill
 
 
 @dataclass(frozen=True)
-class _Lesson:
+class Lesson:
+    """A curated lesson template: what a cluster's skill says and triggers on.
+
+    Public so a domain can hand the forge its own cluster→lesson mapping (the
+    SQL learn corpus does); the forge machinery — train-only firewall check,
+    cluster grouping, skill rendering — stays shared.
+    """
+
     title: str
     triggers: tuple[str, ...]
     guidance: str
 
 
+# Backward-compatible private alias (the class predates its public export).
+_Lesson = Lesson
+
+
 # Known clusters map to curated lessons. Unknown clusters fall back to a
 # generic template (see ``_fallback``), so the forge degrades gracefully.
-_CLUSTER_LESSONS: dict[str, _Lesson] = {
-    "empty-input": _Lesson(
+_CLUSTER_LESSONS: dict[str, Lesson] = {
+    "empty-input": Lesson(
         title="Guard against empty input",
         triggers=("empty",),
         guidance=(
@@ -44,13 +56,13 @@ _CLUSTER_LESSONS: dict[str, _Lesson] = {
 class LessonForge:
     """Mines failing attempts into candidate skills."""
 
-    def __init__(self, lessons: Mapping[str, _Lesson] | None = None) -> None:
+    def __init__(self, lessons: Mapping[str, Lesson] | None = None) -> None:
         self._lessons = dict(_CLUSTER_LESSONS if lessons is None else lessons)
 
     def mine(
         self,
         failures: Sequence[Attempt],
-        tasks_by_id: Mapping[str, Task],
+        tasks_by_id: Mapping[str, LearnableTask],
     ) -> list[Skill]:
         # Held-out firewall (forge side): the forge must never learn from
         # anything but training failures.
@@ -61,7 +73,7 @@ class LessonForge:
                 f"firewall: {', '.join(leaked)}"
             )
 
-        clusters: dict[str, list[Task]] = {}
+        clusters: dict[str, list[LearnableTask]] = {}
         for attempt in failures:
             task = tasks_by_id.get(attempt.task_id)
             if task is None or task.cluster is None:
@@ -85,9 +97,9 @@ class LessonForge:
         return skills
 
 
-def _fallback(cluster: str) -> _Lesson:
+def _fallback(cluster: str) -> Lesson:
     keyword = cluster.split("-", 1)[0]
-    return _Lesson(
+    return Lesson(
         title=f"Lesson for the {cluster} cluster",
         triggers=(keyword,),
         guidance=(
@@ -98,9 +110,12 @@ def _fallback(cluster: str) -> _Lesson:
     )
 
 
-def _render(lesson: _Lesson, cluster: str, tasks: Sequence[Task]) -> str:
+def _render(lesson: Lesson, cluster: str, tasks: Sequence[LearnableTask]) -> str:
+    # A code task is listed by its entry point; a task from a domain without
+    # one (for example SQL) is listed by its id alone.
     motivating = "\n".join(
-        f"- `{task.entry_point}` ({task.id})" for task in tasks
+        f"- `{ep}` ({task.id})" if (ep := getattr(task, "entry_point", "")) else f"- {task.id}"
+        for task in tasks
     )
     return (
         f"# {lesson.title}\n\n"

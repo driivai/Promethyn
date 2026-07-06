@@ -81,13 +81,24 @@ class MockProvider(Provider):
         return self._responder(prompt, system)
 
 
-def _has_relevant_skill(prompt: str, skills: Sequence[Skill]) -> bool:
+def has_relevant_skill(prompt: str, skills: Sequence[Skill]) -> bool:
+    """Whether any in-context skill's trigger appears in the prompt.
+
+    Public because it defines the simulation's improvement criterion — every
+    offline proposer simulation (code or SQL) must use the same one, or the
+    domains would not be comparable.
+    """
+
     text = prompt.lower()
     for skill in skills:
         for trigger in skill.triggers:
             if trigger and trigger.lower() in text:
                 return True
     return False
+
+
+# Backward-compatible private alias (the helper predates its public export).
+_has_relevant_skill = has_relevant_skill
 
 
 def _stub(entry_point: str) -> str:

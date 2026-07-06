@@ -52,7 +52,13 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from prometheus_protocol.core.models import Evidence, Tier, Verdict
+from prometheus_protocol.core.models import (
+    SPLIT_TRAIN,
+    SPLITS,
+    Evidence,
+    Tier,
+    Verdict,
+)
 from prometheus_protocol.sandbox import Limits, Sandbox, build_sandbox
 
 _RESULT_FILE = "result.json"
@@ -117,6 +123,13 @@ class SqlTask:
     evaluation-side ground truth. ``ordered`` marks asks whose answer is a
     sequence (they specify an ordering), switching the comparator to ordered
     equality.
+
+    ``split`` mirrors the code-domain :class:`Task` partition exactly and with
+    the same meaning: ``train`` tasks are what the forge may learn from;
+    ``heldout`` tasks exist only for the promotion gate's firewalled
+    generalisation check and must never be visible to a proposer's learning.
+    The value is validated like the code domain's. ``cluster`` is the optional
+    failure-concept label the forge groups training failures by.
     """
 
     id: str
@@ -124,7 +137,16 @@ class SqlTask:
     schema_sql: str
     fixture_sql: str
     reference_query: str
+    split: str = SPLIT_TRAIN
     ordered: bool = False
+    cluster: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.split not in SPLITS:
+            raise ValueError(
+                f"task {self.id!r} has unknown split {self.split!r}; "
+                f"expected one of {SPLITS}"
+            )
 
 
 # --------------------------------------------------------------------------

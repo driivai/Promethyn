@@ -8,6 +8,27 @@ in `spec/invariants.md` is a major version bump.
 ## [Unreleased]
 
 ### Added
+- **The SQL learn loop, through the shared promotion pipeline.** Verified SQL
+  competence is now promotable to a reusable skill exactly as code competence
+  is: the same `Orchestrator` sequencing, `LessonForge`, `PromotionGate` (the
+  gate module has a zero-line diff), held-out firewall, markdown skill
+  registry, and ledger run both domains. `SqlTask` gains the same validated
+  `train`/`heldout` split partition as the code `Task` (defaulting to `train`
+  — the fail-safe direction; held-out membership is always explicit) plus an
+  optional failure-concept `cluster`; sql-v1 is explicitly partitioned
+  (18 train / 14 held-out) with two labelled clusters spanning both splits. A
+  new `LearnableTask` port (`core/interfaces.py`) names what the learning
+  loop requires of any domain's task; the orchestrator and the forge's
+  provenance renderer now treat `entry_point` as optional code-domain
+  metadata (code-domain behaviour is bit-identical; all pinned promotion
+  numbers unchanged). `benchmarks/sql_learn_demo.py` runs one cycle through
+  the real machinery — held-out baseline 20%, an overfit lesson REFUSED at
+  20%→20%, a generalising lesson PROMOTED at 20%→60%, then a rollback
+  restoring 20% exactly with a `rollback` ledger record. Conformance re-proves
+  the firewall on SQL ids (unmodified gate and forge both refuse), audits
+  no-held-out-leakage from the ledger alone, pins earned promotion and exact
+  reversibility, and shows a promoted SQL skill leaves the code benchmark
+  bit-identical (scoping by retrieval relevance, honestly documented as such).
 - Operational hardening of execution and sandbox fault attribution (four
   tightenings; no verdict, gate, fusion, or INV-EXEC/INV-SANDBOX semantics
   loosened):

@@ -9,9 +9,33 @@ downstream code can program against the interfaces, not the implementations.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Sequence
+from typing import Protocol, Sequence
 
 from prometheus_protocol.core.models import Attempt, Evidence, Skill, Task
+
+
+class LearnableTask(Protocol):
+    """The port a task must satisfy to ride the learning loop, in any domain.
+
+    The promotion pipeline (orchestrator sequencing, forge mining, promotion
+    gate, held-out firewall) is generic over tasks with these fields; the code
+    domain's :class:`Task` and the SQL domain's ``SqlTask`` both satisfy it
+    structurally. ``split`` carries the train/held-out partition with the same
+    meaning everywhere: the forge may learn from ``train`` only, and
+    ``heldout`` exists solely for the gate's firewalled generalisation check.
+    ``cluster`` is the optional failure-concept label the forge groups
+    training failures by.
+
+    Domain-specific extras (the code domain's ``entry_point`` and hidden
+    ``cases``, the SQL domain's schema/fixture/reference) are NOT part of this
+    port — the loop must not require them. The matching domain verifier is
+    what consumes them, behind the shared ``Verifier`` seam.
+    """
+
+    id: str
+    prompt: str
+    split: str
+    cluster: str | None
 
 
 class Provider(ABC):

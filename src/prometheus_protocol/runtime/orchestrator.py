@@ -24,12 +24,13 @@ from typing import Sequence
 from prometheus_protocol.core.config import Config
 from prometheus_protocol.core.interfaces import (
     Gate,
+    LearnableTask,
     Ledger,
     Provider,
     Registry,
     Verifier,
 )
-from prometheus_protocol.core.models import Attempt, Skill, Task, Verdict
+from prometheus_protocol.core.models import Attempt, Skill, Verdict
 from prometheus_protocol.forge.miner import LessonForge
 from prometheus_protocol.gate.promotion import GateDecision
 from prometheus_protocol.memory.tiers import MemoryTier
@@ -116,7 +117,7 @@ class Orchestrator:
 
     def _skills_for(
         self,
-        task: Task,
+        task: LearnableTask,
         extra_skills: Sequence[Skill],
         exclude_ids: Sequence[str],
     ) -> list[Skill]:
@@ -132,7 +133,7 @@ class Orchestrator:
 
     def run_split(
         self,
-        tasks: Sequence[Task],
+        tasks: Sequence[LearnableTask],
         *,
         extra_skills: Sequence[Skill] = (),
         exclude_ids: Sequence[str] = (),
@@ -143,8 +144,11 @@ class Orchestrator:
         outcomes: list[TaskOutcome] = []
         for task in tasks:
             skills = self._skills_for(task, extra_skills, exclude_ids)
+            # ``entry_point`` is code-domain metadata; tasks from domains
+            # without one (for example SQL) propose from the prompt alone.
+            entry_point = getattr(task, "entry_point", "")
             code = self.provider.propose_solution(
-                prompt=task.prompt, entry_point=task.entry_point, skills=skills
+                prompt=task.prompt, entry_point=entry_point, skills=skills
             )
             evidence = self.verifier.verify(code=code, task=task)
             # Gather advisory verdicts (if any) for the same outcome. The
@@ -165,7 +169,7 @@ class Orchestrator:
             attempt = Attempt(
                 task_id=task.id,
                 split=task.split,
-                entry_point=task.entry_point,
+                entry_point=entry_point,
                 code=code,
                 evidence=evidence,
                 skills_used=tuple(skill.id for skill in skills),
@@ -181,13 +185,13 @@ class Orchestrator:
 
     # -- high-level operations --------------------------------------------
 
-    def baseline(self, tasks: Sequence[Task]) -> RunReport:
+    def baseline(self, tasks: Sequence[LearnableTask]) -> RunReport:
         """Run every task once with the registry as it stands."""
 
         return self.run_split(tasks, cycle=0, kind="baseline")
 
     def ablation(
-        self, heldout_tasks: Sequence[Task], skill_id: str, *, cycle: int = 0
+        self, heldout_tasks: Sequence[LearnableTask], skill_id: str, *, cycle: int = 0
     ) -> float:
         """Held-out contribution of ``skill_id``: rate with it minus rate without."""
 
@@ -201,8 +205,8 @@ class Orchestrator:
 
     def run_cycle(
         self,
-        train_tasks: Sequence[Task],
-        heldout_tasks: Sequence[Task],
+        train_tasks: Sequence[LearnableTask],
+        heldout_tasks: Sequence[LearnableTask],
         *,
         cycle: int = 1,
     ) -> CycleReport:
@@ -218,7 +222,7 @@ class Orchestrator:
 
         mined = self.forge.mine(failures, tasks_by_id)
 
-        def score_fn(tasks: Sequence[Task], candidate: Skill) -> float:
+        def score_fn(tasks: Sequence[LearnableTask], candidate: Skill) -> float:
             return self.run_split(
                 tasks, extra_skills=[candidate], cycle=cycle, kind="gate-score"
             ).pass_rate
