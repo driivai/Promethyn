@@ -7,6 +7,29 @@ in `spec/invariants.md` is a major version bump.
 
 ## [Unreleased]
 
+### Fixed
+- **Multi-candidate promotion accounting credits marginal lift.** `run_cycle`
+  used to score every candidate against the cycle-start held-out baseline, so
+  a candidate evaluated after an earlier promotion in the same cycle
+  inherited that promotion's lift — a free-riding skill could be promoted on
+  improvement it did not cause (flagged, not fixed, when the SQL learn loop
+  landed; single-candidate cycles never exposed it). The baseline now
+  advances by re-measurement (`heldout-rebase` attempt rows) after each
+  promotion that leaves candidates still to score, so each candidate's
+  recorded lift — and its promotion ledger row — is its marginal
+  contribution over the state its predecessors left. The gate, its
+  promotion criterion, and the held-out firewall are untouched
+  (`gate/promotion.py` zero-line diff); single-candidate and no-promotion
+  cycles are bit-identical to the old accounting (code-domain pinned numbers
+  unchanged). Conformance pins both directions with the shared pipeline over
+  a stub verifier — a free-riding candidate is refused on zero marginal lift
+  (the same test fails against the old accounting with the rider wrongly
+  approved), a genuinely-marginal candidate still promotes on its own lift —
+  plus promote/promote/rollback coherence (full unwind restores the
+  cycle-start rate exactly). The SQL learn demo now demonstrates the fixed
+  path instead of sidestepping it: the genuine lesson promotes first and the
+  overfit one is refused at 60% → 60% against the re-based baseline.
+
 ### Added
 - **The SQL learn loop, through the shared promotion pipeline.** Verified SQL
   competence is now promotable to a reusable skill exactly as code competence

@@ -12,11 +12,7 @@ from __future__ import annotations
 import pytest
 
 from harness.benchmarks.python_functions import build_benchmark
-from prometheus_protocol.benchmarks.sql_items import (
-    CLUSTER_DISTINCT,
-    CLUSTER_NULL,
-    build_sql_tasks,
-)
+from prometheus_protocol.benchmarks.sql_items import CLUSTER_NULL, build_sql_tasks
 from prometheus_protocol.benchmarks.sql_learn_demo import (
     _NON_TRANSFER,
     SQL_LESSONS,
@@ -86,16 +82,19 @@ def test_scripted_provider_is_frozen_and_skill_gated():
     # Deterministic: same inputs, same output, every time.
     assert provider.propose_solution(prompt=null_train.prompt) == bare
 
+    # A non-transferring held-out member: the matching lesson IS relevant
+    # (its trigger occurs in the prompt), and the query is still the wrong
+    # one — sameness for the right reason, not for lack of retrieval.
     overfit_heldout = next(
         t for t in heldout if t.id in _NON_TRANSFER
     )
-    distinct_skill = Skill(
-        id="skill-y", title="y", body="y",
-        triggers=SQL_LESSONS[CLUSTER_DISTINCT].triggers,
-    )
+    assert overfit_heldout.cluster == CLUSTER_NULL
     assert provider.propose_solution(
-        prompt=overfit_heldout.prompt, skills=[distinct_skill]
+        prompt=overfit_heldout.prompt, skills=[skill]
     ) == provider.propose_solution(prompt=overfit_heldout.prompt)
+    assert provider.propose_solution(
+        prompt=overfit_heldout.prompt, skills=[skill]
+    ) != overfit_heldout.reference_query
 
     with pytest.raises(ValueError, match="off-book"):
         provider.propose_solution(prompt="not a corpus prompt")

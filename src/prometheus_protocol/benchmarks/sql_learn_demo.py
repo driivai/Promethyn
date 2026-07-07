@@ -16,17 +16,21 @@ retrieved skill is relevant to the prompt (same criterion as the code mock:
 a skill trigger appears in the prompt). The model never changes — a promoted
 skill changes the CONTEXT a proposal is made in, never any weights.
 
-The corpus is built so the one cycle demonstrates both gate outcomes:
+The corpus is built so the one cycle demonstrates both gate outcomes AND the
+marginal-lift accounting:
 
-* ``sql-null-absence`` — the lesson GENERALISES: with the skill in context
-  the provider also writes correct queries for the held-out absence tasks it
-  never trained on, so the held-out rate rises and the gate promotes.
-* ``sql-distinct-shortcut`` — the lesson is OVERFIT by construction: its
-  held-out members' improved queries are the same wrong queries (the lesson
-  fixed only the tasks it was mined from), so the held-out rate does not
-  move and the gate refuses promotion. The cluster name sorts before the
-  genuine one, so it is scored before anything has been promoted — the
-  refusal is measured against the clean baseline.
+* ``sql-distinct-shortcut`` — the lesson GENERALISES: with the skill in
+  context the provider also writes correct queries for the held-out dedup
+  tasks it never trained on, so the held-out rate rises and the gate
+  promotes. Its cluster name sorts first, so this promotion lands BEFORE the
+  other candidate is scored.
+* ``sql-null-absence`` — the lesson is OVERFIT by construction: its held-out
+  members' improved queries are the same wrong queries (the lesson fixed
+  only the tasks it was mined from). It is scored AFTER the promotion above,
+  against the RE-BASED baseline, and shows zero marginal lift — refused.
+  Under the old cycle-start-baseline accounting this exact candidate would
+  have been credited with the earlier promotion's lift and wrongly promoted;
+  the demo now exercises the fixed path instead of sidestepping it.
 
 Both verdicts come from the real machinery: every pass/fail is the HARD SQL
 verifier executing queries in the sandbox, and the promotion decision is the
@@ -126,10 +130,13 @@ _BASELINES: dict[str, str] = {
 
 #: Held-out tasks whose lesson does NOT transfer: with the (overfit) skill in
 #: context the provider still writes the wrong query. This is the simulation
-#: of a lesson that fixed only the tasks it was mined from.
+#: of a lesson that fixed only the tasks it was mined from. These are the
+#: null cluster's held-out members, so the overfit candidate is the one
+#: scored AFTER the genuine promotion — the marginal-lift accounting, not
+#: evaluation order, is what refuses it.
 _NON_TRANSFER = frozenset({
-    "sql/26-login-users",
-    "sql/32-distinct-kind-days",
+    "sql/05-customers-without-orders",
+    "sql/31-avg-call-duration",
 })
 
 
@@ -234,8 +241,13 @@ def run_learn_demo(
         verdict = "PROMOTED" if decision.approved else "REFUSED"
         out(f"[gate] {decision.skill_id}: held-out {decision.rate_before:.0%} "
             f"-> {decision.rate_after:.0%} : {verdict}"
-            + ("" if decision.approved else " (no held-out improvement — the "
+            + ("" if decision.approved else " (zero marginal lift — the "
                "lesson fits its training tasks only)"))
+        if decision.rate_before != cycle.baseline_heldout_rate:
+            out(f"[gate]   (scored against the re-based baseline "
+                f"{decision.rate_before:.0%}, not the {cycle.baseline_heldout_rate:.0%} "
+                f"cycle start — an earlier promotion's lift is never credited "
+                f"to a later candidate)")
 
     out(f"[learn] held-out rate after promotion: {cycle.post_heldout_rate:.0%}")
     promoted_id = cycle.promoted[0] if cycle.promoted else None
@@ -291,12 +303,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"[demo] skill registry: {registry_dir}")
         summary = run_learn_demo(registry_dir)
     ok = (
-        summary["promoted"] == (f"skill-{CLUSTER_NULL}",)
-        and summary["decisions"].get(f"skill-{CLUSTER_DISTINCT}") is False
+        summary["promoted"] == (f"skill-{CLUSTER_DISTINCT}",)
+        and summary["decisions"].get(f"skill-{CLUSTER_NULL}") is False
         and summary["rollback_rate"] == summary["baseline_heldout_rate"]
     )
-    print("[demo] " + ("learn loop closed: earned promotion, overfit refused, "
-                       "rollback exact" if ok else "UNEXPECTED OUTCOME (see above)"))
+    print("[demo] " + ("learn loop closed: earned promotion, free-riding "
+                       "overfit refused on marginal lift, rollback exact"
+                       if ok else "UNEXPECTED OUTCOME (see above)"))
     return 0 if ok else 1
 
 
