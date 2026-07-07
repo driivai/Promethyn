@@ -133,33 +133,45 @@ held-out members it never saw. Two families carry mining labels:
 [learn] train run: 4/5 verified failures -> forge mines from them (train split only)
 [learn]   candidate skill-sql-distinct-shortcut (triggers: each once, distinct)
 [learn]   candidate skill-sql-null-absence (triggers: never, no manager, missing)
-[gate] skill-sql-distinct-shortcut: held-out 20% -> 20% : REFUSED (no held-out improvement — the lesson fits its training tasks only)
-[gate] skill-sql-null-absence: held-out 20% -> 60% : PROMOTED
+[gate] skill-sql-distinct-shortcut: held-out 20% -> 60% : PROMOTED
+[gate] skill-sql-null-absence: held-out 60% -> 60% : REFUSED (zero marginal lift — the lesson fits its training tasks only)
+[gate]   (scored against the re-based baseline 60%, not the 20% cycle start — an earlier promotion's lift is never credited to a later candidate)
 [learn] held-out rate after promotion: 60%
-[learn] promoted skill on disk: skill-sql-null-absence.md (versioned markdown row — reviewable, deletable)
-[learn] rollback: removed skill-sql-null-absence; held-out rate restored to 20%
+[learn] promoted skill on disk: skill-sql-distinct-shortcut.md (versioned markdown row — reviewable, deletable)
+[learn] rollback: removed skill-sql-distinct-shortcut; held-out rate restored to 20%
 [audit] promotions ledger (in order):
-[audit]   #1 promote skill-sql-null-absence: 20% -> 60%
-[audit]   #2 rollback skill-sql-null-absence: 60% -> 20%
-[demo] learn loop closed: earned promotion, overfit refused, rollback exact
+[audit]   #1 promote skill-sql-distinct-shortcut: 20% -> 60%
+[audit]   #2 rollback skill-sql-distinct-shortcut: 60% -> 20%
+[demo] learn loop closed: earned promotion, free-riding overfit refused on marginal lift, rollback exact
 ```
 
 Every pass/fail above is the HARD verifier executing queries in the sandbox;
 both gate decisions are the unmodified `PromotionGate`. Promotion is earned
 the same way as in code: repeated verified train failures mine the candidate,
-and only a measured held-out improvement promotes it. The overfit candidate is
-a deliberate construction — its held-out members' improved queries are the
-same wrong queries, simulating a lesson that fixed only what it was mined
-from — and its cluster name sorts first, so it is scored against the clean
-baseline **before** anything has been promoted (see the honest limits below
-for why that ordering is load-bearing).
+and only a measured held-out improvement promotes it.
+
+The refusal doubles as the demonstration of **marginal-lift accounting**
+(`run_cycle`): candidates are evaluated in the forge's deterministic order
+(sorted cluster names), and after a promotion lands the baseline is
+re-measured before the next candidate is scored. The overfit candidate — a
+deliberate construction whose held-out members' improved queries are the same
+wrong queries, simulating a lesson that fixed only what it was mined from —
+is scored *after* the genuine promotion, against the re-based 60% baseline,
+and shows zero marginal lift. Under the earlier cycle-start-baseline
+accounting this exact candidate measured 20% → 60% and would have been
+promoted on lift the other skill produced; the demo used to sidestep that by
+evaluation order, and now exercises the fixed path instead. Single-candidate
+cycles (the code domain's benchmark) never re-base and are bit-identical to
+the old accounting.
 
 ### What a promoted SQL skill actually is
 
 A markdown lesson (`Skill`) mined from verified train failures: a title,
 trigger phrases, guidance prose, and provenance listing the train tasks it
 came from — never a held-out task. Its value claim is exactly its measured
-held-out lift, nothing more. It is scoped by retrieval relevance (its
+**marginal** held-out lift — held-out performance with it versus the current
+baseline at its evaluation, including any promotions earlier in the same
+cycle — nothing more; the promotion ledger row records precisely that pair. It is scoped by retrieval relevance (its
 triggers and domain-prefixed cluster tag occur in SQL absence-asks and in no
 code-benchmark prompt — pinned by unit test, and conformance shows the code
 baseline bit-identical with the SQL skill sitting in the registry). It is
@@ -193,16 +205,17 @@ record, and the pre-promotion held-out rate returns exactly.
   a domain boundary. A trigger phrase that crossed domains would cross with
   it. A structural scope field is a possible follow-up; today the honest
   statement is "scoped in measured practice".
-* **Multi-candidate cycles score against a cycle-start baseline.** The shared
-  `run_cycle` promotes candidates sequentially: after one promotion, later
-  candidates are scored with the promoted skill retrievable from the registry
-  while `rate_before` still dates from the cycle start, so a worthless later
-  candidate could inherit an earlier promotion's lift. This is pre-existing
-  shared-pipeline behaviour that the single-cluster code benchmark never
-  exercises; the SQL demo sidesteps it deterministically (the refusal
-  candidate sorts first) rather than silently re-engineering the pipeline.
-  Fixing it (re-basing the rate between promotions) is a flagged follow-up
-  that would touch the code domain's promotion accounting too.
+* **Marginal attribution is sequential and order-conditional.** (The
+  cycle-start-baseline mis-attribution flagged here previously is fixed:
+  the baseline is re-measured after each promotion, so a later candidate is
+  never credited with an earlier promotion's lift — conformance pins both
+  directions, free-rider refused and genuinely-marginal promoted.) What
+  remains true and deliberate: candidates are evaluated greedily in the
+  forge's deterministic order, so a candidate's recorded lift is conditional
+  on the promotions before it, and two complementary lessons that only help
+  **together** would each show zero marginal lift alone and neither would
+  promote. Subset search over candidates is a possible future extension; the
+  greedy order is documented, deterministic, and auditable from the ledger.
 * **The lesson book is a simulation.** As in the code domain, the frozen
   provider's improved-when-relevant behaviour is scripted; the demo measures
   the *pipeline* (mining, firewall, earned promotion, refusal, rollback), not
