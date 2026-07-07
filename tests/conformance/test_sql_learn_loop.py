@@ -49,8 +49,12 @@ _REQUIRE = (os.environ.get("PROM_REQUIRE_SANDBOX", "") or "").strip().lower() in
     "1", "true", "yes", "on",
 }
 
-OVERFIT_SKILL = f"skill-{CLUSTER_DISTINCT}"
-GENUINE_SKILL = f"skill-{CLUSTER_NULL}"
+# The genuine lesson's cluster sorts FIRST, so its promotion lands before the
+# overfit candidate is scored — the overfit refusal therefore also proves the
+# marginal-lift accounting (a later candidate is never credited with an
+# earlier promotion's lift).
+GENUINE_SKILL = f"skill-{CLUSTER_DISTINCT}"
+OVERFIT_SKILL = f"skill-{CLUSTER_NULL}"
 
 
 def _require_runtime() -> None:
@@ -149,16 +153,22 @@ def test_sql_cycle_promotes_generalizing_and_refuses_overfit(learn_cycle):
     orchestrator, report, _, _ = learn_cycle
     assert report.baseline_heldout_rate == 0.2
     decisions = {d.skill_id: d for d in report.decisions}
-    # The overfit lesson is scored first (its cluster sorts first), against
-    # the clean baseline: no held-out lift, refused, never enters the registry.
-    overfit = decisions[OVERFIT_SKILL]
-    assert overfit.approved is False
-    assert overfit.rate_after == report.baseline_heldout_rate
-    assert orchestrator.registry.get(OVERFIT_SKILL) is None
-    # The genuine lesson lifts held-out tasks it was never mined from.
+    # The genuine lesson (scored first) lifts held-out tasks it was never
+    # mined from and promotes on that lift, measured from the cycle start.
     genuine = decisions[GENUINE_SKILL]
     assert genuine.approved is True
-    assert genuine.rate_after == 0.6
+    assert (genuine.rate_before, genuine.rate_after) == (0.2, 0.6)
+    # The overfit lesson is scored AFTER that promotion, against the
+    # RE-BASED baseline — not the stale cycle start. It shows zero marginal
+    # lift and is refused; under cycle-start accounting its rate_after would
+    # have cleared the criterion on the genuine skill's lift.
+    overfit = decisions[OVERFIT_SKILL]
+    assert overfit.approved is False
+    assert overfit.rate_before == 0.6  # re-based
+    assert overfit.rate_before != report.baseline_heldout_rate
+    assert overfit.rate_after == 0.6
+    assert overfit.rate_after > report.baseline_heldout_rate  # the old trap
+    assert orchestrator.registry.get(OVERFIT_SKILL) is None
     assert report.promoted == (GENUINE_SKILL,)
     assert report.post_heldout_rate == 0.6
     assert orchestrator.registry.get(GENUINE_SKILL) is not None
@@ -179,11 +189,17 @@ def test_no_heldout_leakage_into_the_promotion_path(learn_cycle):
 
     rows = orchestrator.ledger.attempts()
     assert rows, "the cycle must be auditable from the ledger"
+    # The audit is total: every attempt kind the cycle writes is one this
+    # test classifies, so a new kind cannot silently dodge the leakage check.
+    assert {r["kind"] for r in rows} <= {
+        "train", "heldout-before", "gate-score", "heldout-rebase", "heldout-after"
+    }
     train_kind_ids = {r["task_id"] for r in rows if r["kind"] == "train"}
     heldout_kind_ids = {
         r["task_id"]
         for r in rows
-        if r["kind"] in ("heldout-before", "gate-score", "heldout-after")
+        if r["kind"]
+        in ("heldout-before", "gate-score", "heldout-rebase", "heldout-after")
     }
     assert train_kind_ids == train_ids
     assert heldout_kind_ids == heldout_ids
@@ -212,7 +228,7 @@ def test_promoted_sql_skill_is_scoped_to_its_domain(tmp_path):
         Attempt(task_id=t.id, split=SPLIT_TRAIN, entry_point="", code="x",
                 evidence=Evidence(passed=False, total=1, passed_count=0))
         for t in train
-        if t.cluster == CLUSTER_NULL
+        if t.cluster == CLUSTER_DISTINCT
     ]
     (sql_skill,) = LessonForge(SQL_LESSONS).mine(failures, by_id)
     assert sql_skill.id == GENUINE_SKILL
