@@ -32,7 +32,7 @@ on:
         required: true
         default: tencent/hy3-preview
       item_set:
-        description: "Committed item set to evaluate (live-v2 is the harder, discriminating set)"
+        description: "Committed item set to evaluate (live-v2: harder code set; grounding-v1: the gold-labeled grounding admissions set — no sandbox ground truth, gold labels are the reference)"
         required: true
         default: live-v2
 

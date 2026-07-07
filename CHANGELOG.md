@@ -7,6 +7,31 @@ in `spec/invariants.md` is a major version bump.
 
 ## [Unreleased]
 
+### Added
+- **The grounding domain: the first step past executable truth.**
+  `GroundingVerifier` (`verifier/grounding.py`) judges whether a candidate
+  claim is supported by a provided source — `Tier.SOFT` by construction (it
+  executes nothing), strict verdict/confidence parsing with ABSTAIN on
+  anything malformed, and tier-pinned so it cannot masquerade as HARD. A
+  gold-labeled admissions set (`grounding-v1`, 44 items: 18 supported, 26
+  plausible traps across ten families) makes the judge measurable where
+  ground truth is a curated human label, not a program; the admissions
+  harness (`benchmarks/grounding_eval.py`, read-only, reusing the
+  fixture-tested eval arithmetic) reports false-PASS / false-FAIL / abstain /
+  calibration / per-category leaks, offline against a scripted judge with
+  designed deviations (verbatim: false-PASS 2/25 = 8.0%, false-FAIL 1/17,
+  abstains 2 — all pinned by conformance) and live via the judge-eval-live
+  workflow's new `item_set=grounding-v1` (operator-dispatched; both arms).
+  The loop demo and conformance record the structural finding: with no HARD
+  verifier, a soft-only judgment is non-authoritative and the gate blocks it
+  at every risk class — no execution, not even a pending hold — so the human
+  backstop is the only path to action; a human grounding review enters as
+  `Tier.HUMAN` evidence, decides the fused verdict, and calibrates the judge
+  exactly as the sandbox calibrates the code judge. No gate, bank, firewall,
+  or HARD-domain behavior changed; soft-tier authority remains structurally
+  unreachable and any future grant is flagged as a spec-owner invariant
+  decision (`docs/domains-grounding.md`).
+
 ### Fixed
 - **Multi-candidate promotion accounting credits marginal lift.** `run_cycle`
   used to score every candidate against the cycle-start held-out baseline, so
