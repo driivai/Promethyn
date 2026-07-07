@@ -10,8 +10,13 @@ One learning cycle is:
   1. Measure the held-out pass rate with the registry as it stands.
   2. Propose and verify solutions for the *train* split; collect failures.
   3. Forge candidate skills from the train failures only.
-  4. For each candidate, ask the gate to score it on the *held-out* split.
-     The gate enforces the firewall and promotes only genuine improvements.
+  4. For each candidate, in the forge's deterministic order, ask the gate to
+     score it on the *held-out* split against the CURRENT baseline. The gate
+     enforces the firewall and promotes only genuine improvements; after a
+     promotion lands, the baseline is re-measured before the next candidate
+     is scored, so each candidate's recorded lift is its MARGINAL
+     contribution over the state its predecessors left — never a credit for
+     lift an earlier promotion produced.
   5. Re-measure the held-out pass rate after promotions.
 """
 
@@ -227,15 +232,25 @@ class Orchestrator:
                 tasks, extra_skills=[candidate], cycle=cycle, kind="gate-score"
             ).pass_rate
 
+        # Candidates are evaluated in the forge's deterministic order, each
+        # against the CURRENT baseline. After a promotion the baseline is
+        # re-measured (the promoted skill now acts through ordinary registry
+        # retrieval), so the next candidate's recorded lift is its marginal
+        # contribution — a candidate can never be credited with lift an
+        # earlier promotion in the same cycle produced. A cycle with a single
+        # candidate, or with no promotions, is bit-identical to the old
+        # accounting: the baseline is only ever re-measured after a promotion
+        # with candidates still to score.
+        current_rate = rate_before
         decisions: list[GateDecision] = []
         promoted: list[str] = []
-        for candidate in mined:
+        for index, candidate in enumerate(mined):
             decision = self.gate.evaluate(
                 candidate=candidate,
                 train_ids=train_ids,
                 heldout_tasks=heldout_tasks,
                 score_fn=score_fn,
-                rate_before=rate_before,
+                rate_before=current_rate,
             )
             decisions.append(decision)
             _LOG.debug(
@@ -259,6 +274,10 @@ class Orchestrator:
                     decision.rate_before * 100,
                     decision.rate_after * 100,
                 )
+                if index + 1 < len(mined):
+                    current_rate = self.run_split(
+                        heldout_tasks, cycle=cycle, kind="heldout-rebase"
+                    ).pass_rate
 
         post_rate = self.run_split(
             heldout_tasks, cycle=cycle, kind="heldout-after"
