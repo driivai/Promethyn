@@ -8,6 +8,27 @@ in `spec/invariants.md` is a major version bump.
 ## [Unreleased]
 
 ### Added
+- **The verifier extension surface: a documented contract + a conformance
+  suite.** The seam the three built-in domains (code, SQL, grounding) already
+  share is now named, stabilised, and mechanically enforced, so a third party
+  can add a domain verifier without touching the Hearth. New
+  `prometheus_protocol.conformance` package: a `VerifierCase` descriptor and
+  `check_verifier` that check the required guarantees — tier honesty (a SOFT
+  process cannot emit HARD; authority follows the tier the platform assigns,
+  not the verifier's say-so), fault distinction (candidate fault → FAIL,
+  harness fault → ABSTAIN), fail-closed (no ground truth ⇒ ABSTAIN, never a
+  guess), and a verifier-appropriate adversarial probe — plus a
+  domain-general held-out-firewall check. Run it with `python -m
+  prometheus_protocol.conformance`. The three shipped verifiers pass unchanged
+  (proof the contract is real); deliberately non-conformant verifiers (a soft
+  one stamping HARD, one guessing instead of abstaining) are REJECTED with the
+  failing check named — the suite has teeth. `docs/extending-promethyn.md` is
+  the guide (verifier contract, LearnableTask/held-out contract, registration
+  surface, the can/cannot boundary, and an add-a-domain-in-N-steps walkthrough
+  citing the real SQL and grounding examples). No Hearth change: the bank,
+  gate, firewall, executor, and Evidence/verdict semantics are byte-identical
+  (a conformance test asserts the diff against main is empty); the suite is a
+  contract around the Hearth, and it reads it as a client, never modifies it.
 - **grounding-v2: the harder, discriminating grounding item set.** The first
   live grounding run ceilinged (0/26 false-PASS on both arms — directional,
   not load-bearing, exactly the sql-v1 / live-v1 pattern), so
