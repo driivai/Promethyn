@@ -32,9 +32,17 @@ on:
         required: true
         default: tencent/hy3-preview
       item_set:
-        description: "Committed item set to evaluate (live-v2: harder code set; grounding-v1: the gold-labeled grounding admissions set — no sandbox ground truth, gold labels are the reference)"
+        description: "Committed item set to evaluate (live-v2: harder code set; live-v1: original code set; grounding-v1: the gold-labeled grounding admissions set — no sandbox ground truth, gold labels are the reference)"
         required: true
+        # A validated selector, not free text: the options mirror the harness's
+        # --item-set choices exactly, so a typo'd set id can no longer dispatch
+        # two runners through setup and auth preflight only to die at argparse.
+        type: choice
         default: live-v2
+        options:
+          - live-v2
+          - live-v1
+          - grounding-v1
 
 permissions:
   contents: read
