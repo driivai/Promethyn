@@ -194,6 +194,46 @@ def test_human_review_unlocks_and_calibrates():
 # --------------------------------------------------------------------------
 
 
+def test_admissions_arithmetic_is_exact_on_grounding_v2():
+    """The harder set folds through the same fixture-tested arithmetic."""
+
+    from prometheus_protocol.benchmarks.grounding_eval import SCRIPTED_REPLIES_V2
+    from prometheus_protocol.benchmarks.grounding_items_v2 import (
+        build_grounding_items_v2,
+    )
+
+    items = build_grounding_items_v2()
+    judge = GroundingVerifier(
+        ScriptedGroundingJudgeProvider(items, SCRIPTED_REPLIES_V2)
+    )
+    rows = run_grounding_eval(items, judge=judge)
+    m = compute_metrics(rows)
+
+    assert m.n_items == m.n_reference == 64
+    assert (m.n_decided, m.n_abstained) == (62, 2)  # h36 abstain, h39 malformed
+    assert (m.n_agree, m.agreement) == (57, 57 / 62)
+    # The dangerous direction: three designed leaks on the subtlest shapes,
+    # out of 44 decided gold-not-supported items (45 minus the h36 abstain).
+    assert (m.reference_fails_decided, m.false_pass) == (44, 3)
+    assert m.false_pass_rate == 3 / 44
+    # The safe direction: two designed strict-judge refusals of 18 decided.
+    assert (m.reference_passes_decided, m.false_fail) == (18, 2)
+    assert m.false_fail_rate == 2 / 18
+    assert (m.unstated_count, m.unstated_correct) == (1, 1)  # h08
+
+    gold = {i.item_id: i.gold for i in items}
+    false_passes = sorted(
+        r.item_id for r in rows
+        if gold[r.item_id] == GOLD_NOT_SUPPORTED and r.judged == Verdict.PASS
+    )
+    false_fails = sorted(
+        r.item_id for r in rows
+        if gold[r.item_id] == GOLD_SUPPORTED and r.judged == Verdict.FAIL
+    )
+    assert false_passes == ["h10", "h41", "h62"]
+    assert false_fails == ["h15", "h64"]
+
+
 def test_admissions_arithmetic_is_exact_against_gold():
     items = build_grounding_items()
     judge = GroundingVerifier(ScriptedGroundingJudgeProvider(items, SCRIPTED_REPLIES))
