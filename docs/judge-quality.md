@@ -316,6 +316,111 @@ readiness; or weakening, let alone dropping, the HARD backstop. In this
 domain the backstop caught what both judges are for — that is why these
 numbers could be measured at all.
 
+## Live grounding admissions — grounding-v1 (both arms), 2026-07-08
+
+**One-line honest summary: zero false-PASS on both arms across all 26
+grounding traps — the judges did not leak on grounding-v1 — but with both
+arms perfect on the dangerous direction the set has not yet been shown to
+discriminate (the SQL-v1 / live-v1 pattern), so the number is directional;
+and either way a clean soft verdict stays advisory: the gate blocks
+soft-only authority by construction.**
+
+Provenance: dispatched via the `judge-eval-live` workflow on `main` with
+`item_set=grounding-v1`; both arms completed. Item set `grounding-v1`
+(44 gold-labeled items; 18 supported / 26 not-supported traps across ten
+families). The reference here is the **curated gold label, not an executed
+program** — the domain's defining difference (see `docs/domains-grounding.md`);
+nothing was sandbox-verified because nothing is executable. The actor and the
+independent judge were genuinely distinct open-weight models **from different
+families**, named here only as `actor-model` and `judge-model-A` (the mapping
+lives in the operator's dispatch inputs, not in this repo). Approximate cost:
+~88 judge calls across both arms.
+
+**Run A — correlated (judge shares the actor's model, `actor-model`):**
+
+| metric | value |
+|---|---|
+| judge decided / abstained | 44 / 0 |
+| agreement (of decided) | 44/44 = 100% |
+| false-PASS (judge SUPPORTED where gold NOT-SUPPORTED) | 0/26 = 0.0% |
+| false-FAIL (judge NOT-SUPPORTED where gold SUPPORTED) | 0/18 = 0.0% |
+
+**Run B — independent (distinct-family judge, `judge-model-A`):**
+
+| metric | value |
+|---|---|
+| judge decided / abstained | 44 / 0 |
+| agreement (of decided) | 41/44 = 93.2% |
+| false-PASS (judge SUPPORTED where gold NOT-SUPPORTED) | 0/26 = 0.0% |
+| false-FAIL (judge NOT-SUPPORTED where gold SUPPORTED) | 3/18 = 16.7% |
+
+**False-PASS delta: Run A 0.0% vs Run B 0.0% — no delta; both arms were
+clean on the dangerous direction.**
+
+Per-trap-category: with zero false-PASSes overall and zero abstains, **every
+trap family was fully caught by both arms** — number-drift (4), swapped-entity
+(4), over-generalization (3), source-silent (3), unstated-causation (3),
+wrong-fact (3), negation-flip (2), temporal-overreach (2), aggregation-error
+(1), hedge-to-assertion (1). Run B's three false-FAILs all fell on supported
+claims in the `paraphrase`/`stated` categories (the two-fact `combination`
+items all passed on both arms).
+
+#### Interpretation
+
+*The finding.* **0% false-PASS on both arms** on the grounding-v1 traps: the
+soft grounding judge did not leak on these faithfulness cases — not the
+correlated configuration, not the independent one. Against the pre-committed
+review bands from the grounding change (≤2% grant-with-backstop / ~5%
+advisory / >5% defer), this lands in the **grant-with-backstop** band — where
+"backstop" in this domain is not a policy knob but the structure itself: the
+human review that was already mandatory stays mandatory.
+
+*The ceiling caveat — read it with the finding, not after it.* Both arms
+scoring perfectly on the dangerous direction is exactly what a
+**non-discriminating set** looks like: SQL-v1's first reliability run and the
+live-v1 judge eval showed the same flattering ceiling before harder items
+were built. So "0% false-PASS" here is **directional** — *these judges did
+not leak on these 44 items* — and not a settled domain-quality claim. The
+statistics say the same thing: 0/26 bounds the true trap false-PASS rate
+below only ~11.5% at 95% confidence (rule of three), the bound
+`docs/domains-grounding.md` committed to **before** the run. A harder
+grounding set (grounding-v2: subtler traps, longer sources, multi-claim
+composites) is required before this number is load-bearing. Note also what a
+ceiling costs us: with both arms at zero, this run carries **no evidence
+either way about a correlated-grader blind spot in grounding** — the set
+cannot separate the arms it does not stress.
+
+*The error-profile note.* The independent judge was **stricter**: 16.7%
+false-FAIL (three supported claims rejected) against the correlated arm's
+0%, at lower agreement (93.2% vs 100%). That is the same safety-favorable
+profile the code domain measured on live-v2 — error mass on the over-reject
+side (good claims get a second look) rather than the pass-bad side. In a
+domain whose only backstop is a human, a strict advisor is the right kind of
+wrong.
+
+*The structural point (the thesis).* Even at 0.0% false-PASS on both arms,
+the grounding verdict is **SOFT and advisory, and the gate blocks it from
+autonomous authority by construction** — a good number does not and cannot
+promote a soft verdict. The harness itself prints this under every report,
+and it is worth recording verbatim:
+
+> Gold labels are a curated human reference — not executable truth. This
+> measurement bounds the judge's advisory weight; it does not and cannot
+> grant authority: soft-only judgments remain non-authoritative and the gate
+> blocks them regardless of these numbers.
+
+The measurement informs how much *advisory* weight the judge's flags and
+triage ordering deserve; it never unlocks authority where truth is not
+executable. Changing that would take a new named invariant in `spec/`, not a
+clean dispatch.
+
+*Load-bearing-ness.* N=44, a single run per arm, one model pair, one item
+set. This validates the grounding measurement pipeline end to end on live
+models and gives a directional admissions read; it is **not** domain
+certification, and it does not make "grounding is solved" a supportable
+sentence — a possibly-easy set reporting 0% is reported here as exactly
+that.
+
 ## Caveats
 
 * The scripted-reference set is ten small, single-function tasks: big enough
