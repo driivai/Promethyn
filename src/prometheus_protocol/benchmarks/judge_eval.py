@@ -476,11 +476,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument(
         "--item-set",
-        choices=("live-v1", "live-v2", "grounding-v1"),
+        choices=("live-v1", "live-v2", "grounding-v1", "grounding-v2"),
         default="live-v2",
         help="which committed item set a --live run evaluates (for the code "
         "sets, ignored in the offline scripted mode, which always uses its "
-        "ten-item reference set); grounding-v1 delegates to the grounding "
+        "ten-item reference set); the grounding sets delegate to the grounding "
         "admissions harness in both modes",
     )
     args = parser.parse_args(argv)
@@ -488,10 +488,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     # The grounding domain has no HARD reference — its gold labels are the
     # reference — so its admissions harness owns the run end to end. Selecting
     # it here keeps one workflow entry point for every live measurement.
-    if args.item_set == "grounding-v1":
+    if args.item_set in ("grounding-v1", "grounding-v2"):
         from prometheus_protocol.benchmarks import grounding_eval
 
-        return grounding_eval.main(["--live"] if args.live else [])
+        forwarded = ["--item-set", args.item_set]
+        if args.live:
+            forwarded.append("--live")
+        return grounding_eval.main(forwarded)
 
     # The HARD reference executes candidates under the mandatory isolating
     # sandbox. The memory cap is disabled for determinism across hosts; the

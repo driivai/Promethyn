@@ -163,6 +163,88 @@ SCRIPTED_REPLIES: dict[str, str] = {
 }
 
 
+#: Scripted replies for the grounding-v2 offline reference run. Same fixture
+#: discipline as v1: correct verdicts everywhere EXCEPT designed deviations,
+#: chosen so every counter is exercised on the harder set:
+#:   h10, h41, h62 -> false-PASS (a quantifier drift, the flagship unstated
+#:                    inference, and a causal adjacency — the trap shapes a
+#:                    real judge is most likely to leak on)
+#:   h15, h64      -> false-FAIL at low/mid confidence (arithmetic-entailed
+#:                    supported claims a strict judge refuses)
+#:   h36           -> explicit ABSTAIN (on a gold not-supported item)
+#:   h39           -> malformed reply (parses to ABSTAIN; gold supported)
+#:   h08           -> correct verdict with NO stated confidence
+#: Expected fold over the 64 items: decided 62, abstained 2, agreement 57/62,
+#: false-PASS 3/44 (45 gold-not-supported minus the h36 abstain), false-FAIL
+#: 2/18 (19 gold-supported minus the h39 abstain), unstated 1 (correct).
+SCRIPTED_REPLIES_V2: dict[str, str] = {
+    "h01": "NOT-SUPPORTED 0.85",
+    "h02": "NOT-SUPPORTED 0.7",
+    "h03": "NOT-SUPPORTED 0.8",
+    "h04": "NOT-SUPPORTED 0.75",
+    "h05": "NOT-SUPPORTED 0.8",
+    "h06": "NOT-SUPPORTED 0.95",
+    "h07": "SUPPORTED 0.9",
+    "h08": "SUPPORTED",
+    "h09": "NOT-SUPPORTED 0.65",
+    "h10": "SUPPORTED 0.75",       # false-PASS: quantifier drift slips by
+    "h11": "NOT-SUPPORTED 0.7",
+    "h12": "NOT-SUPPORTED 0.9",
+    "h13": "NOT-SUPPORTED 0.75",
+    "h14": "NOT-SUPPORTED 0.85",
+    "h15": "NOT-SUPPORTED 0.4",    # false-FAIL: refuses the arithmetic
+    "h16": "SUPPORTED 0.95",
+    "h17": "NOT-SUPPORTED 0.7",
+    "h18": "NOT-SUPPORTED 0.8",
+    "h19": "NOT-SUPPORTED 0.9",
+    "h20": "NOT-SUPPORTED 0.6",
+    "h21": "NOT-SUPPORTED 0.8",
+    "h22": "SUPPORTED 0.9",
+    "h23": "SUPPORTED 0.85",
+    "h24": "SUPPORTED 0.95",
+    "h25": "NOT-SUPPORTED 0.7",
+    "h26": "NOT-SUPPORTED 0.75",
+    "h27": "NOT-SUPPORTED 0.85",
+    "h28": "NOT-SUPPORTED 0.8",
+    "h29": "NOT-SUPPORTED 0.65",
+    "h30": "SUPPORTED 0.9",
+    "h31": "SUPPORTED 0.7",
+    "h32": "SUPPORTED 0.95",
+    "h33": "NOT-SUPPORTED 0.8",
+    "h34": "NOT-SUPPORTED 0.75",
+    "h35": "NOT-SUPPORTED 0.9",
+    "h36": "ABSTAIN",              # explicit no-opinion
+    "h37": "NOT-SUPPORTED 0.9",
+    "h38": "SUPPORTED 0.9",
+    "h39": "It reads as supported to me.",  # malformed -> parser ABSTAIN
+    "h40": "SUPPORTED 0.85",
+    "h41": "SUPPORTED 0.85",       # false-PASS: the flagship unstated inference
+    "h42": "NOT-SUPPORTED 0.55",
+    "h43": "NOT-SUPPORTED 0.8",
+    "h44": "NOT-SUPPORTED 0.75",
+    "h45": "NOT-SUPPORTED 0.7",
+    "h46": "NOT-SUPPORTED 0.95",
+    "h47": "SUPPORTED 0.85",
+    "h48": "SUPPORTED 0.95",
+    "h49": "NOT-SUPPORTED 0.75",
+    "h50": "NOT-SUPPORTED 0.85",
+    "h51": "NOT-SUPPORTED 0.7",
+    "h52": "NOT-SUPPORTED 0.75",
+    "h53": "NOT-SUPPORTED 0.95",
+    "h54": "NOT-SUPPORTED 0.65",
+    "h55": "SUPPORTED 0.95",
+    "h56": "SUPPORTED 0.75",
+    "h57": "NOT-SUPPORTED 0.85",
+    "h58": "NOT-SUPPORTED 0.8",
+    "h59": "NOT-SUPPORTED 0.9",
+    "h60": "NOT-SUPPORTED 0.75",
+    "h61": "NOT-SUPPORTED 0.7",
+    "h62": "SUPPORTED 0.6",        # false-PASS: causal adjacency tempts
+    "h63": "SUPPORTED 0.9",
+    "h64": "NOT-SUPPORTED 0.55",   # false-FAIL: refuses the arithmetic
+}
+
+
 def run_grounding_eval(
     items: Sequence[GroundingEvalItem], *, judge: Verifier
 ) -> tuple[JudgedRow, ...]:
@@ -201,6 +283,7 @@ def render_grounding_report(
     *,
     judge_model: str,
     mode: str,
+    item_set_version: str = GROUNDING_ITEM_SET_VERSION,
 ) -> str:
     m = compute_metrics(rows)
     by_id = {item.item_id: item for item in items}
@@ -208,7 +291,7 @@ def render_grounding_report(
         f"# Grounding admissions test ({mode})",
         "",
         f"judge model : {judge_model}",
-        f"item set    : {GROUNDING_ITEM_SET_VERSION}",
+        f"item set    : {item_set_version}",
         f"items       : {m.n_items}",
         f"with gold reference : {m.n_reference}",
         f"judge decided : {m.n_decided}  |  judge abstained : {m.n_abstained}",
@@ -290,9 +373,29 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="judge via the configured provider (PROM_PROVIDER=remote, "
         "PROM_JUDGE_MODEL, ...) instead of the offline scripted reference",
     )
+    parser.add_argument(
+        "--item-set",
+        choices=("grounding-v1", "grounding-v2"),
+        default="grounding-v1",
+        help="which committed gold-labeled set to measure against "
+        "(grounding-v2 is the harder, discriminating set)",
+    )
     args = parser.parse_args(argv)
 
-    items = build_grounding_items()
+    # Set selection is data-only: the same verifier, the same arithmetic, the
+    # same report over a different (items, version, scripted-replies) triple.
+    if args.item_set == "grounding-v2":
+        from prometheus_protocol.benchmarks.grounding_items_v2 import (
+            GROUNDING_ITEM_SET_VERSION_V2 as item_set_version,
+            build_grounding_items_v2 as build_items,
+        )
+        scripted_replies = SCRIPTED_REPLIES_V2
+    else:
+        item_set_version = GROUNDING_ITEM_SET_VERSION
+        build_items = build_grounding_items
+        scripted_replies = SCRIPTED_REPLIES
+
+    items = build_items()
     if args.live:
         from prometheus_protocol.core.config import Config
         from prometheus_protocol.runtime.factory import build_judge_provider
@@ -302,14 +405,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         judge_model = getattr(provider, "model", "") or "unknown"
         mode = "live provider"
     else:
-        provider = ScriptedGroundingJudgeProvider(items, SCRIPTED_REPLIES)
+        provider = ScriptedGroundingJudgeProvider(items, scripted_replies)
         judge_model = provider.model
         mode = "offline scripted reference"
 
     judge = GroundingVerifier(provider)
     rows = run_grounding_eval(items, judge=judge)
     print(
-        render_grounding_report(rows, items, judge_model=judge_model, mode=mode),
+        render_grounding_report(
+            rows, items, judge_model=judge_model, mode=mode,
+            item_set_version=item_set_version,
+        ),
         end="",
     )
     return 0
