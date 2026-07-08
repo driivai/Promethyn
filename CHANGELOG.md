@@ -8,6 +8,25 @@ in `spec/invariants.md` is a major version bump.
 ## [Unreleased]
 
 ### Added
+- **grounding-v2: the harder, discriminating grounding item set.** The first
+  live grounding run ceilinged (0/26 false-PASS on both arms — directional,
+  not load-bearing, exactly the sql-v1 / live-v1 pattern), so
+  `benchmarks/grounding_items_v2.py` adds 64 gold-labeled items over eight
+  new sources: 45 not-supported claims engineered to be *nearly* right
+  (quantifier-drift, scope-creep, unstated-inference, wrong-attribution,
+  partial-support, near-miss-aggregation, temporal-near-miss,
+  hedge-stripping, causation-from-correlation, plus a few easy anchors)
+  against 19 supported controls including arithmetic-entailed
+  `entailed-subtle` items that price in blanket strictness. Every item
+  carries its gold rationale, and the whole set passed an adversarial
+  label-review pass (each trap independently attacked with "could a careful
+  reader legitimately argue the opposite?"); four items where reviewers
+  registered genuine tension were rewritten before commit. The admissions
+  harness gains data-only set selection (`--item-set grounding-v2`; default
+  grounding-v1 unchanged; same verifier, same arithmetic), `judge_eval`
+  forwards the new id, and the live workflow's `item_set` dropdown offers
+  `grounding-v2`. Offline scripted reference on the new set: decided 62,
+  abstained 2, false-PASS 3/44, false-FAIL 2/18 — all pinned by conformance.
 - **The grounding domain: the first step past executable truth.**
   `GroundingVerifier` (`verifier/grounding.py`) judges whether a candidate
   claim is supported by a provided source — `Tier.SOFT` by construction (it

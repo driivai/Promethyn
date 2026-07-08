@@ -76,16 +76,63 @@ with the per-category tables locating each designed deviation exactly
 false-FAIL in `paraphrase`; conformance pins all of these counts).
 
 **Live numbers are an operator dispatch**, not a build-environment spend.
-The `judge-eval-live` workflow accepts `item_set=grounding-v1` and runs the
-same two arms as the code measurements — Run A with the actor-family judge
-(the correlated, self-grading configuration) and Run B with an
-independent-family judge:
+The `judge-eval-live` workflow accepts the grounding sets in its `item_set`
+dropdown and runs the same two arms as the code measurements — Run A with
+the actor-family judge (the correlated, self-grading configuration) and
+Run B with an independent-family judge:
 
 ```
 Actions -> judge-eval-live -> Run workflow
   actor_model: <actor model id>      judge_model: <independent judge id>
-  item_set:    grounding-v1
+  item_set:    grounding-v2   (or grounding-v1)
 ```
+
+## grounding-v2: the harder set (breaking the v1 ceiling)
+
+The first live run answered with a ceiling: **both** arms scored 0/26
+false-PASS on grounding-v1 — every trap caught — which cannot separate
+judge quality from set easiness (the sql-v1 / live-v1 pattern). Per the
+recorded interpretation, that 0% is directional, not load-bearing.
+`grounding-v2 (64 items)` (`benchmarks/grounding_items_v2.py`) exists to
+make the next number mean something: 45 not-supported claims (a large
+false-PASS denominator) engineered to be *nearly* right, against 19
+supported controls that keep false-FAIL priced (including
+`entailed-subtle` items whose support requires arithmetic or careful
+reading, so a judge cannot protect itself by rejecting everything for
+free).
+
+The subtle trap families, each the mistake a fluent summarizer actually
+makes: **quantifier-drift** (some/often → most/usually),
+**scope-creep** (a stated subset silently widened), **unstated-inference**
+(the conclusion every reader draws and the source never states — the
+hardest family), **wrong-attribution** (the right fact on the wrong actor,
+both plausible), **partial-support** (~80% grounded plus one unstated
+qualifier), **near-miss-aggregation** (a derived quantity slightly wrong —
+only arithmetic catches it), **temporal-near-miss** (wrong only against
+the source's own time frame, e.g. "since March 2021" → "over five years"
+with no document date), **hedge-stripping** (a hedged possibility stated a
+shade too confidently), and **causation-from-correlation** (adjacency or
+credited belief asserted as cause). A handful of deliberately easy
+`easy-control` traps anchor the scale.
+
+**Label integrity is the measurement's foundation** in a domain whose
+reference is human: every v2 item carries its gold rationale in the
+committed file, and the whole set went through an **adversarial
+label-review pass** — each trap and each subtle-supported item was
+independently attacked with "could a reasonable, careful reader
+legitimately argue the opposite label?". Items where reviewers registered
+genuine tension were rewritten before commit (the review findings are in
+the change description); an ambiguous faithfulness item is worse than an
+easy one, because a judge error and a label error become
+indistinguishable. The residual limit is unchanged and per-item explicit:
+these labels are reviewable human judgment, shipped as diffs.
+
+What the next live dispatch (`item_set=grounding-v2`, both arms) can show:
+a judge that STILL holds ~0% false-PASS on these earns a trustworthy
+"genuinely good at grounding on tested shapes"; a judge that leaks shows
+its real grounding false-PASS rate. Either is a result; v1's ceiling was
+not. The structural rule is unchanged either way — soft verdicts remain
+advisory and gated regardless of any number.
 
 or locally:
 `PROM_PROVIDER=remote PROM_API_BASE=... PROM_API_KEY=... PROM_JUDGE_MODEL=...
