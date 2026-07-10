@@ -421,6 +421,109 @@ certification, and it does not make "grounding is solved" a supportable
 sentence — a possibly-easy set reporting 0% is reported here as exactly
 that.
 
+## Live grounding admissions — grounding-v2 (both arms), 2026-07-09
+
+**One-line honest summary: on the harder grounding-v2 traps the ceiling
+broke — the correlated judge leaked 11.1% false-PASS while the
+independent-family judge leaked zero in this run — replicating the
+decorrelation signal in a non-executable-truth domain, in a safety-favorable
+direction, but on small denominators (5/45 vs 0/43) that fix the direction,
+not a precise effect size; and either way the verdict stays SOFT and
+gated.**
+
+Provenance: dispatched via the `judge-eval-live` workflow on `main` with
+`item_set=grounding-v2`; both arms completed. Item set `grounding-v2`
+(64 gold-labeled items; 19 supported / 45 not-supported traps across the nine
+subtle families plus easy anchors — the harder set built after grounding-v1
+ceilinged). The reference is the **curated gold label, not an executed
+program** (see `docs/domains-grounding.md`); nothing was sandbox-verified
+because nothing here is executable. The actor and the independent judge were
+genuinely distinct open-weight models **from different families**, named here
+only as `actor-model` and `judge-model-A` (the mapping lives in the
+operator's dispatch inputs, not this repo). Approximate cost: ~126 judge
+calls across both arms.
+
+**Run A — correlated (judge shares the actor's model, `actor-model`):**
+
+| metric | value |
+|---|---|
+| judge decided / abstained | 64 / 0 |
+| agreement (of decided) | 58/64 = 90.6% |
+| false-PASS (judge SUPPORTED where gold NOT-SUPPORTED) | 5/45 = 11.1% |
+| false-FAIL (judge NOT-SUPPORTED where gold SUPPORTED) | 1/19 = 5.3% |
+
+**Run B — independent (distinct-family judge, `judge-model-A`):**
+
+| metric | value |
+|---|---|
+| judge decided / abstained | 62 / 2 |
+| agreement (of decided) | 62/62 = 100% |
+| false-PASS (judge SUPPORTED where gold NOT-SUPPORTED) | 0/43 = 0.0% |
+| false-FAIL (judge NOT-SUPPORTED where gold SUPPORTED) | 0/19 = 0.0% |
+
+**False-PASS delta: Run A 11.1% vs Run B 0.0% (in this run).**
+
+Per-trap-category: Run A's five false-PASSes each landed on a *different*
+subtle family — **near-miss-aggregation, quantifier-drift, scope-creep,
+unstated-inference, wrong-attribution** (one each) — the categories that
+require doing the arithmetic or resisting the reading a fluent summarizer
+supplies. None landed on the `easy-control` anchors. Run B leaked on none of
+them, and its two abstains reduced its trap denominator to 43.
+
+#### Interpretation
+
+*The finding.* On the harder set the correlated judge leaked **11.1%
+false-PASS (5/45)** while the independent-family judge leaked **0% (0/43) in
+this run** — the decorrelation signal the code domain saw on live-v2,
+**replicated in a non-executable-truth domain**. This overturns the
+grounding-v1 ceiling (both arms 0/26, which could not tell judge quality from
+set easiness): grounding-v2 discriminated, exactly as it was built to. The
+self-grading blind spot is now visible where v1 hid it.
+
+*The error-profile shift.* Independence traded false-PASS for stricter
+behavior, the same safety-favorable profile seen on code: the correlated
+judge's leaks fell on the **subtlest categories** (inference, aggregation,
+quantifier, scope, attribution) — precisely where a model grading its own
+family's output is expected to be blind — while the independent judge caught
+them all and paid its price on the safe side (its two abstains, not a
+false-PASS). A false-PASS lets an ungrounded claim through (the dangerous
+error); the independent arm made none here.
+
+*The caveats — read them with the finding, not after it.* **Small N.** Run A's
+5/45 and Run B's 0/43 are small denominators: a one-item swing moves Run A's
+rate ~2 points, and **0/43 is consistent with a true false-PASS rate up to
+~7% at 95% confidence** (rule of three) — so Run B's zero is "**zero in this
+run**," not zero in general. **Single run per arm, one model pair, one item
+set.** The direction (correlated leaks, independent does not; error mass on
+the safe side) is real and safety-favorable; the *magnitude* is not settled —
+"eliminates" or "halves" would be overclaims this data cannot support. Run B
+abstained on 2 items (mild reasoning-format parse loss at harder items), so
+its false-PASS denominator is 43, not 45.
+
+*The structural point (the thesis).* Even at 11.1% correlated / 0% independent,
+the grounding verdict stays **SOFT and advisory, and the gate blocks it from
+autonomous authority by construction** — the measurement sets advisory weight,
+it never grants authority. The harness prints this under every report, and it
+is worth recording verbatim:
+
+> Gold labels are a curated human reference — not executable truth. This
+> measurement bounds the judge's advisory weight; it does not and cannot
+> grant authority: soft-only judgments remain non-authoritative and the gate
+> blocks them regardless of these numbers.
+
+What the numbers change is *how much advisory weight* the correlated
+configuration deserves (less — it demonstrably leaks on the subtle traps) and
+which configuration to prefer for triage (the independent family); what they
+do not and cannot change is whether a soft verdict can act on its own. That
+would take a new named invariant in `spec/`, not a clean dispatch.
+
+*Load-bearing-ness.* N=64, a single run per arm, one model pair, item set
+grounding-v2. This is **directional frontier evidence** — the first live sign
+of a correlated-grader blind spot in a domain without executable truth, in
+the safety-favorable direction — **not** domain certification and not a
+precise effect size. A repeat run and further item-set growth are what would
+turn the direction into a magnitude.
+
 ## Caveats
 
 * The scripted-reference set is ten small, single-function tasks: big enough
