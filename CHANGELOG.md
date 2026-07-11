@@ -8,6 +8,33 @@ in `spec/invariants.md` is a major version bump.
 ## [Unreleased]
 
 ### Added
+- **Confidence composition, measured (not invented).** The open problem left by
+  the orchestration skeleton — combining per-step confidences into a sound
+  chain-level number — is now attacked *empirically*. A new benchmark
+  (`benchmarks/chain_items.py`, `benchmarks/chain_eval.py`) builds 42 multi-step
+  chains whose final output is HARD-verified by executing an assembled SQL query
+  through the real `SqlVerifier` (ground truth is executed, never labelled;
+  compounding and recovery are mechanical). Five candidate composition rules
+  (`min`, `product`, `mean`, `tier_weighted`, `weakest_link_length`) ship as
+  pure, tested **hypotheses** in `orchestration/composition.py`, and the harness
+  measures each rule's calibration table, false-confidence rate (scored-high-but-
+  actually-wrong) swept over thresholds, discrimination, and degradation with
+  chain length. **Measured finding:** no rule is trustworthy enough to bear a
+  halt decision — even with calibrated per-step inputs and strict compounding
+  the safest rule (`product`) still mislabels ~1-in-13 "high-confidence" chains
+  as safe when they are wrong, `mean` is dangerous at every threshold (it averages
+  the weak link away), the rules that reach 0% false-confidence do so only by
+  going nearly silent, and false-confidence rises with chain length — all on 8
+  incorrect chains, so directional not settled. So the runtime's `min()`
+  placeholder **stays unchanged** (it was not licensed for replacement; it is
+  tied-best-calibrated and never over-states trust), the composed number is a
+  human summary that may only make halting *more* conservative, and it is
+  structurally unable to authorize — the composition module holds no gate/executor
+  capability, and a high composed confidence provably cannot execute a
+  non-authoritative action (the gate still decides — tested). The calibration
+  arithmetic is fixture-verified before it is trusted. **No Hearth change** and
+  **no orchestration-skeleton change** — both are byte-identical to main
+  (conformance-tested); this sprint only ADDS. See `docs/composition-study.md`.
 - **Governed multi-agent orchestration (skeleton).** A new `orchestration/`
   module generalises the *proposer* side into a DAG of agent steps while the
   Hearth stays singular: every agent's every action routes through the
