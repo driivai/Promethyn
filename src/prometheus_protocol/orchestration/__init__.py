@@ -7,12 +7,17 @@ messages are tier-tagged so errors cannot silently compound. The orchestrator
 has no authority to execute — its only door to action is a submit-only
 :class:`ActionGateway` that always ends at the gate.
 
-See ``docs/orchestration.md`` for the layer, the invariants it upholds, and the
-one thing it deliberately does NOT solve (principled confidence composition).
+See ``docs/orchestration.md`` for the layer and the invariants it upholds. The
+one thing it deliberately does NOT solve — principled confidence composition
+across dependent steps — is now *measured* rather than guessed: several candidate
+rules live in :mod:`~prometheus_protocol.orchestration.composition` as tested
+hypotheses, and ``docs/composition-study.md`` records what the measurement
+licenses (and, so far, does not).
 """
 
 from __future__ import annotations
 
+from prometheus_protocol.orchestration.composition import RULES
 from prometheus_protocol.orchestration.gateway import ActionGateway, SubmitFn
 from prometheus_protocol.orchestration.messages import AgentMessage, content_hash
 from prometheus_protocol.orchestration.runtime import (
@@ -45,4 +50,5 @@ __all__ = [
     "WorkflowRun",
     "StepRecord",
     "WorkflowLedgerPort",
+    "RULES",
 ]
