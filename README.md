@@ -5,224 +5,152 @@
   </picture>
 </p>
 
-<p align="center"><strong>A verifier-first runtime for reversible, self-improving AI systems.</strong></p>
+<p align="center"><strong>A verifier-first runtime that makes a frozen AI model safe to act: it verifies each action, halts the ones it is unsure about for a human, and records every decision.</strong></p>
 
 <p align="center">
-  <a href="docs/open-core-boundary.md">Open-core boundary</a> ·
-  <a href="#current-status">Status</a> ·
-  <a href="#the-core-idea">Core idea</a> ·
-  <a href="#the-hearth">The Hearth</a> ·
-  <a href="#contributing">Contributing</a>
+  <a href="#the-demo">Demo</a> ·
+  <a href="#the-measured-result">Measured result</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#status--honest">Status</a> ·
+  <a href="#getting-started">Getting started</a>
 </p>
 
 ---
 
-Promethyn is an open protocol and reference runtime for building AI systems that can improve over time without drifting into ungrounded certainty.
+Promethyn is not a model. It is the system around a model. A model, agent, or swarm may **propose** work; Promethyn decides what can be executed, what must be held for a human, what can be learned, and what must be blocked — and writes all of it to an audit ledger.
 
-It is not a model.
-It is the system around a model.
+## The problem
 
-A model, agent, or swarm may propose work. Promethyn decides what can be trusted, what can be executed, what can be learned, and what must be blocked, routed, or forgotten.
+AI agents are getting good at *acting* — using tools, changing files, running commands. The risk is not that a model is wrong sometimes; it is that a **confident wrong action executes before anyone checked it**. The common pattern is act-first, guard-later: generate, then bolt on a filter. Promethyn inverts it — verification and permission are the runtime, not an afterthought. Nothing reaches the world until a verifier has graded it and a gate has authorized it.
 
-> A self-improving system is only as safe as its ability to find out when it is wrong.
-> Promethyn treats verification as the master key.
+## The demo
 
-## Current status
+The most direct proof is a destructive task run **twice with the same frozen model** — once through Promethyn, once as a bare agent loop. The only difference is the runtime.
 
-Promethyn is pre-1.0 and under active development. Most of the open core is already built and on `main`. The project is a public, inspectable blueprint for a verifiable learning runtime — the goal is to make the safety boundary explicit, testable, and hard to bypass, not to hide it behind magic.
+The task: *delete the stale branches of a repository.* A deterministic fixture has ten candidate branches — eight fully merged into `main`, and two that look just as stale but carry commits `main` never received. Branch names carry no hint; the safe/unsafe split exists only in content.
 
-**One thing to know up front:** execution is deliberately **not yet live**. The executor is a no-op today. The system reasons about and grades proposed actions for real, but it does not act on the world yet. That ordering is intentional — Promethyn learns to judge before it is allowed to act, and live execution only turns on once it runs inside the sandbox with the gate routing low-confidence actions to a human.
+| | deleted | held for a human | data lost |
+|---|---|---|---|
+| **Promethyn** | 8 (proven lossless, in the sandbox) | 2 (routed to the operator, who denies them — both survive) | **0** |
+| **bare agent loop** | 10 | — | **2 branches of unmerged work destroyed** |
 
-**Built and on `main`:**
+Promethyn runs a real merge-check **inside the sandbox** as authoritative evidence, auto-approves only the eight it can prove are lossless, **halts the two it cannot** as pending actions for a human, and records every decision in the ledger. The bare loop — same model, same proposal — just executes the plan, and the unmerged work becomes unreachable. The bare loop is a fair baseline, not a strawman: the honest caveat (a maximally careful agent *could* avoid the loss) is stated in [`docs/demo-stale-branches.md`](docs/demo-stale-branches.md); the point is that Promethyn makes the guarantee **structural** rather than hoping the agent is careful.
 
-- Core type system and the typed proposer/judge wall
-- Verifier bank with calibrated trust ranking, wired into the runtime
-- A calibrated soft model-judge alongside the authoritative hard verifier
-- Permission gate and held-out firewall
-- Experience ledger and scoped memory
-- Skill registry (versioned, reversible)
-- Local runtime and CLI
-- Swarm proposer with provider-backed roles and a mandatory, non-removable skeptic
-- Sandbox isolation for untrusted candidate code — network-denied, filesystem-constrained, resource-bounded, and adversarially tested
-- A conformance suite for the safety invariants
+Reproduce it (needs the namespace isolation runtime — unprivileged user namespaces):
 
-**Deliberately not yet live:**
-
-- **Tool execution.** The executor is a no-op. Nothing reaches the world until execution runs inside the sandbox under gate approval, with low-confidence actions routed to a human.
-
-**Next:**
-
-- Live, sandboxed tool execution
-- Verifiers for domains beyond code
-- A hosted control plane (commercial)
-
-This repository answers one question: **how can an AI system earn competence over time without corrupting itself?**
-
-## The core idea
-
-Most agent systems follow a simple loop:
-
-```mermaid
-flowchart LR
-    A[task] --> B[model] --> C[answer / action]
+```
+python -m prometheus_protocol.tools.stale_branch_demo hero
+python -m prometheus_protocol.tools.stale_branch_demo baseline
 ```
 
-Promethyn uses a stricter one:
+*(A recorded walkthrough is coming; today the command above is the artifact, and it runs deterministically.)*
+
+## The measured result
+
+Promethyn's soft checks can be a model grading another model's answer. A known hazard: a model **grading its own family's output** shares its blind spots, so it waves through mistakes it would have made itself. We measured this on live models, and the effect is real and in the safety-favorable direction — reported here with its caveats, because the honesty is part of the result.
+
+- **Code domain (executable ground truth, 82 items):** a judge sharing the actor's model let **3.9% (2/51)** of the sandbox-failed answers through as passes; an **independent-family** judge let **0% (0/49)** through.
+- **Grounding domain — no automated ground truth (64 items, gold-labeled by hand):** the same pattern **replicated where nothing can be executed to check it** — the self-grading judge leaked **11.1% (5/45)**, the independent judge **0% (0/43) in that run**.
+
+Read these as **directional, not precise**: the denominators are small (~50 for code; 45 and 43 for grounding), each is a **single run per arm**, and a `0/43` is statistically consistent with a true rate up to ~7%. The independent judge is not simply "better" — it is *stricter*, trading a lower false-PASS rate for more false-FAILs (over-rejecting good answers), which in a safety setting is the error you want. Full numbers, both arms, and every caveat are in [`docs/judge-quality.md`](docs/judge-quality.md).
+
+The practical takeaway is modest and load-bearing: **don't let a model be the sole grader of its own family's work** — and Promethyn's design never does (a soft verdict is advisory and gated regardless of how confident it is; see below).
+
+## How it works
+
+One loop, with the trust boundary drawn in types:
 
 ```mermaid
 flowchart LR
-    T[task] --> P[proposer]
-    P --> V[verifier bank]
+    T[task] --> P[proposer<br/>model · agent · swarm]
+    P -->|proposal only — no verdict, no approval| V[verifier bank]
     V --> G[permission gate]
-    G --> X[execution]
-    X --> L[outcome ledger]
-    L --> PR[skill promotion]
-    PR --> R[reversible registry]
+    G -->|approved| X[sandboxed executor]
+    G -.->|low-confidence / high-risk| H[human]
+    X --> L[audit ledger]
+    L --> PR[earned, reversible<br/>skill promotion]
 ```
 
-The model does not get to decide what is true. The swarm does not get to decide what is true. Memory does not get to decide what is true.
+- **Verifiers come in two tiers.** A **HARD** verifier establishes ground truth by *executing* it — running a candidate's tests in the sandbox (code), or running its query against a fixture database and comparing result sets (SQL). A **SOFT** verifier (a model-judge — e.g. grounding: does this claim follow from this source?) only *advises*: it can never decide a verdict on its own, and its trustworthy weight is bounded by its **measured** error rate. Authority is a property of the tier, not something a verifier can assert.
+- **The gate authorizes or halts.** An authoritative pass above a risk-dependent confidence bar is approved; anything low-confidence, high-risk, or backed only by soft evidence is **routed to a human** — never rubber-stamped. In a domain with no HARD verifier, the human is the *only* path to action, by construction.
+- **Execution is real and fail-closed.** Approved actions run inside an isolating sandbox (network-denied, filesystem-constrained, resource-bounded); if isolation cannot start, the executor refuses rather than running unsandboxed. The action set is deliberately small: in-sandbox Python, plus one narrow external connector (delete a branch of a caller-pinned local git repo).
+- **The ledger is the audit and learning substrate.** Every proposal, verdict, gate decision, human override, and execution is written down and re-readable.
+- **Improvement is earned and reversible.** Only repeated, verified, scoped wins survive a **held-out firewall** (the forge never learns from the tasks it is scored against) to become a promoted skill — a versioned, deletable registry row, not an opaque weight update.
 
-Only the verifier bank can grade claims against evidence, and only the gate can authorize action.
+The trusted core that holds these rules — the verifier bank, the gate, the held-out firewall, the proposer/judge wall, the execution boundary, the ledger, the promotion rules — is called **the Hearth**: kept small, typed, and hard to bypass, with everything riskier (models, swarms, soft verifiers, tool proposals) contained around it.
 
-## Why Promethyn exists
+## Status — honest
 
-Modern AI systems are getting better at acting, remembering, planning, and using tools. That creates a new problem:
+This is an early, working project with real results, **not a finished product.** What is on `main` today is genuinely shipped; the honesty about what is *not* here is deliberate.
 
-| Capability         | Failure mode                                     |
-| ------------------ | ------------------------------------------------ |
-| Memory             | Bad lessons become persistent behavior           |
-| Agent autonomy     | Confident actions execute before being grounded  |
-| Multi-agent debate | Consensus gets mistaken for truth                |
-| Continual learning | The system improves on noise, not reality        |
-| Tool use           | Unverified assumptions become real-world actions |
-| Fine-tuning        | Bad updates become hard to inspect or reverse    |
+**Proven and on `main`:**
 
-Promethyn is built around the opposite principle: **improvement must be earned.** A system may propose, simulate, remember, and reason — but nothing becomes trusted skill until it survives verification, gating, outcome tracking, and promotion.
+- The full **propose → verify → gate → execute → learn** loop, end to end.
+- **Real sandboxed execution** with a human-in-the-loop halt for low-confidence and high-risk actions, and a fail-closed refusal when isolation is unavailable.
+- Three working domains: **code** (HARD, sandboxed tests), **SQL** (HARD, sandboxed result-equivalence — wired into the earned/reversible learn loop), and **grounding/faithfulness** (SOFT, hand-labeled — v1 and the harder, discriminating v2).
+- The **git-tool demo** above, and the **decorrelation measurement** above.
+- An **extension surface + conformance suite** so a third party can add a domain verifier without touching the Hearth (`python -m prometheus_protocol.conformance`; guide in [`docs/extending-promethyn.md`](docs/extending-promethyn.md)).
 
-## Architecture
+**Not done yet (and not implied to be):**
 
-```mermaid
-flowchart TD
-    T[Task Packet<br/>goal · context · constraints · risk]
-    P[Proposer side<br/>model · agent · swarm · tools]
-    T --> P
-    P -->|TestPlan only — no truth, no approval, no execution| VB
-
-    subgraph H [The Hearth · trusted core]
-        VB[Verifier Bank<br/>trust-ranked grading · sandboxed checks]
-        G[Permission Gate<br/>approve · edit · block · route]
-        PG[Promotion Gate<br/>held-out firewall]
-        VB --> G
-    end
-
-    G -->|approved actions only| X[Executor<br/>no-op today — execution not yet live]
-    X --> L[Experience Ledger<br/>actions · outcomes · overrides · audit]
-    L --> PG
-    PG --> R[Skill Registry<br/>versioned · scoped · reversible]
-
-    classDef trusted fill:#FBE9DD,stroke:#B23E12,color:#1C1B19;
-    class VB,G,PG trusted;
-```
-
-## The hard wall
-
-Promethyn enforces a proposer/judge boundary, by type, not by convention.
-
-The proposer side can produce: hypotheses, options, forecasts, critiques, proposed actions, and test plans.
-
-The proposer side **cannot** produce: truth, approval, execution authority, promoted skills, permanent memory, verifier judgments, or gate decisions.
-
-The first object allowed to assert grounded confidence is a verifier-bank judgment. The first object allowed to authorize execution is a gate decision.
-
-## What makes Promethyn different
-
-| Common pattern                        | Promethyn pattern                                       |
-| ------------------------------------- | ------------------------------------------------------- |
-| The model answers directly            | The model proposes; the runtime grades                  |
-| Agents debate until they agree        | Consensus produces testable candidates only             |
-| Memory is treated as context          | Memory is scoped, editable, and trust-ranked            |
-| Skills are hidden in weights          | Skills live in an inspectable registry                  |
-| Fine-tuning changes behavior opaquely | Skill promotion is versioned and reversible             |
-| Guardrails sit after generation       | Verification and permission are core runtime primitives |
-| Logs are for debugging                | The ledger is the audit and learning substrate          |
-
-## Simulation swarm
-
-Promethyn supports a reasoning swarm, but the swarm is only a proposer. A swarm may assemble task-specific roles — domain expert, user simulator, strategy planner, skeptic, policy reviewer, outcome forecaster, resource optimizer, evidence judge — to widen the proposal space and attach falsification checks. It cannot certify its own conclusions.
-
-```mermaid
-flowchart LR
-    S[swarm roles] --> PR[proposals]
-    PR --> D[debate layer]
-    D --> TP[TestPlan]
-    TP --> VB[verifier bank]
-    VB --> G[gate]
-    G --> X[executor]
-```
-
-The skeptic and policy reviewer are mandatory roles for high-impact tasks. They cannot be voted out by the swarm, and in the code domain the skeptic's falsification checks are executed for real by the hard verifier.
-
-## Verifiable learning
-
-Promethyn does not assume an action worked because it sounded good. It records what was attempted, what evidence existed before execution, what the verifier judged, what the gate allowed, what actually happened, whether a human overrode it, whether the outcome supported the forecast, and whether the pattern should become reusable skill.
-
-Only repeated, verified, scoped wins can become promoted skills. A bad lesson should be a deletable row, not permanent damage inside model weights.
-
-## The Hearth
-
-The trusted core of Promethyn is called the Hearth — the small, contained vessel that holds the fire safely.
-
-The Hearth contains: the verifier bank, the permission gate, the held-out firewall, the proposer/judge wall, the execution-authorization boundary, ledger commitments, and the promotion rules.
-
-Everything riskier sits around it, contained: models, swarms, soft verifiers, generated plans, memory candidates, and tool proposals.
-
-The Hearth is intentionally small, typed, inspectable, and difficult to bypass. The rule for every change is one question: *does this belong in the Hearth, or is it a contained module?* Keeping the trusted core small is what keeps it verifiable.
-
-## Open-core boundary
-
-Promethyn is open where trust is created and commercial where trust is operated.
-
-The open-source project owns: the protocol specification, core types, invariants, conformance tests, the local runtime, verifier interfaces, gate interfaces, the sandbox executor, scoped-memory interfaces, the skill-registry interface, the model-provider boundary, and the swarm proposer layer.
-
-Commercial products may provide: a hosted verifier bank, a managed audit ledger, a managed skill registry, enterprise dashboards, compliance packs, production connectors, private deployments, team workspaces, advanced analytics, conformant verifier distribution, and SLA support.
-
-The commercial product may operate and scale the protocol. It may not privately redefine it. See [`docs/open-core-boundary.md`](docs/open-core-boundary.md) for the full boundary, the conformance-mark policy, and the safety-core guarantees.
+- Domains beyond code, SQL, and grounding (customer ops, finance, research, personal/enterprise automation are *designed for*, not built).
+- Harder non-executable-truth domains beyond single-claim grounding (open-ended "is this good?" judgments).
+- Broad tool connectors and multi-step orchestration — the external action set is intentionally minimal today.
+- The live decorrelation numbers come from an **operator-dispatched** run against real models; the offline pipeline is deterministic, but the measurements are single runs on small sets, not a benchmark.
+- A hosted control plane (commercial; see the open-core boundary below).
 
 ## What Promethyn is useful for
 
-Promethyn is useful wherever work recurs and success is checkable. Today it ships a working verifier for the **software-engineering** domain — tests, builds, lint, and security checks, run inside the sandbox. The other domains below are what the protocol is **designed** to serve; each needs a domain-specific verifier that is not yet built.
+Promethyn fits wherever **work recurs and success is checkable**. It is *less* useful where no meaningful ground truth exists — and there it is built to route, ask, defer, or stay silent rather than fake a verifier and optimize against it.
 
-| Domain                | What Promethyn can verify                                    | Status                         |
-| --------------------- | ------------------------------------------------------------ | ------------------------------ |
-| Software engineering  | tests, builds, lint, security scans, review outcomes         | ✅ implemented today            |
-| Customer operations   | response quality, escalation decisions, task completion      | ◻ designed for — not yet built |
-| Finance workflows     | policy checks, document evidence, approval outcomes          | ◻ designed for — not yet built |
-| Research agents       | source quality, citation validity, prediction accuracy       | ◻ designed for — not yet built |
-| Personal agents       | user corrections, completed tasks, calendar actions          | ◻ designed for — not yet built |
-| Enterprise automation | tool results, human approvals, audit trails, rollback events | ◻ designed for — not yet built |
+| Domain | What it can verify | Status |
+|---|---|---|
+| Software engineering | tests, builds, lint, security scans (executed) | ✅ on `main` |
+| SQL / analytics | query result-equivalence against a fixture (executed) | ✅ on `main` |
+| Grounding / faithfulness | whether a claim is supported by a source (advisory, human-backstopped) | ✅ on `main` |
+| Customer ops · finance · research · automation | response quality, policy checks, source validity, approvals | ◻ designed for — not yet built |
 
-Promethyn is **less** useful where no meaningful ground truth exists. Where verification is impossible, Promethyn is built to route, ask, defer, or stay silent — rather than fake a verifier and optimize against it.
+## Getting started
+
+```bash
+pip install -e ".[dev]"          # install the runtime + dev tools
+
+python -m pytest -q              # run the suite (385 passed, 2 skipped — the skips are opt-in container tests)
+
+# the demo (needs the namespace isolation runtime):
+python -m prometheus_protocol.tools.stale_branch_demo hero
+python -m prometheus_protocol.tools.stale_branch_demo baseline
+
+# domain loops and the extension conformance suite:
+python -m prometheus_protocol.benchmarks.sql_loop_demo
+python -m prometheus_protocol.benchmarks.grounding_loop_demo
+python -m prometheus_protocol.conformance
+```
+
+The `prometheus-protocol` CLI is installed with the package. Deeper docs: the sandbox model ([`docs/sandbox.md`](docs/sandbox.md)), the domains ([`docs/domains-sql.md`](docs/domains-sql.md), [`docs/domains-grounding.md`](docs/domains-grounding.md)), the judge-quality measurements ([`docs/judge-quality.md`](docs/judge-quality.md)), and the extension contract ([`docs/extending-promethyn.md`](docs/extending-promethyn.md)).
+
+## The hard wall
+
+The proposer/judge boundary is enforced **by type, not by convention**. The proposer side can produce hypotheses, options, forecasts, critiques, proposed actions, and test plans. It **cannot** produce truth, approval, execution authority, promoted skills, or gate decisions. The first object allowed to assert grounded confidence is a verifier-bank judgment; the first object allowed to authorize execution is a gate decision; the executor accepts only an approved gate decision — passing it anything else is a type error.
+
+A reasoning **swarm** is supported, but it is only a proposer: it can widen the proposal space and attach falsification checks, and it carries mandatory, non-removable skeptic and policy-reviewer roles — but it cannot certify its own conclusions.
+
+## Open-core boundary
+
+Promethyn is open where trust is *created* and commercial where trust is *operated*. The open-source project owns the protocol, core types, invariants, conformance tests, the local runtime, the verifier/gate/sandbox/registry interfaces, and the swarm proposer layer. Commercial products may provide hosted and managed versions (verifier bank, audit ledger, skill registry, dashboards, connectors, SLA support) — they may operate the protocol but not privately redefine it. See [`docs/open-core-boundary.md`](docs/open-core-boundary.md).
 
 ## Non-goals
 
-Promethyn is not: a new base model, a wrapper around a single model provider, a prompt library, a chatbot UI, a replacement for human judgment in high-risk workflows, a system that treats model confidence as truth, or a system that treats swarm consensus as truth.
+Promethyn is not a base model, a wrapper around one provider, a prompt library, a chatbot UI, a replacement for human judgment in high-risk workflows, or a system that treats model confidence — or swarm consensus — as truth.
 
 ## License
 
-The open-source license for the public protocol, SDKs, local runtime, conformance tests, and reference implementations is the Apache License 2.0. Commercial hosted services, enterprise deployments, dashboards, production connectors, and managed infrastructure may be proprietary. See [`docs/open-core-boundary.md`](docs/open-core-boundary.md).
-
-The Python package installs as `prometheus_protocol`; the project and brand name is Promethyn.
+Apache-2.0. See [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE). The Python package installs as `prometheus_protocol`; the project and brand name is Promethyn.
 
 ## Contributing
 
-Promethyn welcomes contributions that strengthen the protocol, improve conformance, clarify safety boundaries, add verifiers, improve local runtime behavior, or make the system easier to inspect. Contributions go through the conformance and hygiene gates as a condition of acceptance.
-
-Contributions must preserve the central invariant:
+Contributions that strengthen the protocol, add verifiers, improve conformance, or make the system easier to inspect are welcome, and go through the conformance and hygiene gates. The central invariant every change must preserve:
 
 > The proposer may suggest. The verifier judges. The gate authorizes. The ledger remembers. The registry promotes only what was earned.
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`docs/open-core-boundary.md`](docs/open-core-boundary.md).
-
-## The principle
-
-Promethyn exists to make AI improvement earned, reversible, and inspectable.
