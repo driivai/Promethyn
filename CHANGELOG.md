@@ -8,6 +8,33 @@ in `spec/invariants.md` is a major version bump.
 ## [Unreleased]
 
 ### Added
+- **Governed multi-agent orchestration (skeleton).** A new `orchestration/`
+  module generalises the *proposer* side into a DAG of agent steps while the
+  Hearth stays singular: every agent's every action routes through the
+  existing verify → gate → human-hold → execute → ledger pipeline, and
+  inter-agent messages are tier-tagged so an upstream error cannot be
+  laundered into a downstream fact. The orchestrator has **no authority to
+  execute** — its whole vocabulary for touching the world is a submit-only
+  `ActionGateway.route_action` that always ends at the gate; `WorkflowRuntime`
+  holds no executor, gate, or `execute`/`approve` method (a soft-only claim
+  proposing an action is blocked by the gate — tested). The message contract
+  is structural both ways: an agent returns an `AgentProposal` with no tier or
+  confidence field, and an `AgentMessage` cannot exist untiered — the runtime
+  builds it from the verifier bank's judgment of an independent grader's
+  evidence, never from the proposing agent. The ledger is **extended
+  additively** (a `workflow_steps` table + two methods; existing rows and
+  queries untouched) so a multi-step run is auditable per step
+  (`workflow_id`/`agent_id`/tier/outcome) in one query. `python -m
+  prometheus_protocol.orchestration.demo` runs three agents end to end (a soft
+  plan, a hard implement that executes, a high-risk export routed to a human
+  who approves it through the controller). **No Hearth change** — the bank,
+  both gates, executor, controller, pending, forge, and core models/interfaces
+  are byte-identical to main (conformance-tested). Deliberately out of scope
+  and isolated as follow-ups: principled confidence composition across
+  dependent steps (the runtime passes/records per-step confidence and reports
+  a labelled *minimum* placeholder, not a solution), the workflow-halt UX, and
+  a process boundary that would close the in-Python introspection caveat noted
+  in `docs/orchestration.md`.
 - **The verifier extension surface: a documented contract + a conformance
   suite.** The seam the three built-in domains (code, SQL, grounding) already
   share is now named, stabilised, and mechanically enforced, so a third party

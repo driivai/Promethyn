@@ -89,6 +89,28 @@ CREATE TABLE IF NOT EXISTS executions (
     -- rows written before the link existed.
     pending_id    INTEGER
 );
+
+-- Workflow attribution for the governed orchestration layer (additive; the
+-- single-proposer flow never writes here). One row per agent step in a
+-- multi-step run, so "show every step in this workflow, which agent, at what
+-- tier/confidence, what the gate decided, where a human was asked" is one
+-- query. The step's action, if any, is authorized through the SAME gate and
+-- recorded in `executions`; this table links to that hold by subject_id and
+-- pending_id. It records grading and routing outcomes — it authorizes nothing.
+CREATE TABLE IF NOT EXISTS workflow_steps (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    workflow_id  TEXT    NOT NULL,
+    step_id      TEXT    NOT NULL,
+    agent_id     TEXT    NOT NULL,
+    tier         TEXT    NOT NULL,   -- the tier the step's output was graded at
+    verdict      TEXT    NOT NULL,
+    confidence   REAL    NOT NULL,   -- this step's own graded confidence
+    proposed_action INTEGER NOT NULL, -- 1 if the step proposed an executable action
+    outcome      TEXT    NOT NULL,   -- approve / route / block / none (no action)
+    subject_id   TEXT    NOT NULL,   -- links to executions.subject_id, when an action
+    pending_id   INTEGER,            -- the human hold this step created, if routed
+    created_at   TEXT    NOT NULL
+);
 """
 
 # Terminal states a pending action can settle into. ``pending`` is the only
@@ -425,6 +447,72 @@ class SqliteLedger(Ledger):
             (pending_id,),
         ).fetchall()
         return [self._execution_row(row) for row in rows]
+
+    # -- workflow attribution (additive; orchestration layer) --------------
+
+    def record_workflow_step(
+        self,
+        *,
+        workflow_id: str,
+        step_id: str,
+        agent_id: str,
+        tier: str,
+        verdict: str,
+        confidence: float,
+        proposed_action: bool,
+        outcome: str,
+        subject_id: str,
+        pending_id: int | None,
+        created_at: str,
+    ) -> int:
+        """Record one agent step of a governed workflow. Authorizes nothing.
+
+        This is pure attribution: the step's grading (tier/verdict/confidence),
+        whether it proposed an action, and what the shared gate decided. Any
+        real execution is written by the executor into ``executions``; this row
+        links to it by ``subject_id``/``pending_id``.
+        """
+
+        cur = self._conn.execute(
+            """
+            INSERT INTO workflow_steps (
+                workflow_id, step_id, agent_id, tier, verdict, confidence,
+                proposed_action, outcome, subject_id, pending_id, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                workflow_id, step_id, agent_id, tier, verdict, float(confidence),
+                1 if proposed_action else 0, outcome, subject_id, pending_id,
+                created_at,
+            ),
+        )
+        self._conn.commit()
+        return int(cur.lastrowid)
+
+    def workflow_steps(self, workflow_id: str) -> list[dict]:
+        """Every recorded step of one workflow, in insertion order."""
+
+        rows = self._conn.execute(
+            "SELECT * FROM workflow_steps WHERE workflow_id = ? ORDER BY id",
+            (workflow_id,),
+        ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "workflow_id": row["workflow_id"],
+                "step_id": row["step_id"],
+                "agent_id": row["agent_id"],
+                "tier": row["tier"],
+                "verdict": row["verdict"],
+                "confidence": row["confidence"],
+                "proposed_action": bool(row["proposed_action"]),
+                "outcome": row["outcome"],
+                "subject_id": row["subject_id"],
+                "pending_id": row["pending_id"],
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
 
     # -- audit queries (read-only) -----------------------------------------
 
