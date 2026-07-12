@@ -26,12 +26,22 @@ cost.
 |---|---|---|---|
 | `baseline` | the plain independent judge (comparison point) | 1× | — |
 | `threshold` | accept a PASS only at stated confidence ≥ θ, else ABSTAIN | 1× | `--min-confidence` |
-| `ensemble` | N independent judges; **unanimity** to PASS, else ABSTAIN/FAIL | N× | `PROM_JUDGE_MODELS`, `--on-disagreement` |
+| `ensemble` **(independence positive control)** | N independent judges; **unanimity** to PASS | N× | `PROM_JUDGE_MODELS`, `--on-disagreement` |
 | `k-sample` | same judge k times; majority/unanimity to PASS | k× | `--k`, `--require`, `PROM_JUDGE_TEMPERATURE` |
 | `adversarial` | elicit the strongest case AGAINST, then re-decide | 2× | — |
 
 Cost is not free: a lever that halves false-PASS at 3× the model calls is a
 tradeoff, not a win. The driver prints the exact call count per run.
+
+**`ensemble` is not a calibration lever — it is the positive control.** Running
+two independent families (`PROM_JUDGE_MODELS=A,B`) with a unanimity rule is
+"buy a second independent judge," measured with extra steps. It belongs in the
+experiment as the thing the *real* levers must match, not as a fourth peer. The
+question the experiment actually asks is narrower and sharper: **can any lever
+applied to a self-grading judge recover the independent judge's false-PASS
+floor?** If yes, a single-model deployment can be made safe (a product). If no,
+there is no substitute for a second model family — a stronger, more quotable
+version of the result already in `docs/judge-quality.md`.
 
 ## How it is measured (the existing harness, unchanged)
 
@@ -55,54 +65,101 @@ with hand-computed expected verdicts/confidences
 before a single credit is spent. The offline driver mode is a deterministic
 **plumbing smoke** (a scripted judge), not a judge measurement.
 
-## The exact operator dispatch (spends credits — run outside the build env)
+## The exact operator dispatch (spends credits — DO NOT run before reading the verdict below)
 
-Set the provider once (neutral placeholders — the model-id mapping stays out of
-the repo; `<judge-model-A>` and `<judge-model-B>` must be **independent
-families** from `<actor-model>` and from each other):
-
-```
-export PROM_PROVIDER=remote
-export PROM_API_BASE=<endpoint>
-export PROM_API_KEY=<key>
-export PROM_MODEL=<actor-model>          # candidates' author (actor family)
-export PROM_JUDGE_MODEL=<judge-model-A>  # independent judge (already-proven baseline)
-```
-
-Run each lever on **both** hardest sets (swap `--item-set grounding-v2` ↔
-`--item-set live-v2`):
+Provider setup (neutral placeholders — the model-id mapping stays out of the
+repo; `<judge-model-A>` and `<judge-model-B>` are **independent families** from
+`<actor-model>` and from each other):
 
 ```
-# 0. baseline (the comparison point)               cost 1×  (64 / 82 calls)
-python -m prometheus_protocol.benchmarks.soft_calibration_eval --live \
-    --item-set grounding-v2 --lever baseline
+export PROM_PROVIDER=remote PROM_API_BASE=<endpoint> PROM_API_KEY=<key>
+export PROM_MODEL=<actor-model>
+```
 
-# 1. confidence threshold                          cost 1×  (64 / 82 calls)
-python -m prometheus_protocol.benchmarks.soft_calibration_eval --live \
-    --item-set grounding-v2 --lever threshold --min-confidence 0.8
-#   (repeat at --min-confidence 0.7 and 0.9 to trace the false-PASS/coverage curve)
+The self-grading (correlated) judge is the thing under test; the independent
+judge and the ensemble are the targets/controls. Per set (grounding-v2 n=64,
+live-v2 n=82), swap `--item-set` and run:
 
-# 2. ensemble of two independent judges            cost 2×  (128 / 164 calls)
-PROM_JUDGE_MODELS=<judge-model-A>,<judge-model-B> \
-python -m prometheus_protocol.benchmarks.soft_calibration_eval --live \
-    --item-set grounding-v2 --lever ensemble --on-disagreement abstain
+```
+# --- endpoints (both arms), persisting per-item records for the free threshold sweep ---
+# baseline correlated          1×  (64 / 82)
+PROM_JUDGE_MODEL=<actor-model>  python -m prometheus_protocol.benchmarks.soft_calibration_eval \
+    --live --item-set grounding-v2 --lever baseline --persist base.corr.grounding-v2.json
+# baseline independent         1×  (64 / 82)
+PROM_JUDGE_MODEL=<judge-model-A> python -m prometheus_protocol.benchmarks.soft_calibration_eval \
+    --live --item-set grounding-v2 --lever baseline --persist base.indep.grounding-v2.json
 
-# 3. self-consistency / k-sampling  (REQUIRES temp>0) cost 3×  (192 / 246 calls)
-PROM_JUDGE_TEMPERATURE=0.7 \
-python -m prometheus_protocol.benchmarks.soft_calibration_eval --live \
+# --- threshold: POST-HOC, ZERO model calls (θ read off the frontier with its coverage cost) ---
+python -m prometheus_protocol.benchmarks.threshold_frontier --from base.corr.grounding-v2.json
+python -m prometheus_protocol.benchmarks.threshold_frontier --from base.indep.grounding-v2.json
+
+# --- temperature CONTROL: T=0.7, k=1 (isolates temperature from sampling) both arms  1× each ---
+PROM_JUDGE_TEMPERATURE=0.7 PROM_JUDGE_MODEL=<actor-model> \
+    python -m prometheus_protocol.benchmarks.soft_calibration_eval --live \
+    --item-set grounding-v2 --lever k-sample --k 1 --require majority
+PROM_JUDGE_TEMPERATURE=0.7 PROM_JUDGE_MODEL=<judge-model-A> \
+    python -m prometheus_protocol.benchmarks.soft_calibration_eval --live \
+    --item-set grounding-v2 --lever k-sample --k 1 --require majority
+
+# --- k-sample: T=0.7, k=3 (the delta vs the k=1 control is attributable to SAMPLING) both arms 3× ---
+PROM_JUDGE_TEMPERATURE=0.7 PROM_JUDGE_MODEL=<actor-model> \
+    python -m prometheus_protocol.benchmarks.soft_calibration_eval --live \
+    --item-set grounding-v2 --lever k-sample --k 3 --require majority
+PROM_JUDGE_TEMPERATURE=0.7 PROM_JUDGE_MODEL=<judge-model-A> \
+    python -m prometheus_protocol.benchmarks.soft_calibration_eval --live \
     --item-set grounding-v2 --lever k-sample --k 3 --require majority
 
-# 4. adversarial self-check                        cost 2×  (128 / 164 calls)
-python -m prometheus_protocol.benchmarks.soft_calibration_eval --live \
-    --item-set grounding-v2 --lever adversarial
+# --- adversarial self-check, both arms  2× ---
+PROM_JUDGE_MODEL=<actor-model>  python -m prometheus_protocol.benchmarks.soft_calibration_eval \
+    --live --item-set grounding-v2 --lever adversarial
+PROM_JUDGE_MODEL=<judge-model-A> python -m prometheus_protocol.benchmarks.soft_calibration_eval \
+    --live --item-set grounding-v2 --lever adversarial
+
+# --- ensemble = INDEPENDENCE POSITIVE CONTROL (two independent families)  2× ---
+PROM_JUDGE_MODELS=<judge-model-A>,<judge-model-B> \
+    python -m prometheus_protocol.benchmarks.soft_calibration_eval --live \
+    --item-set grounding-v2 --lever ensemble --on-disagreement abstain
 ```
 
-Both arms of the correlated-grader comparison still apply: to measure a lever
-against the *correlated* baseline, set `PROM_JUDGE_MODEL=<actor-model>` (judge =
-actor family); against the *independent* baseline, keep them distinct. The
-already-recorded independent baseline is grounding-v2 false-PASS **0/45** and
-live-v2 near-**0** — that is the bar a lever must beat, and it is already at the
-floor.
+**k-sample requires the T=0.7/k=1 control.** Baseline is T=0.0/k=1; k-sample is
+T=0.7/k=3. Two variables move at once, so any k-sample delta is unattributable
+without the T=0.7/k=1 control that isolates temperature from sampling. Do not run
+k-sample without it — an uninterpretable measurement is worse than none.
+
+### Model-call count and cost
+
+Per set the call multiplier is: baseline 1+1, threshold 0 (post-hoc), control
+1+1, k-sample 3+3, adversarial 2+2, ensemble 2 = **16 n**.
+
+| set | n | live judge calls (16 n) |
+|---|---|---|
+| grounding-v2 | 64 | 1 024 |
+| live-v2 | 82 | 1 312 |
+| **total** | | **2 336** |
+
+At a **stated representative rate of ~$0.002 per judge call** (a short
+verdict+confidence completion on a hosted mid-size open-weight model; the real
+rate depends on the operator's endpoint and the models' token pricing, which are
+neutral-identified and not in this repo), the full dispatch is **≈ $4.70**; even
+at a 10× larger-model rate (~$0.02/call) it is **≈ $47**. The dollars are modest.
+The question is not the dollars — it is whether they buy a decision (they do not;
+see below).
+
+### Does this dispatch produce a decision? No — defer it.
+
+Given the pre-registered adoption rule and power check
+(`docs/soft-calibration-adoption-rule.md`): **this dispatch cannot produce an
+adoption decision, and should be deferred until `gold-set-v3` exists.** On the
+primary set (grounding-v2 correlated, 5/45) the 5-point bar is reachable only by
+correcting ≥3 of 5 false-PASSes, which is not statistically distinguishable from
+noise (McNemar p = 0.125), whose only significant outcome (a clean sweep to
+0/45) we are pre-committed to treat as a suspected harness bug, and whose target
+effect is smaller than the same models' documented run-to-run variance (~3.9 pp).
+On the secondary set (live-v2 correlated, 3.9%) a 5-point absolute drop is
+arithmetically impossible. Spending ~$5–47 here would produce numbers that
+cannot clear any honest bar. **The correct next expenditure is labeling effort on
+`gold-set-v3`, not credits on these sets.** (Recommending against the spend is
+the intended, successful outcome of this analysis.)
 
 ## Honest bars (read before believing any number)
 
@@ -118,13 +175,25 @@ floor.
   refusing to decide 60% of items is abstention, not calibration.
 - **Single run, small set.** Directional, exactly as the recorded baselines are.
 
-## The honest note — a prediction on record, before the data
+## The primary prediction — one falsifiable claim, on record before dispatch
 
-I expect most of these levers to help little **on the independent baseline**,
-for a structural reason: the independent judge is already at ~0% false-PASS on
-these sets (a floor), and the false-PASSes that remain are **systematic**
-(the model genuinely misreads a subtle trap), not variance-driven. Composition
-could not fix that; neither can most of these levers. Specifically:
+> **Only the lever that buys real independence (`ensemble` — a second model
+> family) will clear the adoption bar on the correlated arm. `threshold`,
+> `k-sample`, and `adversarial` will not, because they are variance reduction
+> applied to a bias problem: the self-grading judge's false-PASS is systematic,
+> and resampling, thresholding, or re-prompting the same model does not remove a
+> bias in that model.**
+
+One sentence, thesis-consistent, resolved in one run per the per-arm conditional
+(SC-1 recorded both directions and read as unfalsifiable; this does not). It is a
+prediction about *direction*, made under the caveat the power check already
+proved: at current N even the positive control may be unable to clear the bar
+with statistical confidence — which is why the recommendation is to defer.
+
+### Secondary per-lever predictions
+
+The false-PASSes that remain on a good judge are **systematic** (it misreads a
+subtle trap), not variance-driven — the reason the primary claim holds:
 
 - **`k-sample` — expect no meaningful help (often a literal no-op).** At
   temperature 0 the k samples are *identical*, so majority-of-k is the single

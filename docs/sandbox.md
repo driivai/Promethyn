@@ -51,6 +51,17 @@ Selected by `Config.sandbox` / `PROM_SANDBOX`; the default `auto` picks the best
 
 ### Container (`container`) — most robust for production
 
+> **Experimental until proven end-to-end in CI.** The adapter and its
+> candidate-start signal are unit- and transport-tested against a stub runtime in
+> CI, but the real-`docker run` end-to-end tests
+> (`test_sandbox_container_signal.py::test_real_container_*`) were gated on
+> `PROM_REQUIRE_CONTAINER`, a flag that was set in no workflow — so they had never
+> run in CI (see `docs/skip-sweep.md`). A dedicated `container-sandbox.yml` job now
+> runs them nightly and on `sandbox/`-touching PRs; until it has a green run on
+> record, treat the container backend as **experimental**. The daemonless
+> **namespace** adapter is the proven default and covers crash→FAIL under real
+> isolation in CI.
+
 Runs the candidate in Docker or Podman with `--network none`, a read-only root
 plus a writable workspace bind, `--memory` / CPU quota / `--pids-limit`
 (cgroup-backed resource bounds), `--cap-drop ALL`,
