@@ -146,7 +146,7 @@ def build_lever_judge(
 
 
 def _run_and_render(*, domain: str, item_set: str, judge: Verifier, judge_model: str,
-                    calls_per_item: int, lever: str, live: bool) -> str:
+                    calls_per_item: int, lever: str, live: bool, arm: str) -> str:
     if domain == "grounding":
         from prometheus_protocol.benchmarks import grounding_eval as ge
 
@@ -190,11 +190,13 @@ def _run_and_render(*, domain: str, item_set: str, judge: Verifier, judge_model:
         )
 
     n_items = len(items)
-    cost = (
-        f"\n## Cost\n\nmodel calls this run ≈ {calls_per_item} × {n_items} items "
-        f"= {calls_per_item * n_items} judge calls (lever cost factor {calls_per_item}×)\n"
+    from prometheus_protocol.benchmarks.soft_calibration_report import render_block, summarize
+
+    summary = summarize(
+        rows, set_name=item_set, arm=arm, lever=lever,
+        model_calls=calls_per_item * n_items,
     )
-    return report + cost
+    return report + "\n" + render_block(summary)
 
 
 # --------------------------------------------------------------------------
@@ -283,9 +285,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             providers = [_remote_judge_provider(config, m, temperature=temperature)
                          for m in models]
         judge_model = ",".join(getattr(pr, "model", "?") for pr in providers)
+        # The arm is the correlated-grader axis: a judge sharing the actor's
+        # model is the correlated arm; a distinct family is the independent arm.
+        # The ensemble is the independence positive control by construction.
+        if args.lever == "ensemble":
+            arm = "independence-control"
+        else:
+            actor = config.model or ""
+            arm = "correlated" if (models[0] and models[0] == actor) else "independent"
     else:
         providers = _offline_providers(domain, args.lever)
         judge_model = ",".join(getattr(pr, "model", "?") for pr in providers)
+        arm = "scripted-smoke"
         if args.item_set in ("live-v1", "live-v2"):
             # The offline smoke has no scripted code-domain live set; use the
             # bundled ten-item reference so the driver still renders.
@@ -305,17 +316,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         from prometheus_protocol.verifier.runner import SubprocessVerifier
 
+        from prometheus_protocol.benchmarks.soft_calibration_report import (
+            render_block, summarize,
+        )
+
         items = build_eval_items()
         rows = run_judge_eval(items, judge=judge, reference=SubprocessVerifier(memory_mb=0))
         print(render_report(rows, judge_model=judge_model,
                             mode=f"lever={args.lever} | offline scripted SMOKE"), end="")
-        print(f"\n## Cost\n\nmodel calls ≈ {calls} × {len(items)} = {calls * len(items)} "
-              f"(cost factor {calls}×)\n")
+        summary = summarize(rows, set_name="bundled-code-reference", arm=arm,
+                            lever=args.lever, model_calls=calls * len(items))
+        print("\n" + render_block(summary), end="")
         return 0
 
     print(_run_and_render(
         domain=domain, item_set=args.item_set, judge=judge, judge_model=judge_model,
-        calls_per_item=calls, lever=args.lever, live=args.live,
+        calls_per_item=calls, lever=args.lever, live=args.live, arm=arm,
     ), end="")
     return 0
 
