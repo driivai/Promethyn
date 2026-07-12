@@ -8,6 +8,37 @@ in `spec/invariants.md` is a major version bump.
 ## [Unreleased]
 
 ### Added
+- **Make the SOFT-lever experiment decidable (SC-2).** The lever machinery from
+  the prior change was not *dispatchable* — it had no pre-committed adoption rule
+  and could not produce a decision. This change fixes that, entirely offline (no
+  live model call), adopting nothing and leaving default behaviour byte-identical.
+  A **pre-registered adoption rule + power check**
+  (`docs/soft-calibration-adoption-rule.md`, committed before any measurement
+  code) shows the finding in bold: at the current 45/51 gold-negative
+  denominators **no lever can clear the bar** (correcting 3 of 5 false-PASSes is
+  McNemar p=0.125; a 5-pt drop is arithmetically impossible on live-v2's 3.9%).
+  The driver is **instrumented** so the abstention trap is impossible to miss —
+  every run prints coverage, false-PASS **and** false-FAIL as `n/d` (never a bare
+  %), model-call count, and machine-readable JSON, with a rule-of-three ceiling on
+  any thin denominator (a conformance test fails the build if a rate lacks its
+  denominator). **`threshold` is now free** — a post-hoc θ-sweep frontier
+  (`threshold_frontier`) recomputes verdicts from a persisted baseline with zero
+  model calls and shows the coverage/false-PASS trade by construction (on scripted
+  grounding-v2, θ=0.8 withholds 3 correct PASSes to catch 2 false ones); the
+  hardcoded θ=0.8 default is deleted. The k-sample **vote fraction is renamed**
+  (`vote_fraction`, not a confidence) and a test locks that it can never become
+  `Judgment.confidence`. `ensemble` is relabelled the **independence positive
+  control**, the four hedged predictions are replaced by **one falsifiable
+  claim**, and the dispatch plan adds a **T=0.7/k=1 control** (isolating
+  temperature from sampling), exact per-line call counts, dollar cost, and the
+  honest verdict: **defer dispatch** until a larger gold set exists. That set's
+  **protocol + a 20-item adversarial pilot + the required N** ship in
+  `docs/gold-set-v3-protocol.md` / `benchmarks/gold_pilot_v3.py`. Finally a **skip
+  sweep** (`docs/skip-sweep.md`) found two tests that never ran in CI — the
+  container-backend real-`docker run` tests (flag set nowhere) and the
+  Hearth-byte-identical guards (skipped under CI's shallow checkout) — and fixes
+  both: a dedicated `container-sandbox.yml` job and `fetch-depth: 0` in `ci.yml`;
+  the container backend is marked experimental until that job is green.
 - **SOFT-judge calibration levers (opt-in, measured, none adopted by default).**
   The composition study showed composition cannot add signal the per-step judge
   lacks, so lowering the SOFT judge's **false-PASS** is the higher-leverage path.
