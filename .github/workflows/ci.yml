@@ -18,6 +18,14 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Fetch full history so origin/main is resolvable. Several conformance
+          # tests assert the Hearth (and default-judge path) are byte-identical to
+          # main by diffing against origin/main; under the default shallow checkout
+          # (fetch-depth 1) origin/main is absent and those tests SILENTLY SKIP —
+          # the "Hearth unchanged" guard then never runs in CI. fetch-depth: 0
+          # makes them run.
+          fetch-depth: 0
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5

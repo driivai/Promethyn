@@ -1,0 +1,54 @@
+name: Container sandbox (real docker run)
+
+# The real-container isolation tests were gated on PROM_REQUIRE_CONTAINER, a flag
+# set in NO workflow — so they had never run in CI since inception (a HARD verifier
+# for the container backend that did not exist in practice). The default suite must
+# not pull images as a side effect, and that policy is preserved: this runs the
+# container-backend end-to-end tests in their OWN job, not the default suite —
+# nightly, and on any PR that touches the sandbox package.
+#
+# ubuntu-latest ships a running docker daemon, so no special hardware or credits
+# are needed. If these tests FAIL, that is the most valuable signal this job can
+# produce (the assumed runtime and the real one disagree) — the run goes red.
+
+on:
+  schedule:
+    - cron: "0 5 * * *"   # nightly
+  pull_request:
+    paths:
+      - "src/prometheus_protocol/sandbox/**"
+      - "tests/conformance/test_sandbox_container_signal.py"
+      - ".github/workflows/container-sandbox.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  container-sandbox:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install (editable + dev extra)
+        run: python -m pip install -e ".[dev]"
+
+      - name: Confirm a container runtime is present
+        run: docker version
+
+      - name: Real-container isolation (fail, do not skip)
+        env:
+          # Under this flag the tests FAIL rather than skip if the runtime/image
+          # is unusable, so green here means the container backend was proven
+          # end-to-end against a real `docker run`, not merely a stub.
+          PROM_REQUIRE_CONTAINER: "1"
+        run: |
+          python -m pytest -rA -v \
+            tests/conformance/test_sandbox_container_signal.py -k real_container
