@@ -60,6 +60,7 @@ class RemoteModelProvider(Provider):
         api_key: str | None = None,
         timeout_s: float = 30.0,
         system_prompt: str = _DEFAULT_SYSTEM_PROMPT,
+        assess_temperature: float = 0.0,
     ) -> None:
         if not api_base:
             raise ConfigError("api_base is required (set PROM_API_BASE)")
@@ -70,6 +71,12 @@ class RemoteModelProvider(Provider):
         self.api_key = api_key
         self.timeout_s = timeout_s
         self.system_prompt = system_prompt
+        # Sampling temperature for the advisory `assess`/`generate` path only.
+        # Default 0.0 leaves the request byte-identical to before; a positive
+        # value lets the self-consistency lever draw varied judge samples. The
+        # proposer path stays temperature 0 regardless (determinism there is a
+        # correctness property, not a lever).
+        self.assess_temperature = assess_temperature
 
     @classmethod
     def from_config(cls, config: Config) -> "RemoteModelProvider":
@@ -111,7 +118,9 @@ class RemoteModelProvider(Provider):
     def _complete(self, prompt: str, system: str) -> str:
         payload = {
             "model": self.model,
-            "temperature": 0,
+            # 0.0 normalises to integer 0 so the default request is byte-identical
+            # to before this knob existed; a positive value enables judge sampling.
+            "temperature": self.assess_temperature or 0,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": prompt},
