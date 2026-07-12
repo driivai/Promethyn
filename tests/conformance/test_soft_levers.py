@@ -88,6 +88,7 @@ def _run(judge: Verifier) -> Evidence:
 
 @pytest.mark.parametrize("verdict,detail,expected", [
     (Verdict.PASS, "PASS 0.90", Verdict.PASS),    # confident PASS survives
+    (Verdict.PASS, "PASS 0.80", Verdict.PASS),    # exactly at θ survives (strict <)
     (Verdict.PASS, "PASS 0.79", Verdict.ABSTAIN), # just under -> withheld
     (Verdict.PASS, "PASS", Verdict.ABSTAIN),      # unstated -> withheld
     (Verdict.FAIL, "FAIL 0.90", Verdict.FAIL),    # FAIL untouched
