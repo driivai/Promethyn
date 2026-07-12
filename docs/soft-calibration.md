@@ -137,12 +137,18 @@ could not fix that; neither can most of these levers. Specifically:
   ones — the judge is sure and wrong), and it withholds correct low-confidence
   PASSes too. Net: false-PASS down a little, ABSTAIN up, denominator shrinks —
   watch the silence trap. Useful mainly as a routing knob, not a fix.
-- **`ensemble` of independent families — the most likely to genuinely help,**
-  because two *independent* judges' systematic errors are less correlated than
-  one judge's repeated samples, so unanimity removes the false-PASSes where the
-  families disagree. But it pays 2×+ and raises false-FAIL/ABSTAIN (any dissent
-  blocks a PASS), and on sets already at the false-PASS floor there is little
-  headroom to show it. Predicted best-of-the-four, still bounded by rule-of-three.
+- **`ensemble` of independent families — the most likely to help *where there
+  is headroom*, but plausibly net-negative on the already-at-floor independent
+  baseline.** Two *independent* judges' systematic errors are less correlated
+  than one judge's repeated samples, so unanimity removes the false-PASSes where
+  the families disagree — a real gain on the *correlated* arm or a harder future
+  set. But it pays 2×+ and raises false-FAIL/ABSTAIN (any dissent blocks a PASS),
+  and the independent baseline is already ~0% false-PASS: there is no false-PASS
+  left to remove, so on *that* arm the lever is likely pure cost and lost
+  coverage. (An independent forecaster in this sprint's adversarial review
+  predicted ensemble **net-negative** outright on the floor set; I rate it
+  best-of-the-four only conditional on headroom. Either way, bounded by
+  rule-of-three — measure both arms before believing it.)
 - **`adversarial` self-check — plausibly helps on the exact trap shapes,**
   because it forces the judge to articulate the failure mode a careless pass
   skips; but it risks *raising false-FAIL* (talking itself out of correct
