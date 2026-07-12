@@ -8,6 +8,28 @@ in `spec/invariants.md` is a major version bump.
 ## [Unreleased]
 
 ### Added
+- **SOFT-judge calibration levers (opt-in, measured, none adopted by default).**
+  The composition study showed composition cannot add signal the per-step judge
+  lacks, so lowering the SOFT judge's **false-PASS** is the higher-leverage path.
+  A new module (`verifier/soft_levers.py`) adds four configurable, `Tier.SOFT`
+  wrappers around the existing judge — a confidence **threshold** (1×), an
+  **ensemble** of independent judges requiring unanimity to PASS (N×), **k-sample**
+  self-consistency (k×), and an **adversarial self-check** that elicits the
+  strongest case against before deciding (2×) — plus a driver
+  (`benchmarks/soft_calibration_eval.py`) that measures each against the recorded
+  baselines by reusing the EXISTING item sets (live-v2, grounding-v2), the
+  fixture-tested `compute_metrics` fold, and the report renderers. **A SOFT
+  verdict stays SOFT** — a lever can only turn a shaky PASS into an ABSTAIN, never
+  grant authority (tested: a lever's PASS still yields a non-authoritative
+  judgment the gate blocks). Every lever's arithmetic is fixture-verified on
+  scripted judge outputs before any live use, and each reports its model-call
+  cost honestly. A single additive knob (`PROM_JUDGE_TEMPERATURE`, default 0) lets
+  the k-sample lever draw varied samples; **default behaviour, the production
+  judge path, and the Hearth are byte-identical to main** (conformance-tested) —
+  no lever is adopted in this change; adoption is a separate, measurement-gated
+  decision. The live measurement is an operator dispatch (spends credits); the
+  exact per-lever commands, cost, and the honest bars (rule-of-three on 0/n; the
+  silence trap) are in `docs/soft-calibration.md`.
 - **Confidence composition, measured (not invented).** The open problem left by
   the orchestration skeleton — combining per-step confidences into a sound
   chain-level number — is now attacked *empirically*. A new benchmark
