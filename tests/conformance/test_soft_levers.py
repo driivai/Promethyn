@@ -34,6 +34,7 @@ from prometheus_protocol.verifier.soft_levers import (
     ConfidenceThresholdJudge,
     EnsembleJudge,
     RepeatedSamplingJudge,
+    parse_vote_fraction,
 )
 
 
@@ -151,18 +152,22 @@ def test_ensemble_on_disagreement_fail_mode(verdicts, expected):
     assert _run(_ensemble(verdicts, on_disagreement="fail")).verdict == expected
 
 
-def test_ensemble_forced_fail_confidence_is_broken_unanimity_never_zero():
+def test_ensemble_forced_fail_vote_fraction_is_broken_unanimity_never_zero():
     # [P, A] in fail mode: one non-PASS of two -> FAIL at (n-passes)/n = 0.5,
     # never a bare FAIL 0.00 (there ARE zero FAIL votes, but unanimity WAS broken).
     ev = _run(_ensemble([P, A], on_disagreement="fail"))
     assert ev.verdict == Verdict.FAIL
-    assert parse_confidence(ev.detail) == pytest.approx(0.5, abs=1e-9)
+    # it is a VOTE FRACTION, not a confidence: readable as such, and NOT as a
+    # confidence (so it never enters a calibration column).
+    assert parse_vote_fraction(ev.detail) == pytest.approx(0.5, abs=1e-9)
+    assert parse_confidence(ev.detail) is None
 
 
-def test_ensemble_pass_confidence_is_agreement_and_stays_soft():
+def test_ensemble_pass_reports_vote_fraction_not_confidence_and_stays_soft():
     ev = _run(_ensemble([P, P, P]))
     assert ev.verdict == Verdict.PASS and ev.tier == Tier.SOFT
-    assert parse_confidence(ev.detail) == 1.0
+    assert parse_vote_fraction(ev.detail) == 1.0     # agreement, exposed as a vote
+    assert parse_confidence(ev.detail) is None        # NOT a stated confidence
     assert _ensemble([P, P]).model_calls_per_item == 2
     assert _ensemble([P, P, P]).model_calls_per_item == 3
 
@@ -195,12 +200,30 @@ def test_k_sample_vote_rules(seq, require, expected):
     assert j.model_calls_per_item == 3
 
 
-def test_k_sample_majority_confidence_is_vote_fraction():
+def test_k_sample_majority_reports_vote_fraction_not_confidence():
     j = RepeatedSamplingJudge(_CyclingJudge([P, P, F]), k=3, require="majority")
     ev = _run(j)
     assert ev.verdict == Verdict.PASS
-    # synthesised to 2 decimals (well within the 0.2-wide calibration buckets)
-    assert parse_confidence(ev.detail) == pytest.approx(0.67, abs=1e-9)
+    # 2 of 3 judges passed -> vote_fraction 0.67 (2 decimals); it is a vote count
+    # normalised by k, NOT a confidence — the confidence parser does not read it.
+    assert parse_vote_fraction(ev.detail) == pytest.approx(0.67, abs=1e-9)
+    assert parse_confidence(ev.detail) is None
+
+
+def test_vote_fraction_cannot_flow_into_judgment_confidence():
+    """The category-error guard (deliverable F): an aggregation lever's vote
+    fraction is NOT a confidence and cannot become Judgment.confidence. The bank
+    computes confidence from TrustStats + Verdict, never from Evidence.detail."""
+
+    # A unanimous k-sample PASS reports vote_fraction 1.00...
+    ev = _run(RepeatedSamplingJudge(_CyclingJudge([P, P, P]), k=3, require="unanimous"))
+    assert parse_vote_fraction(ev.detail) == 1.0
+    # ...but the bank's judgment confidence is the SOFT-advisory value (0.5 for an
+    # uncalibrated soft verifier), NOT the 1.00 vote fraction.
+    judgment = VerifierBank().judge([ev])
+    assert judgment.authoritative is False
+    assert judgment.confidence == pytest.approx(0.5, abs=1e-9)
+    assert judgment.confidence != parse_vote_fraction(ev.detail)
 
 
 # --------------------------------------------------------------------------

@@ -25,6 +25,7 @@ lever that halves false-PASS at 3× the model calls is a tradeoff, not a win.
 
 from __future__ import annotations
 
+import re
 import time
 from typing import Callable, Sequence
 
@@ -36,19 +37,38 @@ from prometheus_protocol.core.models import Evidence, Skill, Tier, Verdict
 ConfidenceParser = Callable[[str], "float | None"]
 
 _VERDICT_WORD = {Verdict.PASS: "PASS", Verdict.FAIL: "FAIL", Verdict.ABSTAIN: "ABSTAIN"}
+_VOTE_FRACTION = re.compile(r"vote_fraction=([01](?:\.\d+)?)")
 
 
-def _synth_detail(verdict: Verdict, confidence: float | None, note: str) -> str:
-    """Render a lever's decision so the EXISTING confidence parsers read it.
+def _synth_detail(verdict: Verdict, vote_fraction: float | None, note: str) -> str:
+    """Render an aggregation lever's decision.
 
-    Both domain parsers accept ``<token> <number>`` on the first line, so a
-    synthesised ``PASS 0.67`` line round-trips the aggregated confidence through
-    the unchanged harness. ABSTAIN carries no number (it is excluded from
-    calibration anyway)."""
+    The number an ensemble / k-sample reports is a **vote fraction** — "2 of 3
+    judges passed" — NOT a stated confidence. It is a count normalised by k, on a
+    different scale from a probability of correctness (the same incommensurable-
+    scale error the composition study named: a vote is not a certainty). So it is
+    emitted as an explicit ``vote_fraction=...`` field, deliberately positioned so
+    the domain confidence parsers (which read a number *immediately* after the
+    verdict word) do NOT pick it up: it can never enter a calibration column, and
+    — since ``Judgment.confidence`` is computed by the bank from TrustStats +
+    Verdict, never from ``Evidence.detail`` — it can never become a confidence.
+    Read the vote breakdown with :func:`parse_vote_fraction`."""
 
     word = _VERDICT_WORD[verdict]
-    head = word if confidence is None else f"{word} {confidence:.2f}"
-    return f"{head}\n{note}" if note else head
+    head = word if vote_fraction is None else f"{word} vote_fraction={vote_fraction:.2f}"
+    return f"{head} | {note}" if note else head
+
+
+def parse_vote_fraction(detail: str) -> float | None:
+    """Read an aggregation lever's vote fraction (winning votes / total), if any.
+
+    This is NOT a confidence and is intentionally not readable by the confidence
+    parsers; it exists only so the vote breakdown is auditable."""
+
+    if not detail:
+        return None
+    m = _VOTE_FRACTION.search(detail)
+    return float(m.group(1)) if m else None
 
 
 def _soft_evidence(
@@ -170,21 +190,22 @@ class EnsembleJudge(Verifier):
         fails = verdicts.count(Verdict.FAIL)
 
         if passes == n:
-            verdict, conf = Verdict.PASS, 1.0
+            verdict, vote_fraction = Verdict.PASS, 1.0
         elif fails == n:
-            verdict, conf = Verdict.FAIL, 1.0
+            verdict, vote_fraction = Verdict.FAIL, 1.0
         elif passes == 0 and fails == 0:
-            verdict, conf = Verdict.ABSTAIN, None  # nobody had an opinion
+            verdict, vote_fraction = Verdict.ABSTAIN, None  # nobody had an opinion
         else:
             # a PASS is broken by any FAIL or any withheld vote; return the
             # configured non-unanimous outcome (never a PASS). A forced FAIL's
-            # confidence is the fraction of judges that did NOT endorse a PASS
+            # vote fraction is the fraction of judges that did NOT endorse a PASS
             # (how much unanimity was broken) — so a lone dissent among passes
             # reads as a low-but-nonzero FAIL, never a bare 0.00.
             verdict = Verdict.FAIL if self._on_disagreement == "fail" else Verdict.ABSTAIN
-            conf = ((n - passes) / n) if verdict == Verdict.FAIL else None
+            vote_fraction = ((n - passes) / n) if verdict == Verdict.FAIL else None
         note = f"ensemble votes: PASS={passes} FAIL={fails} ABSTAIN={n - passes - fails} of {n}"
-        return _soft_evidence(self.verifier_id, verdict, _synth_detail(verdict, conf, note), cost=cost)
+        return _soft_evidence(
+            self.verifier_id, verdict, _synth_detail(verdict, vote_fraction, note), cost=cost)
 
 
 # --------------------------------------------------------------------------
@@ -246,20 +267,21 @@ class RepeatedSamplingJudge(Verifier):
 
         if self._require == "unanimous":
             if passes == self._k:
-                verdict, conf = Verdict.PASS, 1.0
+                verdict, vote_fraction = Verdict.PASS, 1.0
             elif fails == self._k:
-                verdict, conf = Verdict.FAIL, 1.0
+                verdict, vote_fraction = Verdict.FAIL, 1.0
             else:
-                verdict, conf = Verdict.ABSTAIN, None
+                verdict, vote_fraction = Verdict.ABSTAIN, None
         else:  # majority of all k
             if passes * 2 > self._k:
-                verdict, conf = Verdict.PASS, passes / self._k
+                verdict, vote_fraction = Verdict.PASS, passes / self._k
             elif fails * 2 > self._k:
-                verdict, conf = Verdict.FAIL, fails / self._k
+                verdict, vote_fraction = Verdict.FAIL, fails / self._k
             else:
-                verdict, conf = Verdict.ABSTAIN, None
+                verdict, vote_fraction = Verdict.ABSTAIN, None
         note = f"k={self._k} {self._require} votes: PASS={passes} FAIL={fails}"
-        return _soft_evidence(self.verifier_id, verdict, _synth_detail(verdict, conf, note), cost=cost)
+        return _soft_evidence(
+            self.verifier_id, verdict, _synth_detail(verdict, vote_fraction, note), cost=cost)
 
 
 # --------------------------------------------------------------------------
@@ -328,4 +350,5 @@ __all__ = [
     "EnsembleJudge",
     "RepeatedSamplingJudge",
     "AdversarialSelfCheckProvider",
+    "parse_vote_fraction",
 ]
