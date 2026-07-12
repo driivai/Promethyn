@@ -54,6 +54,13 @@ jobs:
           PROM_REQUIRE_SANDBOX: "1"
         run: python -m pytest -q tests/conformance -k sandbox
 
+      - name: Hearth guards must EXECUTE, not skip (fetch-depth 0 makes origin/main resolvable)
+        # The four Hearth/default-judge byte-identical tests skipif origin/main is
+        # unresolvable — TRUE under the old shallow checkout, so they silently
+        # skipped in CI. -v -rs makes their execution visible by name and shows the
+        # SKIPPED list (they must not appear in it).
+        run: python -m pytest -v -rs -k hearth tests/conformance
+
       - name: Test
         env:
           # Fail rather than skip the sandbox conformance tests if the isolation
