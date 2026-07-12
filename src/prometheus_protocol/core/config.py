@@ -56,6 +56,13 @@ class Config:
     judge_model: str | None = None
     judge_api_base: str | None = None
     judge_api_key: str | None = None
+    # Judge sampling temperature. Default 0.0 keeps the judge deterministic
+    # (unchanged behaviour). It exists so the self-consistency / repeated-
+    # sampling calibration lever can draw genuinely varied samples: at
+    # temperature 0 repeated calls are identical and majority-of-k is a no-op.
+    # Only the judge's `assess` path reads this; the actor/proposer path stays
+    # deterministic regardless.
+    judge_temperature: float = 0.0
 
     registry_dir: Path = Path(".prometheus/skills")
     ledger_path: Path = Path(".prometheus/ledger.db")
@@ -115,6 +122,7 @@ class Config:
             # Empty means unset for both: they then inherit the actor's endpoint.
             judge_api_base=env.get("PROM_JUDGE_API_BASE") or None,
             judge_api_key=env.get("PROM_JUDGE_API_KEY") or None,
+            judge_temperature=_as_float(env.get("PROM_JUDGE_TEMPERATURE"), 0.0),
             registry_dir=Path(env.get("PROM_REGISTRY_DIR", ".prometheus/skills")),
             ledger_path=Path(env.get("PROM_LEDGER_PATH", ".prometheus/ledger.db")),
             trust_store_path=Path(
