@@ -52,6 +52,38 @@ FAILED ::test_real_container_candidate_crash_classifies_fail
 
 That is the gate behaving correctly (fail-not-skip under the flag), and the
 reason the end-to-end proof is deferred to the `ubuntu-latest` CI job, which ships
-a running daemon. Until that job has a green run on record, the container backend
-is documented as **not verified end-to-end** (README "Not done yet";
-`docs/sandbox.md` marks the adapter experimental).
+a running daemon.
+
+## The `ubuntu-latest` job ran — and it is RED (a real bug, not a chore)
+
+The `container-sandbox.yml` job ran on a real runner (Docker 28.0.4) and
+**FAILED** on its first run
+([run 29205643658](https://github.com/driivai/Promethyn/actions/runs/29205643658)),
+which is the most valuable signal this job could produce. It confirms, on a real
+`docker run`, the exact failure direction this test was built to catch:
+
+```
+test_real_container_run_confirms_candidate_start FAILED
+  assert res.started_ok  →  False
+  SandboxResult(stderr="python: can't open file '/workspace/.prom-start.py': [Errno 13] Permission denied",
+                exit_status=2, started_ok=False, candidate_started=False,
+                detail='container did not confirm candidate start')
+
+test_real_container_candidate_crash_classifies_fail FAILED
+  AssertionError: sandbox did not start: container did not confirm candidate start
+  assert <Verdict.ABSTAIN> == <Verdict.FAIL>
+2 failed, 15 deselected
+```
+
+**What it means.** Under a real container the in-container bootstrap file
+`/workspace/.prom-start.py` is **not readable by the non-root container user**
+(Errno 13). So the unforgeable candidate-start signal never fires,
+`candidate_started` is False, and a crashing candidate **classifies ABSTAIN, not
+FAIL** — a HARD verifier silently degrading into "could not verify" while wearing
+a HARD tier tag. The stub-runtime tests that run in the default suite did not
+catch it because a stub does not enforce the `--user`/bind-mount permission
+interaction a real `docker run` does — which is precisely why the real-container
+test exists. The bug is **not fixed in this cleanup branch** (it is runtime
+`sandbox/` code, out of scope here); the container backend stays **experimental**
+and the README caveat stays. The daemonless **namespace** backend is unaffected
+and remains the proven default (crash→FAIL under real isolation in CI).
