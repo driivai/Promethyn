@@ -154,7 +154,9 @@ primary set (grounding-v2 correlated, 5/45) the 5-point bar is reachable only by
 correcting ≥3 of 5 false-PASSes, which is not statistically distinguishable from
 noise (McNemar p = 0.125), whose only significant outcome (a clean sweep to
 0/45) we are pre-committed to treat as a suspected harness bug, and whose target
-effect is smaller than the same models' documented run-to-run variance (~3.9 pp).
+effect is smaller than the same models' documented run-to-run variance (~3.9 pp —
+measured, live-v2 correlated 4/51↔2/51 across two dispatches; see the adoption-rule
+doc §(b) for the citation and the both-tails significance table).
 On the secondary set (live-v2 correlated, 3.9%) a 5-point absolute drop is
 arithmetically impossible. Spending ~$5–47 here would produce numbers that
 cannot clear any honest bar. **The correct next expenditure is labeling effort on

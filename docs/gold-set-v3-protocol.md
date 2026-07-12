@@ -91,6 +91,12 @@ fraction:
 | bound the independent false-PASS floor **< 2%** (0/n, 3/n < 0.02) | > 150 | ≈ **215** |
 | bound the floor **< 1%** | > 300 | ≈ **429** |
 
+The **total** column is the gold-negative count divided by the ~0.70 gold-negative
+fraction (e.g. `150 / 0.70 = 214 ≈ 215`, `488 / 0.70 = 697 ≈ 700`); the 150 is
+rule-of-three (`3/150 = 2%`) and the 488 is the two-proportion power formula. Both
+derivations are shown step-by-step in `docs/soft-calibration-adoption-rule.md`
+§"Required N".
+
 So the minimum useful build is **≈ 215 items** (to retire the rule-of-three
 objection by bounding the floor under 2%); a build that could **adopt** a lever
 on a 5-point effect is **≈ 700 items**. The 20-item pilot is ~9% of the smaller

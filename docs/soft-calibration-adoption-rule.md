@@ -79,29 +79,49 @@ out of the five that leak, out of forty-five.**
 The lever is applied to the **same 45 items** as the baseline, so the correct
 test is paired (McNemar exact), not two independent samples. With the baseline's
 5 false-PASSes as the discordant-eligible events and a lever that corrects `b` of
-them introducing no new ones:
+them introducing no new ones.
 
-```
-correct 3 of 5 -> 2/45   McNemar one-sided exact p = 0.125    not significant   (this is the 5-pp threshold)
-correct 4 of 5 -> 1/45   p = 0.0625                            not significant
-correct 5 of 5 -> 0/45   p = 0.0312                            significant
-```
+**Tail choice, stated once (not left as a degree of freedom).** The
+pre-registered hypothesis is directional — a calibration lever can only *reduce*
+false-PASS, never add one — so the **one-sided** test is the appropriate primary.
+An unlabelled tail is a researcher degree of freedom this sprint exists to close,
+so every p-value below is reported **both tails**, and the finding is stated so
+it holds under either:
 
-Unpaired Fisher exact agrees (cross-check): 5/45 vs 2/45 → p = 0.22; only 5/45 vs
-**0/45** → p = 0.028 is significant. And the baseline itself is barely resolved:
-**5/45 has an exact 95% CI of [3.7%, 24.1%]** (Clopper–Pearson) — a 20-point-wide
-band around an 11% point estimate.
+| outcome | McNemar 1-sided | McNemar 2-sided | Fisher 1-sided | Fisher 2-sided | clears 5pp? |
+|---|---|---|---|---|---|
+| correct 3 of 5 → 2/45 | 0.125 | 0.250 | 0.217 | 0.434 | yes (point est.) |
+| correct 4 of 5 → 1/45 | 0.0625 | 0.125 | 0.101 | 0.203 | yes |
+| correct 5 of 5 → 0/45 | 0.0312 | 0.0625 | 0.0278 | 0.0556 | yes |
 
-Two more facts that sink the same nail:
+The baseline is barely resolved either way: **5/45 has an exact 95% CI of [3.7%,
+24.1%]** (Clopper–Pearson) — a 20-point band around an 11% estimate.
 
-- **Only a clean sweep to 0/45 reaches significance** (p ≈ 0.03) — and the SC-2
-  standing rule says a lever posting 0% false-PASS on a full denominator is to be
-  assumed a harness bug before a result. So the *only* statistically-clearing
-  outcome is the one we are pre-committed to disbelieve first.
-- **Documented run-to-run variance is at the scale of the effect.** The *same*
-  correlated config measured **7.8%** on one dispatch and **3.9%** on the next
-  (`docs/judge-quality.md`: live-v2) — a ~3.9-point swing from resampling the
-  same models, against a 5-point bar.
+> **NO OUTCOME ON THIS SET IS BOTH CLEARING AND SIGNIFICANT.** The only outcome
+> that clears the 5-pt bar *and* reaches one-sided significance is a clean sweep
+> to 0/45 — and even that **fails a two-sided test** (McNemar 0.0625, Fisher
+> 0.0556, both > 0.05), and is precisely the 0%-on-a-full-denominator result the
+> SC-2 standing rule says to assume is a harness bug before a result. Whichever
+> tail you pick, this set cannot both show the effect and prove it. This
+> strengthens the defer decision — it does not soften it, and the rule is not
+> loosened to fit it.
+
+- **Documented run-to-run variance is at the scale of the effect.** On live-v2,
+  the *same* correlated config measured false-PASS **4/51 = 7.8%** on one dispatch
+  and **2/51 = 3.9%** on the next (`docs/judge-quality.md` §Caveats, lines
+  298–300) — a **2-item swing = 2/51 ≈ 3.9 pp**, against a 5-point bar. This is a
+  **measured** difference between two real runs, not an estimate — but it is only
+  **n = 2 dispatches** (one observed difference, not a characterised
+  distribution), and it is measured on **live-v2 and imported cross-set** as an
+  indicative scale for grounding-v2's own run-to-run noise, which is
+  **unmeasured** (single run per arm). So it is a *secondary* support; the primary
+  support is the grounding-v2-native significance result above, which does not
+  depend on it.
+  *(Coincidence check — two quantities here are both "3.9%": live-v2's correlated
+  **baseline** false-PASS is 2/51, and the run-to-run **swing** is also 2/51.
+  Both are "2 events over 51", hence the same ratio — different quantities that
+  happen to share a small-integer denominator, not a number copied from one place
+  to another.)*
 
 ### (c) live-v2 cannot satisfy the rule at all
 
@@ -142,12 +162,32 @@ The rule is not loosened to fix this. The denominators are.
 To make the experiment decidable, the gold set must grow (protocol:
 `docs/gold-set-v3-protocol.md`). From the same α = 0.05, power = 0.80 targets:
 
-- **Detect a 5-point correlated effect (11% → 6%):** ≈ **488 gold-negative items
-  per arm** (two-proportion normal approximation) ⇒ ≈ **700 total items** at
-  grounding-v2's ~70% gold-negative fraction.
+Note every N below is first derived as a count of **gold-negative** items (the
+false-PASS denominator), then converted to a **total** item count by dividing by
+grounding-v2's gold-negative fraction **45/64 = 0.703 ≈ 0.70** (assumed to hold in
+v3). Rounding is upward (ceil).
+
 - **Bound the independent false-PASS floor below 2%** (the number a hostile
-  reviewer attacks): 0/n with 3/n < 0.02 ⇒ **> 150 gold-negatives** ⇒ ≈ **215
-  total items**. Below 1%: > 300 gold-negatives ⇒ ≈ 429 items.
+  reviewer attacks with rule-of-three). Rule of three: a `0/n` observation bounds
+  the true rate at `≤ 3/n` (95%). Require `3/n < 0.02` ⇒ **n > 150 gold-negative
+  items** (3/150 = 0.02 exactly, so strictly more than 150). Convert to total:
+  `150 / 0.70 = 214.3` ⇒ **≈ 215 total items**. (The 150 is the rule-of-three
+  number; the 215 is that number grossed up for the ~30% gold-positive items the
+  set also needs.) Below 1%: `3/n < 0.01` ⇒ n > 300 gold-neg ⇒ `300/0.70 = 428.6`
+  ⇒ ≈ **429 total**.
+- **Detect a 5-point correlated effect (p₀ = 0.11 → p₁ = 0.06)** at α = 0.05
+  (two-sided), power = 0.80, two independent proportions:
+
+  ```
+  n_perarm = ( z_{α/2}·√(2·p̄·(1−p̄)) + z_β·√(p₀(1−p₀)+p₁(1−p₁)) )² / (p₀−p₁)²
+           = ( 1.960·√(2·0.085·0.915) + 0.842·√(0.11·0.89 + 0.06·0.94) )² / 0.05²
+           = ( 1.960·0.3945 + 0.842·0.3928 )² / 0.0025
+           = ( 0.7732 + 0.3307 )² / 0.0025  =  1.2186 / 0.0025  ≈ 487.4
+  ```
+
+  ⇒ **≈ 488 gold-negative items per arm**; convert to total: `488 / 0.70 = 697.1`
+  ⇒ **≈ 700 total items**. (`p̄ = (p₀+p₁)/2 = 0.085`; `z_{0.025} = 1.960`,
+  `z_{0.20} = 0.842`.)
 
 The 20-item pilot in `docs/gold-set-v3-protocol.md` is not powered to adopt
 anything — it exists to prove the construction protocol and, if it surfaces even
