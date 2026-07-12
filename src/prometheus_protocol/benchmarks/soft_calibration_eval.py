@@ -146,7 +146,8 @@ def build_lever_judge(
 
 
 def _run_and_render(*, domain: str, item_set: str, judge: Verifier, judge_model: str,
-                    calls_per_item: int, lever: str, live: bool, arm: str) -> str:
+                    calls_per_item: int, lever: str, live: bool, arm: str,
+                    persist: str | None = None) -> str:
     if domain == "grounding":
         from prometheus_protocol.benchmarks import grounding_eval as ge
 
@@ -191,6 +192,10 @@ def _run_and_render(*, domain: str, item_set: str, judge: Verifier, judge_model:
 
     n_items = len(items)
     from prometheus_protocol.benchmarks.soft_calibration_report import render_block, summarize
+
+    if persist:
+        from prometheus_protocol.benchmarks.threshold_frontier import persist_records
+        persist_records(rows, persist, set_name=item_set, arm=arm)
 
     summary = summarize(
         rows, set_name=item_set, arm=arm, lever=lever,
@@ -244,8 +249,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     p.add_argument("--item-set", choices=CODE_SETS + GROUNDING_SETS, default="grounding-v2")
     p.add_argument("--lever", choices=LEVERS, default="baseline")
-    p.add_argument("--min-confidence", type=float, default=0.8,
-                   help="threshold lever: minimum stated confidence to accept a PASS")
+    p.add_argument("--min-confidence", type=float, default=None,
+                   help="threshold lever: minimum stated confidence to accept a PASS. "
+                        "REQUIRED for --lever threshold; there is no default — read θ off "
+                        "the coverage/false-PASS frontier (threshold_frontier) with its "
+                        "coverage cost, do not guess a number")
+    p.add_argument("--persist", default=None,
+                   help="write per-item baseline records (item_id,verdict,confidence,gold,"
+                        "tier) to this JSON path, for a zero-model-call threshold_frontier sweep")
     p.add_argument("--k", type=int, default=3, help="k-sample lever: number of samples")
     p.add_argument("--require", choices=("majority", "unanimous"), default="majority",
                    help="k-sample lever: vote rule")
@@ -256,6 +267,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = p.parse_args(argv)
 
     domain = "grounding" if args.item_set in GROUNDING_SETS else "code"
+
+    if args.lever == "threshold" and args.min_confidence is None:
+        print("error: --lever threshold requires an explicit --min-confidence. There "
+              "is no default θ; read one off the coverage/false-PASS frontier "
+              "(python -m prometheus_protocol.benchmarks.threshold_frontier) and state "
+              "its coverage cost. Note: threshold needs no live call — sweep θ offline "
+              "over a persisted baseline instead of dispatching this lever.")
+        return 1
 
     if args.live:
         from prometheus_protocol.core.config import Config
@@ -332,6 +351,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(_run_and_render(
         domain=domain, item_set=args.item_set, judge=judge, judge_model=judge_model,
         calls_per_item=calls, lever=args.lever, live=args.live, arm=arm,
+        persist=args.persist,
     ), end="")
     return 0
 
