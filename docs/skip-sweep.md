@@ -131,3 +131,72 @@ infra-fault; every rate in `docs/judge-quality.md` and
 `docs/soft-calibration-adoption-rule.md` stands as published.** The bug was real,
 latent, and authoritative — but it had not yet reached the numbers. It was caught
 by the container job before it could.
+
+## A near-miss: the type gate that would have passed vacuously (EX-1)
+
+EX-1's fix rests on a type: `core.models.Unavailable` carries no `verdict`, so a
+static checker refuses `x.verdict` on an `Evidence | Unavailable` until the
+`Unavailable` branch is narrowed — the guarantee that a HARD verifier which could
+not run can never be narrowed into a verdict. To make that guarantee load-bearing,
+the sprint adds a mypy gate over the frozen Hearth files (`mypy.ini`, run in
+`ci.yml`; the build fails if the core stops type-checking).
+
+**The gate itself nearly shipped false-passing.** Invoked the obvious way —
+`mypy --ignore-missing-imports <files>` from outside the package — mypy cannot
+resolve `prometheus_protocol.*` and **degrades every prometheus type to `Any`**.
+Under `Any`, `x.verdict` on an `Unavailable` is *accepted*: the gate reports
+`Success` and verifies **nothing**. Caught by a deliberate teeth-probe (a bad
+`x.verdict` that the gate MUST reject):
+
+```
+# toothless (types are Any): Success — the mistake is NOT caught
+$ mypy --ignore-missing-imports _teeth_probe.py
+Success: no issues found in 1 source file
+
+# with types resolved (mypy_path=src, explicit_package_bases): the mistake IS caught
+$ MYPYPATH=src mypy --explicit-package-bases --ignore-missing-imports _teeth_probe.py
+_teeth_probe.py:3: error: Item "Unavailable" of "Evidence | Unavailable"
+    has no attribute "verdict"  [union-attr]
+```
+
+`mypy.ini` therefore pins `mypy_path = src` + `explicit_package_bases = True`, and
+the teeth-probe is kept as the standing check that the gate is not toothless.
+
+**Why this belongs in the skip sweep: it is the same pattern, a third time.** A
+check that reports success while verifying nothing is exactly the failure this
+project keeps finding — and EX-1 is a nest of it:
+
+1. a **false-passing verifier** — the sprint's subject: a HARD check that could
+   not execute returned `ABSTAIN`, authoritative "no opinion" from a check that
+   never ran;
+2. a **false-passing sandbox check** — Bug 1: the container start-signal silently
+   failed (unreadable bootstrap), so a crash classified ABSTAIN instead of FAIL;
+3. a **false-passing type gate** — this: a mypy gate that would have reported
+   `Success` while checking `Any`.
+
+All three are "the check ran, a record said pass, nothing was actually verified."
+The third was caught *before it shipped*, by treating the gate as a candidate that
+must prove it catches the mistake — not by trusting its green.
+
+### EX-1 deferred scope (follow-ups, deliberately out of scope)
+
+EX-1 migrated only category **B** (could-not-execute) to `Unavailable`. Two
+adjacent cases were left exactly as they were, on purpose, and are recorded here
+so they are not forgotten:
+
+- **Row 10 — a wall-clock timeout WITH a confirmed candidate start** stays
+  `Verdict.ABSTAIN`. It is a real semantic question (arguably a `FAIL` — the
+  candidate's own hang), but it is not *this* bug, and changing it would move
+  PASS/FAIL semantics on already-published results. Follow-up: decide
+  timeout-after-confirmed-start = FAIL vs ABSTAIN on its own evidence. (A timeout
+  *without* a confirmed start IS category B and did migrate.)
+- **Row 13 — `reported_total == 0` (an empty task)** stays `Verdict.ABSTAIN`. The
+  check ran and there was nothing to check — a genuine "no opinion", correctly
+  excluded from calibration. No change wanted; noted so the distinction between
+  "task-unsound abstain" (keep) and "could-not-execute" (now `Unavailable`) stays
+  explicit.
+- **The four pre-existing `[arg-type]` mypy findings in `verifier/bank.py`**
+  (`Evidence.verdict` is typed `Verdict | None` though `__post_init__` always sets
+  it) are ratcheted with targeted `# type: ignore[arg-type]`, not fixed in EX-1.
+  Follow-up: tighten `Evidence.verdict` to `Verdict` at construction and drop the
+  four ignores (`warn_unused_ignores` will flag them the moment the root is fixed).
