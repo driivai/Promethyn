@@ -64,7 +64,7 @@ def _action_from_dict(data: dict) -> ExecutableAction:
 
 
 def _judgment_to_dict(judgment: Judgment) -> dict:
-    return {
+    data: dict[str, object] = {
         "verdict": judgment.verdict.value,
         "confidence": judgment.confidence,
         "authoritative": judgment.authoritative,
@@ -72,6 +72,24 @@ def _judgment_to_dict(judgment: Judgment) -> dict:
         "conflict": judgment.conflict,
         "detail": judgment.detail,
     }
+    # An authoritative verifier that could NOT execute is carried on the Judgment
+    # (see core.models.Judgment.unavailable) so a could-not-run HARD/HUMAN check
+    # beside a success is never invisible. Record it in the audit blob too. Emitted
+    # ONLY when non-empty: a clean run's judgment JSON is byte-identical to before,
+    # and the KEY'S PRESENCE is the fault signal (its absence is the norm). The
+    # blob is opaque and readers require only verdict/confidence, so the extra key
+    # is tolerated with no schema change or migration.
+    if judgment.unavailable:
+        data["unavailable"] = [
+            {
+                "verifier_id": u.verifier_id,
+                "tier": u.tier.value,
+                "reason": u.reason.value,
+                "detail": u.detail,
+            }
+            for u in judgment.unavailable
+        ]
+    return data
 
 
 def _judgment_from_dict(data: dict) -> Judgment:
