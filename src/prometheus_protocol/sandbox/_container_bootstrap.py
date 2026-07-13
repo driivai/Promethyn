@@ -1,8 +1,13 @@
 """Runs INSIDE the container, then execs the candidate command.
 
-Invoked (mounted read-only into the container) as::
-
-    python /.prom-start.py -- argv...
+Delivered as ``python -c <this source> -- argv...`` — the host reads this file
+at import and passes its source on the command line; it is **never** staged as a
+file into the bind-mounted workspace. That makes it untamperable by the
+candidate (nothing on the shared writable mount is load-bearing) and sidesteps
+the ``--user``/bind-mount readability interaction a staged file hit (a non-root
+container user could not read the root-owned staged file — Errno 13). Under
+``-c`` ``sys.argv`` is ``['-c', '--', argv...]``, so the ``--`` guard below is
+unchanged.
 
 Standard library only. It carries the unforgeable candidate-start signal
 across the container boundary, mirroring the namespace adapter's close-on-exec

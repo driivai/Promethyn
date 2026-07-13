@@ -35,7 +35,7 @@ from prometheus_protocol.core.interfaces import (
     Registry,
     Verifier,
 )
-from prometheus_protocol.core.models import Attempt, Skill, Verdict
+from prometheus_protocol.core.models import Attempt, Evidence, Skill, Unavailable, Verdict
 from prometheus_protocol.forge.miner import LessonForge
 from prometheus_protocol.gate.promotion import GateDecision
 from prometheus_protocol.memory.tiers import MemoryTier
@@ -49,7 +49,13 @@ class TaskOutcome:
     task_id: str
     split: str
     passed: bool
-    attempt: Attempt
+    attempt: Attempt | None
+    #: True when the authoritative verifier could NOT execute this task — an infra
+    #: fault, not a candidate result. Such an outcome has no attempt and is
+    #: EXCLUDED from every rate below (never silently counted as a fail, which
+    #: would understate the true pass rate — the denominator corruption EX-1 fixes,
+    #: one layer up).
+    unavailable: bool = False
 
 
 @dataclass(frozen=True)
@@ -58,16 +64,24 @@ class RunReport:
 
     @property
     def pass_rate(self) -> float:
-        if not self.outcomes:
+        decided = [o for o in self.outcomes if not o.unavailable]
+        if not decided:
             return 0.0
-        passed = sum(1 for o in self.outcomes if o.passed)
-        return passed / len(self.outcomes)
+        passed = sum(1 for o in decided if o.passed)
+        return passed / len(decided)
 
     def rate_for(self, split: str) -> float:
-        subset = [o for o in self.outcomes if o.split == split]
+        subset = [o for o in self.outcomes if o.split == split and not o.unavailable]
         if not subset:
             return 0.0
         return sum(1 for o in subset if o.passed) / len(subset)
+
+    @property
+    def n_unavailable(self) -> int:
+        """Tasks whose verification could not execute — an operational fault,
+        counted and visible, never folded into a pass/fail rate."""
+
+        return sum(1 for o in self.outcomes if o.unavailable)
 
 
 @dataclass(frozen=True)
@@ -164,6 +178,25 @@ class Orchestrator:
             # criterion the loop and gate consult. A pass requires a PASS
             # verdict (ABSTAIN, like the old timeout, is not a pass).
             judgment = self.bank.judge([evidence, *advisory_evidence])
+            if isinstance(judgment, Unavailable):
+                # The authoritative verifier could NOT execute this task — an infra
+                # fault, not a candidate failure. It is not a pass, and it is
+                # EXCLUDED from the pass rate rather than silently counted as a fail
+                # (that would understate the true rate). Recorded as an unavailable
+                # outcome, never a fabricated verdict.
+                _LOG.warning(
+                    "task %s: verification unavailable (%s): %s",
+                    task.id,
+                    judgment.reason.value,
+                    judgment.detail,
+                )
+                outcomes.append(
+                    TaskOutcome(task.id, task.split, passed=False, attempt=None, unavailable=True)
+                )
+                continue
+            # A real Judgment means the authoritative verifier produced Evidence (a
+            # HARD Unavailable would have made the whole judgment Unavailable).
+            assert isinstance(evidence, Evidence)
             passed = judgment.verdict == Verdict.PASS
             _LOG.debug(
                 "task %s: verdict=%s confidence=%.3f",

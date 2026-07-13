@@ -250,6 +250,39 @@ def test_adapter_marker_forgery_is_still_a_candidate_start(stub_runtime):
     assert res.started_ok and res.candidate_started and res.exit_status == 127
 
 
+def test_bootstrap_is_delivered_via_dash_c_never_staged(stub_runtime):
+    """The start-signal bootstrap is passed as ``python -c <source>`` and is NEVER
+    written into the bind-mounted workspace, so the candidate has nothing on the
+    shared writable mount to tamper with or replace. Proven directly: after a run
+    the workspace does not contain the bootstrap file the adapter used to stage."""
+
+    with tempfile.TemporaryDirectory(prefix="prom-ctr-forge-") as ws:
+        Path(ws, "prog.py").write_text("print('ok')\n", encoding="utf-8")
+        res = _stub_sandbox(stub_runtime).run(
+            argv=[sys.executable, "-I", "prog.py"],
+            workspace=ws,
+            limits=Limits(wall_time_s=30, memory_bytes=0),
+        )
+        assert res.started_ok and res.candidate_started
+        assert not (Path(ws) / ".prom-start.py").exists()
+
+
+def test_candidate_writing_the_bootstrap_name_forges_nothing(stub_runtime):
+    """A hostile candidate WRITES a fake ``.prom-start.py`` into its (writable)
+    workspace, trying to become the bootstrap. It forges nothing: the real
+    bootstrap runs from ``-c`` (never from the workspace), and the nonce-keyed
+    start signal already fired before the candidate's code ran. The candidate's
+    own run stays its own — a writable workspace cannot subvert the start signal."""
+
+    forge = (
+        "open('.prom-start.py', 'w').write('import os; os._exit(0)')\n"
+        "print('candidate ran')\n"
+    )
+    res = _run_code(_stub_sandbox(stub_runtime), forge)
+    assert res.started_ok and res.candidate_started
+    assert "candidate ran" in res.stdout
+
+
 def test_container_candidate_crash_classifies_fail_via_the_verifier(stub_runtime):
     evidence = SubprocessVerifier(
         memory_mb=0, timeout_s=30, sandbox=_stub_sandbox(stub_runtime)

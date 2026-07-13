@@ -128,6 +128,12 @@ _ADDITIVE_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("authoritative", "INTEGER"),
         ("judgment", "TEXT"),
         ("pending_id", "INTEGER"),
+        # EX-1 discriminator: 1 when this row is a could-not-EXECUTE (an
+        # authoritative verifier that could not run — an infra/policy fault),
+        # forever distinct from a genuine ABSTAIN. Before EX-1 an infra-ABSTAIN
+        # and a real abstention wrote byte-identical rows; this column, derived
+        # from the recorded source, makes them permanently separable.
+        ("unavailable", "INTEGER"),
     ],
     "pending_actions": [("execution_committed_at", "TEXT")],
 }
@@ -408,13 +414,18 @@ class SqliteLedger(Ledger):
         authoritative = (
             int(bool(judgment.get("authoritative"))) if judgment else None
         )
+        # EX-1: a could-not-EXECUTE row is marked distinctly (derived from the
+        # source the controller records), so an infra/policy unavailability is
+        # forever separable in the ledger from a genuine abstention — the two used
+        # to write byte-identical rows, which is how the bug hid.
+        unavailable = int(source == "unavailable")
         cur = self._conn.execute(
             """
             INSERT INTO executions (
                 subject_id, source, executed, refused, sandbox,
                 exit_status, detail, created_at,
-                verdict, confidence, authoritative, judgment, pending_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                verdict, confidence, authoritative, judgment, pending_id, unavailable
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 subject_id,
@@ -430,6 +441,7 @@ class SqliteLedger(Ledger):
                 authoritative,
                 json.dumps(judgment) if judgment is not None else None,
                 pending_id,
+                unavailable,
             ),
         )
         self._conn.commit()
@@ -637,6 +649,8 @@ class SqliteLedger(Ledger):
         record["refused"] = bool(record["refused"])
         if record.get("authoritative") is not None:
             record["authoritative"] = bool(record["authoritative"])
+        if record.get("unavailable") is not None:
+            record["unavailable"] = bool(record["unavailable"])
         if record.get("judgment"):
             record["judgment"] = _load_json(record["judgment"])
         return record

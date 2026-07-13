@@ -41,10 +41,18 @@ _LOG = logging.getLogger(__name__)
 # Overridable; production should pin by digest, e.g. python:3.12-slim@sha256:...
 _DEFAULT_IMAGE = os.environ.get("PROM_SANDBOX_IMAGE", "python:3.12-slim")
 _WORKDIR = "/workspace"
-# The in-container bootstrap that carries the unforgeable candidate-start
-# signal (see ``_start_signal.py``); staged into each run's workspace and run
-# from there (``/workspace/.prom-start.py``, invoked relative to the workdir).
+# The in-container bootstrap that carries the unforgeable candidate-start signal
+# (see ``_start_signal.py``). It is delivered as ``python -c <source>`` — its
+# source is read here at import and passed on the command line, NEVER staged as a
+# file into the bind-mounted workspace. So the candidate cannot tamper with or
+# replace it (nothing on the shared writable mount is load-bearing), and it
+# sidesteps the ``--user``/bind-mount readability interaction a staged file hit:
+# a non-root container user could not read the root-owned staged file (Errno 13),
+# which made the start signal silently fail.
 _BOOTSTRAP = Path(__file__).with_name("_container_bootstrap.py")
+_BOOTSTRAP_SOURCE = _BOOTSTRAP.read_text(encoding="utf-8")
+#: Retained only so a test can prove that a candidate WRITING this name into the
+#: workspace forges nothing — the bootstrap is never read from there.
 _BOOTSTRAP_NAME = ".prom-start.py"
 
 
@@ -157,30 +165,32 @@ class ContainerSandbox(Sandbox):
         if self.runtime is None:
             return SandboxResult(started_ok=False, detail="no container runtime")
 
-        # Stage the start-signal bootstrap into the run's own workspace (already
-        # bind-mounted read-write) rather than bind-mounting the installed
-        # package file: a fresh, world-readable copy per run avoids depending on
-        # the install-path file's mode (a 0600 install, or an SELinux label on a
-        # separate mount, would otherwise make the container user unable to read
-        # it and fail every run closed). The candidate cannot subvert it — the
-        # bootstrap has exec'd the candidate away before the candidate's code
-        # runs, each run gets a fresh workspace, and the per-run nonce arrives on
-        # stdin, never from this file.
+        # Make the run's workspace reachable by the NON-ROOT container user
+        # (``--user 65534``). The workspace is a fresh per-run host temp dir the
+        # caller created (typically 0700, owned by the host user); bind-mounted,
+        # the container user cannot traverse it — the exact failure a staged
+        # bootstrap file hit (Errno 13), and one the candidate's own code files
+        # would hit next. The host cannot chown to 65534 without privilege (the CI
+        # runner is unprivileged), so open the *directory* so the container user
+        # can traverse it, read the candidate's code files, and write its results
+        # — the writable workspace the sandbox intends (INV-SANDBOX-2). This is NOT
+        # the forgeable-bootstrap concern EX-1 fixed: the start-signal bootstrap is
+        # delivered via ``-c`` (below), never staged here, so a writable workspace
+        # cannot forge or replace it.
         try:
-            staged = Path(workspace) / _BOOTSTRAP_NAME
-            shutil.copyfile(_BOOTSTRAP, staged)
-            os.chmod(staged, 0o644)
+            os.chmod(workspace, 0o777)
         except OSError as exc:
             return SandboxResult(
-                started_ok=False, detail=f"could not stage container bootstrap: {exc}"
+                started_ok=False,
+                detail=f"could not prepare container workspace: {exc}",
             )
 
         # Rewrite the interpreter path: argv[0] is the host interpreter; in the
         # image the candidate runs under the image's python with the same flags.
-        # The candidate command is wrapped by the staged bootstrap, which carries
-        # the unforgeable candidate-start signal: it consumes a fresh per-run
-        # nonce from the first line of stdin (a place the candidate can never
-        # read it back from) and emits the nonce-keyed started line on stderr
+        # The candidate command is wrapped by the bootstrap delivered via ``-c``,
+        # which carries the unforgeable candidate-start signal: it consumes a fresh
+        # per-run nonce from the first line of stdin (a place the candidate can
+        # never read it back from) and emits the nonce-keyed started line on stderr
         # right before exec'ing the candidate.
         inner_argv = ["python", *argv[1:]] if argv else ["python"]
         nonce = new_nonce()
@@ -199,7 +209,7 @@ class ContainerSandbox(Sandbox):
             "--security-opt", "no-new-privileges",
             "--user", "65534:65534",
             self.image,
-            "python", _BOOTSTRAP_NAME, "--",
+            "python", "-c", _BOOTSTRAP_SOURCE, "--",
             *inner_argv,
         ]
         try:

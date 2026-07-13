@@ -100,6 +100,35 @@ def test_attempt_without_judgment_leaves_columns_null():
         ledger.close()
 
 
+def test_unavailable_execution_is_forever_distinct_from_an_abstain():
+    ledger = SqliteLedger(":memory:")
+    try:
+        # A could-not-EXECUTE row: the controller records source "unavailable"
+        # with no judgment (there is no verdict to authorize on).
+        ledger.record_execution(
+            subject_id="s1", source="unavailable", executed=False, refused=True,
+            sandbox_name="", exit_status=None, detail="sandbox did not start",
+            created_at="t", judgment=None,
+        )
+        # A genuine policy block whose fused judgment ABSTAINed.
+        ledger.record_execution(
+            subject_id="s2", source="blocked", executed=False, refused=False,
+            sandbox_name="", exit_status=None, detail="blocked",
+            created_at="t",
+            judgment={"verdict": "abstain", "confidence": 0.5, "authoritative": False},
+        )
+        rows = {r["subject_id"]: r for r in ledger.executions()}
+        # The infra/policy unavailability is marked and carries no verdict; the
+        # abstention is NOT unavailable and records verdict="abstain". These used
+        # to be indistinguishable — the exact separation EX-1 exists to make.
+        assert rows["s1"]["unavailable"] is True
+        assert rows["s1"]["verdict"] is None
+        assert rows["s2"]["unavailable"] is False
+        assert rows["s2"]["verdict"] == "abstain"
+    finally:
+        ledger.close()
+
+
 def test_confidence_and_verdict_columns_are_indexed():
     ledger = SqliteLedger(":memory:")
     try:
@@ -148,10 +177,16 @@ def test_opening_an_old_ledger_adds_the_columns(tmp_path):
             "executions.verdict", "executions.confidence",
             "executions.authoritative", "executions.judgment",
             "executions.pending_id",
+            # EX-1: the could-not-EXECUTE discriminator, added additively to old
+            # ledgers so an infra/policy unavailability is forever separable from
+            # a genuine abstention.
+            "executions.unavailable",
             "pending_actions.execution_committed_at",
         }
         cols = {r["name"] for r in ledger._conn.execute("PRAGMA table_info(attempts)")}
         assert {"verdict", "confidence"} <= cols
+        exec_cols = {r["name"] for r in ledger._conn.execute("PRAGMA table_info(executions)")}
+        assert "unavailable" in exec_cols
     finally:
         ledger.close()
 
