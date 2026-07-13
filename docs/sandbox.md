@@ -51,19 +51,18 @@ Selected by `Config.sandbox` / `PROM_SANDBOX`; the default `auto` picks the best
 
 ### Container (`container`) — most robust for production
 
-> **Experimental — a real-`docker run` bug is currently OPEN.** The adapter and
-> its candidate-start signal are unit- and transport-tested against a stub runtime
-> in CI, but the real-container end-to-end tests
-> (`test_sandbox_container_signal.py::test_real_container_*`) had never run in CI
-> (the `PROM_REQUIRE_CONTAINER` gate was set in no workflow — see
-> `docs/skip-sweep.md`). The dedicated `container-sandbox.yml` job now runs them,
-> and its **first run is RED**: on a real container the bootstrap
-> `/workspace/.prom-start.py` is not readable by the non-root user (Errno 13), so
-> the start signal never fires and a crash **classifies ABSTAIN instead of FAIL**.
-> Treat the container backend as **experimental / known-broken end-to-end** until
-> that is fixed and the job is green. The daemonless **namespace** adapter is
-> unaffected — it is the proven default and covers crash→FAIL under real isolation
-> in CI.
+> **Proven end-to-end in CI.** The adapter and its candidate-start signal are
+> unit- and transport-tested against a stub runtime, and the real-container
+> end-to-end tests (`test_sandbox_container_signal.py::test_real_container_*`) now
+> run green in a dedicated `container-sandbox.yml` job: on a real `docker run` the
+> candidate-start signal is confirmed, and a candidate crash inside the container
+> **classifies FAIL** (not ABSTAIN). The earlier Errno-13 bug — the in-container
+> bootstrap `/workspace/.prom-start.py` was unreadable by the non-root user, so the
+> start signal never fired and a crash classified ABSTAIN — is fixed: the bootstrap
+> is delivered via `python -c` and is never staged into the bind-mounted workspace,
+> so it is both readable and untamperable (see `docs/skip-sweep.md`). The tests are
+> opt-in via `PROM_REQUIRE_CONTAINER`; the daemonless **namespace** adapter remains
+> the proven default where no container daemon is available.
 
 Runs the candidate in Docker or Podman with `--network none`, a read-only root
 plus a writable workspace bind, `--memory` / CPU quota / `--pids-limit`
