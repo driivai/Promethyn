@@ -175,7 +175,7 @@ _STUB = textwrap.dedent(
     BARE = {"--rm", "--interactive", "--read-only"}
     VALUED = {"--network", "--tmpfs", "--volume", "--workdir", "--memory",
               "--memory-swap", "--cpus", "--pids-limit", "--cap-drop",
-              "--security-opt", "--user"}
+              "--security-opt", "--user", "--env"}
     volumes, workdir, i = {}, None, 0
     while i < len(args):
         if args[i] in BARE:
@@ -186,6 +186,9 @@ _STUB = textwrap.dedent(
                 volumes[cont] = host
             if args[i] == "--workdir":
                 workdir = args[i + 1]
+            if args[i] == "--env":
+                k, _, v = args[i + 1].partition("=")
+                os.environ[k] = v
             i += 2
         else:
             break

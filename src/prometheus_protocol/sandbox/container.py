@@ -201,6 +201,14 @@ class ContainerSandbox(Sandbox):
             "--tmpfs", "/tmp:rw,size=64m",
             "--volume", f"{workspace}:{_WORKDIR}:rw",
             "--workdir", _WORKDIR,
+            # Write NO bytecode into the shared workspace mount. The candidate
+            # runs as the non-root container user (65534); a `__pycache__` it
+            # creates would be owned by 65534, and the host (a different, often
+            # unprivileged uid) then cannot remove that sub-directory when it
+            # cleans up its temp workspace — the run would succeed but its
+            # teardown would fail. No bytecode, no orphan, clean teardown; caching
+            # buys nothing for a one-shot sandboxed run anyway.
+            "--env", "PYTHONDONTWRITEBYTECODE=1",
             "--memory", str(max(limits.memory_bytes, 16 * 1024 * 1024)),
             "--memory-swap", str(max(limits.memory_bytes, 16 * 1024 * 1024)),
             "--cpus", "1",
