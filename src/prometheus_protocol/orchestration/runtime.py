@@ -34,7 +34,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable, Protocol
 
-from prometheus_protocol.core.models import Tier, Verdict
+from prometheus_protocol.core.models import Tier, Unavailable, Verdict
+from prometheus_protocol.gate.authorization import OUTCOME_UNAVAILABLE
 from prometheus_protocol.gate.promotion import (
     OUTCOME_APPROVE,
     OUTCOME_BLOCK,
@@ -42,7 +43,7 @@ from prometheus_protocol.gate.promotion import (
 )
 from prometheus_protocol.orchestration.gateway import ActionGateway
 from prometheus_protocol.orchestration.messages import AgentMessage
-from prometheus_protocol.orchestration.workflow import Workflow
+from prometheus_protocol.orchestration.workflow import AgentStep, Workflow
 from prometheus_protocol.verifier.bank import VerifierBank
 
 _OUTCOME_NONE = "none"  # the step proposed no action
@@ -75,18 +76,27 @@ class WorkflowLedgerPort(Protocol):
 
 @dataclass(frozen=True)
 class StepRecord:
-    """The in-memory result of running one step (mirrors the ledger row)."""
+    """The in-memory result of running one step (mirrors the ledger row).
+
+    ``verdict``/``confidence``/``tier``/``message`` are ``None`` when the step did
+    not produce a graded result: ``unavailable`` is True when the step's own
+    authoritative grader could not execute, and ``halted`` is True when the step
+    was skipped because a dependency was unavailable (a cascade). Such a step
+    emits NO downstream message — nothing may compound on a check that did not
+    run — so its ``message`` is None and dependents cannot fire."""
 
     step_id: str
     agent_id: str
-    tier: Tier
-    verdict: Verdict
-    confidence: float
+    tier: Tier | None
+    verdict: Verdict | None
+    confidence: float | None
     proposed_action: bool
     outcome: str
     subject_id: str
     pending_id: int | None
-    message: AgentMessage
+    message: AgentMessage | None
+    unavailable: bool = False
+    halted: bool = False
 
 
 @dataclass(frozen=True)
@@ -107,6 +117,14 @@ class WorkflowRun:
     @property
     def held_subject_ids(self) -> tuple[str, ...]:
         return tuple(s.subject_id for s in self.steps if s.outcome == OUTCOME_ROUTE)
+
+    @property
+    def unavailable_step_ids(self) -> tuple[str, ...]:
+        """Steps that could not be graded — their own grader was unavailable, or a
+        dependency was (a cascade halt). Visible at the run level, not only in the
+        ledger, so a caller can see exactly which branch could not run."""
+
+        return tuple(s.step_id for s in self.steps if s.unavailable or s.halted)
 
 
 class WorkflowRuntime:
@@ -131,8 +149,24 @@ class WorkflowRuntime:
         messages: dict[str, AgentMessage] = {}
         records: list[StepRecord] = []
         confidences: list[float] = []
+        halted: set[str] = set()  # step_ids whose branch could not be graded
 
         for step in workflow.order():
+            # (0) Cascade halt: a dependent NEVER fires on an absent input. If any
+            #     dependency's branch was unavailable (halted, emitting no message),
+            #     halt this step too — checked HERE, at decision time, before it
+            #     proposes. The strict ``messages[dep]`` lookup below would KeyError
+            #     on an absent message regardless (fail-closed); this makes the halt
+            #     graceful so independent sibling branches still run.
+            halted_deps = [dep for dep in step.depends_on if dep in halted]
+            if halted_deps:
+                halted.add(step.step_id)
+                records.append(self._halt_record(
+                    step, workflow, tier=None, proposed_action=False,
+                    subject_id="", unavailable=False, halted=True,
+                ))
+                continue
+
             inputs = tuple(messages[dep] for dep in step.depends_on)
 
             # (1) propose — proposer side only, no verdict/confidence.
@@ -141,6 +175,24 @@ class WorkflowRuntime:
             # (2) grade — the independent judge, fused through the bank (reuse).
             evidence = step.grader.grade(proposal, inputs)
             judgment = self._bank.judge([evidence])
+
+            # (2a) The step's own authoritative grader COULD NOT EXECUTE. Halt this
+            #      branch: emit NO downstream message (a SOFT verdict must never
+            #      stand in for a HARD check that never ran) and do NOT route the
+            #      ungraded action (an ungraded action is never authorized). Record
+            #      it distinctly and cascade to dependents. After this, ``judgment``
+            #      is narrowed to a real Judgment for the rest of the loop.
+            if isinstance(judgment, Unavailable):
+                halted.add(step.step_id)
+                subject_id = f"{workflow.workflow_id}:{step.step_id}"
+                records.append(self._halt_record(
+                    step, workflow, tier=judgment.tier,
+                    proposed_action=proposal.action is not None,
+                    subject_id=subject_id if proposal.action is not None else "",
+                    unavailable=True, halted=False,
+                ))
+                continue
+
             tier = evidence.tier if evidence.tier is not None else Tier.SOFT
 
             # (3) route any action through the SAME gate. The runtime never
@@ -204,6 +256,51 @@ class WorkflowRuntime:
             steps=tuple(records),
             chain_confidence_placeholder=chain,
             messages=messages,
+        )
+
+    def _halt_record(
+        self,
+        step: AgentStep,
+        workflow: Workflow,
+        *,
+        tier: Tier | None,
+        proposed_action: bool,
+        subject_id: str,
+        unavailable: bool,
+        halted: bool,
+    ) -> StepRecord:
+        """Record a branch that halted — its own grader could not execute
+        (``unavailable``), or a dependency's did (``halted``, a cascade). It emits
+        no message and authorizes no action; the workflow ledger row marks it
+        ``verdict='unavailable'`` / ``outcome=OUTCOME_UNAVAILABLE`` so it is forever
+        distinct from a graded pass/fail/abstain in the audit trail."""
+
+        self._ledger.record_workflow_step(
+            workflow_id=workflow.workflow_id,
+            step_id=step.step_id,
+            agent_id=step.agent.agent_id,
+            tier=tier.value if tier is not None else "",
+            verdict="unavailable",
+            confidence=0.0,
+            proposed_action=proposed_action,
+            outcome=OUTCOME_UNAVAILABLE,
+            subject_id=subject_id,
+            pending_id=None,
+            created_at=self._clock(),
+        )
+        return StepRecord(
+            step_id=step.step_id,
+            agent_id=step.agent.agent_id,
+            tier=tier,
+            verdict=None,
+            confidence=None,
+            proposed_action=proposed_action,
+            outcome=OUTCOME_UNAVAILABLE,
+            subject_id=subject_id,
+            pending_id=None,
+            message=None,
+            unavailable=unavailable,
+            halted=halted,
         )
 
 

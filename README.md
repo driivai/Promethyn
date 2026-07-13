@@ -96,7 +96,7 @@ This is an early, working project with real results, **not a finished product.**
 - Domains beyond code, SQL, and grounding (customer ops, finance, research, personal/enterprise automation are *designed for*, not built).
 - Harder non-executable-truth domains beyond single-claim grounding (open-ended "is this good?" judgments).
 - Broad tool connectors and multi-step orchestration — the external action set is intentionally minimal today.
-- **The container sandbox backend is not yet verified end-to-end in CI.** The daemonless *namespace* backend is proven under real isolation in CI; the container adapter is transport-tested against a stub, and its real-`docker run` tests now have a dedicated CI job (`container-sandbox.yml`) but no green run on record yet. Treat `ContainerSandbox` as experimental (see `docs/skip-sweep.md`, `docs/sandbox.md`).
+- **The container sandbox backend is proven end-to-end in CI, but is opt-in, not the default.** The daemonless *namespace* backend is the default and covers crash→FAIL under real isolation; the container adapter is additionally proven by a dedicated CI job (`container-sandbox.yml`) that runs both real-`docker run` tests green — candidate-start confirmation and a container-run crash classifying FAIL. It requires a container daemon, is enabled with `PROM_REQUIRE_CONTAINER`, and should be digest-pinned in production (see `docs/sandbox.md`).
 - The live decorrelation numbers come from an **operator-dispatched** run against real models; the offline pipeline is deterministic, but the measurements are single runs on small sets, not a benchmark.
 - A hosted control plane (commercial; see the open-core boundary below).
 

@@ -46,6 +46,30 @@ class Tier(str, Enum):
     CONSISTENCY = "consistency"
 
 
+class Unavailability(str, Enum):
+    """Why a verifier could NOT execute the candidate at all.
+
+    This is not a shade of ``ABSTAIN``. ``ABSTAIN`` is a *verdict* — "I executed
+    the candidate and the result is genuinely ambiguous, or the task had nothing
+    to check." Unavailability is the *absence* of a verdict — "I could not
+    execute the candidate" — which is a fault of the harness or a deliberate
+    refusal to run, never the candidate's epistemic ambiguity. The two are kept
+    apart by construction (see :class:`Unavailable`); within unavailability the
+    two reasons are also kept apart, because they mean different things
+    operationally and must never be flattened:
+
+    * ``INFRA_FAULT`` — the isolation runtime failed: no sandbox available, it
+      did not start, or the candidate was never confirmed to begin executing. An
+      operational fault to repair.
+    * ``POLICY_REFUSAL`` — the harness deliberately refused to run: a
+      supply-chain guard tripped (for example an unpinned image under a required
+      digest pin). Not a fault; a chosen "no".
+    """
+
+    INFRA_FAULT = "infra_fault"
+    POLICY_REFUSAL = "policy_refusal"
+
+
 # Tiers whose verdicts are authoritative (decide the result, calibrate others).
 AUTHORITATIVE_TIERS = frozenset({Tier.HARD, Tier.HUMAN})
 
@@ -140,6 +164,35 @@ class Evidence:
 
 
 @dataclass(frozen=True)
+class Unavailable:
+    """A verifier that could NOT execute the candidate — the absence of a verdict.
+
+    A HARD verifier's ``verify`` returns :class:`Evidence` ``| Unavailable``; it
+    returns this in place of Evidence when the check could not run at all. It
+    deliberately has **no** ``verdict`` attribute, so "could not execute" can
+    never be read as "executed and abstained": any code that reaches for
+    ``.verdict`` on an ``Unavailable`` fails — at type-check time (a static
+    checker refuses ``x.verdict`` on ``Evidence | Unavailable`` until the
+    ``Unavailable`` branch is narrowed away) and, if that is bypassed, at runtime
+    (``AttributeError`` on first touch) — rather than silently comparing unequal
+    to every verdict. That is the distinction EX-1 makes unrepresentable
+    otherwise: an authoritative verifier that could not run must never degrade
+    into an abstention.
+
+    ``tier`` is the tier of the verifier that could not run, so a consumer can
+    tell an *authoritative* (HARD/HUMAN) unavailability — which must halt and
+    route to a human, never pass — from a merely advisory one. ``reason`` is
+    :class:`Unavailability` (INFRA_FAULT vs POLICY_REFUSAL, never flattened).
+    ``detail`` is a human diagnostic and is never parsed for meaning.
+    """
+
+    verifier_id: str
+    tier: Tier
+    reason: Unavailability
+    detail: str = ""
+
+
+@dataclass(frozen=True)
 class Attempt:
     """One proposal evaluated against one task, with its evidence.
 
@@ -168,6 +221,14 @@ class Judgment:
     advisory verifiers only. ``contributing`` lists the verifier ids that
     decided the verdict. ``conflict`` is True when an authoritative verifier
     disagreed with the chosen reference verdict.
+
+    ``unavailable`` carries any authoritative verifiers that could NOT execute
+    while a sibling did produce the verdict. A sibling covering for it does not
+    make a could-not-execute a non-event — it is an operational fault every time
+    — so it is carried here and never silently dropped at the bank, staying
+    available to any consumer that records operational faults. (Persisting it onto
+    the execution ledger row is a named follow-up: that serializer lives outside
+    this sprint's frozen-file boundary — see docs/skip-sweep.md.)
     """
 
     verdict: Verdict
@@ -176,6 +237,7 @@ class Judgment:
     contributing: tuple[str, ...] = ()
     conflict: bool = False
     detail: str = ""
+    unavailable: tuple[Unavailable, ...] = ()
 
 
 # Minimal, explicit tool set the executor may act on: in-sandbox code

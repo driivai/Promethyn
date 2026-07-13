@@ -41,10 +41,18 @@ _LOG = logging.getLogger(__name__)
 # Overridable; production should pin by digest, e.g. python:3.12-slim@sha256:...
 _DEFAULT_IMAGE = os.environ.get("PROM_SANDBOX_IMAGE", "python:3.12-slim")
 _WORKDIR = "/workspace"
-# The in-container bootstrap that carries the unforgeable candidate-start
-# signal (see ``_start_signal.py``); staged into each run's workspace and run
-# from there (``/workspace/.prom-start.py``, invoked relative to the workdir).
+# The in-container bootstrap that carries the unforgeable candidate-start signal
+# (see ``_start_signal.py``). It is delivered as ``python -c <source>`` — its
+# source is read here at import and passed on the command line, NEVER staged as a
+# file into the bind-mounted workspace. So the candidate cannot tamper with or
+# replace it (nothing on the shared writable mount is load-bearing), and it
+# sidesteps the ``--user``/bind-mount readability interaction a staged file hit:
+# a non-root container user could not read the root-owned staged file (Errno 13),
+# which made the start signal silently fail.
 _BOOTSTRAP = Path(__file__).with_name("_container_bootstrap.py")
+_BOOTSTRAP_SOURCE = _BOOTSTRAP.read_text(encoding="utf-8")
+#: Retained only so a test can prove that a candidate WRITING this name into the
+#: workspace forges nothing — the bootstrap is never read from there.
 _BOOTSTRAP_NAME = ".prom-start.py"
 
 
@@ -143,6 +151,11 @@ class ContainerSandbox(Sandbox):
             )
             return SandboxResult(
                 started_ok=False,
+                # A deliberate refusal to run (a supply-chain guard), NOT an infra
+                # fault: mark it structurally so the verifier maps it to
+                # Unavailability.POLICY_REFUSAL, never flattened with a daemon-down
+                # INFRA_FAULT.
+                policy_refusal=True,
                 detail=(
                     f"image {self.image!r} is not digest-pinned and "
                     "PROM_REQUIRE_DIGEST_PIN is set"
@@ -152,32 +165,45 @@ class ContainerSandbox(Sandbox):
         if self.runtime is None:
             return SandboxResult(started_ok=False, detail="no container runtime")
 
-        # Stage the start-signal bootstrap into the run's own workspace (already
-        # bind-mounted read-write) rather than bind-mounting the installed
-        # package file: a fresh, world-readable copy per run avoids depending on
-        # the install-path file's mode (a 0600 install, or an SELinux label on a
-        # separate mount, would otherwise make the container user unable to read
-        # it and fail every run closed). The candidate cannot subvert it — the
-        # bootstrap has exec'd the candidate away before the candidate's code
-        # runs, each run gets a fresh workspace, and the per-run nonce arrives on
-        # stdin, never from this file.
+        # Make the run's workspace reachable by the NON-ROOT container user
+        # (``--user 65534``). The workspace is a fresh per-run host temp dir the
+        # caller created (typically 0700, owned by the host user); bind-mounted,
+        # the container user cannot traverse it — the exact failure a staged
+        # bootstrap file hit (Errno 13), and one the candidate's own code files
+        # would hit next. The host cannot chown to 65534 without privilege (the CI
+        # runner is unprivileged), so open the *directory* so the container user
+        # can traverse it, read the candidate's code files, and write its results
+        # — the writable workspace the sandbox intends (INV-SANDBOX-2). This is NOT
+        # the forgeable-bootstrap concern EX-1 fixed: the start-signal bootstrap is
+        # delivered via ``-c`` (below), never staged here, so a writable workspace
+        # cannot forge or replace it.
         try:
-            staged = Path(workspace) / _BOOTSTRAP_NAME
-            shutil.copyfile(_BOOTSTRAP, staged)
-            os.chmod(staged, 0o644)
+            os.chmod(workspace, 0o777)
         except OSError as exc:
             return SandboxResult(
-                started_ok=False, detail=f"could not stage container bootstrap: {exc}"
+                started_ok=False,
+                detail=f"could not prepare container workspace: {exc}",
             )
 
         # Rewrite the interpreter path: argv[0] is the host interpreter; in the
         # image the candidate runs under the image's python with the same flags.
-        # The candidate command is wrapped by the staged bootstrap, which carries
-        # the unforgeable candidate-start signal: it consumes a fresh per-run
-        # nonce from the first line of stdin (a place the candidate can never
-        # read it back from) and emits the nonce-keyed started line on stderr
+        # The candidate command is wrapped by the bootstrap delivered via ``-c``,
+        # which carries the unforgeable candidate-start signal: it consumes a fresh
+        # per-run nonce from the first line of stdin (a place the candidate can
+        # never read it back from) and emits the nonce-keyed started line on stderr
         # right before exec'ing the candidate.
-        inner_argv = ["python", *argv[1:]] if argv else ["python"]
+        # Prepend ``-B`` (never write bytecode) to the candidate harness command.
+        # This is the load-bearing half of the no-orphan guarantee (see the
+        # ``--env`` note below for why the env var alone cannot do it): the harness
+        # runs under ``python -I`` and isolated mode implies ``-E``, so the
+        # interpreter IGNORES every ``PYTHON*`` env var — ``PYTHONDONTWRITEBYTECODE``
+        # included. Left unset, importing the candidate writes a ``__pycache__``
+        # owned by the non-root container user (65534) into the bind-mounted
+        # workspace, a sub-directory the unprivileged host then cannot remove when
+        # it tears down its temp dir (a green run with a failing cleanup). ``-B`` is
+        # a command-line flag ``-I`` does not suppress, so it stops the write at the
+        # one process that actually does it.
+        inner_argv = ["python", "-B", *argv[1:]] if argv else ["python", "-B"]
         nonce = new_nonce()
         command = [
             self.runtime, "run", "--rm", "--interactive",
@@ -186,6 +212,14 @@ class ContainerSandbox(Sandbox):
             "--tmpfs", "/tmp:rw,size=64m",
             "--volume", f"{workspace}:{_WORKDIR}:rw",
             "--workdir", _WORKDIR,
+            # Belt to the ``-B`` suspenders above (which handles the isolated
+            # harness process). Env vars ARE inherited across ``exec`` where the
+            # ``-B`` flag is not, so this covers any NON-isolated ``python`` the
+            # candidate itself spawns — stopping it, too, from leaving a
+            # 65534-owned ``__pycache__`` on the shared mount that the host cannot
+            # reap. The two are complementary; caching buys nothing for a one-shot
+            # sandboxed run anyway.
+            "--env", "PYTHONDONTWRITEBYTECODE=1",
             "--memory", str(max(limits.memory_bytes, 16 * 1024 * 1024)),
             "--memory-swap", str(max(limits.memory_bytes, 16 * 1024 * 1024)),
             "--cpus", "1",
@@ -194,7 +228,7 @@ class ContainerSandbox(Sandbox):
             "--security-opt", "no-new-privileges",
             "--user", "65534:65534",
             self.image,
-            "python", _BOOTSTRAP_NAME, "--",
+            "python", "-c", _BOOTSTRAP_SOURCE, "--",
             *inner_argv,
         ]
         try:

@@ -11,7 +11,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Protocol, Sequence
 
-from prometheus_protocol.core.models import Attempt, Evidence, Skill, Task
+from prometheus_protocol.core.models import Attempt, Evidence, Task, Skill, Unavailable
 
 
 class LearnableTask(Protocol):
@@ -83,10 +83,22 @@ class Provider(ABC):
 
 
 class Verifier(ABC):
-    """Runs candidate code against a task's hidden cases and returns evidence."""
+    """Runs candidate code against a task's hidden cases and returns evidence.
+
+    A verifier returns :class:`Evidence` when it ran the check (a PASS/FAIL, or a
+    genuine ABSTAIN — it executed and the result is ambiguous or the task had
+    nothing to check). It returns :class:`Unavailable` when it could *not* run
+    the check at all (isolation did not start, the candidate was never confirmed
+    to begin, a deliberate policy refusal). The two are different types on
+    purpose: "could not execute" carries no ``verdict`` and can never be narrowed
+    into one, so an authoritative verifier that could not run cannot silently
+    degrade into an abstention. Advisory verifiers that always run (a model judge)
+    only ever return Evidence; the union is what an authoritative executable
+    verifier needs.
+    """
 
     @abstractmethod
-    def verify(self, *, code: str, task: Task) -> Evidence:
+    def verify(self, *, code: str, task: Task) -> Evidence | Unavailable:
         raise NotImplementedError
 
 

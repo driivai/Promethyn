@@ -3,7 +3,10 @@
 It ties the action gate, the human hold, and the executor together. An approved
 decision executes immediately; a routed one *halts* as a pending action and can
 become executed **only** through :meth:`approve`, which records the human
-decision before the executor is ever called; a blocked action never executes.
+decision before the executor is ever called; a blocked action never executes;
+an *unavailable* one — an authoritative check that could not run — is recorded
+distinctly and halts without executing, and is deliberately never an approvable
+hold (a human must not rubber-stamp an action whose verification never ran).
 Every outcome is written to the ledger, so the whole chain is auditable.
 
 The load-bearing property (INV-EXEC-3) is structural: there is no code path here
@@ -20,7 +23,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from prometheus_protocol.core.interfaces import Ledger
-from prometheus_protocol.core.models import ExecutableAction, Judgment
+from prometheus_protocol.core.models import ExecutableAction, Judgment, Unavailable
 from prometheus_protocol.execution.models import PendingAction
 from prometheus_protocol.execution.pending import (
     _DEFAULT_TTL_SECONDS,
@@ -28,7 +31,7 @@ from prometheus_protocol.execution.pending import (
     _judgment_to_dict,
     _utc_now_iso,
 )
-from prometheus_protocol.gate.authorization import ActionGate
+from prometheus_protocol.gate.authorization import ActionGate, OUTCOME_UNAVAILABLE
 from prometheus_protocol.gate.promotion import (
     OUTCOME_APPROVE,
     OUTCOME_ROUTE,
@@ -50,7 +53,7 @@ def _judgment_or_none(decision: GateDecision) -> dict | None:
 class SubmitOutcome:
     """What happened when an action was submitted for authorization."""
 
-    outcome: str  # OUTCOME_APPROVE / OUTCOME_ROUTE / OUTCOME_BLOCK
+    outcome: str  # OUTCOME_APPROVE / OUTCOME_ROUTE / OUTCOME_BLOCK / OUTCOME_UNAVAILABLE
     decision: GateDecision
     execution: ExecutionResult | None = None
     pending: PendingAction | None = None
@@ -99,7 +102,7 @@ class ExecutionController:
     def submit(
         self,
         *,
-        judgment: Judgment,
+        judgment: Judgment | Unavailable,
         action: ExecutableAction,
         risk_class: str = "low",
         subject_id: str = "",
@@ -107,7 +110,9 @@ class ExecutionController:
         """Authorize an action and act on the outcome.
 
         approve -> execute now; route -> halt as a pending action; block ->
-        record and never execute.
+        record and never execute; unavailable -> record distinctly and halt, when
+        an authoritative check could not run (never executes, and never an
+        approvable hold — a human must not rubber-stamp an unverified action).
         """
 
         decision = self._gate.decide(
@@ -120,6 +125,26 @@ class ExecutionController:
         if outcome == OUTCOME_ROUTE:
             held = self._pending.hold(decision, risk_class=risk_class, action=action)
             return SubmitOutcome(outcome=outcome, decision=decision, pending=held)
+        if outcome == OUTCOME_UNAVAILABLE:
+            # An authoritative check could NOT execute: there is no verdict to
+            # authorize on. Record it distinctly (source "unavailable", so a human
+            # can tell a could-not-verify from a policy denial) and halt — it
+            # never executes. It is deliberately NOT parked as an approvable hold:
+            # a human must not be able to approve execution of an action whose
+            # HARD verification never ran. The remedy is to repair the runtime and
+            # re-verify, not to approve blind.
+            self._ledger.record_execution(
+                subject_id=subject_id,
+                source="unavailable",
+                executed=False,
+                refused=True,
+                sandbox_name="",
+                exit_status=None,
+                detail=decision.reason,
+                created_at=self._clock(),
+                judgment=_judgment_or_none(decision),
+            )
+            return SubmitOutcome(outcome=outcome, decision=decision)
         # Blocked: recorded for audit, never executed.
         self._ledger.record_execution(
             subject_id=subject_id,

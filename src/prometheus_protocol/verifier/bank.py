@@ -17,6 +17,8 @@ from prometheus_protocol.core.models import (
     Evidence,
     Judgment,
     Tier,
+    Unavailability,
+    Unavailable,
     Verdict,
 )
 from prometheus_protocol.verifier.aggregate import fuse, p_pass, total_log_odds
@@ -39,6 +41,25 @@ class RankEntry:
     samples: int
     mean_cost: float | None
     mean_latency_ms: float | None
+
+
+def _merge_unavailable(items: list[Unavailable]) -> Unavailable:
+    """The bank's single could-not-execute outcome from authoritative verifiers
+    that could not run. One is reported as-is; several are summarised, keeping
+    POLICY_REFUSAL only when *every* one was a deliberate refusal (otherwise the
+    conservative INFRA_FAULT)."""
+
+    if len(items) == 1:
+        return items[0]
+    all_policy = all(u.reason == Unavailability.POLICY_REFUSAL for u in items)
+    reason = Unavailability.POLICY_REFUSAL if all_policy else Unavailability.INFRA_FAULT
+    ids = ", ".join(u.verifier_id for u in items)
+    return Unavailable(
+        verifier_id=items[0].verifier_id,
+        tier=items[0].tier,
+        reason=reason,
+        detail=f"{len(items)} authoritative verifiers could not execute ({ids})",
+    )
 
 
 class VerifierBank:
@@ -107,37 +128,67 @@ class VerifierBank:
 
     # -- judging -----------------------------------------------------------
 
-    def judge(self, evidence: Sequence[Evidence]) -> Judgment:
-        for item in evidence:
+    def judge(
+        self, evidence: Sequence[Evidence | Unavailable]
+    ) -> Judgment | Unavailable:
+        # An Unavailable is NOT evidence: it is a verifier that could not execute,
+        # and it must never be aggregated into a verdict. Separate it out by TYPE
+        # before anything reads a ``.verdict`` — so no Unavailable can ever enter
+        # the fusion below, by construction rather than by a forgotten guard.
+        graded = [item for item in evidence if isinstance(item, Evidence)]
+        unavailable = [item for item in evidence if isinstance(item, Unavailable)]
+
+        for item in graded:
             self._observe(item)
 
         # Resolve each non-abstaining report to its verifier's persisted stats.
         # Classification and the prior both read the stored tier, so they can
         # never disagree.
         usable: list[tuple[Evidence, TrustStats]] = []
-        for item in evidence:
+        for item in graded:
             if item.verdict == Verdict.ABSTAIN:
                 continue
             usable.append((item, self._ensure_stats(item)))
 
-        if not usable:
-            return Judgment(
-                verdict=Verdict.ABSTAIN,
-                confidence=0.5,
-                authoritative=False,
-            )
-
         authoritative = [pair for pair in usable if pair[1].tier in AUTHORITATIVE_TIERS]
         advisory = [pair for pair in usable if pair[1].tier not in AUTHORITATIVE_TIERS]
+        auth_unavailable = [u for u in unavailable if u.tier in AUTHORITATIVE_TIERS]
 
         if authoritative:
-            return self._authoritative_judgment(authoritative, advisory)
-        return self._advisory_judgment(advisory)
+            # Authoritative truth is available; it decides the verdict. But an
+            # authoritative verifier that could NOT execute alongside it is NOT
+            # simply absent — it is an operational fault every time, and a sibling
+            # covering for it does not make the non-execution a non-event. Carry it
+            # on the Judgment (never drop it here) so a could-not-run HARD/HUMAN
+            # verifier stays visible downstream, exactly like an unavailable that
+            # stood alone. The verdict is still A's; only B's silence is refused.
+            return self._authoritative_judgment(
+                authoritative, advisory, unavailable=tuple(auth_unavailable)
+            )
+        if auth_unavailable:
+            # No authoritative verdict is available AND an authoritative verifier
+            # could not execute. Report the could-not-execute — never fall through
+            # to a SOFT advisory verdict, which would silently stand in for a
+            # HARD/HUMAN check that never ran (the exact defect EX-1 fixes). The
+            # caller halts / routes to a human; it is never a pass, fail, or
+            # abstention.
+            return _merge_unavailable(auth_unavailable)
+        if advisory:
+            return self._advisory_judgment(advisory)
+        # Nothing to go on: every report abstained, and no authoritative verifier
+        # was unavailable. A genuine "no opinion".
+        return Judgment(
+            verdict=Verdict.ABSTAIN,
+            confidence=0.5,
+            authoritative=False,
+        )
 
     def _authoritative_judgment(
         self,
         authoritative: list[tuple[Evidence, TrustStats]],
         advisory: list[tuple[Evidence, TrustStats]],
+        *,
+        unavailable: tuple[Unavailable, ...] = (),
     ) -> Judgment:
         has_human = any(stats.tier == Tier.HUMAN for _, stats in authoritative)
         ref_tier = Tier.HUMAN if has_human else Tier.HARD
@@ -150,7 +201,11 @@ class VerifierBank:
         # The verdict is decided by the authoritative reference alone — an
         # advisory verdict can never override it (I6).
         ref_contributions = [(s, e.verdict) for (e, s) in reference]
-        ref_verdict, _ = fuse(ref_contributions)
+        # EX-1 mypy baseline (pre-existing, NOT introduced here): Evidence.verdict
+        # is typed Verdict|None though __post_init__ always sets it. Ratcheted, not
+        # fixed — see the mypy-gate follow-up. warn_unused_ignores flags this the
+        # moment the root type is tightened.
+        ref_verdict, _ = fuse(ref_contributions)  # type: ignore[arg-type]
 
         # Confidence additionally reflects every non-reference verifier, each
         # weighted by the trust it has earned: an agreeing advisor raises
@@ -158,14 +213,14 @@ class VerifierBank:
         # An un-audited verifier contributes a log-LR of ~0 (I7), so it moves
         # confidence negligibly until it has earned weight through calibration.
         all_contributions = ref_contributions + [(s, e.verdict) for (e, s) in others]
-        probability = p_pass(total_log_odds(all_contributions))
+        probability = p_pass(total_log_odds(all_contributions))  # type: ignore[arg-type]  # EX-1 baseline (Evidence.verdict is Verdict|None)
         confidence = probability if ref_verdict == Verdict.PASS else 1.0 - probability
 
         # Calibrate each non-reference verifier against the reference verdict.
         for e, s in others:
             self._store.put(
                 e.verifier_id,
-                updated(s, predicted=e.verdict, actual=ref_verdict),
+                updated(s, predicted=e.verdict, actual=ref_verdict),  # type: ignore[arg-type]  # EX-1 baseline (Evidence.verdict is Verdict|None)
             )
 
         conflict = any(e.verdict != ref_verdict for e, _ in authoritative)
@@ -175,6 +230,7 @@ class VerifierBank:
             authoritative=True,
             contributing=tuple(e.verifier_id for e, _ in reference),
             conflict=conflict,
+            unavailable=unavailable,
         )
 
     def _advisory_judgment(
@@ -183,7 +239,7 @@ class VerifierBank:
         # No authoritative reference is available, so we report the fused
         # advisory verdict but record no calibration (there is no ground truth).
         contributions = [(s, e.verdict) for (e, s) in advisory]
-        verdict, confidence = fuse(contributions)
+        verdict, confidence = fuse(contributions)  # type: ignore[arg-type]  # EX-1 baseline (Evidence.verdict is Verdict|None)
         return Judgment(
             verdict=verdict,
             confidence=confidence,

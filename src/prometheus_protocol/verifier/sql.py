@@ -13,10 +13,15 @@ verifier, not a soft model judge. It emits the same tier-tagged
 * **PASS** — the candidate's result set is equivalent to the reference's;
 * **FAIL** — the results differ, or the candidate query errors on the valid
   fixture schema (its own fault, like a candidate crash in the code domain);
-* **ABSTAIN** — a harness fault: the sandbox did not start, the run timed
-  out, the fixture could not be built, or the *reference* query itself failed
-  (a broken task is never pinned on the candidate). An ABSTAIN is "could not
-  verify" and feeds no calibration.
+* **ABSTAIN** — a genuine "no opinion after running": the *reference* query
+  itself failed, so the task is unsound (a broken task is never pinned on the
+  candidate), or the candidate started and then ran past the wall clock. An
+  ABSTAIN feeds no calibration;
+* **Unavailable** (a non-verdict, not an abstention) — the check could **not**
+  execute: the sandbox did not start, a timeout before the run was confirmed to
+  start, the fixture could not be built, or the reference could not be run at
+  all. An authoritative check that could not execute must never silently degrade
+  into an abstention, so this is a distinct type carrying no ``verdict``.
 
 Comparison semantics (deliberate, documented, and enforced by tests):
 
@@ -57,6 +62,8 @@ from prometheus_protocol.core.models import (
     SPLITS,
     Evidence,
     Tier,
+    Unavailability,
+    Unavailable,
     Verdict,
 )
 from prometheus_protocol.sandbox import Limits, Sandbox, build_sandbox
@@ -296,7 +303,15 @@ class SqlVerifier:
             detail=detail[:1000],
         )
 
-    def verify(self, *, code: str, task: SqlTask) -> Evidence:
+    def _unavailable(self, *, reason: Unavailability, detail: str) -> Unavailable:
+        """A could-not-execute outcome — a non-verdict this HARD check emits when
+        it could not run the check at all (see the module docstring)."""
+
+        return Unavailable(
+            verifier_id=self.verifier_id, tier=self.tier, reason=reason, detail=detail[:1000]
+        )
+
+    def verify(self, *, code: str, task: SqlTask) -> Evidence | Unavailable:
         started = time.monotonic()
 
         def done(verdict: Verdict, detail: str, run=None) -> Evidence:
@@ -304,16 +319,34 @@ class SqlVerifier:
                 verdict, detail=detail, duration_s=time.monotonic() - started, run=run
             )
 
+        def unavailable(reason: Unavailability, detail: str) -> Unavailable:
+            return self._unavailable(reason=reason, detail=detail)
+
         # Ground truth first: the reference must run cleanly, every time. A
         # task whose reference fails is a harness/task fault — never a verdict.
         ref_payload, ref_run = self._execute(task, task.reference_query)
         if not ref_run.started_ok:
-            return done(Verdict.ABSTAIN, f"sandbox did not start: {ref_run.detail}")
+            # Isolation could not start: could-not-execute, never an abstention.
+            return unavailable(
+                Unavailability.POLICY_REFUSAL
+                if ref_run.policy_refusal
+                else Unavailability.INFRA_FAULT,
+                f"sandbox did not start: {ref_run.detail}",
+            )
         if ref_run.timed_out:
-            return done(Verdict.ABSTAIN, "reference query timed out; could not verify")
+            # The reference could not be run to completion, so we have no ground
+            # truth to judge against: could-not-execute (infra), not an abstention.
+            return unavailable(
+                Unavailability.INFRA_FAULT, "reference query timed out; could not verify"
+            )
         if ref_payload is None:
-            return done(Verdict.ABSTAIN, "reference produced no result; harness fault")
+            return unavailable(
+                Unavailability.INFRA_FAULT, "reference produced no result; harness fault"
+            )
         if "setup_error" in ref_payload or "query_error" in ref_payload:
+            # The reference SANDBOX ran fine and the reference QUERY errored: the
+            # task itself is unsound. This is a genuine "ran, and there is nothing
+            # sound to check" — ABSTAIN (category C), unchanged.
             reason = ref_payload.get("setup_error") or ref_payload.get("query_error")
             return done(
                 Verdict.ABSTAIN, f"reference query failed ({reason}); task is unsound"
@@ -321,12 +354,28 @@ class SqlVerifier:
 
         cand_payload, cand_run = self._execute(task, code)
         if not cand_run.started_ok:
-            return done(Verdict.ABSTAIN, f"sandbox did not start: {cand_run.detail}")
+            return unavailable(
+                Unavailability.POLICY_REFUSAL
+                if cand_run.policy_refusal
+                else Unavailability.INFRA_FAULT,
+                f"sandbox did not start: {cand_run.detail}",
+            )
         if cand_run.timed_out:
-            return done(
-                Verdict.ABSTAIN,
-                f"candidate query timed out after {self.timeout_s}s; could not verify",
-                cand_run,
+            if cand_run.candidate_started:
+                # The candidate started and then ran past the wall clock: its own
+                # hang. Unchanged "no opinion after running" (ABSTAIN), not
+                # could-not-execute.
+                return done(
+                    Verdict.ABSTAIN,
+                    f"candidate query timed out after {self.timeout_s}s; could not verify",
+                    cand_run,
+                )
+            # Timed out before the candidate was confirmed to start: a harness
+            # fault, could-not-execute.
+            return unavailable(
+                Unavailability.INFRA_FAULT,
+                f"timed out after {self.timeout_s}s before the candidate was "
+                "confirmed to start",
             )
         if cand_payload is None:
             # The runner always writes unless the candidate's own resource use
@@ -339,16 +388,17 @@ class SqlVerifier:
                     f"(exit {cand_run.exit_status}); treated as the candidate's crash",
                     cand_run,
                 )
-            return done(
-                Verdict.ABSTAIN,
+            return unavailable(
+                Unavailability.INFRA_FAULT,
                 "no result and the run was not confirmed to start; harness fault",
-                cand_run,
             )
         if "setup_error" in cand_payload:
-            return done(
-                Verdict.ABSTAIN,
+            # The fixture already built cleanly for the reference above, so a
+            # candidate-side setup failure is a transient/infra fault, not the
+            # candidate's and not task-unsoundness: could-not-execute.
+            return unavailable(
+                Unavailability.INFRA_FAULT,
                 f"fixture setup failed ({cand_payload['setup_error']}); harness fault",
-                cand_run,
             )
         if "query_error" in cand_payload:
             return done(

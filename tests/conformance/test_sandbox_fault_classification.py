@@ -1,10 +1,12 @@
-"""Conformance: candidate-fault (FAIL) vs harness-fault (ABSTAIN).
+"""Conformance: candidate-fault (FAIL) vs harness-fault (Unavailable).
 
 A candidate that crashes or is killed by a resource limit — with isolation
 confirmed started — is its OWN failure (FAIL, which feeds calibration). A harness
 or infrastructure fault (isolation never started, or the candidate not confirmed
-to run) is a could-not-verify (ABSTAIN, no calibration sample). Conservative on
-doubt: only a confirmed candidate start FAILs.
+to run) is a could-not-EXECUTE: the verifier returns :class:`Unavailable`, a
+non-verdict that carries no ``verdict`` — never an ABSTAIN (an authoritative check
+that could not run must not degrade into an abstention) and never a calibration
+sample. Conservative on doubt: only a confirmed candidate start FAILs.
 
 The signal is the sandbox's definite ``candidate_started`` token. The harness and
 fake-matrix cases need no isolation runtime and always run; the real crash->FAIL
@@ -21,7 +23,15 @@ from pathlib import Path
 
 import pytest
 
-from prometheus_protocol.core.models import Case, Evidence, Task, Tier, Verdict
+from prometheus_protocol.core.models import (
+    Case,
+    Evidence,
+    Task,
+    Tier,
+    Unavailability,
+    Unavailable,
+    Verdict,
+)
 from prometheus_protocol.sandbox import Limits, NamespaceSandbox
 from prometheus_protocol.sandbox.base import Sandbox, SandboxResult
 from prometheus_protocol.sandbox.unsafe import NullSandbox
@@ -67,8 +77,11 @@ class _FakeSandbox(Sandbox):
         )
 
 
-def _verdict(sandbox: Sandbox) -> Verdict:
-    return SubprocessVerifier(memory_mb=0, sandbox=sandbox).verify(code=_OK, task=_TASK).verdict
+def _outcome(sandbox: Sandbox):
+    """The verifier's outcome — an Evidence (it ran) or an Unavailable (it could
+    not). Deliberately does NOT reach for ``.verdict``: an Unavailable has none."""
+
+    return SubprocessVerifier(memory_mb=0, sandbox=sandbox).verify(code=_OK, task=_TASK)
 
 
 def _run(sandbox: NamespaceSandbox, code: str) -> SandboxResult:
@@ -105,18 +118,27 @@ def test_nullsandbox_reports_no_candidate_started():
 
 
 def test_confirmed_candidate_start_without_a_verdict_is_a_fail():
-    assert _verdict(_FakeSandbox(started_ok=True, candidate_started=True)) == Verdict.FAIL
+    out = _outcome(_FakeSandbox(started_ok=True, candidate_started=True))
+    assert isinstance(out, Evidence) and out.verdict == Verdict.FAIL
 
 
-def test_started_but_candidate_unconfirmed_is_abstain():
+def test_started_but_candidate_unconfirmed_is_unavailable():
     # started_ok True but the candidate was NOT confirmed to run (e.g. a bootstrap
-    # crash after start): a harness fault we cannot pin on the candidate -> ABSTAIN.
-    assert _verdict(_FakeSandbox(started_ok=True, candidate_started=False)) == Verdict.ABSTAIN
+    # crash after start): a harness fault we cannot pin on the candidate. This is
+    # could-not-EXECUTE — an Unavailable (INFRA_FAULT), NOT an ABSTAIN. This is the
+    # regression test that catches the bug cold from a STUB, no real container:
+    # against main this returned Verdict.ABSTAIN.
+    out = _outcome(_FakeSandbox(started_ok=True, candidate_started=False))
+    assert isinstance(out, Unavailable)
+    assert out.reason == Unavailability.INFRA_FAULT
+    assert not hasattr(out, "verdict")  # by construction: no verdict to misuse
 
 
-def test_isolation_not_started_is_abstain():
-    assert _verdict(_FakeSandbox(started_ok=False, candidate_started=False)) == Verdict.ABSTAIN
-    assert _verdict(NullSandbox()) == Verdict.ABSTAIN
+def test_isolation_not_started_is_unavailable():
+    a = _outcome(_FakeSandbox(started_ok=False, candidate_started=False))
+    b = _outcome(NullSandbox())
+    assert isinstance(a, Unavailable) and a.reason == Unavailability.INFRA_FAULT
+    assert isinstance(b, Unavailable) and b.reason == Unavailability.INFRA_FAULT
 
 
 # -- started_ok is unforgeable: marker forgery vs genuine start failures ----
@@ -202,11 +224,11 @@ def test_candidate_crash_fail_creates_a_calibration_sample():
     assert sample_count(store.get("soft")) == 1  # the crash-FAIL calibrated the advisor
 
 
-def test_harness_fault_abstain_creates_no_calibration_sample():
-    evidence = SubprocessVerifier(memory_mb=0, sandbox=NullSandbox()).verify(
+def test_harness_fault_unavailable_creates_no_calibration_sample():
+    outcome = SubprocessVerifier(memory_mb=0, sandbox=NullSandbox()).verify(
         code=_OK, task=_TASK
     )
-    assert evidence.verdict == Verdict.ABSTAIN
+    assert isinstance(outcome, Unavailable)
     store = InMemoryTrustStore()
     bank = VerifierBank(store)
     bank.register("subprocess-tests", Tier.HARD)
@@ -215,8 +237,11 @@ def test_harness_fault_abstain_creates_no_calibration_sample():
         passed=True, total=1, passed_count=1,
         verifier_id="soft", verdict=Verdict.PASS, tier=Tier.SOFT,
     )
-    bank.judge([evidence, soft])
-    assert sample_count(store.get("soft")) == 0  # ABSTAIN is no reference -> no sample
+    # The authoritative verifier could not execute; a SOFT verdict must NOT stand
+    # in for it, so the bank returns the Unavailable and calibrates nothing.
+    judgment = bank.judge([outcome, soft])
+    assert isinstance(judgment, Unavailable)
+    assert sample_count(store.get("soft")) == 0  # no reference -> no sample
 
 
 # -- parity: verdicts that were already correct do not move -----------------

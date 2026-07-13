@@ -38,6 +38,17 @@ jobs:
       - name: Compile
         run: python -m compileall -q src tests scripts
 
+      - name: Hearth type gate (mypy, strict on the frozen core)
+        # EX-1: "could not execute" is a distinct type (core.models.Unavailable)
+        # that carries no `verdict`, so an authoritative verifier that could not
+        # run can never be narrowed into a verdict. That guarantee is only real if
+        # a checker enforces it — a type contract that never runs is the exact
+        # class of bug EX-1 fixes — so it runs here and the build FAILS if the
+        # Hearth does not type-check. mypy.ini pins exactly the frozen files (and
+        # `mypy_path=src` so the real types resolve and the gate has teeth); the
+        # rest of the repo is not checked here (no yak-shaving).
+        run: python -m mypy --config-file mypy.ini
+
       - name: Repository hygiene
         run: python scripts/check_hygiene.py
 

@@ -44,8 +44,15 @@ class SandboxResult:
 
     ``started_ok`` answers the load-bearing question: did isolation start at
     all? When it is ``False`` the candidate did not run under isolation (a
-    missing runtime, a failed setup), and the caller must treat the run as "could
-    not verify" (ABSTAIN) — never as a pass or a fail.
+    missing runtime, a failed setup, or a deliberate policy refusal), and the
+    caller must treat the run as **could-not-execute** — a non-verdict outcome
+    (:class:`~prometheus_protocol.core.models.Unavailable`), never a pass, a
+    fail, or an abstention. ``policy_refusal`` distinguishes *why* it could not
+    run: ``True`` for a deliberate refusal to run (a supply-chain guard, e.g. an
+    unpinned image under a required digest pin — a chosen "no"), ``False`` for an
+    infrastructure fault (no runtime, setup failure — a fault to repair). A caller
+    maps the two to ``Unavailability.POLICY_REFUSAL`` / ``INFRA_FAULT`` so they
+    are never flattened together.
 
     ``candidate_started`` is the stronger, *definite* signal: the candidate
     command actually began executing under isolation. It is set only when the
@@ -74,6 +81,11 @@ class SandboxResult:
     output_truncated: bool = False
     started_ok: bool = True
     candidate_started: bool = False
+    #: When ``started_ok`` is False, whether the run was *deliberately refused*
+    #: (a policy/supply-chain guard) rather than an infrastructure fault. Set
+    #: structurally at the refusal site — never inferred from ``detail`` text —
+    #: so a caller can classify the unavailability without parsing a string.
+    policy_refusal: bool = False
     #: Which process/resource-limit lever the adapter used: ``"cgroup"`` (the
     #: stronger, per-cgroup cap — pids.max and, on v2, memory/cpu) or ``"rlimit"``
     #: (the POSIX rlimit fallback). Never silently weaker: a caller can tell.

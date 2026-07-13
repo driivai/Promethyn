@@ -152,7 +152,10 @@ def test_guessing_verifier_is_rejected():
     failed = {c.name for c in report.failures}
     assert "fail-closed" in failed, report.render()
     fc = next(c for c in report.failures if c.name == "fail-closed")
-    assert "GUESSED" in fc.detail
+    # A HARD verifier that returns a verdict when it could not run is rejected:
+    # the contract now requires an Unavailable (a non-verdict), not merely a
+    # non-guess. The detail names that requirement.
+    assert "must return Unavailable" in fc.detail
 
 
 def test_conformant_and_nonconformant_are_distinguished():
@@ -180,6 +183,24 @@ _HEARTH_FILES = (
     "src/prometheus_protocol/verifier/grounding.py",
 )
 
+# EX-1 (PR #52: a HARD verifier that cannot execute must not abstain) changed
+# exactly these ten frozen files, with explicit approval — the sanctioned delta.
+# The guard tolerates a change to one of THESE and still fails on ANY other
+# frozen-file change, so the Hearth stays protected against unsanctioned edits
+# while EX-1's approved surface lands.
+_EX1_CHANGED = frozenset({
+    "src/prometheus_protocol/core/models.py",
+    "src/prometheus_protocol/core/interfaces.py",
+    "src/prometheus_protocol/verifier/runner.py",
+    "src/prometheus_protocol/verifier/sql.py",
+    "src/prometheus_protocol/verifier/bank.py",
+    "src/prometheus_protocol/gate/authorization.py",
+    "src/prometheus_protocol/benchmarks/judge_eval.py",
+    "src/prometheus_protocol/orchestration/runtime.py",
+    "src/prometheus_protocol/execution/controller.py",
+    "src/prometheus_protocol/execution/pending.py",
+})
+
 
 def _git(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
@@ -193,10 +214,12 @@ def _git(*args: str) -> subprocess.CompletedProcess:
     reason="origin/main not available in this checkout",
 )
 def test_hearth_is_unchanged_versus_main():
-    """No Hearth-core file differs from origin/main. This sprint is a contract
-    AROUND the Hearth; if this fails, the surface changed behaviour."""
+    """No Hearth-core file differs from origin/main, EXCEPT the files EX-1 (PR #52)
+    changed with approval (``_EX1_CHANGED``). This sprint is a contract AROUND the
+    Hearth; if a file outside that sanctioned delta changed, the surface moved."""
 
     diff = _git("diff", "--name-only", "origin/main", "--", *_HEARTH_FILES)
     assert diff.returncode == 0, diff.stderr
     changed = [line for line in diff.stdout.splitlines() if line.strip()]
-    assert changed == [], f"Hearth files changed vs origin/main: {changed}"
+    unsanctioned = [f for f in changed if f not in _EX1_CHANGED]
+    assert unsanctioned == [], f"unsanctioned Hearth change vs origin/main: {unsanctioned}"

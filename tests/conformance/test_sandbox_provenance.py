@@ -16,7 +16,7 @@ so they always run, in CI and locally.
 from __future__ import annotations
 
 from prometheus_protocol.core.config import Config
-from prometheus_protocol.core.models import Case, Task, Verdict
+from prometheus_protocol.core.models import Case, Task, Unavailability, Unavailable, Verdict
 from prometheus_protocol.sandbox import Limits
 from prometheus_protocol.sandbox.container import ContainerSandbox, is_digest_pinned
 from prometheus_protocol.verifier.runner import SubprocessVerifier
@@ -80,15 +80,19 @@ def test_config_exposes_require_digest_pin():
     assert Config.from_env({"PROM_REQUIRE_DIGEST_PIN": "1"}).require_digest_pin is True
 
 
-# -- fail-closed preserved: a refusal ABSTAINs, never passes or fails --------
+# -- fail-closed preserved: a refusal is Unavailable, never passes or fails ---
 
 
-def test_digest_pin_refusal_flows_through_verifier_as_abstain():
-    # The tightening keeps the fail-closed guarantee: a refused image is a
-    # could-not-verify, so the verifier ABSTAINs (no pass, no fail, no sample).
+def test_digest_pin_refusal_flows_through_verifier_as_unavailable():
+    # The tightening keeps the fail-closed guarantee, and names the reason: a
+    # refused image is a DELIBERATE policy refusal to run — could-not-execute, so
+    # the verifier returns Unavailable(POLICY_REFUSAL) (no pass, no fail, and NOT
+    # an abstention; no calibration sample). It is never flattened with a
+    # daemon-down INFRA_FAULT.
     sandbox = ContainerSandbox(runtime="docker", image=_BARE, require_digest_pin=True)
-    evidence = SubprocessVerifier(memory_mb=0, sandbox=sandbox).verify(code=_OK, task=_TASK)
-    assert evidence.verdict == Verdict.ABSTAIN
+    outcome = SubprocessVerifier(memory_mb=0, sandbox=sandbox).verify(code=_OK, task=_TASK)
+    assert isinstance(outcome, Unavailable)
+    assert outcome.reason == Unavailability.POLICY_REFUSAL
 
 
 # -- the container adapter reports the stronger (cgroup) lever ----------------
