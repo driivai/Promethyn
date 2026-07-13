@@ -83,10 +83,17 @@ FAIL** — a HARD verifier silently degrading into "could not verify" while wear
 a HARD tier tag. The stub-runtime tests that run in the default suite did not
 catch it because a stub does not enforce the `--user`/bind-mount permission
 interaction a real `docker run` does — which is precisely why the real-container
-test exists. The bug is **not fixed in this cleanup branch** (it is runtime
-`sandbox/` code, out of scope here); the container backend stays **experimental**
-and the README caveat stays. The daemonless **namespace** backend is unaffected
-and remains the proven default (crash→FAIL under real isolation in CI).
+test exists.
+
+**Resolution (EX-1).** This RED was the finding that opened EX-1, and it is now
+**fixed and GREEN on record**
+([run 29225713634](https://github.com/driivai/Promethyn/actions/runs/29225713634),
+`2 passed`): the bootstrap is delivered via `python -c` and never staged into the
+bind-mounted workspace, so it is both readable by the non-root user and
+untamperable, and a container-run crash now **classifies FAIL**. The `sandbox/`
+fix was in scope for EX-1 (the sprint this RED launched), not the earlier cleanup
+branch. The `README`/`docs/sandbox.md` experimental caveats are dropped
+accordingly. The daemonless **namespace** backend remains the proven default.
 
 ## Did the ABSTAIN bug contaminate any published number? (EX-1 §0 audit)
 
@@ -195,19 +202,17 @@ so they are not forgotten:
   excluded from calibration. No change wanted; noted so the distinction between
   "task-unsound abstain" (keep) and "could-not-execute" (now `Unavailable`) stays
   explicit.
-- **An authoritative could-not-execute *beside* a successful sibling is carried on
-  `Judgment.unavailable`, but the execution ledger does not yet persist it.** When
-  one HARD/HUMAN verifier passes and another could not run, the verdict is (rightly)
-  the one that executed — but the one that could not is an operational fault every
-  time, and EX-1 originally *dropped* it at the bank (the exact "a fault that reports
-  nothing looks like no fault" failure this sprint exists to kill). Fixed: the bank
-  now carries it on `Judgment.unavailable` instead of discarding it. Not yet done:
-  persisting that field onto the execution ledger row — the execution-path serializer
-  `_judgment_to_dict` lives in `execution/pending.py`, a frozen file *outside* EX-1's
-  nine-file boundary, so wiring it in is a named follow-up rather than a silent tenth
-  file. Follow-up: serialize `Judgment.unavailable` in `_judgment_to_dict` (and a
-  queryable ledger column) so an authoritative could-not-execute-beside-a-success is
-  auditable, not only in memory.
+- **An authoritative could-not-execute *beside* a successful sibling — fixed, and the
+  fifth instance of the pattern.** When one HARD/HUMAN verifier passes and another
+  could not run, the verdict is (rightly) the one that executed — but the one that
+  could not is an operational fault every time, and EX-1 originally *dropped* it at
+  the bank (the exact "a fault that reports nothing looks like no fault" failure this
+  sprint exists to kill). Fixed on both sides: the bank now carries it on
+  `Judgment.unavailable`, and `_judgment_to_dict` (the approved tenth frozen file)
+  persists it into the execution ledger's judgment blob — emitted **only when
+  non-empty**, so a clean run's serialized judgment is byte-identical to before (no
+  hash/chain over the blob; readers tolerate the extra key; no migration). Remaining
+  follow-up (its own PR): promote it to a queryable ledger column.
 - **A SOFT-only `Unavailable` with no graded evidence** falls through to
   `Judgment(ABSTAIN)` and is dropped — same shape as the bank case above, lower stakes
   (a SOFT verifier is advisory, so its non-execution is not a gate-relevant fault).
@@ -224,3 +229,51 @@ so they are not forgotten:
   not fixed (out of scope; the diff stays minimal). Follow-up: tighten
   `Evidence.verdict` to `Verdict` at construction and delete the four ignores
   (`warn_unused_ignores` will prove they are gone the moment the root is fixed).
+- **Surface the reference partition in the *published* report.** `compute_metrics`
+  now carries `n_reference_abstained` and asserts the reference denominator is total
+  (`n_items == n_reference + n_reference_abstained + n_reference_unavailable`), but
+  the published `docs/judge-quality.md` report is left byte-identical (adding the
+  partition line changed the committed golden, which the `judge-eval` job correctly
+  caught). Follow-up (its own PR, so the §0-certified numbers doc is reviewed as a
+  diff): print the reference partition in the report.
+
+## The scar: five present-but-void guards (EX-1)
+
+The thing this sprint kept finding is one bug wearing five costumes: a guard or a
+record that is **present, plausible, and void** — it looks like it enforces or
+records something and enforces or records nothing. A summary is not a check; a field
+is not a record. Named, in the order they surfaced:
+
+1. **A test that never ran.** The four "Hearth is byte-identical to `origin/main`"
+   guards `skipif` `origin/main` is unresolvable — TRUE under CI's default shallow
+   checkout (`fetch-depth: 1`), so they **silently SKIPPED**. The whole "the frozen
+   core did not change" guarantee was unenforced in CI. Cured with `fetch-depth: 0`
+   plus a `-v -rs` step that shows them execute *by name* and shows the SKIPPED list
+   (they must not be in it).
+2. **A type gate that checked nothing.** The mypy Hearth gate would pass *vacuously*
+   under `--ignore-missing-imports` alone — the package's own types degrade to `Any`,
+   so it approves anything. Cured with `mypy_path=src` + `explicit_package_bases` so
+   the real types resolve, and proven with a teeth-probe (a deliberate type error the
+   gate must catch).
+3. **An env var that was silently dropped.** `PYTHONDONTWRITEBYTECODE=1` was set to
+   stop the container leaving a root-owned `__pycache__` the host can't reap — but the
+   candidate harness runs under `python -I`, and isolated mode implies `-E`, which
+   ignores every `PYTHON*` variable. The env var read like a guard and did nothing;
+   only the real-container CI caught that the "fix" hadn't fixed anything. Cured with
+   `-B`, a command-line flag `-I` does not suppress.
+4. **A nullable verdict.** `Evidence.verdict` is typed `Verdict | None` though it is
+   always set — a verdict-shaped hole that can hold "nothing" and be mistaken for a
+   value, and the reason the checker cannot see through the fusion calls. Ratcheted
+   with targeted ignores; tightening it is a named follow-up above.
+5. **A field that records nothing.** `Judgment.unavailable` carried an authoritative
+   could-not-execute, but the bank *dropped* it whenever a sibling produced a verdict,
+   and nothing persisted it — a record that recorded nothing. Cured by carrying it at
+   the bank and persisting it in the judgment blob (the tenth frozen file).
+
+The common cure is the same every time: **make the check actually execute in the
+environment it claims to guard.** Resolve `origin/main` and run the guard; give mypy
+the real types; run the container on a real daemon; narrow the nullable and let the
+type checker speak; persist the field and read it back. A check that never runs in its
+real environment is indistinguishable from a check that passes — which is the entire
+reason EX-1 exists: a HARD verifier that *could not execute* must not be allowed to
+look exactly like one that ran and had no opinion.
