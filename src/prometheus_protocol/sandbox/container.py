@@ -192,7 +192,18 @@ class ContainerSandbox(Sandbox):
         # per-run nonce from the first line of stdin (a place the candidate can
         # never read it back from) and emits the nonce-keyed started line on stderr
         # right before exec'ing the candidate.
-        inner_argv = ["python", *argv[1:]] if argv else ["python"]
+        # Prepend ``-B`` (never write bytecode) to the candidate harness command.
+        # This is the load-bearing half of the no-orphan guarantee (see the
+        # ``--env`` note below for why the env var alone cannot do it): the harness
+        # runs under ``python -I`` and isolated mode implies ``-E``, so the
+        # interpreter IGNORES every ``PYTHON*`` env var — ``PYTHONDONTWRITEBYTECODE``
+        # included. Left unset, importing the candidate writes a ``__pycache__``
+        # owned by the non-root container user (65534) into the bind-mounted
+        # workspace, a sub-directory the unprivileged host then cannot remove when
+        # it tears down its temp dir (a green run with a failing cleanup). ``-B`` is
+        # a command-line flag ``-I`` does not suppress, so it stops the write at the
+        # one process that actually does it.
+        inner_argv = ["python", "-B", *argv[1:]] if argv else ["python", "-B"]
         nonce = new_nonce()
         command = [
             self.runtime, "run", "--rm", "--interactive",
@@ -201,13 +212,13 @@ class ContainerSandbox(Sandbox):
             "--tmpfs", "/tmp:rw,size=64m",
             "--volume", f"{workspace}:{_WORKDIR}:rw",
             "--workdir", _WORKDIR,
-            # Write NO bytecode into the shared workspace mount. The candidate
-            # runs as the non-root container user (65534); a `__pycache__` it
-            # creates would be owned by 65534, and the host (a different, often
-            # unprivileged uid) then cannot remove that sub-directory when it
-            # cleans up its temp workspace — the run would succeed but its
-            # teardown would fail. No bytecode, no orphan, clean teardown; caching
-            # buys nothing for a one-shot sandboxed run anyway.
+            # Belt to the ``-B`` suspenders above (which handles the isolated
+            # harness process). Env vars ARE inherited across ``exec`` where the
+            # ``-B`` flag is not, so this covers any NON-isolated ``python`` the
+            # candidate itself spawns — stopping it, too, from leaving a
+            # 65534-owned ``__pycache__`` on the shared mount that the host cannot
+            # reap. The two are complementary; caching buys nothing for a one-shot
+            # sandboxed run anyway.
             "--env", "PYTHONDONTWRITEBYTECODE=1",
             "--memory", str(max(limits.memory_bytes, 16 * 1024 * 1024)),
             "--memory-swap", str(max(limits.memory_bytes, 16 * 1024 * 1024)),
