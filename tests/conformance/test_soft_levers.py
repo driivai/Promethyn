@@ -373,6 +373,24 @@ _UNCHANGED_FILES = (
     "src/prometheus_protocol/benchmarks/grounding_eval.py",
 )
 
+# EX-1 (PR #52: a HARD verifier that cannot execute must not abstain) changed
+# exactly these ten frozen files, with explicit approval — the sanctioned delta.
+# The guard tolerates a change to one of THESE and still fails on ANY other
+# protected-file change, so the Hearth + default judge path stay protected
+# against unsanctioned edits while EX-1's approved surface lands.
+_EX1_CHANGED = frozenset({
+    "src/prometheus_protocol/core/models.py",
+    "src/prometheus_protocol/core/interfaces.py",
+    "src/prometheus_protocol/verifier/runner.py",
+    "src/prometheus_protocol/verifier/sql.py",
+    "src/prometheus_protocol/verifier/bank.py",
+    "src/prometheus_protocol/gate/authorization.py",
+    "src/prometheus_protocol/benchmarks/judge_eval.py",
+    "src/prometheus_protocol/orchestration/runtime.py",
+    "src/prometheus_protocol/execution/controller.py",
+    "src/prometheus_protocol/execution/pending.py",
+})
+
 
 def _git(*args: str) -> subprocess.CompletedProcess:
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -387,4 +405,5 @@ def test_hearth_and_default_judge_path_unchanged_versus_main():
     diff = _git("diff", "--name-only", "origin/main", "--", *_UNCHANGED_FILES)
     assert diff.returncode == 0, diff.stderr
     changed = [line for line in diff.stdout.splitlines() if line.strip()]
-    assert changed == [], f"protected files changed vs origin/main: {changed}"
+    unsanctioned = [f for f in changed if f not in _EX1_CHANGED]
+    assert unsanctioned == [], f"unsanctioned protected change vs origin/main: {unsanctioned}"
