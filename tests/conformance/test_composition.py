@@ -267,26 +267,6 @@ _HEARTH_FILES = (
     "src/prometheus_protocol/orchestration/workflow.py",
 )
 
-# EX-1 (PR #52: a HARD verifier that cannot execute must not abstain) changed
-# exactly these ten frozen files, with explicit approval — the sanctioned delta.
-# The guard tolerates a change to one of THESE and still fails on ANY other
-# frozen-file change, so the Hearth stays protected against unsanctioned edits
-# while EX-1's approved surface lands. (Deleting them from the list instead would
-# leave them unguarded against a future unsanctioned change — a hole.)
-_EX1_CHANGED = frozenset({
-    "src/prometheus_protocol/core/models.py",
-    "src/prometheus_protocol/core/interfaces.py",
-    "src/prometheus_protocol/verifier/runner.py",
-    "src/prometheus_protocol/verifier/sql.py",
-    "src/prometheus_protocol/verifier/bank.py",
-    "src/prometheus_protocol/gate/authorization.py",
-    "src/prometheus_protocol/benchmarks/judge_eval.py",
-    "src/prometheus_protocol/orchestration/runtime.py",
-    "src/prometheus_protocol/execution/controller.py",
-    "src/prometheus_protocol/execution/pending.py",
-})
-
-
 def _git(*args: str) -> subprocess.CompletedProcess:
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     return subprocess.run(["git", *args], capture_output=True, text=True, cwd=root)
@@ -297,13 +277,12 @@ def _git(*args: str) -> subprocess.CompletedProcess:
     reason="origin/main not available in this checkout",
 )
 def test_hearth_and_orchestration_core_unchanged_versus_main():
-    """This sprint adds composition.py + a benchmark; it changes no trusted-core
-    file and no orchestration-skeleton file, EXCEPT the files EX-1 (PR #52) changed
-    with approval (``_EX1_CHANGED``). The ledger is not in this set (it is
-    unchanged here, but the study needs no ledger change)."""
+    """No trusted-core file and no orchestration-skeleton file differs from
+    origin/main — the last approved baseline (EX-1, PR #52, merged, is part of it).
+    No exemptions: any frozen-file change vs that baseline fails. The ledger is
+    not in this set (extended additively, deliberately outside the freeze)."""
 
     diff = _git("diff", "--name-only", "origin/main", "--", *_HEARTH_FILES)
     assert diff.returncode == 0, diff.stderr
     changed = [line for line in diff.stdout.splitlines() if line.strip()]
-    unsanctioned = [f for f in changed if f not in _EX1_CHANGED]
-    assert unsanctioned == [], f"unsanctioned Hearth change vs origin/main: {unsanctioned}"
+    assert changed == [], f"protected files changed vs origin/main: {changed}"
