@@ -237,9 +237,9 @@ so they are not forgotten:
   caught). Follow-up (its own PR, so the §0-certified numbers doc is reviewed as a
   diff): print the reference partition in the report.
 
-## The scar: five present-but-void guards (EX-1)
+## The scar: six present-but-void guards (EX-1)
 
-The thing this sprint kept finding is one bug wearing five costumes: a guard or a
+The thing this sprint kept finding is one bug wearing six costumes: a guard or a
 record that is **present, plausible, and void** — it looks like it enforces or
 records something and enforces or records nothing. A summary is not a check; a field
 is not a record. Named, in the order they surfaced:
@@ -269,6 +269,18 @@ is not a record. Named, in the order they surfaced:
    could-not-execute, but the bank *dropped* it whenever a sibling produced a verdict,
    and nothing persisted it — a record that recorded nothing. Cured by carrying it at
    the bank and persisting it in the judgment blob (the tenth frozen file).
+6. **A human gate routed around by momentum.** This one is about the sprint's own
+   process, not its code — and it is the only instance in this list no test can
+   catch. The review protocol held two items open at merge time (one of them flagged
+   as a hard stop pending a ruling), and the PR merged anyway on the strength of a
+   green build. Green is not the same as approved: CI asserts "the code passes its
+   checks," never "the human said yes" — those are different predicates, and the
+   second one was the whole point of the checkpoint ceremony. A human backstop is
+   only a backstop if something actually *waits* on it; a gate that can be overtaken
+   by momentum is present, plausible, and void — the same shape as the other five,
+   wearing a process instead of a test. (Both open items were closed post-merge
+   against what actually landed; nothing on main violated a ruling. That is luck,
+   not enforcement.)
 
 The common cure is the same every time: **make the check actually execute in the
 environment it claims to guard.** Resolve `origin/main` and run the guard; give mypy
