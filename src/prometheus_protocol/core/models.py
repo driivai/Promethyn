@@ -221,6 +221,14 @@ class Judgment:
     advisory verifiers only. ``contributing`` lists the verifier ids that
     decided the verdict. ``conflict`` is True when an authoritative verifier
     disagreed with the chosen reference verdict.
+
+    ``unavailable`` carries any authoritative verifiers that could NOT execute
+    while a sibling did produce the verdict. A sibling covering for it does not
+    make a could-not-execute a non-event — it is an operational fault every time
+    — so it is carried here and never silently dropped at the bank, staying
+    available to any consumer that records operational faults. (Persisting it onto
+    the execution ledger row is a named follow-up: that serializer lives outside
+    this sprint's frozen-file boundary — see docs/skip-sweep.md.)
     """
 
     verdict: Verdict
@@ -229,6 +237,7 @@ class Judgment:
     contributing: tuple[str, ...] = ()
     conflict: bool = False
     detail: str = ""
+    unavailable: tuple[Unavailable, ...] = ()
 
 
 # Minimal, explicit tool set the executor may act on: in-sandbox code

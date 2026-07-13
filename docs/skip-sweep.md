@@ -195,8 +195,32 @@ so they are not forgotten:
   excluded from calibration. No change wanted; noted so the distinction between
   "task-unsound abstain" (keep) and "could-not-execute" (now `Unavailable`) stays
   explicit.
-- **The four pre-existing `[arg-type]` mypy findings in `verifier/bank.py`**
-  (`Evidence.verdict` is typed `Verdict | None` though `__post_init__` always sets
-  it) are ratcheted with targeted `# type: ignore[arg-type]`, not fixed in EX-1.
-  Follow-up: tighten `Evidence.verdict` to `Verdict` at construction and drop the
-  four ignores (`warn_unused_ignores` will flag them the moment the root is fixed).
+- **An authoritative could-not-execute *beside* a successful sibling is carried on
+  `Judgment.unavailable`, but the execution ledger does not yet persist it.** When
+  one HARD/HUMAN verifier passes and another could not run, the verdict is (rightly)
+  the one that executed — but the one that could not is an operational fault every
+  time, and EX-1 originally *dropped* it at the bank (the exact "a fault that reports
+  nothing looks like no fault" failure this sprint exists to kill). Fixed: the bank
+  now carries it on `Judgment.unavailable` instead of discarding it. Not yet done:
+  persisting that field onto the execution ledger row — the execution-path serializer
+  `_judgment_to_dict` lives in `execution/pending.py`, a frozen file *outside* EX-1's
+  nine-file boundary, so wiring it in is a named follow-up rather than a silent tenth
+  file. Follow-up: serialize `Judgment.unavailable` in `_judgment_to_dict` (and a
+  queryable ledger column) so an authoritative could-not-execute-beside-a-success is
+  auditable, not only in memory.
+- **A SOFT-only `Unavailable` with no graded evidence** falls through to
+  `Judgment(ABSTAIN)` and is dropped — same shape as the bank case above, lower stakes
+  (a SOFT verifier is advisory, so its non-execution is not a gate-relevant fault).
+  Follow-up: carry it too, or decide explicitly that an advisory could-not-execute
+  warrants no record.
+- **The four pre-existing `[arg-type]` mypy findings in `verifier/bank.py` are the
+  *fourth* instance of this sprint's recurring shape — a value that is present but
+  void.** `Evidence.verdict` is typed `Verdict | None` though `__post_init__` always
+  sets it: a **nullable verdict**, a verdict-shaped hole that can hold "nothing" and
+  be mistaken for a value, which is exactly why the checker cannot see through the
+  fusion calls. It sits with the test that never ran, the type gate that checked
+  nothing, and the env var that was silently dropped — the same failure the whole
+  sprint keeps finding. Ratcheted in EX-1 with targeted `# type: ignore[arg-type]`,
+  not fixed (out of scope; the diff stays minimal). Follow-up: tighten
+  `Evidence.verdict` to `Verdict` at construction and delete the four ignores
+  (`warn_unused_ignores` will prove they are gone the moment the root is fixed).

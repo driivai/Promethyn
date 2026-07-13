@@ -155,10 +155,16 @@ class VerifierBank:
         auth_unavailable = [u for u in unavailable if u.tier in AUTHORITATIVE_TIERS]
 
         if authoritative:
-            # Authoritative truth is available; it decides. An authoritative
-            # verifier that happened to be unavailable alongside it is simply
-            # absent, not blocking.
-            return self._authoritative_judgment(authoritative, advisory)
+            # Authoritative truth is available; it decides the verdict. But an
+            # authoritative verifier that could NOT execute alongside it is NOT
+            # simply absent — it is an operational fault every time, and a sibling
+            # covering for it does not make the non-execution a non-event. Carry it
+            # on the Judgment (never drop it here) so a could-not-run HARD/HUMAN
+            # verifier stays visible downstream, exactly like an unavailable that
+            # stood alone. The verdict is still A's; only B's silence is refused.
+            return self._authoritative_judgment(
+                authoritative, advisory, unavailable=tuple(auth_unavailable)
+            )
         if auth_unavailable:
             # No authoritative verdict is available AND an authoritative verifier
             # could not execute. Report the could-not-execute — never fall through
@@ -181,6 +187,8 @@ class VerifierBank:
         self,
         authoritative: list[tuple[Evidence, TrustStats]],
         advisory: list[tuple[Evidence, TrustStats]],
+        *,
+        unavailable: tuple[Unavailable, ...] = (),
     ) -> Judgment:
         has_human = any(stats.tier == Tier.HUMAN for _, stats in authoritative)
         ref_tier = Tier.HUMAN if has_human else Tier.HARD
@@ -222,6 +230,7 @@ class VerifierBank:
             authoritative=True,
             contributing=tuple(e.verifier_id for e, _ in reference),
             conflict=conflict,
+            unavailable=unavailable,
         )
 
     def _advisory_judgment(
