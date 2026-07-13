@@ -146,12 +146,21 @@ class JudgeMetrics:
     single one means the ground-truth denominator was shrunk by a runtime failure
     rather than by real abstention, which is exactly the corruption EX-1 makes
     visible. ``n_judge_unavailable`` is the same for the judge arm.
+
+    ``n_reference_abstained`` closes the reference partition: every item's
+    reference is exactly one of decided (PASS/FAIL, counted in ``n_reference``),
+    abstained (``n_reference_abstained``), or could-not-execute
+    (``n_reference_unavailable``). ``compute_metrics`` asserts
+    ``n_items == n_reference + n_reference_abstained + n_reference_unavailable`` —
+    so no item can leave the ground-truth denominator without a name (the §0
+    thesis, turned into an invariant).
     """
 
     n_items: int
     n_reference: int
     n_decided: int
     n_abstained: int
+    n_reference_abstained: int
     n_reference_unavailable: int
     n_judge_unavailable: int
     n_agree: int
@@ -215,6 +224,20 @@ def compute_metrics(
     # reported, never folded into (or silently dropped from) a rate denominator.
     n_reference_unavailable = sum(1 for r in rows if r.reference_unavailable)
     n_judge_unavailable = sum(1 for r in rows if r.judge_unavailable)
+    # The reference partition must be TOTAL: every item's reference is decided
+    # (PASS/FAIL), an abstention, or a could-not-execute. Count the abstentions
+    # explicitly and assert the identity, so no item can silently leave the
+    # ground-truth denominator — the §0 thesis (denominator shrinkage must be
+    # named, never hidden) enforced as an invariant.
+    n_reference_abstained = sum(1 for r in rows if r.reference == Verdict.ABSTAIN)
+    assert (
+        len(rows)
+        == len(referenced) + n_reference_abstained + n_reference_unavailable
+    ), (
+        "reference partition is not total: "
+        f"{len(rows)} items != {len(referenced)} decided + "
+        f"{n_reference_abstained} abstained + {n_reference_unavailable} unavailable"
+    )
 
     agree = [r for r in decided if r.judged == r.reference]
     ref_fail = [r for r in decided if r.reference == Verdict.FAIL]
@@ -246,6 +269,7 @@ def compute_metrics(
         n_reference=len(referenced),
         n_decided=len(decided),
         n_abstained=abstained,
+        n_reference_abstained=n_reference_abstained,
         n_reference_unavailable=n_reference_unavailable,
         n_judge_unavailable=n_judge_unavailable,
         n_agree=len(agree),
