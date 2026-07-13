@@ -87,3 +87,47 @@ test exists. The bug is **not fixed in this cleanup branch** (it is runtime
 `sandbox/` code, out of scope here); the container backend stays **experimental**
 and the README caveat stays. The daemonless **namespace** backend is unaffected
 and remains the proven default (crash→FAIL under real isolation in CI).
+
+## Did the ABSTAIN bug contaminate any published number? (EX-1 §0 audit)
+
+The container RED above is one instance of a wider bug: a HARD verifier that
+**cannot execute** returns `Verdict.ABSTAIN` (`runner.py:188`, backend-agnostic),
+and `benchmarks/judge_eval.py:192` **excludes every reference-ABSTAIN row from
+`n_reference`** — so an infra-ABSTAIN silently shrinks the ground-truth
+denominator under every published false-PASS / false-FAIL rate. Before fixing the
+bug, EX-1 audited whether it had already corrupted a published figure. It
+distinguishes two kinds of could-not-decide: **category B** (could-not-execute — an
+infra/harness fault: sandbox did not start, candidate never confirmed) and
+**category C** (`reported_total == 0`, task-unsound). Only B is the bug; C is a
+legitimate abstain (the check ran, there was nothing to check).
+
+**Method — measured, not asserted.** No per-item eval artifacts are committed to
+the repo (the live-v1/live-v2 dispatch results live only in the Actions logs), so
+the reference side was **re-derived by re-executing the deterministic HARD
+reference** (`SubprocessVerifier(memory_mb=0)`, exactly as `judge_eval.py:504`
+builds it) over every committed CODE item set, under the real namespace sandbox,
+counting PASS / FAIL / ABSTAIN and classifying every abstain B vs C. The grounding
+sets need no execution — their reference is the gold label, mapped straight to a
+verdict (`grounding_eval.py:266` → `_GOLD_VERDICT`, `SUPPORTED→PASS`,
+`NOT_SUPPORTED→FAIL`), so a reference-ABSTAIN is not representable there.
+
+| published rate(s) | reference | re-executed result | category-B abstains |
+|---|---|---|---|
+| offline scripted (`judge-quality.md`) | HARD verifier ×10 | 5 PASS / 5 FAIL / **0 ABSTAIN** (`n_reference=10`) | **0** |
+| live-v1 `0/32`, `0/16` (both arms) | HARD verifier ×48 | 16 PASS / 32 FAIL / **0 ABSTAIN** | **0** |
+| live-v2 `2/51`=3.9%, `0/49`, `0/31` | HARD verifier ×82 | 31 PASS / 51 FAIL / **0 ABSTAIN** | **0** |
+| grounding-v1 `0/26` (both arms) | gold label (no sandbox) | n/a — reference cannot ABSTAIN | **0 (structural)** |
+| grounding-v2 `5/45`, `0/43` | gold label (no sandbox) | n/a — reference cannot ABSTAIN | **0 (structural)** |
+
+The re-execution reproduces each documented PASS/FAIL split exactly (48/48 =
+16 PASS / 32 FAIL; 82/82 = 31 PASS / 51 FAIL), and every published denominator is
+full: where a code-domain denominator is short of the item count (e.g. live-v2
+independent `0/49`, not `0/51`) it is short by the **judge's** documented abstains,
+never the reference's.
+
+**Finding: ZERO category-B reference-ABSTAINs behind any published number. No
+published false-PASS or false-FAIL figure had its denominator shrunk by an
+infra-fault; every rate in `docs/judge-quality.md` and
+`docs/soft-calibration-adoption-rule.md` stands as published.** The bug was real,
+latent, and authoritative — but it had not yet reached the numbers. It was caught
+by the container job before it could.
