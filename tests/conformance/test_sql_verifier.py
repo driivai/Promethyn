@@ -13,7 +13,7 @@ import os
 
 import pytest
 
-from prometheus_protocol.core.models import Tier, Verdict
+from prometheus_protocol.core.models import Tier, Unavailable, Verdict
 from prometheus_protocol.gate.promotion import (
     OUTCOME_APPROVE,
     OUTCOME_BLOCK,
@@ -81,12 +81,15 @@ def test_query_error_on_valid_schema_is_the_candidates_fail():
     assert "errored" in evidence.detail
 
 
-def test_sandbox_fault_is_abstain_not_a_verdict():
-    evidence = SqlVerifier(sandbox=NullSandbox()).verify(
+def test_sandbox_fault_is_unavailable_not_a_verdict():
+    outcome = SqlVerifier(sandbox=NullSandbox()).verify(
         code="SELECT 1", task=_TASK
     )
-    assert evidence.verdict == Verdict.ABSTAIN
-    assert "sandbox did not start" in evidence.detail
+    # Could-not-execute is a non-verdict (Unavailable), never an ABSTAIN: it has
+    # no ``verdict`` at all, so it cannot be mistaken for one.
+    assert isinstance(outcome, Unavailable)
+    assert not hasattr(outcome, "verdict")
+    assert "sandbox did not start" in outcome.detail
 
 
 def test_unsound_reference_is_abstain_never_pinned_on_the_candidate():
@@ -157,18 +160,21 @@ def test_full_loop_closes_in_the_sql_domain():
     assert summary["decisions"][0]["decided_by"] == "demo-operator"
 
 
-def test_abstaining_sql_evidence_never_authorizes(monkeypatch):
+def test_unavailable_sql_verification_routes_to_human_never_authorizes(monkeypatch):
     _require_runtime()
-    # An ABSTAIN is not authoritative: the bank's judgment cannot pass the
-    # gate, so a verification the harness could not run never executes.
-    evidence = SqlVerifier(sandbox=NullSandbox()).verify(code="SELECT 1", task=_TASK)
+    # A verification the harness could NOT run is could-not-execute, not an
+    # abstention: the bank returns Unavailable (a SOFT verdict must never stand in
+    # for it), and the gate routes it to a human hold via OUTCOME_UNAVAILABLE —
+    # never a pass, and never a silent policy block that misreports the reason.
+    outcome = SqlVerifier(sandbox=NullSandbox()).verify(code="SELECT 1", task=_TASK)
+    assert isinstance(outcome, Unavailable)
     bank = VerifierBank()
     bank.register(SqlVerifier.VERIFIER_ID, Tier.HARD)
-    judgment = bank.judge([evidence])
-    assert not judgment.authoritative
-    from prometheus_protocol.gate.authorization import ActionGate
+    judgment = bank.judge([outcome])
+    assert isinstance(judgment, Unavailable)
+    from prometheus_protocol.gate.authorization import ActionGate, OUTCOME_UNAVAILABLE
 
     decision = ActionGate(escalate_below=0.75, route_high_risk=True).decide(
-        judgment, risk_class="medium", subject_id="sql/abstain"
+        judgment, risk_class="medium", subject_id="sql/unavailable"
     )
-    assert decision.outcome == OUTCOME_BLOCK and not decision.approved
+    assert decision.outcome == OUTCOME_UNAVAILABLE and not decision.approved

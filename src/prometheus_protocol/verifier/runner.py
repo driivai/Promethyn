@@ -20,7 +20,14 @@ import time
 from pathlib import Path
 
 from prometheus_protocol.core.interfaces import Verifier
-from prometheus_protocol.core.models import Evidence, Task, Tier, Verdict
+from prometheus_protocol.core.models import (
+    Evidence,
+    Task,
+    Tier,
+    Unavailability,
+    Unavailable,
+    Verdict,
+)
 from prometheus_protocol.sandbox import Limits, Sandbox, build_sandbox
 
 # The harness that runs inside the child process. It imports the candidate as
@@ -89,17 +96,25 @@ main()
 class SubprocessVerifier(Verifier):
     """Default verifier. See the module-level security notice.
 
-    Emits tier-tagged :class:`Evidence`; it is an authoritative hard check.
-    ``PASS`` when every case passes. ``FAIL`` when the candidate itself is at
-    fault — a wrong answer, an exception raised inside a case, or the candidate
-    crashing / being killed by a resource limit on its own code (a *confirmed*
-    candidate start that produced no verdict). ``ABSTAIN`` when the check could
-    not run and the fault cannot be pinned on the candidate — isolation did not
-    start, a wall-clock timeout, the candidate was never confirmed to run, or the
-    task had no cases. The candidate-vs-harness distinction rests on the sandbox's
-    definite ``candidate_started`` signal; on doubt it stays ABSTAIN. An ABSTAIN
-    is a genuine "no opinion": never a pass or a fail, and it never feeds
-    calibration; a FAIL does.
+    It is an authoritative hard check, and its outcome is one of two *types*, so
+    "could not execute" can never be mistaken for a verdict:
+
+    * :class:`Evidence` when the check ran. ``PASS`` when every case passes;
+      ``FAIL`` when the candidate itself is at fault — a wrong answer, an
+      exception raised inside a case, or the candidate crashing / being killed by
+      a resource limit on its own code (a *confirmed* candidate start that
+      produced no verdict); ``ABSTAIN`` only for a genuine "no opinion after
+      running" — the task had no cases (nothing to check), or the candidate
+      started and then ran past the wall clock (its own hang; unchanged
+      semantics). An ABSTAIN never feeds calibration; a FAIL does.
+    * :class:`Unavailable` when the check could **not** run — isolation did not
+      start, the candidate was never confirmed to begin, a wall-clock timeout
+      *before* the candidate started, or a deliberate policy refusal. This is not
+      a verdict and carries no ``verdict``: an authoritative verifier that could
+      not execute must never silently degrade into an abstention. The
+      candidate-vs-harness distinction rests on the sandbox's definite
+      ``candidate_started`` signal; on doubt the run is Unavailable, never a pass
+      or a fail.
     """
 
     #: Stable identifier this verifier reports in every Evidence it emits.
@@ -165,7 +180,18 @@ class SubprocessVerifier(Verifier):
             detail=_clip(detail, 1000),
         )
 
-    def verify(self, *, code: str, task: Task) -> Evidence:
+    def _unavailable(self, *, reason: Unavailability, detail: str) -> Unavailable:
+        """A could-not-execute outcome — a non-verdict this HARD check emits when
+        it could not run the candidate at all (see the class docstring)."""
+
+        return Unavailable(
+            verifier_id=self.verifier_id,
+            tier=self.tier,
+            reason=reason,
+            detail=_clip(detail, 1000),
+        )
+
+    def verify(self, *, code: str, task: Task) -> Evidence | Unavailable:
         cases = [(case.args, case.expected) for case in task.cases]
         total = len(cases)
         with tempfile.TemporaryDirectory(prefix="prom-verify-") as tmp:
@@ -186,29 +212,45 @@ class SubprocessVerifier(Verifier):
             duration = time.monotonic() - started
 
             if not sb.started_ok:
-                # Isolation could not start: we could not verify. ABSTAIN — no
-                # opinion, no calibration sample, never a pass or a fail.
-                return self._evidence(
-                    verdict=Verdict.ABSTAIN,
-                    total=total,
-                    passed_count=0,
-                    failures=(f"sandbox did not start: {sb.detail}",),
-                    stdout=sb.stdout,
-                    stderr=sb.stderr,
-                    duration_s=duration,
-                    timed_out=False,
+                # Isolation could not start: we could NOT execute the candidate.
+                # A non-verdict outcome (Unavailable), never an abstention — an
+                # authoritative check that could not run must not degrade into
+                # "no opinion". The reason is carried structurally by the adapter
+                # (a deliberate policy refusal vs an infrastructure fault), never
+                # parsed from the detail text.
+                reason = (
+                    Unavailability.POLICY_REFUSAL
+                    if sb.policy_refusal
+                    else Unavailability.INFRA_FAULT
+                )
+                return self._unavailable(
+                    reason=reason, detail=f"sandbox did not start: {sb.detail}"
                 )
             if sb.timed_out:
-                # The check could not run to completion: no opinion (ABSTAIN).
-                return self._evidence(
-                    verdict=Verdict.ABSTAIN,
-                    total=total,
-                    passed_count=0,
-                    failures=(f"timed out after {self.timeout_s}s",),
-                    stdout=sb.stdout,
-                    stderr=sb.stderr,
-                    duration_s=duration,
-                    timed_out=True,
+                if sb.candidate_started:
+                    # The candidate started and then ran past the wall clock: its
+                    # own hang. Unchanged semantics — a genuine "no opinion after
+                    # running" (ABSTAIN), NOT could-not-execute. (Whether a
+                    # confirmed-start timeout should be a FAIL is a separate
+                    # question, deliberately out of EX-1's scope.)
+                    return self._evidence(
+                        verdict=Verdict.ABSTAIN,
+                        total=total,
+                        passed_count=0,
+                        failures=(f"timed out after {self.timeout_s}s",),
+                        stdout=sb.stdout,
+                        stderr=sb.stderr,
+                        duration_s=duration,
+                        timed_out=True,
+                    )
+                # Timed out before the candidate was ever confirmed to start: the
+                # check could not run — a harness/infra fault, not the candidate's.
+                return self._unavailable(
+                    reason=Unavailability.INFRA_FAULT,
+                    detail=(
+                        f"timed out after {self.timeout_s}s before the candidate "
+                        "was confirmed to start"
+                    ),
                 )
 
             result = _read_result(result_path)
@@ -231,19 +273,12 @@ class SubprocessVerifier(Verifier):
                         duration_s=duration,
                         timed_out=False,
                     )
-                return self._evidence(
-                    verdict=Verdict.ABSTAIN,
-                    total=total,
-                    passed_count=0,
-                    failures=(
+                return self._unavailable(
+                    reason=Unavailability.INFRA_FAULT,
+                    detail=(
                         f"no verdict produced (exit code {sb.exit_status}) and the "
-                        "candidate was not confirmed to start; treated as a harness "
-                        "fault",
+                        "candidate was not confirmed to start; a harness fault"
                     ),
-                    stdout=sb.stdout,
-                    stderr=sb.stderr,
-                    duration_s=duration,
-                    timed_out=False,
                 )
 
             passed_count = int(result.get("passed", 0))

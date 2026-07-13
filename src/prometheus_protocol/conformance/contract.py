@@ -50,6 +50,7 @@ from prometheus_protocol.core.models import (
     Attempt,
     Evidence,
     Tier,
+    Unavailable,
     Verdict,
 )
 from prometheus_protocol.forge.miner import LessonForge
@@ -199,22 +200,46 @@ def check_verifier(
     ))
 
     # -- fail-closed (always runnable: the injected source refuses to run) --
+    # The contract is tier-dependent and by-construction:
+    #   * an AUTHORITATIVE (executable) verifier that could not run must return a
+    #     could-not-execute OUTCOME (Unavailable) — a non-verdict carrying no
+    #     ``verdict`` at all. It may NOT return an ABSTAIN: an authoritative check
+    #     that could not execute must never degrade into an abstention (EX-1). A
+    #     type-level distinction, not a convention.
+    #   * an ADVISORY judge that cannot form an opinion abstains (Evidence,
+    #     ABSTAIN) — a genuine "no opinion", which is its correct fail-closed.
     fc_verifier, (fc_code, fc_task) = case.failclosed
     fc_evidence = fc_verifier.verify(code=fc_code, task=fc_task)
-    checks.append(CheckResult(
-        "fail-closed",
-        fc_evidence.verdict == Verdict.ABSTAIN,
-        f"with ground truth unavailable the verifier returned "
-        f"{fc_evidence.verdict.value!r} "
-        + ("(ABSTAIN — refuses to guess)" if fc_evidence.verdict == Verdict.ABSTAIN
-           else "(GUESSED a verdict instead of abstaining)"),
-    ))
+    if case.tier in AUTHORITATIVE_TIERS:
+        fc_ok = isinstance(fc_evidence, Unavailable)
+        fc_detail = (
+            "with ground truth unavailable the executable verifier returned "
+            + (
+                "an Unavailable (could-not-execute — no verdict to guess or abstain)"
+                if fc_ok
+                else f"{getattr(fc_evidence, 'verdict', fc_evidence)!r} "
+                "(an authoritative check that could not run must return Unavailable, "
+                "never a verdict or an abstention)"
+            )
+        )
+    else:
+        fc_ok = isinstance(fc_evidence, Evidence) and fc_evidence.verdict == Verdict.ABSTAIN
+        fc_detail = (
+            "with no opinion the advisory judge returned "
+            + (
+                "ABSTAIN (refuses to guess)"
+                if fc_ok
+                else f"{getattr(fc_evidence, 'verdict', fc_evidence)!r} "
+                "(an advisory judge with no opinion must ABSTAIN)"
+            )
+        )
+    checks.append(CheckResult("fail-closed", fc_ok, fc_detail))
 
     # -- emits its declared tier (catches a soft process stamping HARD) -----
-    # A well-behaved verifier tags EVERY Evidence — even an ABSTAIN — with its
-    # declared tier. A soft verifier that stamps HARD on its output is caught
-    # here directly, on a real Evidence it emitted, before the bank is even
-    # consulted.
+    # A well-behaved verifier tags EVERY outcome — an Evidence (even an ABSTAIN)
+    # or an Unavailable — with its declared tier. A soft verifier that stamps HARD
+    # on its output is caught here directly, on a real outcome it emitted, before
+    # the bank is even consulted.
     emitted_tier = fc_evidence.tier
     checks.append(CheckResult(
         "emits-declared-tier",

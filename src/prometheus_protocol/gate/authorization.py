@@ -12,13 +12,28 @@ from __future__ import annotations
 
 from typing import Mapping
 
-from prometheus_protocol.core.models import ExecutableAction, Judgment, Verdict
+from prometheus_protocol.core.models import (
+    ExecutableAction,
+    Judgment,
+    Unavailable,
+    Verdict,
+)
 from prometheus_protocol.gate.promotion import (
     OUTCOME_APPROVE,
     OUTCOME_BLOCK,
     OUTCOME_ROUTE,
     GateDecision,
 )
+
+# A could-not-execute authorization outcome, kept here (not in the frozen
+# promotion module) as a distinct terminal state. An authoritative verifier
+# could not run, so there is no verdict to authorize on: it NEVER approves
+# (``approved`` stays False, so the wall is unchanged) and it is deliberately
+# neither ``block`` (which would misreport a harness fault as a policy denial)
+# nor ``route`` (which means "a PASS too uncertain to auto-approve"). It routes
+# to a human hold and is recorded distinctly, so an unavailable is forever
+# separable in the ledger from an ordinary denial or a genuine abstention.
+OUTCOME_UNAVAILABLE = "unavailable"
 
 # Minimum confidence required to authorize an action, by risk class. A higher
 # risk demands a more confident judgment.
@@ -57,12 +72,27 @@ class ActionGate:
 
     def decide(
         self,
-        judgment: Judgment,
+        judgment: Judgment | Unavailable,
         *,
         risk_class: str = "low",
         subject_id: str = "",
         action: ExecutableAction | None = None,
     ) -> GateDecision:
+        if isinstance(judgment, Unavailable):
+            # An authoritative verifier could NOT execute: there is no verdict to
+            # authorize on. Never approve; route to a human hold via the distinct
+            # terminal outcome above — never a silent block, and never a pass.
+            return GateDecision(
+                approved=False,
+                subject_id=subject_id,
+                judgment=None,
+                reason=(
+                    f"unavailable: an authoritative check could not execute "
+                    f"({judgment.reason.value}: {judgment.detail}); routed to a human"
+                ),
+                outcome=OUTCOME_UNAVAILABLE,
+                action=action,
+            )
         floor = self._min_confidence.get(risk_class, 0.0)
         outcome = self._outcome(judgment, risk_class=risk_class, floor=floor)
         return GateDecision(

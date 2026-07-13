@@ -152,7 +152,10 @@ def test_guessing_verifier_is_rejected():
     failed = {c.name for c in report.failures}
     assert "fail-closed" in failed, report.render()
     fc = next(c for c in report.failures if c.name == "fail-closed")
-    assert "GUESSED" in fc.detail
+    # A HARD verifier that returns a verdict when it could not run is rejected:
+    # the contract now requires an Unavailable (a non-verdict), not merely a
+    # non-guess. The detail names that requirement.
+    assert "must return Unavailable" in fc.detail
 
 
 def test_conformant_and_nonconformant_are_distinguished():

@@ -143,6 +143,11 @@ class ContainerSandbox(Sandbox):
             )
             return SandboxResult(
                 started_ok=False,
+                # A deliberate refusal to run (a supply-chain guard), NOT an infra
+                # fault: mark it structurally so the verifier maps it to
+                # Unavailability.POLICY_REFUSAL, never flattened with a daemon-down
+                # INFRA_FAULT.
+                policy_refusal=True,
                 detail=(
                     f"image {self.image!r} is not digest-pinned and "
                     "PROM_REQUIRE_DIGEST_PIN is set"

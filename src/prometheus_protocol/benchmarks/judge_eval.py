@@ -47,7 +47,7 @@ from dataclasses import dataclass
 from typing import Sequence
 
 from prometheus_protocol.core.interfaces import Provider, Verifier
-from prometheus_protocol.core.models import Case, Skill, Task, Verdict
+from prometheus_protocol.core.models import Case, Evidence, Skill, Task, Unavailable, Verdict
 from prometheus_protocol.verifier.model_judge import ModelJudgeVerifier
 
 #: Evaluation-only judge system prompt. Same one-word verdict contract as the
@@ -97,13 +97,22 @@ class EvalItem:
 @dataclass(frozen=True)
 class JudgedRow:
     """One item after both verifiers ran: the reference verdict, the judge's
-    verdict, and the confidence the judge stated (``None`` when unstated)."""
+    verdict, and the confidence the judge stated (``None`` when unstated).
+
+    A verdict is ``None`` when that verifier could **not execute** the check (it
+    returned :class:`Unavailable`, not a verdict); the matching ``*_unavailable``
+    flag records it. This is distinct from an ABSTAIN verdict: an ABSTAIN is
+    "ran, no opinion" (excluded from rates, carries no fault), whereas an
+    unavailable is "could not run" — an operational fault that is COUNTED and
+    reported, never silently dropped."""
 
     item_id: str
     actor_model: str
-    reference: Verdict
-    judged: Verdict
+    reference: Verdict | None
+    judged: Verdict | None
     confidence: float | None
+    reference_unavailable: bool = False
+    judge_unavailable: bool = False
 
 
 @dataclass(frozen=True)
@@ -129,12 +138,22 @@ class JudgeMetrics:
     whose reference ABSTAINed carry no ground truth and are excluded from every
     rate. The judge's own ABSTAINs are counted, and excluded from agreement and
     error denominators (an abstain is "no opinion", not a wrong opinion).
+
+    ``n_reference_unavailable`` counts rows whose reference could NOT execute (an
+    infra/harness fault, distinct from an abstention). These carry no ground
+    truth and so are absent from every rate denominator — but they are an
+    OPERATIONAL FAULT, counted and reported here, never silently dropped: a
+    single one means the ground-truth denominator was shrunk by a runtime failure
+    rather than by real abstention, which is exactly the corruption EX-1 makes
+    visible. ``n_judge_unavailable`` is the same for the judge arm.
     """
 
     n_items: int
     n_reference: int
     n_decided: int
     n_abstained: int
+    n_reference_unavailable: int
+    n_judge_unavailable: int
     n_agree: int
     agreement: float | None
     reference_fails_decided: int
@@ -192,6 +211,10 @@ def compute_metrics(
     referenced = [r for r in rows if r.reference in (Verdict.PASS, Verdict.FAIL)]
     decided = [r for r in referenced if r.judged in (Verdict.PASS, Verdict.FAIL)]
     abstained = len(referenced) - len(decided)
+    # Could-not-execute is an operational fault, not an abstention: counted and
+    # reported, never folded into (or silently dropped from) a rate denominator.
+    n_reference_unavailable = sum(1 for r in rows if r.reference_unavailable)
+    n_judge_unavailable = sum(1 for r in rows if r.judge_unavailable)
 
     agree = [r for r in decided if r.judged == r.reference]
     ref_fail = [r for r in decided if r.reference == Verdict.FAIL]
@@ -223,6 +246,8 @@ def compute_metrics(
         n_reference=len(referenced),
         n_decided=len(decided),
         n_abstained=abstained,
+        n_reference_unavailable=n_reference_unavailable,
+        n_judge_unavailable=n_judge_unavailable,
         n_agree=len(agree),
         agreement=rate(len(agree), len(decided)),
         reference_fails_decided=len(ref_fail),
@@ -374,13 +399,22 @@ def run_judge_eval(
     for item in items:
         ref = reference.verify(code=item.code, task=item.task)
         judged = judge.verify(code=item.code, task=item.task)
+        # A verifier that could NOT execute returns Unavailable (no verdict). Keep
+        # it as an explicit None + flag, so it is counted as an operational fault
+        # downstream rather than silently vanishing from a denominator.
         rows.append(
             JudgedRow(
                 item_id=item.item_id,
                 actor_model=item.actor_model,
-                reference=ref.verdict,
-                judged=judged.verdict,
-                confidence=parse_confidence(judged.detail),
+                reference=None if isinstance(ref, Unavailable) else ref.verdict,
+                judged=None if isinstance(judged, Unavailable) else judged.verdict,
+                confidence=(
+                    None
+                    if isinstance(judged, Unavailable)
+                    else parse_confidence(judged.detail)
+                ),
+                reference_unavailable=isinstance(ref, Unavailable),
+                judge_unavailable=isinstance(judged, Unavailable),
             )
         )
     return tuple(rows)
@@ -408,6 +442,18 @@ def render_report(
         f"items       : {m.n_items}",
         f"with authoritative reference : {m.n_reference}",
         f"judge decided : {m.n_decided}  |  judge abstained : {m.n_abstained}",
+    ]
+    if m.n_reference_unavailable or m.n_judge_unavailable:
+        # An operational fault, surfaced prominently: a check that could NOT
+        # execute shrank the ground-truth denominator by runtime failure, not by
+        # abstention. Reported, never silently dropped. (Absent when both are 0,
+        # so a clean run's report is byte-identical to before.)
+        lines.append(
+            f"OPERATIONAL FAULT — could-not-execute: reference "
+            f"{m.n_reference_unavailable}, judge {m.n_judge_unavailable} "
+            "(infra fault, not an abstention; excluded from ground truth, flagged here)"
+        )
+    lines += [
         "",
         "| metric | value |",
         "|---|---|",
@@ -535,9 +581,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     metrics = compute_metrics(rows)
     if metrics.n_reference == 0:
+        cause = (
+            f" ({metrics.n_reference_unavailable} could not execute — an infra "
+            "fault, not an abstention)"
+            if metrics.n_reference_unavailable
+            else ""
+        )
         print(
-            "error: no authoritative reference verdicts were produced — is an "
-            "isolating sandbox runtime available? (the reference refuses to run "
+            f"error: no authoritative reference verdicts were produced{cause} — is "
+            "an isolating sandbox runtime available? (the reference refuses to run "
             "candidates unsandboxed)",
             file=sys.stderr,
         )
