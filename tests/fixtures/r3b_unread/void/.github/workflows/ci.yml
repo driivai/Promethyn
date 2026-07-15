@@ -1,0 +1,9 @@
+name: ci
+on: [push]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      LEGACY_TUNING_KNOB: "42"
+    steps:
+      - run: pytest -q

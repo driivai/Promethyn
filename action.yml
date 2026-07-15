@@ -1,0 +1,55 @@
+name: voidguard
+description: >-
+  Scans the checkout for void guards — checks that are present, plausible, and
+  verify nothing — and comments the findings on the pull request. Report-only
+  by default; never fails the build unless fail-on is set.
+inputs:
+  path:
+    description: directory to scan
+    default: "."
+  fail-on:
+    description: "lowest severity that fails the step: none | void | warn | any"
+    default: "none"
+  baseline:
+    description: optional baseline file acknowledging existing findings
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Install voidguard
+      shell: bash
+      run: pip install --quiet "${{ github.action_path }}"
+
+    - name: Scan (report-only; gating is a separate, explicit step)
+      shell: bash
+      run: |
+        ARGS=(scan "${{ inputs.path }}" --json voidguard-report.json --fail-on never)
+        if [ -n "${{ inputs.baseline }}" ]; then ARGS+=(--baseline "${{ inputs.baseline }}"); fi
+        if [ -n "${GITHUB_TOKEN:-}" ]; then ARGS+=(--repo "${GITHUB_REPOSITORY}"); fi
+        voidguard "${ARGS[@]}"
+
+    - name: Upload full report
+      uses: actions/upload-artifact@v4
+      with:
+        name: voidguard-report
+        path: voidguard-report.json
+
+    - name: Comment on the pull request
+      if: github.event_name == 'pull_request'
+      shell: bash
+      run: python "${{ github.action_path }}/action_comment.py" voidguard-report.json
+
+    - name: Gate (opt-in)
+      if: inputs.fail-on != 'none'
+      shell: bash
+      run: |
+        python - "voidguard-report.json" "${{ inputs.fail-on }}" <<'EOF'
+        import json, sys
+        report = json.load(open(sys.argv[1]))
+        level = sys.argv[2]
+        counts = report["counts"]
+        trip = {"void": counts["VOID"],
+                "warn": counts["VOID"] + counts["WARN"],
+                "any": sum(counts.values())}.get(level, 0)
+        sys.exit(1 if trip else 0)
+        EOF
