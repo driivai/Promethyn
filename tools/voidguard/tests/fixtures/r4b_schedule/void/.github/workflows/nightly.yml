@@ -1,0 +1,9 @@
+name: nightly
+on:
+  schedule:
+    - cron: "0 5 * * *"
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: pytest -q
