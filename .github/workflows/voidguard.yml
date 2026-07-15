@@ -1,0 +1,44 @@
+name: voidguard
+
+# The void-guard scanner's own gate: its fixture suite must pass (every rule
+# proven in both directions — flag the void guard, spare the live one), and the
+# scanner dogfoods on this repository, report-only. Report-only is deliberate:
+# the repo's honest UNKNOWNs (runtime-probe skipifs, schedule history) are
+# information, not failures.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "tools/voidguard/**"
+      - ".github/workflows/voidguard.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  voidguard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: pip install -e "tools/voidguard[dev]"
+
+      - name: Fixture suite (true positives AND false positives)
+        run: python -m pytest tools/voidguard/tests -q
+
+      - name: Dogfood scan (report-only)
+        run: voidguard scan . --fail-on never --json voidguard-report.json
+
+      - name: Upload dogfood report
+        uses: actions/upload-artifact@v4
+        with:
+          name: voidguard-dogfood-report
+          path: voidguard-report.json

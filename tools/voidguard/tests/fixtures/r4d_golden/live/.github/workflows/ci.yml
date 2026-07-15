@@ -1,0 +1,7 @@
+name: ci
+on: [push]
+jobs:
+  golden:
+    runs-on: ubuntu-latest
+    steps:
+      - run: diff docs/expected-report.md generated.md
