@@ -134,3 +134,22 @@ aggregated runtime-probe summaries) — and two early false positives found
 during that sweep were fixed and pinned into the fixture suite, which tests
 every rule in both directions: the known-void guard must be flagged, the
 known-live guard must not be.
+
+## Instance #8, found by this tool's own audit
+
+The taxonomy this scanner comes from stopped at seven instances. The eighth is
+in this repository, in this tool's own acknowledgment format — found during the
+pre-publication review of this very repo. The `--baseline` file stores only
+fingerprints (`sha256(rule|guard|mechanism)`), no paths: a reviewer reading the
+committed baseline cannot see *what* was acknowledged without re-running the
+scanner and recomputing the mapping. An acknowledgment list that cannot be
+audited on its face is a (small) void in the tool built to find voids.
+
+It was caught the same way every other instance was caught: by making the check
+actually execute — the review demanded the fingerprint-to-guard mapping be
+recomputed and proven bijective rather than taken on report. That is not an
+embarrassment; that is the thesis holding under its own weight.
+
+**Filed fix (baseline v2):** store `{fingerprint: guard}` pairs so the
+acknowledgment list is human-readable, while matching still keys on the
+fingerprint alone.
