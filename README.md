@@ -34,7 +34,7 @@ voidguard scan .
 
 > Not on PyPI yet: publication is gated on extracting this package to its own
 > repository first — a published package never points into another project's
-> `tools/` directory. Until then: `pip install "voidguard @ git+https://github.com/driivai/promethyn#subdirectory=tools/voidguard"`.
+> `tools/` directory. Until then: `pip install "voidguard @ git+https://github.com/driivai/voidguard"`.
 
 Exit codes: `0` clean, `1` findings, `2` scanner error — gate CI without
 wrapping. `--fail-on {any,warn,void,never}` picks the severity that trips the
@@ -86,7 +86,7 @@ probes are aggregated into a single UNKNOWN instead of one alarm per test.
 ## The GitHub Action
 
 ```yaml
-- uses: driivai/promethyn/tools/voidguard@main
+- uses: driivai/voidguard@main
   with:
     fail-on: none        # report-only by default; set to "void" to gate
     baseline: .voidguard-baseline.json

@@ -29,7 +29,7 @@ dev = ["pytest>=7.0"]
 voidguard = "voidguard.cli:main"
 
 [project.urls]
-Source = "https://github.com/driivai/promethyn"
+Source = "https://github.com/driivai/voidguard"
 
 [tool.setuptools.packages.find]
 where = ["src"]
