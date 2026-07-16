@@ -4,8 +4,11 @@ name: voidguard
 # voidguard, report-only. The scanner's own fixture suite and gated self-scan
 # live in its own repository's CI now (github.com/driivai/voidguard).
 #
-# NOTE: this job installs from driivai/voidguard and goes green once the
-# extracted history is pushed there (the handoff branch voidguard-standalone-main).
+# The install is PINNED to the exact reviewed extraction commit — the same
+# posture this repo demands of container images (a floating ref can be
+# repointed after review; a pinned one cannot). A green install is therefore
+# also the byte-for-byte proof that the standalone repo carries the approved
+# history. Bump the pin deliberately when the standalone repo advances.
 
 on:
   push:
@@ -29,8 +32,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install voidguard (standalone repository)
-        run: pip install "voidguard @ git+https://github.com/driivai/voidguard"
+      - name: Install voidguard (standalone repository, pinned to the reviewed commit)
+        run: pip install "voidguard @ git+https://github.com/driivai/voidguard@d371f9cd18eb880b3e49336134c476136ee515d2"
 
       - name: Scan (report-only)
         run: voidguard scan . --fail-on never --json voidguard-report.json
