@@ -1,9 +1,0 @@
-name: ci
-on: [push]
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    env:
-      CLUSTER_FLAG: "1"
-    steps:
-      - run: go test ./... && cargo test -- --include-ignored

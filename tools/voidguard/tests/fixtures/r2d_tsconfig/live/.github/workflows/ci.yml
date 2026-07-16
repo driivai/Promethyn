@@ -1,7 +1,0 @@
-name: ci
-on: [push]
-jobs:
-  typecheck:
-    runs-on: ubuntu-latest
-    steps:
-      - run: npx tsc --noEmit

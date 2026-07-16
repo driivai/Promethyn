@@ -1,4 +1,0 @@
-{
-  // project config
-  "compilerOptions": { "strict": false, "target": "es2020" }
-}
