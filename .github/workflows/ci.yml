@@ -1,0 +1,33 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-selfscan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Fixture suite (every rule proven in both directions)
+        run: python -m pytest tests -q
+
+      - name: Self-scan — a REAL gate, not a report
+        # The fixtures under tests/fixtures/ are deliberate void guards: scan
+        # TARGETS, not this repo's guards. The committed baseline acknowledges
+        # exactly those known findings, so this step FAILS on any NEW finding —
+        # a void-guard scanner growing a void guard of its own turns this red.
+        run: voidguard scan . --baseline .voidguard-baseline.json --fail-on any

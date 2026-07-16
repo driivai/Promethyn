@@ -1,0 +1,16 @@
+{
+  "voidguard-baseline": 1,
+  "comment": "acknowledged findings; the scanner fails only on NEW ones. Each entry is sha256(rule|guard|mechanism)[:16].",
+  "fingerprints": [
+    "05416d93389b4ee7",
+    "6148177f785edd99",
+    "75fbf632d521d740",
+    "812d481f77c8baf3",
+    "8991d9688210ccda",
+    "93616e6ab272b8d4",
+    "a60df7750f8a4ad3",
+    "da0f1c47fc285205",
+    "db0f571e7709a626",
+    "fbcad1017ff4ab04"
+  ]
+}
