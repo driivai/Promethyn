@@ -1,24 +1,25 @@
 name: voidguard
 
-# The void-guard scanner's own gate: its fixture suite must pass (every rule
-# proven in both directions — flag the void guard, spare the live one), and the
-# scanner dogfoods on this repository, report-only. Report-only is deliberate:
-# the repo's honest UNKNOWNs (runtime-probe skipifs, schedule history) are
-# information, not failures.
+# Dogfood: scan this repository — the scanner's origin — with the extracted
+# voidguard, report-only. The scanner's own fixture suite and gated self-scan
+# live in its own repository's CI now (github.com/driivai/voidguard).
+#
+# NOTE: this job installs from driivai/voidguard and goes green once the
+# extracted history is pushed there (the handoff branch voidguard-standalone-main).
 
 on:
   push:
     branches: [main]
   pull_request:
     paths:
-      - "tools/voidguard/**"
       - ".github/workflows/voidguard.yml"
+      - "tools/voidguard/**"
 
 permissions:
   contents: read
 
 jobs:
-  voidguard:
+  scan:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,16 +29,13 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install
-        run: pip install -e "tools/voidguard[dev]"
+      - name: Install voidguard (standalone repository)
+        run: pip install "voidguard @ git+https://github.com/driivai/voidguard"
 
-      - name: Fixture suite (true positives AND false positives)
-        run: python -m pytest tools/voidguard/tests -q
-
-      - name: Dogfood scan (report-only)
+      - name: Scan (report-only)
         run: voidguard scan . --fail-on never --json voidguard-report.json
 
-      - name: Upload dogfood report
+      - name: Upload report
         uses: actions/upload-artifact@v4
         with:
           name: voidguard-dogfood-report

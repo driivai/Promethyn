@@ -1,9 +1,0 @@
-name: ci
-on: [push]
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    env:
-      PYTHONDONTWRITEBYTECODE: "1"
-    steps:
-      - run: python -B runner.py
