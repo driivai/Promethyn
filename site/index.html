@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Promethyn — the independent layer for AI agent actions</title>
+<meta name="description" content="Promethyn verifies, gates, and records every action an AI agent proposes — independently — before it becomes real. Request early access.">
+<meta property="og:title" content="Promethyn — the independent layer for AI agent actions">
+<meta property="og:description" content="As agents start taking real actions, the missing piece isn't a smarter agent. It's the independent layer that verifies, gates, and records every action before it executes.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://promethynai.com/">
+<meta property="og:image" content="https://promethynai.com/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'%3E%3Cpolygon points='60,16 98.1,38 98.1,82 60,104 21.9,82 21.9,38' fill='none' stroke='%23E2622E' stroke-width='7' stroke-linejoin='round'/%3E%3Cpath d='M60 34 C69 49,78 56,75 73 C73 87,67 95,60 95 C53 95,47 87,45 73 C42 56,51 49,60 34 Z' fill='%23E2622E'/%3E%3Cpath d='M60 60 C64 67,69 71,67 80 C66 88,63 92,60 93 C57 92,54 88,53 80 C51 71,56 67,60 60 Z' fill='%23B23E12'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- ============ HERO ============ -->
+<header class="hero">
+  <div class="wrap">
+    <svg class="mark" viewBox="0 0 120 120" width="72" height="72" role="img" aria-label="Promethyn mark: a flame guarded by a hexagonal gate">
+      <polygon points="60,16 98.1,38 98.1,82 60,104 21.9,82 21.9,38" fill="none" stroke="#F5F4F2" stroke-width="5" stroke-linejoin="round"/>
+      <path d="M60 34 C69 49,78 56,75 73 C73 87,67 95,60 95 C53 95,47 87,45 73 C42 56,51 49,60 34 Z" fill="#E2622E"/>
+      <path d="M60 60 C64 67,69 71,67 80 C66 88,63 92,60 93 C57 92,54 88,53 80 C51 71,56 67,60 60 Z" fill="#B23E12"/>
+    </svg>
+    <p class="eyebrow">Promethyn</p>
+    <h1>The independent layer that decides whether an AI&nbsp;agent&rsquo;s action is allowed to <em>become&nbsp;real</em>.</h1>
+    <p class="sub">Agents are starting to take real actions — deploying code, moving money, changing systems. The missing piece isn&rsquo;t a smarter agent. It&rsquo;s the independent layer that verifies, gates, and records every action before it executes.</p>
+    <a class="btn" href="#request">Request early access</a>
+    <p class="hint">Open source at its core &middot; no tracking on this page</p>
+  </div>
+</header>
+
+<!-- ============ THE PROBLEM ============ -->
+<section class="problem">
+  <div class="wrap">
+    <h2>Agents can act now. That changes what a mistake&nbsp;is.</h2>
+    <div class="beats">
+      <div class="beat">
+        <span class="num">01</span>
+        <h3>Acting is cheap now.</h3>
+        <p>Tool use turned models into operators. An agent can open the pull request, run the migration, issue the refund, send the email — today, in production, while you&rsquo;re in a meeting.</p>
+      </div>
+      <div class="beat">
+        <span class="num">02</span>
+        <h3>A wrong action is not a wrong answer.</h3>
+        <p>A hallucinated paragraph gets edited. A hallucinated <em>action</em> happens: money moves, code ships, a customer hears something false. There is no backspace for an executed action.</p>
+      </div>
+      <div class="beat">
+        <span class="num">03</span>
+        <h3>The agent grades its own homework.</h3>
+        <p>Today, the system that proposed the action is usually the one that decides it looks safe. Between &ldquo;the model wants to&rdquo; and &ldquo;it happened,&rdquo; there is nothing independent at all.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ HOW IT WORKS ============ -->
+<section class="how">
+  <div class="wrap">
+    <h2>How it works</h2>
+    <p class="lede">The whole concept in ninety seconds. Your agent stays your agent — Promethyn stands between what it proposes and what becomes real.</p>
+
+    <ol class="steps">
+      <li><strong>The agent proposes.</strong> Any agent, any framework. A proposed action is treated as a claim — not a command.</li>
+      <li><strong>Promethyn verifies.</strong> An independent verifier bank grades the action on evidence — tests, checks, ground truth. Never on the agent&rsquo;s own confidence.</li>
+      <li><strong>The gate decides.</strong> Pass, block, or route to a human. &ldquo;Couldn&rsquo;t verify&rdquo; is its own outcome — it never passes silently.</li>
+      <li><strong>It becomes real — with a receipt.</strong> Approved actions execute and every decision lands in an audit ledger. Held actions wait for a person.</li>
+    </ol>
+
+    <div class="diagram-wrap">
+      <svg class="diagram" viewBox="0 0 980 330" role="img" aria-label="Flow diagram: an agent proposes an action, Promethyn verifies it independently, the gate decides, and the action either executes with a receipt, is held for a person, or is blocked — every outcome recorded.">
+        <title>Agent proposes, Promethyn verifies, the gate decides, the action executes with a receipt, is held for a person, or is blocked.</title>
+        <defs>
+          <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="#A39E93"/>
+          </marker>
+        </defs>
+
+        <!-- agent proposes -->
+        <rect x="16" y="128" width="168" height="64" rx="10" fill="#23211B" stroke="#3A362E"/>
+        <text x="100" y="155" text-anchor="middle" font-size="15" font-weight="600" fill="#F5F4F2" font-family="system-ui, sans-serif">Agent proposes</text>
+        <text x="100" y="176" text-anchor="middle" font-size="12" fill="#A39E93" font-family="ui-monospace, monospace">any framework</text>
+
+        <line x1="184" y1="160" x2="226" y2="160" stroke="#A39E93" stroke-width="1.5" marker-end="url(#arr)"/>
+
+        <!-- verify -->
+        <rect x="232" y="128" width="188" height="64" rx="10" fill="#23211B" stroke="#3A362E"/>
+        <text x="326" y="155" text-anchor="middle" font-size="15" font-weight="600" fill="#F5F4F2" font-family="system-ui, sans-serif">Promethyn verifies</text>
+        <text x="326" y="176" text-anchor="middle" font-size="12" fill="#A39E93" font-family="ui-monospace, monospace">independent evidence</text>
+
+        <line x1="420" y1="160" x2="462" y2="160" stroke="#A39E93" stroke-width="1.5" marker-end="url(#arr)"/>
+
+        <!-- gate: the guarded flame -->
+        <g transform="translate(478,100)">
+          <polygon points="60,16 98.1,38 98.1,82 60,104 21.9,82 21.9,38" fill="#1C1B19" stroke="#F5F4F2" stroke-width="5" stroke-linejoin="round"/>
+          <path d="M60 34 C69 49,78 56,75 73 C73 87,67 95,60 95 C53 95,47 87,45 73 C42 56,51 49,60 34 Z" fill="#E2622E"/>
+          <path d="M60 60 C64 67,69 71,67 80 C66 88,63 92,60 93 C57 92,54 88,53 80 C51 71,56 67,60 60 Z" fill="#B23E12"/>
+        </g>
+        <text x="538" y="232" text-anchor="middle" font-size="15" font-weight="600" fill="#F5F4F2" font-family="system-ui, sans-serif">Gate decides</text>
+
+        <!-- branches -->
+        <path d="M580 148 C632 120 640 56 694 56" fill="none" stroke="#A39E93" stroke-width="1.5" marker-end="url(#arr)"/>
+        <text x="636" y="84" text-anchor="middle" font-size="12" fill="#A39E93" font-family="ui-monospace, monospace">verified</text>
+
+        <path d="M585 160 L694 160" fill="none" stroke="#E2622E" stroke-width="1.5" marker-end="url(#arr)"/>
+        <text x="636" y="147" text-anchor="middle" font-size="12" fill="#E2622E" font-family="ui-monospace, monospace">couldn&rsquo;t be sure</text>
+
+        <path d="M580 172 C632 200 640 264 694 264" fill="none" stroke="#A39E93" stroke-width="1.5" marker-end="url(#arr)"/>
+        <text x="636" y="244" text-anchor="middle" font-size="12" fill="#A39E93" font-family="ui-monospace, monospace">failed checks</text>
+
+        <!-- outcomes -->
+        <rect x="700" y="24" width="264" height="64" rx="10" fill="#23211B" stroke="#3A362E"/>
+        <text x="716" y="51" font-size="15" font-weight="600" fill="#E2622E" font-family="system-ui, sans-serif">&#10003; Executes</text>
+        <text x="716" y="72" font-size="12" fill="#A39E93" font-family="ui-monospace, monospace">receipt written to the ledger</text>
+
+        <rect x="700" y="128" width="264" height="64" rx="10" fill="#23211B" stroke="#E2622E"/>
+        <text x="716" y="155" font-size="15" font-weight="600" fill="#F5F4F2" font-family="system-ui, sans-serif">&#8594; A person decides</text>
+        <text x="716" y="176" font-size="12" fill="#A39E93" font-family="ui-monospace, monospace">held until a human reviews it</text>
+
+        <rect x="700" y="232" width="264" height="64" rx="10" fill="#23211B" stroke="#3A362E"/>
+        <text x="716" y="259" font-size="15" font-weight="600" fill="#B23E12" font-family="system-ui, sans-serif">&#10007; Blocked</text>
+        <text x="716" y="280" font-size="12" fill="#A39E93" font-family="ui-monospace, monospace">refused — and recorded</text>
+
+        <text x="490" y="322" text-anchor="middle" font-size="12" fill="#A39E93" font-family="ui-monospace, monospace">every outcome writes an audit record — approve, hold, or block</text>
+      </svg>
+    </div>
+  </div>
+</section>
+
+<!-- ============ WHY IT'S DIFFERENT ============ -->
+<section class="principles">
+  <div class="wrap">
+    <h2>Why it&rsquo;s different</h2>
+    <div class="principle">
+      <h3>Independent, not self-graded.</h3>
+      <p>The layer that checks is not the agent that acts. Separate process, separate authority. The agent cannot approve itself, no matter how confident it sounds.</p>
+    </div>
+    <div class="principle">
+      <h3>&ldquo;Couldn&rsquo;t verify&rdquo; is never &ldquo;verified fine.&rdquo;</h3>
+      <p>When verification infrastructure fails, that is a distinct outcome — held, not approved. An outage cannot masquerade as a green light. This is enforced by construction, in the type system, not promised in a comment.</p>
+    </div>
+    <div class="principle">
+      <h3>The human backstop is permanent.</h3>
+      <p>When the system cannot be sure, it routes the action to a person and waits. Not a crutch until the models get better — load-bearing architecture, by design.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ PROOF ============ -->
+<section class="proof">
+  <div class="wrap">
+    <h2>Built in the open</h2>
+    <p>This page isn&rsquo;t a deck. The ideas on it come from building agent verification in the open — and publishing the failures.</p>
+    <ul class="links">
+      <li><a href="https://github.com/driivai/Promethyn">Promethyn</a> — the open-source runtime: verifier bank, permission gate, sandboxed execution, human-halt queue, audit ledger.</li>
+      <li><a href="https://github.com/driivai/voidguard">VoidGuard</a> — a scanner for guards that are present, plausible, and verify nothing. It came out of auditing our own CI.</li>
+      <li><a href="https://github.com/driivai/Promethyn/blob/main/docs/skip-sweep.md">The skip-sweep</a> — the audit where we found seven of our own guards had never been observed to fail. Published in the repo, not filed in a drawer.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ============ EMAIL CAPTURE ============ -->
+<section class="capture" id="request">
+  <div class="wrap">
+    <h2>Request early access</h2>
+    <p>We&rsquo;re opening the verification layer to a small group of teams shipping agents that take real actions.</p>
+    <form name="early-access" method="POST" action="/thanks.html" data-netlify="true" netlify-honeypot="bot-field">
+      <input type="hidden" name="form-name" value="early-access">
+      <p class="bot-field"><label>Don&rsquo;t fill this in if you&rsquo;re human: <input name="bot-field"></label></p>
+      <label for="email">Email</label>
+      <input type="email" id="email" name="email" required placeholder="you@company.com" autocomplete="email">
+      <label for="building">What are you building? <span class="opt">(optional — but it&rsquo;s how we prioritize)</span></label>
+      <textarea id="building" name="building" rows="3" placeholder="An agent that opens PRs / moves money / talks to customers&hellip;"></textarea>
+      <button type="submit" class="btn">Request early access</button>
+    </form>
+    <p class="micro">Early access is limited. Tell us what you&rsquo;re building and we&rsquo;ll reach out. No newsletter, no spam — and no tracking on this page.</p>
+  </div>
+</section>
+
+<!-- ============ FOOTER ============ -->
+<footer>
+  <div class="wrap">
+    <svg class="mark small" viewBox="0 0 120 120" width="28" height="28" aria-hidden="true">
+      <polygon points="60,16 98.1,38 98.1,82 60,104 21.9,82 21.9,38" fill="none" stroke="#A39E93" stroke-width="5" stroke-linejoin="round"/>
+      <path d="M60 34 C69 49,78 56,75 73 C73 87,67 95,60 95 C53 95,47 87,45 73 C42 56,51 49,60 34 Z" fill="#E2622E"/>
+    </svg>
+    <p>Promethyn and VoidGuard are open source under Apache-2.0.<br>
+    <a href="https://github.com/driivai/Promethyn">github.com/driivai/Promethyn</a> &middot;
+    <a href="https://github.com/driivai/voidguard">github.com/driivai/voidguard</a> &middot;
+    <a href="mailto:will@driivai.com">will@driivai.com</a></p>
+    <p class="fine">&copy; 2026 William Nunlist. No cookies, no analytics, no trackers on this page.</p>
+  </div>
+</footer>
+
+</body>
+</html>

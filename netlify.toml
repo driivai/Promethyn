@@ -1,0 +1,15 @@
+# Netlify deploy configuration for the validation landing page in site/.
+# Static publish only: no build step, no functions, no plugins, no JS on the
+# page. Form capture uses the platform's built-in form handling (the form in
+# site/index.html carries the data-netlify attribute), so there is no backend
+# to run or secure. Custom domain and HTTPS are configured in the Netlify UI.
+
+[build]
+  publish = "site"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "no-referrer"
