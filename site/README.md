@@ -21,4 +21,5 @@ requests (fonts are the system stack; the mark is inlined SVG derived from
 Local preview: `python3 -m http.server --directory site 8000`.
 
 Every claim on the page is true of the project today; the proof section links
-only things that exist (the two repositories and the published skip-sweep).
+only things that exist (the three published articles, the two repositories,
+and the skip-sweep).
