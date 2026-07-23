@@ -13,3 +13,20 @@
     X-Frame-Options = "DENY"
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "no-referrer"
+
+# The form-success page has ONE canonical URL: /thanks. The extensionless
+# path resolves whether or not the platform's Pretty URLs optimization is
+# enabled, so the form's action never depends on an optimization toggle.
+# The first rule needs force=true because /thanks.html exists as a real
+# file and shadowed rules don't fire; the second makes /thanks serve the
+# file deterministically instead of relying on implicit resolution.
+[[redirects]]
+  from = "/thanks.html"
+  to = "/thanks"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/thanks"
+  to = "/thanks.html"
+  status = 200

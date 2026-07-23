@@ -11,7 +11,8 @@ requests (fonts are the system stack; the mark is inlined SVG derived from
 `docs/brand/`). The core content works with JS disabled; so does the form.
 
 - `index.html` — the page. The form posts to the platform's built-in form
-  handling (`data-netlify`), with a honeypot field and `action="/thanks.html"`.
+  handling (`data-netlify`), with a honeypot field and `action="/thanks"`
+  (the canonical success URL; see the redirect rules in `netlify.toml`).
 - `thanks.html` — post-submit confirmation (`noindex`).
 - `styles.css` — brand palette taken from the SVGs in `docs/brand/`
   (ink `#1C1B19`, light `#F5F4F2`, flame `#E2622E` / `#B23E12`).
