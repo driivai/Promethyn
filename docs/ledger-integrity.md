@@ -36,9 +36,12 @@ every link after it.
   no field boundary can be forged by embedding a delimiter in the data;
   `u64_be` is an 8-byte big-endian integer; and
   `canonical_json = json.dumps(sort_keys=True, separators=(",",":"), ensure_ascii=True)`
-  is the one deterministic payload serialization. Verification re-canonicalizes
-  the parsed payload, so a semantic edit changes the hash while incidental
-  whitespace does not.
+  is the one deterministic payload serialization used at write time. The hash
+  commits to those **exact stored bytes** — verification recomputes over the
+  stored payload verbatim, it does NOT re-canonicalize — so any byte-level edit
+  (whitespace, key reorder, or a duplicate-key injection a JSON parser would
+  normalize away) changes the hash and is caught. Decodability is still checked
+  separately: a payload corrupted to non-JSON is reported `NOT_VERIFIABLE`.
 - **Append is append-only in fact.** `record_chained` reads the current tip and
   chains onto it; the caller **cannot** pass `prev_hash`, so a forged-prior-hash
   append is impossible through the API. Direct-file forgery of a wrong `prev_hash`
@@ -51,13 +54,20 @@ insertion order from genesis and report the **first** failure with its index and
 a specific reason — never a bare boolean:
 
 ```
-clean 5-entry chain      : chain valid (5 entries)
-edit interior entry 3    : chain BROKEN at entry 3: content edited: stored hash a09e767d…, recomputed a19c4bc8…
-delete interior entry 3  : chain BROKEN at entry 4: seq discontinuity: expected 3, found 4 (an interior entry was deleted or reordered)
-truncate tail (no anchor): chain valid (3 entries)
-truncate tail (anchored) : chain TRUNCATED at entry 3: chain ends at seq 3 but the anchored tip is seq 5: 2 entrie(s) truncated
-corrupt payload entry 2  : chain NOT_VERIFIABLE at entry 2: entry payload is not decodable JSON
+clean 5-entry chain              : chain valid (5 entries)
+dup-key edit (reparses equal)    : chain BROKEN at entry 3: content edited: stored hash a09e767d…, recomputed 947cba79…
+delete interior entry 3          : chain BROKEN at entry 4: seq discontinuity: expected 3, found 4 (an interior entry was deleted or reordered)
+honest append past anchor        : chain valid (7 entries)
+full rewrite + extend (anchored) : chain BROKEN at entry 5: entry at the anchored seq does not match the anchored tip (chain rewritten)
+truncate tail (no anchor)        : chain valid (3 entries)
+truncate tail (anchored)         : chain TRUNCATED at entry 3: chain ends at seq 3 but the anchored tip is seq 5: 2 entrie(s) truncated
+corrupt payload entry 2          : chain NOT_VERIFIABLE at entry 2: entry payload is not decodable JSON
 ```
+
+(The "dup-key edit" case commits to exact stored bytes, so an edit that a JSON
+parser would normalize back to the original is still caught; "honest append past
+anchor" stays valid while "full rewrite + extend" is caught — the anchor pins the
+entry at its seq regardless of later growth.)
 
 It is callable independently — an auditor runs it over the rows; it is not only
 an internal check.
@@ -74,23 +84,30 @@ void guard being closed.
   next entry);
 - **reordering** of interior entries (prev-hash break);
 - an **appended** entry with a fabricated `prev_hash` (prev-hash break);
-- a **rewritten tip**, when an out-of-band tip anchor is supplied (tip-hash
-  mismatch).
+- a **rewrite of the prefix up to an anchored point** — including a full rewrite
+  from genesis, and a rewrite that then *extends* the chain past the anchor —
+  **when an out-of-band tip anchor is supplied.** `verify_chain(expected_tip=…)`
+  pins the entry at the anchored `seq`: because each entry commits to its
+  predecessor, that one hash pins the whole prefix down to genesis, so any rewrite
+  at or before the anchor is caught regardless of how far the chain has since
+  grown (honest appends past the anchor stay valid).
 
 **Does NOT detect on its own — named limits, not silent gaps:**
-- **Pure tail-truncation.** Lopping entries off the end leaves a shorter but
-  internally-valid chain; the chain alone cannot know entries once existed.
-  *Mitigation, implemented:* `chain_tip()` returns the current `(seq, hash)`; an
-  auditor holds it out-of-band and passes it as `expected_tip` to `verify_chain`,
-  which then reports `TRUNCATED`. Without such an anchor, truncation reads as
-  valid — and the verifier says "valid (N entries)", so the honest move is to
-  anchor the tip.
-- **A full rewrite from genesis.** An adversary who can rewrite *every* row can
-  recompute a wholly self-consistent chain. A bare in-file chain cannot detect
-  this; only an externally **anchored or signed** tip (the same `expected_tip`
-  mechanism, or a signature over the tip held elsewhere) closes it. This is the
-  boundary of "tamper-evidence in one file," and it is deliberately not
-  overclaimed.
+- **Pure tail-truncation without an anchor.** Lopping entries off the end leaves a
+  shorter but internally-valid chain; the chain alone cannot know entries once
+  existed. *Mitigation, implemented:* `chain_tip()` returns the current
+  `(seq, hash)`; an auditor holds it out-of-band and passes it as `expected_tip`,
+  and `verify_chain` then reports `TRUNCATED`. Without such an anchor, truncation
+  reads as valid — the verifier says "valid (N entries)" — so the honest move is
+  to anchor the tip.
+- **A full rewrite from genesis without an anchor.** An adversary who can rewrite
+  *every* row can recompute a wholly self-consistent chain, and a bare in-file
+  chain with no external reference cannot detect it. The `expected_tip` anchor
+  above closes this — but the anchor must be held **outside** the file (or signed);
+  an attacker who also controls the stored anchor is back to a full rewrite. This
+  is the boundary of "tamper-evidence in one file," deliberately not overclaimed:
+  the chain makes in-file interior tampering evident, and an out-of-band anchor
+  extends that to truncation and prefix-rewrite.
 
 **Never silently "valid".** If the verifier cannot actually check an entry — a
 missing/None field, or a payload that is not decodable JSON — it returns

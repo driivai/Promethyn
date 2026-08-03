@@ -126,6 +126,7 @@ def verify_rows(rows: list[dict], *, expected_tip: ChainTip | None = None) -> Ch
 
     expected_prev = GENESIS_ROOT
     expected_seq = 1
+    anchored_hash: str | None = None
     for row in rows:
         seq = row.get("seq")
         stored_hash = row.get("entry_hash")
@@ -138,7 +139,11 @@ def verify_rows(rows: list[dict], *, expected_tip: ChainTip | None = None) -> Ch
             return ChainVerification(NOT_VERIFIABLE, expected_seq - 1, seq,
                                      "entry has a missing seq/hash/payload field")
         try:
-            payload_obj = json.loads(payload_raw)
+            # Decodability gate only. The hash below commits to the EXACT stored
+            # payload bytes, NOT a re-serialization — so any byte-level edit
+            # (whitespace, key reorder, or duplicate-key injection that a JSON
+            # parser would normalize away) still changes the hash and is caught.
+            json.loads(payload_raw)
         except (ValueError, TypeError):
             return ChainVerification(NOT_VERIFIABLE, expected_seq - 1, seq,
                                      "entry payload is not decodable JSON")
@@ -154,12 +159,17 @@ def verify_rows(rows: list[dict], *, expected_tip: ChainTip | None = None) -> Ch
                 f"prev-hash mismatch: entry stores {prev_hash[:16]}…, "
                 f"prior entry hashed to {expected_prev[:16]}…")
         try:
+            # The hash commits to the EXACT stored payload bytes (payload_raw),
+            # not a re-serialization, so a byte-level edit is caught. A None/absent
+            # created_at/event/subject or a bad-hex prev_hash raises here
+            # (AttributeError included) and is reported NOT_VERIFIABLE — never a
+            # crash, never read as valid.
             recomputed = entry_hash(
                 seq=seq, created_at=row["created_at"], event=row["event"],
-                subject=row["subject"], payload_canonical=canonical_json(payload_obj),
+                subject=row["subject"], payload_canonical=payload_raw,
                 prev_hash=prev_hash,
             )
-        except (KeyError, ValueError, TypeError) as exc:
+        except (KeyError, ValueError, TypeError, AttributeError) as exc:
             return ChainVerification(NOT_VERIFIABLE, expected_seq - 1, seq,
                                      f"entry could not be re-hashed: {exc}")
         if recomputed != stored_hash:
@@ -168,6 +178,11 @@ def verify_rows(rows: list[dict], *, expected_tip: ChainTip | None = None) -> Ch
                 f"content edited: stored hash {stored_hash[:16]}…, "
                 f"recomputed {recomputed[:16]}…")
 
+        # Pin the entry AT the anchored seq: its hash must still equal the
+        # out-of-band anchor no matter how far the chain has since grown, so a
+        # rewrite-then-extend cannot slip past by merely making the chain longer.
+        if expected_tip is not None and seq == expected_tip.seq:
+            anchored_hash = stored_hash
         expected_prev = stored_hash
         expected_seq += 1
 
@@ -180,9 +195,14 @@ def verify_rows(rows: list[dict], *, expected_tip: ChainTip | None = None) -> Ch
                 TRUNCATED, length, length,
                 f"chain ends at seq {length} but the anchored tip is seq "
                 f"{expected_tip.seq}: {expected_tip.seq - length} entrie(s) truncated")
-        if length == expected_tip.seq and expected_prev != expected_tip.entry_hash:
+        # length >= tip.seq: seqs are contiguous, so an entry with seq == tip.seq
+        # was walked and anchored_hash is set. It must still equal the anchored
+        # value, else the prefix up to the anchor was rewritten — including a
+        # rewrite that then extended the chain past the anchor point.
+        if anchored_hash != expected_tip.entry_hash:
             return ChainVerification(
-                BROKEN, length, length,
-                "tip hash does not match the anchored tip (chain rewritten)")
+                BROKEN, expected_tip.seq, expected_tip.seq,
+                "entry at the anchored seq does not match the anchored tip "
+                "(chain rewritten)")
 
     return ChainVerification(VALID, length, None, "")

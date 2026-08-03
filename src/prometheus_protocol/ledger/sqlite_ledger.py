@@ -204,6 +204,10 @@ class SqliteLedger(Ledger):
         conn = sqlite3.connect(self.path)
         try:
             conn.row_factory = sqlite3.Row
+            # Wait (rather than immediately erroring) when another connection holds
+            # the write lock, so concurrent appenders serialize instead of raising
+            # "database is locked". Paired with the retry in record_chained.
+            conn.execute("PRAGMA busy_timeout = 5000")
             conn.executescript(_SCHEMA)
             conn.commit()
             self._conn = conn
@@ -661,24 +665,37 @@ class SqliteLedger(Ledger):
         retroactive edit is caught by :meth:`verify_chain`.
         """
 
-        row = self._conn.execute(
-            "SELECT seq, entry_hash FROM audit_chain ORDER BY seq DESC LIMIT 1"
-        ).fetchone()
-        prev_seq = row["seq"] if row is not None else 0
-        prev_hash = row["entry_hash"] if row is not None else GENESIS_ROOT
-        seq = prev_seq + 1
         payload_canonical = canonical_json(payload)
-        digest = entry_hash(
-            seq=seq, created_at=created_at, event=event, subject=subject,
-            payload_canonical=payload_canonical, prev_hash=prev_hash,
+        # The tip read + insert is a read-modify-write, so a concurrent appender
+        # on another connection could take the same seq; the UNIQUE(seq) column
+        # then raises IntegrityError on the loser. Retry: re-read the (now newer)
+        # tip and append the next contiguous seq, so the chain stays unbroken and
+        # no raw sqlite error escapes. Bounded, then a clean StateError.
+        for _attempt in range(16):
+            row = self._conn.execute(
+                "SELECT seq, entry_hash FROM audit_chain ORDER BY seq DESC LIMIT 1"
+            ).fetchone()
+            prev_seq = row["seq"] if row is not None else 0
+            prev_hash = row["entry_hash"] if row is not None else GENESIS_ROOT
+            seq = prev_seq + 1
+            digest = entry_hash(
+                seq=seq, created_at=created_at, event=event, subject=subject,
+                payload_canonical=payload_canonical, prev_hash=prev_hash,
+            )
+            try:
+                self._conn.execute(
+                    "INSERT INTO audit_chain (seq, created_at, event, subject, "
+                    "payload, prev_hash, entry_hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (seq, created_at, event, subject, payload_canonical, prev_hash, digest),
+                )
+                self._conn.commit()
+                return seq
+            except sqlite3.IntegrityError:
+                self._conn.rollback()  # another writer took this seq; re-read and retry
+        raise StateError(
+            "could not append to the audit chain: repeated seq collisions under "
+            "concurrent writers"
         )
-        self._conn.execute(
-            "INSERT INTO audit_chain (seq, created_at, event, subject, payload, "
-            "prev_hash, entry_hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (seq, created_at, event, subject, payload_canonical, prev_hash, digest),
-        )
-        self._conn.commit()
-        return seq
 
     def chained_events(self) -> list[dict]:
         """Every chain entry in insertion (id) order — the order verify walks."""

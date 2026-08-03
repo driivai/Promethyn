@@ -6,6 +6,7 @@ connection — i.e. an adversary who reached the file, which is exactly the thre
 from __future__ import annotations
 
 import json
+import threading
 
 import pytest
 
@@ -195,6 +196,94 @@ def test_malformed_payload_is_not_verifiable():
     led._conn.commit()
     r = led.verify_chain()
     assert r.status == NOT_VERIFIABLE and not r.ok
+
+
+# -- regressions from the adversarial review (each was a real, confirmed defect) --
+
+def test_bytewise_payload_edit_detected_even_if_it_reparses_equal():
+    # A duplicate-key edit that json.loads normalizes (last-wins) back to the
+    # original object. The hash must commit to the exact stored BYTES, so this is
+    # caught — not read as VALID while chained_events() returns the forged bytes.
+    led = _ledger_with(3)
+    forged = '{"reason":"forged","reason":"ok","i":2}'  # reparses to {"i":2,"reason":"ok"}
+    assert json.loads(forged) == json.loads('{"i":2,"reason":"ok"}')  # same object
+    led._conn.execute("UPDATE audit_chain SET payload=? WHERE seq=2", (forged,))
+    led._conn.commit()
+    r = led.verify_chain()
+    assert r.status == BROKEN and r.broken_index == 2 and "content edited" in r.detail
+
+
+def test_honest_append_past_anchor_stays_valid():
+    # The anchor is a point-in-time snapshot; legitimate appends grow the chain.
+    led = _ledger_with(5)
+    tip = led.chain_tip()  # seq 5
+    for i in range(6, 9):
+        led.record_chained(event="execute", subject="appdb@h:5432",
+                           payload={"i": i, "reason": "ok"}, created_at=f"t{i}")
+    r = led.verify_chain(expected_tip=tip)
+    assert r.ok and r.length == 8  # anchor at seq 5 still matches; growth is fine
+
+
+def test_full_rewrite_then_extend_detected_with_anchor():
+    # A full rewrite that ALSO extends the chain past the anchored seq must not
+    # slip through just by being longer than the anchor.
+    led = _ledger_with(5)
+    tip = led.chain_tip()  # seq 5, the honest tip hash
+    led._conn.execute("DELETE FROM audit_chain")
+    led._conn.commit()
+    for i in range(1, 7):  # rebuild a self-consistent chain of length 6, all forged
+        led.record_chained(event="execute", subject="FORGED",
+                           payload={"i": i}, created_at=f"x{i}")
+    r = led.verify_chain(expected_tip=tip)
+    assert r.status == BROKEN and "anchored tip" in r.detail
+
+
+def test_none_field_is_not_verifiable_not_a_crash():
+    # A None created_at/event/subject (raw-file corruption) must report
+    # NOT_VERIFIABLE, never raise AttributeError out of the auditor.
+    led = _ledger_with(2)
+    for field in ("created_at", "event", "subject"):
+        rows = led.chained_events()
+        rows[1][field] = None
+        r = verify_rows(rows)  # must not raise
+        assert r.status == NOT_VERIFIABLE and not r.ok, f"None {field} should be NOT_VERIFIABLE"
+
+
+def test_concurrent_appends_serialize_into_one_valid_chain(tmp_path):
+    # Two connections appending to the same ledger file concurrently must produce
+    # one unbroken, contiguous chain — no raw sqlite error, no duplicate seq.
+    path = str(tmp_path / "ledger.db")
+    SqliteLedger(path).close()  # create the schema once
+    barrier = threading.Barrier(2)
+    errors: list[Exception] = []
+
+    def worker(tag: str, k: int) -> None:
+        led = SqliteLedger(path)
+        try:
+            barrier.wait()
+            for i in range(k):
+                led.record_chained(event="execute", subject=tag,
+                                   payload={"i": i}, created_at=f"{tag}-{i}")
+        except Exception as exc:  # a raw sqlite error escaping is the failure
+            errors.append(exc)
+        finally:
+            led.close()
+
+    threads = [threading.Thread(target=worker, args=("A", 25)),
+               threading.Thread(target=worker, args=("B", 25))]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == [], f"append raised under concurrency: {errors}"
+    led = SqliteLedger(path)
+    try:
+        assert led.verify_chain().ok
+        seqs = [e["seq"] for e in led.chained_events()]
+        assert seqs == list(range(1, 51))  # 50 contiguous entries, no gaps/dupes
+    finally:
+        led.close()
 
 
 # -- integration: the chokepoint's decisions ARE chained, and tamper is caught -
