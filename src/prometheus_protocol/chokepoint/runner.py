@@ -83,6 +83,15 @@ class MigrationExecutor(Protocol):
     def __call__(self, sql: str, target: DbTarget) -> tuple[bool, str]: ...
 
 
+class AuditSink(Protocol):
+    """A tamper-evident append target for the runner's decisions. Satisfied by
+    ``SqliteLedger`` (``record_chained``); optional, so the runner has no hard
+    dependency on the ledger."""
+
+    def record_chained(self, *, event: str, subject: str, payload: dict,
+                       created_at: str) -> int: ...
+
+
 def psql_executor(sql: str, target: DbTarget) -> tuple[bool, str]:
     """Default executor: apply the migration through ``psql``, credential in env.
 
@@ -149,13 +158,25 @@ class BrokeredMigrationRunner:
         target: DbTarget,
         consumed: ConsumedApprovals | None = None,
         executor: MigrationExecutor = psql_executor,
+        audit: "AuditSink | None" = None,
         clock: Callable[[], float],
     ) -> None:
         self._authority = authority
         self._target = target
         self._consumed = consumed if consumed is not None else ConsumedApprovals()
         self._executor = executor
+        self._audit = audit
         self._clock = clock
+
+    def _record(self, event: str, subject: str, payload: dict) -> None:
+        """Append a decision to the tamper-evident chain, when an audit sink is
+        configured. Every runner decision (refuse / execute) is recorded, so the
+        chokepoint produces a chained, tamper-evident trail."""
+
+        if self._audit is not None:
+            self._audit.record_chained(
+                event=event, subject=subject, payload=payload, created_at=self._now_iso(),
+            )
 
     @property
     def target(self) -> DbTarget:
@@ -168,6 +189,10 @@ class BrokeredMigrationRunner:
             approval, artifact=artifact, target=self._target.identity, now=self._clock(),
         )
         if not verdict.ok:
+            self._record("refuse", self._target.identity, {
+                "phase": "verify", "reason": verdict.reason,
+                "artifact_sha256": approval.artifact_sha256,
+            })
             return MigrationResult(
                 executed=False, refused=True, reason=verdict.reason,
                 detail=f"approval rejected: {verdict.reason}; DB not touched",
@@ -176,6 +201,10 @@ class BrokeredMigrationRunner:
         # STEP 2 — spend the nonce atomically. A replay (already spent) loses the
         # race and is refused here, still before the DB.
         if not self._consumed.claim(approval.nonce, self._now_iso()):
+            self._record("refuse", self._target.identity, {
+                "phase": "spend", "reason": REPLAY,
+                "artifact_sha256": approval.artifact_sha256,
+            })
             return MigrationResult(
                 executed=False, refused=True, reason=REPLAY,
                 detail="approval already spent (single-use); DB not touched",
@@ -183,6 +212,11 @@ class BrokeredMigrationRunner:
 
         # STEP 3 — authorized, current, bound, first use: run it.
         ok, detail = self._executor(artifact.sql, self._target)
+        self._record("execute", self._target.identity, {
+            "phase": "execute", "artifact_sha256": artifact.sha256,
+            "target": self._target.identity, "ok": bool(ok),
+            "reason": "ok" if ok else "migration_error",
+        })
         return MigrationResult(
             executed=ok, refused=False, reason="ok" if ok else "migration_error",
             detail=(f"migration applied to {self._target.identity}" if ok
