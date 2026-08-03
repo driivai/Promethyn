@@ -17,6 +17,14 @@ from pathlib import Path
 from prometheus_protocol.core.errors import StateError
 from prometheus_protocol.core.interfaces import Ledger
 from prometheus_protocol.core.models import Attempt
+from prometheus_protocol.ledger.audit_chain import (
+    GENESIS_ROOT,
+    ChainTip,
+    ChainVerification,
+    canonical_json,
+    entry_hash,
+    verify_rows,
+)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS attempts (
@@ -111,6 +119,22 @@ CREATE TABLE IF NOT EXISTS workflow_steps (
     pending_id   INTEGER,            -- the human hold this step created, if routed
     created_at   TEXT    NOT NULL
 );
+
+-- Tamper-EVIDENT audit chain (see ledger/audit_chain.py). Each entry commits to
+-- the prior entry's hash, so a retroactive edit/delete/reorder of an interior
+-- entry breaks every later link and is caught by verify_chain(). The chokepoint's
+-- authorization decisions (authorize / refuse / execute) write here. `seq` is the
+-- chain position (1-based, contiguous); `payload` is canonical JSON.
+CREATE TABLE IF NOT EXISTS audit_chain (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    seq        INTEGER NOT NULL UNIQUE,
+    created_at TEXT    NOT NULL,
+    event      TEXT    NOT NULL,
+    subject    TEXT    NOT NULL,
+    payload    TEXT    NOT NULL,   -- canonical JSON of the decision detail
+    prev_hash  TEXT    NOT NULL,   -- prior entry's entry_hash (GENESIS_ROOT for seq 1)
+    entry_hash TEXT    NOT NULL    -- sha256 over this entry's content AND prev_hash
+);
 """
 
 # Terminal states a pending action can settle into. ``pending`` is the only
@@ -180,6 +204,10 @@ class SqliteLedger(Ledger):
         conn = sqlite3.connect(self.path)
         try:
             conn.row_factory = sqlite3.Row
+            # Wait (rather than immediately erroring) when another connection holds
+            # the write lock, so concurrent appenders serialize instead of raising
+            # "database is locked". Paired with the retry in record_chained.
+            conn.execute("PRAGMA busy_timeout = 5000")
             conn.executescript(_SCHEMA)
             conn.commit()
             self._conn = conn
@@ -623,6 +651,70 @@ class SqliteLedger(Ledger):
             )
             filled += 1
         return {"filled": filled, "skipped": skipped}
+
+    # -- tamper-evident audit chain ----------------------------------------
+
+    def record_chained(
+        self, *, event: str, subject: str, payload: dict, created_at: str
+    ) -> int:
+        """Append one decision to the hash chain and return its seq.
+
+        Append-only in fact: the entry chains onto the CURRENT tip. The caller
+        cannot supply ``prev_hash`` — the ledger reads the real tip itself — so a
+        forged-prior-hash append is rejected by construction. Any later
+        retroactive edit is caught by :meth:`verify_chain`.
+        """
+
+        payload_canonical = canonical_json(payload)
+        # The tip read + insert is a read-modify-write, so a concurrent appender
+        # on another connection could take the same seq; the UNIQUE(seq) column
+        # then raises IntegrityError on the loser. Retry: re-read the (now newer)
+        # tip and append the next contiguous seq, so the chain stays unbroken and
+        # no raw sqlite error escapes. Bounded, then a clean StateError.
+        for _attempt in range(16):
+            row = self._conn.execute(
+                "SELECT seq, entry_hash FROM audit_chain ORDER BY seq DESC LIMIT 1"
+            ).fetchone()
+            prev_seq = row["seq"] if row is not None else 0
+            prev_hash = row["entry_hash"] if row is not None else GENESIS_ROOT
+            seq = prev_seq + 1
+            digest = entry_hash(
+                seq=seq, created_at=created_at, event=event, subject=subject,
+                payload_canonical=payload_canonical, prev_hash=prev_hash,
+            )
+            try:
+                self._conn.execute(
+                    "INSERT INTO audit_chain (seq, created_at, event, subject, "
+                    "payload, prev_hash, entry_hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (seq, created_at, event, subject, payload_canonical, prev_hash, digest),
+                )
+                self._conn.commit()
+                return seq
+            except sqlite3.IntegrityError:
+                self._conn.rollback()  # another writer took this seq; re-read and retry
+        raise StateError(
+            "could not append to the audit chain: repeated seq collisions under "
+            "concurrent writers"
+        )
+
+    def chained_events(self) -> list[dict]:
+        """Every chain entry in insertion (id) order — the order verify walks."""
+
+        rows = self._conn.execute("SELECT * FROM audit_chain ORDER BY id").fetchall()
+        return [dict(row) for row in rows]
+
+    def chain_tip(self) -> ChainTip | None:
+        """The current tip, to be held out-of-band as a truncation anchor."""
+
+        row = self._conn.execute(
+            "SELECT seq, entry_hash FROM audit_chain ORDER BY seq DESC LIMIT 1"
+        ).fetchone()
+        return ChainTip(seq=row["seq"], entry_hash=row["entry_hash"]) if row else None
+
+    def verify_chain(self, *, expected_tip: ChainTip | None = None) -> ChainVerification:
+        """Walk and verify the audit chain (delegates to the standalone auditor)."""
+
+        return verify_rows(self.chained_events(), expected_tip=expected_tip)
 
     def close(self) -> None:
         self._conn.close()
