@@ -5,15 +5,111 @@
   </picture>
 </p>
 
-<p align="center"><strong>A verifier-first runtime that makes a frozen AI model safe to act: it verifies each action, halts the ones it is unsure about for a human, and records every decision.</strong></p>
+# Promethyn
+
+**Would you give an autonomous coding agent your production database password?**
+
+Probably not. So don't. Promethyn lets an agent perform *approved* production
+operations **without ever possessing the credential to perform them.**
+
+It is an **enforcement boundary, not a linter.** The agent proposes an action;
+Promethyn holds the privileged credential and releases it only for a specific,
+verified, single-use, approved action — then records a tamper-evident receipt.
+The agent cannot bypass it, because the agent never holds the keys.
 
 <p align="center">
-  <a href="#the-demo">Demo</a> ·
-  <a href="#the-measured-result">Measured result</a> ·
+  <a href="#the-enforcement-model">Enforcement model</a> ·
+  <a href="#the-bypass-proof-six-paths-all-closed">Bypass proof</a> ·
+  <a href="#see-it-in-5-minutes">5-minute demo</a> ·
+  <a href="#the-demo">Stale-branch demo</a> ·
   <a href="#how-it-works">How it works</a> ·
-  <a href="#status--honest">Status</a> ·
-  <a href="#getting-started">Getting started</a>
+  <a href="#status--honest">Status</a>
 </p>
+
+---
+
+### What Promethyn is — and is not
+
+- **IS** an enforcement gate that *exclusively holds the credential*. Proven: an
+  agent in the sandbox cannot reach the target database by any of **six** paths
+  (§ [Bypass proof](#the-bypass-proof-six-paths-all-closed)).
+- **IS** single-use, artifact-bound approvals — replay, artifact-swap,
+  wrong-target, and forged approvals are all refused, and the database is **never
+  touched on a refusal.**
+- **IS** a tamper-evident ledger — hash-chained, so an interior edit, deletion, or
+  reorder of the audit trail is detected.
+- **IS NOT** a flag-and-warn interceptor watching an agent that still holds the
+  keys. The whole point is that it doesn't watch — it *withholds*.
+- **IS NOT** (honestly) a finished product. It is an enforcement **core**, alpha,
+  with **one** protected action today: destructive PostgreSQL migrations.
+
+## The enforcement model
+
+The load-bearing point: the credential lives with the runner, **not** the agent,
+and the agent's only path to the database is *through* the gate.
+
+```
+   AGENT  (sandboxed)                     · holds NO database credential
+   authors a migration, proposes it       · has NO network path to the DB
+        │
+        │   the artifact (SQL text) only — never a live connection
+        ▼
+   ┌────────────────────────────────┐
+   │  PROMETHYN GATE — verify        │  ──▶   approve  ·  hold-for-human  ·  block
+   └────────────────────────────────┘
+        │
+        │   a single-use, artifact-bound, signed approval
+        ▼
+   ┌────────────────────────────────┐         ┌──────────────────────┐
+   │  BROKERED RUNNER               │  ────▶   │   TARGET DATABASE    │
+   │  holds the ONLY credential     │  the     └──────────────────────┘
+   └────────────────────────────────┘  only
+        │                                path
+        │   every decision (approve / refuse / execute)
+        ▼
+   ┌────────────────────────────────┐
+   │  TAMPER-EVIDENT LEDGER         │   hash-chained · verify_chain() → VALID / BROKEN
+   └────────────────────────────────┘
+
+   ✗   agent ──/──▶ database         The agent has no credential and no path.
+                                     Its ONLY route to the DB is through the gate —
+                                     proven: 6 of 6 direct-attack paths fail inside
+                                     the sandbox and succeed outside (isolation,
+                                     not a dead database).
+```
+
+## The bypass proof: six paths, all closed
+
+The differentiator is that the agent *cannot* reach the credentialed target — not
+that it is politely asked not to. An agent in the sandbox was attacked against a
+**live** PostgreSQL by six distinct paths; every one fails inside the sandbox and
+every one succeeds from the runner's host — proving the failures are isolation,
+not a dead database:
+
+| path | inside the sandbox (agent) | outside (runner) |
+|---|---|---|
+| `psql` → host-loopback TCP | **BLOCKED** — network unreachable | reaches the DB |
+| `psql` → Unix socket | **BLOCKED** — socket not present | reaches the DB |
+| raw TCP socket | **BLOCKED** | reaches the DB |
+| raw `AF_UNIX` socket | **BLOCKED** | reaches the DB |
+| `psycopg` driver → TCP | **BLOCKED** | reaches the DB |
+| `psycopg` driver → Unix socket | **BLOCKED** | reaches the DB |
+
+Inside the sandbox only loopback exists and the socket path is absent. This is a
+committed test, not a screenshot:
+[`tests/chokepoint/test_isolation.py::test_agent_cannot_reach_db_by_any_path`](tests/chokepoint/test_isolation.py)
+— which also asserts the candidate genuinely ran isolated, so it cannot trivially
+pass. The full threat model is in
+[`docs/chokepoint-threat-model.md`](docs/chokepoint-threat-model.md); the ledger's
+tamper-evidence in [`docs/ledger-integrity.md`](docs/ledger-integrity.md).
+
+### See it in 5 minutes
+
+[`demo/`](demo/) runs the whole enforcement story against the **real** chokepoint
+and a real PostgreSQL — nothing mocked: a direct agent attempt fails, an approved
+migration runs once, replay / swap / forgery are refused, and the hash-chained
+ledger verifies (then breaks under tampering). See
+[`demo/README.md`](demo/README.md).
 
 ---
 
