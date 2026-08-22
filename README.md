@@ -33,9 +33,11 @@ The agent cannot bypass it, because the agent never holds the keys.
 - **IS** an enforcement gate that *exclusively holds the credential*. Proven: an
   agent in the sandbox cannot reach the target database by any of **six** paths
   (§ [Bypass proof](#the-bypass-proof-six-paths-all-closed)).
-- **IS** single-use, artifact-bound approvals — replay, artifact-swap,
-  wrong-target, and forged approvals are all refused, and the database is **never
-  touched on a refusal.**
+- **IS** single-use, artifact-bound approvals — the spent-nonce store is a
+  mandatory durable SQLite file, so replay stays refused across threads,
+  processes, and runner restarts. Target binding includes host, port, database,
+  database user, and schema; artifact-swap, privilege-change, wrong-target, and
+  forged approvals are refused before the database is touched.
 - **IS** a tamper-evident ledger — hash-chained, so an interior edit, deletion, or
   reorder of the audit trail is detected.
 - **IS NOT** a flag-and-warn interceptor watching an agent that still holds the

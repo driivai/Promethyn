@@ -115,21 +115,30 @@ test (a check tested only on the happy path is itself a void guard):
 - **P2 — Credential exclusivity.** Only the runner holds a working credential.
 - **P3 — Artifact binding.** An approval binds to the exact artifact content hash; the
   runner re-hashes what it is about to execute and refuses on mismatch (**swap-fails**).
-- **P4 — Target binding.** An approval binds to the exact target (DB/schema); use against
-  another target is refused (**wrong-target-fails**).
+- **P4 — Target binding.** An approval binds to a canonical target object containing
+  host, port, database, database user, and schema. A credential rotation does not change
+  that identity, but a principal/privilege or schema change does; use against any different
+  target is refused (**wrong-target-fails**).
 - **P5 — Single use.** An approval executes at most once; a second use is refused
-  (**replay-fails**), enforced atomically so concurrent drivers cannot both execute.
+  (**replay-fails**). The runner requires a durable filesystem-backed spent-nonce store;
+  SQLite's unique claim is serialized within a process and atomic across processes, so
+  concurrent drivers cannot both execute and a restart cannot forget a spent approval.
+  Spent nonces are intentionally retained rather than pruned: deleting one could revive a
+  replay if the host wall clock later moved backward into that approval's validity window.
 - **P6 — Expiry.** Approvals are short-lived; past the TTL they are refused
-  (**expired-fails**). Proposed TTL: **5 minutes** — long enough for a human/automated
-  approval-to-execution hop, short enough that a captured approval is stale before it is
-  useful, and consistent with the migration being a deliberate, promptly-executed act.
+  (**expired-fails**). Default TTL: **90 seconds** — the clock starts after human or
+  automated authorization, so it covers only the approval-to-execution hop. Exact-boundary,
+  non-finite-time, and serialization tests keep the deadline fail-closed.
 - **P7 — Unforgeable approval.** The approval cannot be produced by the agent zone (§4.3).
 - **P8 — Fail closed.** Any ambiguity — an `Unavailable` verifier, an unbound / expired /
   replayed / mismatched approval, a runner that cannot confirm the target — results in the
   migration **not running**. There is no fail-open branch anywhere in the chain.
 - **P9 — Tamper-evident ledger.** The audit trail is a hash chain: each entry carries the
   prior entry's hash, so any retroactive edit or deletion is detectable by a verifier that
-  walks the chain and reports the first broken link.
+  walks the chain and reports the first broken link. The runner must commit an execution
+  intent before database contact; an unavailable intent append blocks execution. The
+  outcome links back to that intent, so a post-execution audit outage leaves a durable,
+  explicitly unresolved record rather than making the run disappear.
 
 ## 6. Attack scenarios → defense
 
@@ -138,9 +147,9 @@ test (a check tested only on the happy path is itself a void guard):
 | A1 | Agent connects to the DB directly (TCP) | Network namespace: host loopback unreachable | live proof, STOP 2 |
 | A2 | Agent connects via the Postgres Unix socket | Socket placed outside the sandbox's mount view; §4.1 | live proof, STOP 2 |
 | A3 | Agent finds/steals a credential in its context | Credential only in runner zone (P2) | isolation proof |
-| A4 | Agent replays a used approval | Single-use, atomic claim (P5) | replay-fails |
+| A4 | Agent replays a used approval, including after restart | Durable single-use, atomic claim (P5) | replay-fails + restart/thread/process races |
 | A5 | Agent swaps artifact B under artifact A's approval | Runner re-hashes; mismatch refused (P3) | swap-fails |
-| A6 | Agent aims an approval at a different target | Target binding (P4) | wrong-target-fails |
+| A6 | Agent changes DB, host, port, user/privilege, or schema | Canonical target binding (P4) | wrong-target + privilege-change tests |
 | A7 | Agent waits out / captures a stale approval | TTL expiry (P6) | expired-fails |
 | A8 | Agent fabricates an approval | Unforgeable, gate-issued (P7) | forge-fails |
 | A9 | Verifier can't run; agent hopes it slips through | Fail closed on `Unavailable` (P8) | fail-closed test |

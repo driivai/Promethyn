@@ -8,6 +8,25 @@ in `spec/invariants.md` is a major version bump.
 ## [Unreleased]
 
 ### Added
+- **Durable, privilege-complete migration approvals.** The brokered migration
+  runner now requires a filesystem-backed consumed-approval store; spent nonces
+  survive restarts and claims serialize across threads and processes. Approval
+  MACs bind a versioned canonical target object containing host, port, database,
+  database user, and schema (excluding only the rotatable password), and the
+  PostgreSQL executor establishes the bound schema as its transaction-local
+  search path. The privileged executor now uses the PostgreSQL wire protocol,
+  removing psql meta-commands from the artifact surface. Production composition
+  requires a stable 256-bit signing key, durable store, and audit sink; direct
+  runner construction also requires an audit sink. The runner commits a durable
+  execution intent before database contact and links the outcome to it. Intent
+  audit failures block execution; outcome audit failures return an explicit
+  degraded result while leaving the intent for reconciliation. Store outages
+  also fail closed. Approval JSON is strict and versioned, timestamps must be
+  finite, and store files require safe ownership and permissions. Adversarial
+  tests cover restart replay, thread/process/fork races, audit outages, corruption,
+  user privilege changes, schema changes, and hostile psql command text. CI now
+  provisions PostgreSQL and requires live driver, schema, rollback, and
+  meta-command tests on every supported Python version.
 - **Make the SOFT-lever experiment decidable (SC-2).** The lever machinery from
   the prior change was not *dispatchable* — it had no pre-committed adoption rule
   and could not produce a decision. This change fixes that, entirely offline (no
