@@ -9,6 +9,7 @@ provisions a DB) an absent DB FAILS — so this is never a silently-skipped guar
 from __future__ import annotations
 
 import dataclasses
+import json
 import os
 import time
 from pathlib import Path
@@ -17,6 +18,11 @@ import psycopg
 import pytest
 
 from prometheus_protocol.chokepoint import (
+    AUDIT_OUTCOME_UNAVAILABLE,
+    RECEIPT_COMMITTED,
+    RECEIPT_NOT_FOUND,
+    RECONCILED_COMMITTED,
+    RECONCILED_NOT_COMMITTED,
     REPLAY,
     ApprovalAuthority,
     BrokeredMigrationRunner,
@@ -78,6 +84,51 @@ def _scalar(target: DbTarget, query: str):
 def _execute(target: DbTarget, query: str) -> None:
     with _connect(target) as connection, connection.cursor() as cursor:
         cursor.execute(query)
+
+
+def _receipt_row(target: DbTarget, execution_id: str):
+    with _connect(target) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT pg_catalog.to_regclass("
+            "'promethyn_internal.migration_receipts')"
+        )
+        relation = cursor.fetchone()
+        if relation is None or relation[0] is None:
+            return None
+        cursor.execute(
+            "SELECT artifact_sha256, target_canonical, committed_at "
+            "FROM promethyn_internal.migration_receipts "
+            "WHERE execution_id = %s",
+            (execution_id,),
+        )
+        return cursor.fetchone()
+
+
+def _delete_receipt(target: DbTarget, execution_id: str | None) -> None:
+    if execution_id is None:
+        return
+    with _connect(target) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            "DELETE FROM promethyn_internal.migration_receipts "
+            "WHERE execution_id = %s",
+            (execution_id,),
+        )
+
+
+class _FailOutcomeAudit:
+    def __init__(self, ledger: SqliteLedger) -> None:
+        self.ledger = ledger
+
+    def record_chained(self, **event):
+        if event["event"] == "execute_outcome":
+            raise OSError("simulated termination before outcome audit")
+        return self.ledger.record_chained(**event)
+
+    def chained_events(self):
+        return self.ledger.chained_events()
+
+    def verify_chain(self):
+        return self.ledger.verify_chain()
 
 
 def _runner_and_approval(target: DbTarget, store_path, sql: str):
@@ -197,3 +248,146 @@ def test_live_executor_does_not_interpret_psql_meta_commands(tmp_path):
         _execute(target, f"DROP TABLE IF EXISTS {table}")
         runner.close()
         audit.close()
+
+
+def test_live_executor_rejects_transaction_control_before_migration(tmp_path):
+    target = _require_db()
+    table = f"transaction_escape_probe_{int(time.time() * 1_000_000)}"
+    runner, artifact, approval, audit = _runner_and_approval(
+        target,
+        tmp_path / "transaction-escape.db",
+        f"COMMIT; CREATE TABLE {table} (id int);",
+    )
+
+    try:
+        result = runner.execute(approval=approval, artifact=artifact)
+        assert not result.executed and result.reason == "migration_error"
+        assert "transaction-control statements are forbidden" in result.detail
+        assert result.execution_id is not None
+        assert _receipt_row(target, result.execution_id) is None
+        assert _scalar(target, f"SELECT to_regclass('{table}') IS NULL") is True
+    finally:
+        _execute(target, f"DROP TABLE IF EXISTS {table}")
+        runner.close()
+        audit.close()
+
+
+def test_live_restart_reconciles_commit_from_transaction_receipt(tmp_path):
+    target = _require_db()
+    table = f"committed_receipt_probe_{int(time.time() * 1_000_000)}"
+    audit_path = tmp_path / "committed-receipt-audit.db"
+    consumed_path = tmp_path / "committed-receipt-consumed.db"
+    ledger = SqliteLedger(audit_path)
+    authority = ApprovalAuthority()
+    artifact = MigrationArtifact(f"CREATE TABLE {table} (id int);")
+    approval = authority.mint(
+        artifact_sha256=artifact.sha256,
+        target=target.identity,
+        now=time.time(),
+    )
+    runner = BrokeredMigrationRunner(
+        authority=authority,
+        target=target,
+        consumed=ConsumedApprovals(consumed_path),
+        executor=postgres_executor,
+        audit=_FailOutcomeAudit(ledger),
+        clock=time.time,
+    )
+    execution_id = None
+
+    try:
+        result = runner.execute(approval=approval, artifact=artifact)
+        execution_id = result.execution_id
+        assert result.executed and result.reason == AUDIT_OUTCOME_UNAVAILABLE
+        assert execution_id is not None
+        receipt = _receipt_row(target, execution_id)
+        assert receipt is not None
+        assert receipt[0] == artifact.sha256
+        assert receipt[1] == target.identity.canonical
+        assert _scalar(target, f"SELECT to_regclass('{table}') IS NOT NULL") is True
+    finally:
+        runner.close()
+        ledger.close()
+
+    reopened = SqliteLedger(audit_path)
+    restarted = BrokeredMigrationRunner(
+        authority=authority,
+        target=target,
+        consumed=ConsumedApprovals(consumed_path),
+        executor=postgres_executor,
+        audit=reopened,
+        clock=time.time,
+    )
+    try:
+        report = restarted.reconcile_unfinished()
+        assert len(report) == 1
+        assert report[0].resolved and report[0].state == RECEIPT_COMMITTED
+        outcome = reopened.chained_events()[-1]
+        assert outcome["event"] == "execute_outcome"
+        payload = json.loads(outcome["payload"])
+        assert payload["reason"] == RECONCILED_COMMITTED
+        assert payload["execution_id"] == execution_id
+    finally:
+        restarted.close()
+        reopened.close()
+        _execute(target, f"DROP TABLE IF EXISTS {table}")
+        _delete_receipt(target, execution_id)
+
+
+def test_live_restart_proves_failed_transaction_did_not_commit(tmp_path):
+    target = _require_db()
+    table = f"rolled_back_receipt_probe_{int(time.time() * 1_000_000)}"
+    audit_path = tmp_path / "rolled-back-receipt-audit.db"
+    consumed_path = tmp_path / "rolled-back-receipt-consumed.db"
+    ledger = SqliteLedger(audit_path)
+    authority = ApprovalAuthority()
+    artifact = MigrationArtifact(
+        f"CREATE TABLE {table} (id int); SELECT 1 / 0;"
+    )
+    approval = authority.mint(
+        artifact_sha256=artifact.sha256,
+        target=target.identity,
+        now=time.time(),
+    )
+    runner = BrokeredMigrationRunner(
+        authority=authority,
+        target=target,
+        consumed=ConsumedApprovals(consumed_path),
+        executor=postgres_executor,
+        audit=_FailOutcomeAudit(ledger),
+        clock=time.time,
+    )
+    execution_id = None
+
+    try:
+        result = runner.execute(approval=approval, artifact=artifact)
+        execution_id = result.execution_id
+        assert not result.executed and result.reason == AUDIT_OUTCOME_UNAVAILABLE
+        assert execution_id is not None
+        assert _receipt_row(target, execution_id) is None
+        assert _scalar(target, f"SELECT to_regclass('{table}') IS NULL") is True
+    finally:
+        runner.close()
+        ledger.close()
+
+    reopened = SqliteLedger(audit_path)
+    restarted = BrokeredMigrationRunner(
+        authority=authority,
+        target=target,
+        consumed=ConsumedApprovals(consumed_path),
+        executor=postgres_executor,
+        audit=reopened,
+        clock=time.time,
+    )
+    try:
+        report = restarted.reconcile_unfinished()
+        assert len(report) == 1
+        assert report[0].resolved and report[0].state == RECEIPT_NOT_FOUND
+        outcome = reopened.chained_events()[-1]
+        payload = json.loads(outcome["payload"])
+        assert payload["reason"] == RECONCILED_NOT_COMMITTED
+        assert payload["ok"] is False
+    finally:
+        restarted.close()
+        reopened.close()
+        _execute(target, f"DROP TABLE IF EXISTS {table}")

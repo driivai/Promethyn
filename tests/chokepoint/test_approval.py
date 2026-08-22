@@ -17,6 +17,7 @@ from prometheus_protocol.chokepoint import (
     EXPIRED,
     INVALID_SIGNATURE,
     INVALID_TIME,
+    RECEIPT_NOT_FOUND,
     REPLAY,
     TARGET_MISMATCH,
     Approval,
@@ -26,6 +27,7 @@ from prometheus_protocol.chokepoint import (
     DbTarget,
     MigrationArtifact,
     MigrationTarget,
+    ReceiptStatus,
 )
 from prometheus_protocol.core.models import (
     Judgment,
@@ -43,7 +45,7 @@ class _SpyExecutor:
         self.calls: list[str] = []
         self._ok = ok
 
-    def __call__(self, sql: str, target) -> tuple[bool, str]:
+    def __call__(self, sql: str, target, execution_id, artifact_sha256) -> tuple[bool, str]:
         self.calls.append(sql)
         return self._ok, "spy applied"
 
@@ -51,10 +53,18 @@ class _SpyExecutor:
 class _Audit:
     def __init__(self) -> None:
         self.seq = 0
+        self.events: list[dict[str, object]] = []
 
     def record_chained(self, **event) -> int:
         self.seq += 1
+        self.events.append({"seq": self.seq, **event})
         return self.seq
+
+    def chained_events(self) -> list[dict[str, object]]:
+        return list(self.events)
+
+    def verify_chain(self):
+        return type("Verification", (), {"ok": True})()
 
 
 def _clock():
@@ -76,7 +86,11 @@ def _pass_judgment() -> Judgment:
 def _runner(authority, target, spy, clock, store_path):
     return BrokeredMigrationRunner(
         authority=authority, target=target, consumed=ConsumedApprovals(store_path),
-        executor=spy, audit=_Audit(), clock=clock,
+        executor=spy,
+        receipt_lookup=lambda execution_id, artifact_sha256, bound: ReceiptStatus(
+            RECEIPT_NOT_FOUND
+        ),
+        audit=_Audit(), clock=clock,
     )
 
 
@@ -156,6 +170,56 @@ def test_wrong_target_fails(tmp_path):
         ),
         now=clock(),
     )
+    result = runner.execute(approval=approval, artifact=art)
+
+    assert result.refused and result.reason == TARGET_MISMATCH
+    assert spy.calls == []
+    runner.close()
+
+
+def test_invalid_approval_does_not_contact_db_for_reconciliation(tmp_path):
+    _t, clock = _clock()
+    auth = ApprovalAuthority()
+    runner_target = _target()
+    approved_target = MigrationTarget(
+        host="other.internal",
+        port=5432,
+        dbname="appdb",
+        user="migrator",
+        schema="public",
+    )
+    art = MigrationArtifact("CREATE TABLE wrong_target (id int);")
+    approval = auth.mint(
+        artifact_sha256=art.sha256,
+        target=approved_target,
+        now=clock(),
+    )
+    audit = _Audit()
+    audit.record_chained(
+        event="execute_intent",
+        subject=runner_target.identity.canonical,
+        payload={
+            "execution_id": "a" * 64,
+            "artifact_sha256": "b" * 64,
+            "target": runner_target.identity.canonical,
+        },
+        created_at="1000.0",
+    )
+    spy = _SpyExecutor()
+
+    def forbidden_lookup(execution_id, artifact_sha256, target):
+        raise AssertionError("invalid approval reached the database recovery path")
+
+    runner = BrokeredMigrationRunner(
+        authority=auth,
+        target=runner_target,
+        consumed=ConsumedApprovals(tmp_path / "invalid-no-reconcile.db"),
+        executor=spy,
+        receipt_lookup=forbidden_lookup,
+        audit=audit,
+        clock=clock,
+    )
+
     result = runner.execute(approval=approval, artifact=art)
 
     assert result.refused and result.reason == TARGET_MISMATCH

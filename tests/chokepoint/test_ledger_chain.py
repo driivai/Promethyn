@@ -8,13 +8,23 @@ from __future__ import annotations
 import json
 import threading
 
+import pytest
+
 from prometheus_protocol.chokepoint import (
     AUDIT_OUTCOME_UNAVAILABLE,
+    RECEIPT_COMMITTED,
+    RECEIPT_NOT_FOUND,
+    RECEIPT_UNAVAILABLE,
+    RECONCILED_COMMITTED,
+    RECONCILED_NOT_COMMITTED,
+    RECONCILIATION_REQUIRED,
     ApprovalAuthority,
     BrokeredMigrationRunner,
     ConsumedApprovals,
     DbTarget,
     MigrationArtifact,
+    ReceiptStatus,
+    execution_id_for,
 )
 from prometheus_protocol.core.models import Judgment, Verdict
 from prometheus_protocol.ledger.audit_chain import (
@@ -36,6 +46,44 @@ def _ledger_with(n: int) -> SqliteLedger:
         led.record_chained(event="execute", subject="appdb@h:5432",
                            payload={"i": i, "reason": "ok"}, created_at=f"t{i}")
     return led
+
+
+class _ReceiptBackend:
+    """In-memory model of the executor's atomic database receipt."""
+
+    def __init__(self, *, terminate: bool = False) -> None:
+        self.terminate = terminate
+        self.calls: list[str] = []
+        self.receipts: dict[str, tuple[str, str]] = {}
+
+    def __call__(
+        self,
+        sql: str,
+        target: DbTarget,
+        execution_id: str,
+        artifact_sha256: str,
+    ) -> tuple[bool, str]:
+        self.calls.append(execution_id)
+        if self.terminate:
+            raise SystemExit("simulated process termination during transaction")
+        self.receipts[execution_id] = (
+            artifact_sha256,
+            target.identity.canonical,
+        )
+        return True, "ok"
+
+    def lookup(
+        self, execution_id: str, artifact_sha256: str, target: DbTarget
+    ) -> ReceiptStatus:
+        receipt = self.receipts.get(execution_id)
+        if receipt is None:
+            return ReceiptStatus(RECEIPT_NOT_FOUND)
+        if receipt != (artifact_sha256, target.identity.canonical):
+            return ReceiptStatus("conflict")
+        return ReceiptStatus(
+            RECEIPT_COMMITTED,
+            committed_at="2026-08-22T12:00:00+00:00",
+        )
 
 
 # -- happy + structure --------------------------------------------------------
@@ -295,14 +343,18 @@ def test_chokepoint_decisions_are_chained_and_tamper_is_detected(tmp_path):
     art = MigrationArtifact("CREATE TABLE t (id int);")
 
     class _Spy:
-        def __call__(self, sql, tgt):
+        def __call__(self, sql, tgt, execution_id, artifact_sha256):
             return True, "ok"
 
     t = [1000.0]
     runner = BrokeredMigrationRunner(
         authority=auth, target=target,
         consumed=ConsumedApprovals(tmp_path / "consumed.db"),
-        executor=_Spy(), audit=led, clock=lambda: t[0],
+        executor=_Spy(),
+        receipt_lookup=lambda execution_id, artifact_sha256, bound: ReceiptStatus(
+            RECEIPT_NOT_FOUND
+        ),
+        audit=led, clock=lambda: t[0],
     )
     judgment = Judgment(verdict=Verdict.PASS, confidence=1.0, authoritative=True)
     approval = auth.authorize(judgment, artifact=art, target=target.identity, now=t[0])
@@ -336,8 +388,14 @@ def test_execution_intent_survives_restart_when_outcome_append_fails(tmp_path):
                 raise OSError("simulated audit outage")
             return ledger.record_chained(**event)
 
+        def chained_events(self):
+            return ledger.chained_events()
+
+        def verify_chain(self):
+            return ledger.verify_chain()
+
     class _Spy:
-        def __call__(self, sql, target):
+        def __call__(self, sql, target, execution_id, artifact_sha256):
             return True, "ok"
 
     authority = ApprovalAuthority()
@@ -357,6 +415,9 @@ def test_execution_intent_survives_restart_when_outcome_append_fails(tmp_path):
         target=target,
         consumed=ConsumedApprovals(tmp_path / "durable-intent-consumed.db"),
         executor=_Spy(),
+        receipt_lookup=lambda execution_id, artifact_sha256, bound: ReceiptStatus(
+            RECEIPT_NOT_FOUND
+        ),
         audit=_FailOutcome(),
         clock=lambda: 1_001.0,
     )
@@ -374,3 +435,302 @@ def test_execution_intent_survives_restart_when_outcome_append_fails(tmp_path):
         assert reopened.verify_chain().ok
     finally:
         reopened.close()
+
+
+def test_execution_id_is_stable_and_bound_to_nonce_artifact_and_target():
+    authority = ApprovalAuthority()
+    target = DbTarget(
+        host="db.internal",
+        port=5432,
+        dbname="appdb",
+        user="migrator",
+        password="secret",
+    )
+    artifact = MigrationArtifact("CREATE TABLE stable_id (id int);")
+    approval = authority.mint(
+        artifact_sha256=artifact.sha256,
+        target=target.identity,
+        now=1_000.0,
+    )
+
+    first = execution_id_for(
+        approval=approval, artifact=artifact, target=target.identity
+    )
+    assert first == execution_id_for(
+        approval=approval, artifact=artifact, target=target.identity
+    )
+    other_approval = authority.mint(
+        artifact_sha256=artifact.sha256,
+        target=target.identity,
+        now=1_000.0,
+    )
+    assert first != execution_id_for(
+        approval=other_approval, artifact=artifact, target=target.identity
+    )
+
+
+def test_restart_reconciles_committed_receipt_after_outcome_audit_failure(tmp_path):
+    path = tmp_path / "committed-reconcile.db"
+    ledger = SqliteLedger(path)
+
+    class _FailOutcome:
+        def record_chained(self, **event):
+            if event["event"] == "execute_outcome":
+                raise SystemExit("simulated termination before outcome audit")
+            return ledger.record_chained(**event)
+
+        def chained_events(self):
+            return ledger.chained_events()
+
+        def verify_chain(self):
+            return ledger.verify_chain()
+
+    authority = ApprovalAuthority()
+    target = DbTarget(
+        host="db.internal",
+        port=5432,
+        dbname="appdb",
+        user="migrator",
+        password="secret",
+    )
+    artifact = MigrationArtifact("CREATE TABLE committed_before_crash (id int);")
+    approval = authority.mint(
+        artifact_sha256=artifact.sha256,
+        target=target.identity,
+        now=1_000.0,
+    )
+    backend = _ReceiptBackend()
+    runner = BrokeredMigrationRunner(
+        authority=authority,
+        target=target,
+        consumed=ConsumedApprovals(tmp_path / "committed-consumed.db"),
+        executor=backend,
+        receipt_lookup=backend.lookup,
+        audit=_FailOutcome(),
+        clock=lambda: 1_001.0,
+    )
+    with pytest.raises(SystemExit, match="termination before outcome audit"):
+        runner.execute(approval=approval, artifact=artifact)
+    execution_id = backend.calls[-1]
+    assert execution_id in backend.receipts
+    runner.close()
+    ledger.close()
+
+    reopened = SqliteLedger(path)
+    restarted = BrokeredMigrationRunner(
+        authority=authority,
+        target=target,
+        consumed=ConsumedApprovals(tmp_path / "committed-consumed.db"),
+        executor=backend,
+        receipt_lookup=backend.lookup,
+        audit=reopened,
+        clock=lambda: 1_002.0,
+    )
+    try:
+        report = restarted.reconcile_unfinished()
+        assert len(report) == 1
+        assert report[0].resolved and report[0].state == RECEIPT_COMMITTED
+        events = reopened.chained_events()
+        assert [event["event"] for event in events] == [
+            "execute_intent",
+            "execute_outcome",
+        ]
+        outcome = json.loads(events[-1]["payload"])
+        assert outcome["execution_id"] == execution_id
+        assert outcome["reason"] == RECONCILED_COMMITTED
+        assert outcome["reconciled"] is True
+    finally:
+        restarted.close()
+        reopened.close()
+
+
+def test_restart_records_not_committed_after_termination_during_transaction(tmp_path):
+    path = tmp_path / "terminated-reconcile.db"
+    ledger = SqliteLedger(path)
+    authority = ApprovalAuthority()
+    target = DbTarget(
+        host="db.internal",
+        port=5432,
+        dbname="appdb",
+        user="migrator",
+        password="secret",
+    )
+    artifact = MigrationArtifact("CREATE TABLE killed_transaction (id int);")
+    approval = authority.mint(
+        artifact_sha256=artifact.sha256,
+        target=target.identity,
+        now=1_000.0,
+    )
+    backend = _ReceiptBackend(terminate=True)
+    runner = BrokeredMigrationRunner(
+        authority=authority,
+        target=target,
+        consumed=ConsumedApprovals(tmp_path / "terminated-consumed.db"),
+        executor=backend,
+        receipt_lookup=backend.lookup,
+        audit=ledger,
+        clock=lambda: 1_001.0,
+    )
+    with pytest.raises(SystemExit, match="simulated process termination"):
+        runner.execute(approval=approval, artifact=artifact)
+    runner.close()
+    ledger.close()
+
+    backend.terminate = False
+    reopened = SqliteLedger(path)
+    restarted = BrokeredMigrationRunner(
+        authority=authority,
+        target=target,
+        consumed=ConsumedApprovals(tmp_path / "terminated-consumed.db"),
+        executor=backend,
+        receipt_lookup=backend.lookup,
+        audit=reopened,
+        clock=lambda: 1_002.0,
+    )
+    try:
+        report = restarted.reconcile_unfinished()
+        assert len(report) == 1
+        assert report[0].resolved and report[0].state == RECEIPT_NOT_FOUND
+        outcome = json.loads(reopened.chained_events()[-1]["payload"])
+        assert outcome["reason"] == RECONCILED_NOT_COMMITTED
+        assert outcome["ok"] is False
+    finally:
+        restarted.close()
+        reopened.close()
+
+
+def test_restart_records_not_committed_after_termination_before_executor(tmp_path):
+    path = tmp_path / "pre-executor-reconcile.db"
+    ledger = SqliteLedger(path)
+
+    class _TerminateAfterIntent:
+        def record_chained(self, **event):
+            seq = ledger.record_chained(**event)
+            if event["event"] == "execute_intent":
+                raise SystemExit("simulated termination after durable intent")
+            return seq
+
+        def chained_events(self):
+            return ledger.chained_events()
+
+        def verify_chain(self):
+            return ledger.verify_chain()
+
+    authority = ApprovalAuthority()
+    target = DbTarget(
+        host="db.internal",
+        port=5432,
+        dbname="appdb",
+        user="migrator",
+        password="secret",
+    )
+    artifact = MigrationArtifact("CREATE TABLE never_reached_executor (id int);")
+    approval = authority.mint(
+        artifact_sha256=artifact.sha256,
+        target=target.identity,
+        now=1_000.0,
+    )
+    backend = _ReceiptBackend()
+    runner = BrokeredMigrationRunner(
+        authority=authority,
+        target=target,
+        consumed=ConsumedApprovals(tmp_path / "pre-executor-consumed.db"),
+        executor=backend,
+        receipt_lookup=backend.lookup,
+        audit=_TerminateAfterIntent(),
+        clock=lambda: 1_001.0,
+    )
+    with pytest.raises(SystemExit, match="termination after durable intent"):
+        runner.execute(approval=approval, artifact=artifact)
+    assert backend.calls == []
+    runner.close()
+    ledger.close()
+
+    reopened = SqliteLedger(path)
+    restarted = BrokeredMigrationRunner(
+        authority=authority,
+        target=target,
+        consumed=ConsumedApprovals(tmp_path / "pre-executor-consumed.db"),
+        executor=backend,
+        receipt_lookup=backend.lookup,
+        audit=reopened,
+        clock=lambda: 1_002.0,
+    )
+    try:
+        report = restarted.reconcile_unfinished()
+        assert len(report) == 1
+        assert report[0].resolved and report[0].state == RECEIPT_NOT_FOUND
+        outcome = json.loads(reopened.chained_events()[-1]["payload"])
+        assert outcome["reason"] == RECONCILED_NOT_COMMITTED
+    finally:
+        restarted.close()
+        reopened.close()
+
+
+def test_unavailable_receipt_blocks_all_further_database_execution(tmp_path):
+    ledger = SqliteLedger(tmp_path / "blocked-reconcile.db")
+    authority = ApprovalAuthority()
+    target = DbTarget(
+        host="db.internal",
+        port=5432,
+        dbname="appdb",
+        user="migrator",
+        password="secret",
+    )
+    old_artifact = MigrationArtifact("CREATE TABLE unknown_outcome (id int);")
+    old_approval = authority.mint(
+        artifact_sha256=old_artifact.sha256,
+        target=target.identity,
+        now=1_000.0,
+    )
+    old_execution_id = execution_id_for(
+        approval=old_approval,
+        artifact=old_artifact,
+        target=target.identity,
+    )
+    ledger.record_chained(
+        event="execute_intent",
+        subject=target.identity.canonical,
+        payload={
+            "phase": "execute_intent",
+            "execution_id": old_execution_id,
+            "artifact_sha256": old_artifact.sha256,
+            "target": target.identity.canonical,
+        },
+        created_at="1001.0",
+    )
+
+    next_artifact = MigrationArtifact("CREATE TABLE must_not_run (id int);")
+    next_approval = authority.mint(
+        artifact_sha256=next_artifact.sha256,
+        target=target.identity,
+        now=1_001.0,
+    )
+    backend = _ReceiptBackend()
+    receipt_state = [RECEIPT_UNAVAILABLE]
+    runner = BrokeredMigrationRunner(
+        authority=authority,
+        target=target,
+        consumed=ConsumedApprovals(tmp_path / "blocked-consumed.db"),
+        executor=backend,
+        receipt_lookup=lambda execution_id, artifact_sha256, bound: ReceiptStatus(
+            receipt_state[0], detail="database offline"
+        ),
+        audit=ledger,
+        clock=lambda: 1_002.0,
+    )
+    try:
+        result = runner.execute(approval=next_approval, artifact=next_artifact)
+        assert result.refused and result.reason == RECONCILIATION_REQUIRED
+        assert backend.calls == []
+
+        # Recovery failure does not burn the new approval. Once the old intent
+        # can be proven rolled back, the exact same capability may proceed.
+        receipt_state[0] = RECEIPT_NOT_FOUND
+        retry = runner.execute(approval=next_approval, artifact=next_artifact)
+        assert retry.executed and not retry.refused
+        assert len(backend.calls) == 1
+        assert ledger.verify_chain().ok
+    finally:
+        runner.close()
+        ledger.close()

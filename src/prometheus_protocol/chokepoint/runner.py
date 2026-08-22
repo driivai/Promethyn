@@ -3,17 +3,24 @@
 This is the trusted-zone component that alone can touch the target database. It
 executes a migration **only** when presented an approval that verifies against
 the exact artifact and its own bound target, has not expired, and has never been
-spent before. Everything else is refused, and a refusal never touches the DB.
+spent before. Everything else is refused. An invalid approval causes no database
+contact at all; a reconciliation refusal may read the reserved receipt table but
+never runs the requested migration.
 
 Order of enforcement in :meth:`execute` (each step fail-closed):
 
 1. re-hash the artifact and verify the approval (signature, artifact, target,
    expiry) — a bound-field failure refuses *before* any DB contact;
-2. atomically **spend** the approval's nonce — a second use of the same approval
+2. reconcile any older unfinished intent; ambiguity blocks this approval without
+   spending it;
+3. atomically **spend** the approval's nonce — a second use of the same approval
    loses the race and is refused as a replay;
-3. durably record an execution intent — an unavailable audit sink refuses before
+4. durably record an execution intent — an unavailable audit sink refuses before
    database contact;
-4. only then run the migration and append an outcome linked to that intent.
+5. only then run the migration and insert its execution receipt in the same
+   PostgreSQL transaction;
+6. append an outcome linked to that intent. After a crash, the receipt proves
+   commit versus rollback before another migration is allowed to run.
 
 The runner is bound to ONE target and ONE credential at construction (like the
 git tool is bound to one repo): an approval naming a different target fails step
@@ -27,6 +34,8 @@ PostgreSQL wire protocol directly; it never interprets psql meta-commands.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import sqlite3
 import stat
@@ -50,20 +59,54 @@ REPLAY = "replay"
 STORE_UNAVAILABLE = "approval_store_unavailable"
 AUDIT_UNAVAILABLE = "audit_unavailable"
 AUDIT_OUTCOME_UNAVAILABLE = "audit_outcome_unavailable"
+RECONCILIATION_REQUIRED = "reconciliation_required"
+RECONCILED_COMMITTED = "reconciled_committed"
+RECONCILED_NOT_COMMITTED = "reconciled_not_committed"
+
+RECEIPT_COMMITTED = "committed"
+RECEIPT_NOT_FOUND = "not_found"
+RECEIPT_IN_PROGRESS = "in_progress"
+RECEIPT_UNAVAILABLE = "unavailable"
+RECEIPT_CONFLICT = "conflict"
+
+_RECEIPT_SCHEMA = "promethyn_internal"
+_RECEIPT_TABLE = "migration_receipts"
 
 
 @dataclass(frozen=True)
 class MigrationResult:
     """What the runner did. ``executed`` is True only when the DB was touched and
-    the migration succeeded; ``refused`` is True when authorization failed and the
-    DB was NOT touched. Exactly one of the two is True, except an authorized
-    migration that ran but errored (``executed=False, refused=False``)."""
+    the migration succeeded; ``refused`` is True when the requested migration was
+    not run. Exactly one of the two is True, except an authorized migration that
+    ran but errored (``executed=False, refused=False``)."""
 
     executed: bool
     refused: bool
     reason: str
     detail: str = ""
     audit_recorded: bool = False
+    execution_id: str | None = None
+
+
+@dataclass(frozen=True)
+class ReceiptStatus:
+    """What PostgreSQL can prove about one durable execution intent."""
+
+    state: str
+    committed_at: str | None = None
+    detail: str = ""
+
+
+@dataclass(frozen=True)
+class ReconciliationResult:
+    """Outcome of reconciling one intent that lacks an audit outcome."""
+
+    execution_id: str
+    intent_seq: int | None
+    state: str
+    resolved: bool
+    audit_recorded: bool = False
+    detail: str = ""
 
 
 @dataclass(frozen=True)
@@ -123,9 +166,24 @@ class MigrationRunnerConfig:
 
 class MigrationExecutor(Protocol):
     """Runs approved SQL against the target. Injected so tests can supply a spy
-    that proves a refusal never reaches the DB."""
+    that proves a refusal never reaches the DB. A custom implementation must
+    atomically persist the receipt described by its matching ``ReceiptLookup``."""
 
-    def __call__(self, sql: str, target: DbTarget) -> tuple[bool, str]: ...
+    def __call__(
+        self,
+        sql: str,
+        target: DbTarget,
+        execution_id: str,
+        artifact_sha256: str,
+    ) -> tuple[bool, str]: ...
+
+
+class ReceiptLookup(Protocol):
+    """Reads the transaction-coupled receipt for one execution intent."""
+
+    def __call__(
+        self, execution_id: str, artifact_sha256: str, target: DbTarget
+    ) -> ReceiptStatus: ...
 
 
 class AuditSink(Protocol):
@@ -139,9 +197,133 @@ class AuditSink(Protocol):
         self, *, event: str, subject: str, payload: dict[str, object], created_at: str
     ) -> int: ...
 
+    def chained_events(self) -> list[dict[str, object]]: ...
 
-def postgres_executor(sql: str, target: DbTarget) -> tuple[bool, str]:
-    """Apply approved SQL through PostgreSQL's wire protocol, in one transaction.
+    def verify_chain(self) -> object: ...
+
+
+def execution_id_for(
+    *, approval: Approval, artifact: MigrationArtifact, target: MigrationTarget
+) -> str:
+    """Derive a stable, non-secret identifier for one approved execution.
+
+    The nonce is signed by the approval authority and single-use in the durable
+    approval store. Committing the target and artifact to the identifier makes a
+    receipt collision across security boundaries fail visibly.
+    """
+
+    material = json.dumps(
+        {
+            "artifact_sha256": artifact.sha256,
+            "approval_nonce": approval.nonce,
+            "target": target.canonical,
+            "version": 1,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(b"promethyn-execution\x00" + material).hexdigest()
+
+
+def _starts_transaction_control_statement(sql: str) -> bool:
+    """Conservatively find transaction-control at a statement boundary.
+
+    PostgreSQL would honor an artifact-level ``COMMIT`` even when the driver
+    began the transaction. That would destroy atomicity with the receipt. This
+    scanner ignores quoted text, identifiers, dollar-quoted bodies, and nested
+    comments, then rejects transaction-control keywords only when they are the
+    first token of a statement. False positives fail closed before DB contact.
+    """
+
+    forbidden = {
+        "abort",
+        "begin",
+        "commit",
+        "end",
+        "prepare",
+        "release",
+        "rollback",
+        "savepoint",
+        "start",
+    }
+    index = 0
+    statement_start = True
+    length = len(sql)
+    while index < length:
+        char = sql[index]
+        if char.isspace():
+            index += 1
+            continue
+        if sql.startswith("--", index):
+            newline = sql.find("\n", index + 2)
+            index = length if newline < 0 else newline + 1
+            continue
+        if sql.startswith("/*", index):
+            depth = 1
+            index += 2
+            while index < length and depth:
+                if sql.startswith("/*", index):
+                    depth += 1
+                    index += 2
+                elif sql.startswith("*/", index):
+                    depth -= 1
+                    index += 2
+                else:
+                    index += 1
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            index += 1
+            while index < length:
+                if sql[index] == quote:
+                    if index + 1 < length and sql[index + 1] == quote:
+                        index += 2
+                        continue
+                    index += 1
+                    break
+                index += 1
+            continue
+        if char == "$":
+            tag_end = sql.find("$", index + 1)
+            if tag_end >= 0:
+                tag = sql[index : tag_end + 1]
+                tag_body = tag[1:-1]
+                if not tag_body or (
+                    (tag_body[0].isalpha() or tag_body[0] == "_")
+                    and all(c.isalnum() or c == "_" for c in tag_body)
+                ):
+                    close = sql.find(tag, tag_end + 1)
+                    index = length if close < 0 else close + len(tag)
+                    continue
+        if char == ";":
+            statement_start = True
+            index += 1
+            continue
+        if char.isalpha() or char == "_":
+            end = index + 1
+            while end < length and (sql[end].isalnum() or sql[end] in {"_", "$"}):
+                end += 1
+            if statement_start and sql[index:end].lower() in forbidden:
+                return True
+            statement_start = False
+            index = end
+            continue
+        statement_start = False
+        index += 1
+    return False
+
+
+def _is_lower_hex_digest(value: str) -> bool:
+    return len(value) == 64 and all(char in "0123456789abcdef" for char in value)
+
+
+def postgres_executor(
+    sql: str,
+    target: DbTarget,
+    execution_id: str,
+    artifact_sha256: str,
+) -> tuple[bool, str]:
+    """Apply approved SQL and its receipt in one PostgreSQL transaction.
 
     This deliberately does *not* shell out to ``psql``. A psql input file has a
     second command language (``\\!``, ``\\connect``, ``\\copy`` and friends) that
@@ -151,8 +333,22 @@ def postgres_executor(sql: str, target: DbTarget) -> tuple[bool, str]:
 
     The bound schema is quoted as exactly one PostgreSQL identifier and installed
     as the transaction-local search path. A server-side statement timeout bounds
-    execution after the connection's own timeout has elapsed.
+    execution after the connection's own timeout has elapsed. The execution ID
+    is locked for the connection session, then a receipt is inserted only after
+    the artifact succeeds; PostgreSQL commits the migration and receipt together
+    or rolls both back. A pre-existing matching receipt makes a retry idempotent,
+    while a conflicting receipt fails closed.
     """
+
+    if not _is_lower_hex_digest(execution_id) or not _is_lower_hex_digest(
+        artifact_sha256
+    ):
+        return False, "invalid execution ID or artifact digest"
+    if _starts_transaction_control_statement(sql):
+        return False, (
+            "transaction-control statements are forbidden; migration and receipt "
+            "must commit atomically"
+        )
 
     try:
         psycopg = import_module("psycopg")
@@ -170,6 +366,50 @@ def postgres_executor(sql: str, target: DbTarget) -> tuple[bool, str]:
             autocommit=False,
         ) as connection, connection.cursor() as cursor:
             cursor.execute(
+                "SELECT pg_catalog.pg_advisory_lock("
+                "pg_catalog.hashtextextended(%s, 0))",
+                (execution_id,),
+            )
+            cursor.execute(
+                "SELECT pg_catalog.pg_advisory_xact_lock("
+                "pg_catalog.hashtextextended("
+                "'promethyn-receipt-bootstrap-v1', 0))"
+            )
+            cursor.execute(
+                "SELECT pg_catalog.to_regnamespace(%s)", (_RECEIPT_SCHEMA,)
+            )
+            namespace = cursor.fetchone()
+            if namespace is None or namespace[0] is None:
+                cursor.execute(f"CREATE SCHEMA {_RECEIPT_SCHEMA}")
+            cursor.execute(
+                "SELECT pg_catalog.to_regclass(%s)",
+                (f"{_RECEIPT_SCHEMA}.{_RECEIPT_TABLE}",),
+            )
+            relation = cursor.fetchone()
+            if relation is None or relation[0] is None:
+                cursor.execute(
+                    f"CREATE TABLE {_RECEIPT_SCHEMA}.{_RECEIPT_TABLE} ("
+                    "execution_id text PRIMARY KEY, "
+                    "artifact_sha256 text NOT NULL, "
+                    "target_canonical text NOT NULL, "
+                    "committed_at timestamptz NOT NULL DEFAULT clock_timestamp())"
+                )
+            # Commit only the idempotent receipt-schema bootstrap. The session
+            # execution lock survives this boundary; the approved migration and
+            # its receipt begin afterward and still commit atomically together.
+            connection.commit()
+            cursor.execute(
+                f"SELECT artifact_sha256, target_canonical "
+                f"FROM {_RECEIPT_SCHEMA}.{_RECEIPT_TABLE} "
+                "WHERE execution_id = %s",
+                (execution_id,),
+            )
+            existing = cursor.fetchone()
+            if existing is not None:
+                if existing[0] != artifact_sha256 or existing[1] != target.identity.canonical:
+                    return False, "execution receipt conflicts with artifact or target"
+                return True, "execution receipt already committed"
+            cursor.execute(
                 "SELECT pg_catalog.set_config("
                 "'search_path', pg_catalog.quote_ident(%s), true)",
                 (target.schema,),
@@ -179,9 +419,91 @@ def postgres_executor(sql: str, target: DbTarget) -> tuple[bool, str]:
                 "'statement_timeout', '60000', true)"
             )
             cursor.execute(sql, prepare=False)
+            cursor.execute(
+                f"INSERT INTO {_RECEIPT_SCHEMA}.{_RECEIPT_TABLE} "
+                "(execution_id, artifact_sha256, target_canonical) "
+                "VALUES (%s, %s, %s)",
+                (execution_id, artifact_sha256, target.identity.canonical),
+            )
     except psycopg.Error as exc:
         return False, str(exc).strip()[:500]
     return True, ""
+
+
+def postgres_receipt_lookup(
+    execution_id: str, artifact_sha256: str, target: DbTarget
+) -> ReceiptStatus:
+    """Read a PostgreSQL execution receipt without racing an active transaction.
+
+    The executor holds the same advisory lock until commit/rollback. A lookup
+    that cannot acquire it reports ``in_progress`` rather than falsely treating
+    an uncommitted receipt as a rollback.
+    """
+
+    if not _is_lower_hex_digest(execution_id) or not _is_lower_hex_digest(
+        artifact_sha256
+    ):
+        return ReceiptStatus(
+            RECEIPT_CONFLICT,
+            detail="intent contains an invalid execution ID or artifact digest",
+        )
+
+    try:
+        psycopg = import_module("psycopg")
+    except ImportError:
+        return ReceiptStatus(
+            RECEIPT_UNAVAILABLE,
+            detail="psycopg is unavailable; execution receipt cannot be checked",
+        )
+
+    try:
+        with psycopg.connect(
+            host=target.host,
+            port=target.port,
+            dbname=target.dbname,
+            user=target.user,
+            password=target.password,
+            connect_timeout=10,
+            autocommit=False,
+        ) as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT pg_catalog.pg_try_advisory_xact_lock("
+                "pg_catalog.hashtextextended(%s, 0))",
+                (execution_id,),
+            )
+            lock_row = cursor.fetchone()
+            if lock_row is None or not bool(lock_row[0]):
+                return ReceiptStatus(
+                    RECEIPT_IN_PROGRESS,
+                    detail="execution transaction still holds its receipt lock",
+                )
+            cursor.execute(
+                "SELECT pg_catalog.to_regclass(%s)",
+                (f"{_RECEIPT_SCHEMA}.{_RECEIPT_TABLE}",),
+            )
+            relation = cursor.fetchone()
+            if relation is None or relation[0] is None:
+                return ReceiptStatus(RECEIPT_NOT_FOUND)
+            cursor.execute(
+                f"SELECT artifact_sha256, target_canonical, committed_at "
+                f"FROM {_RECEIPT_SCHEMA}.{_RECEIPT_TABLE} "
+                "WHERE execution_id = %s",
+                (execution_id,),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                return ReceiptStatus(RECEIPT_NOT_FOUND)
+            if row[0] != artifact_sha256 or row[1] != target.identity.canonical:
+                return ReceiptStatus(
+                    RECEIPT_CONFLICT,
+                    detail="receipt exists but does not match the intent",
+                )
+            return ReceiptStatus(RECEIPT_COMMITTED, committed_at=str(row[2]))
+    except psycopg.Error as exc:
+        return ReceiptStatus(
+            RECEIPT_UNAVAILABLE,
+            detail=str(exc).strip()[:500],
+        )
 
 
 # Compatibility name for callers of the alpha API. The implementation is now
@@ -334,17 +656,27 @@ class BrokeredMigrationRunner:
         target: DbTarget,
         consumed: ConsumedApprovals,
         executor: MigrationExecutor = postgres_executor,
+        receipt_lookup: ReceiptLookup | None = None,
         audit: AuditSink,
         clock: Callable[[], float],
     ) -> None:
         if audit is None:
             raise ValueError("migration runner audit sink is required")
+        if receipt_lookup is None:
+            if executor is not postgres_executor:
+                raise ValueError(
+                    "custom migration executor requires a matching receipt lookup"
+                )
+            receipt_lookup = postgres_receipt_lookup
         self._authority = authority
         self._target = target
         self._consumed = consumed
         self._executor = executor
+        self._receipt_lookup = receipt_lookup
         self._audit = audit
         self._clock = clock
+        self._execution_lock = threading.RLock()
+        self._reconcile_lock = threading.RLock()
 
     def _record(
         self, event: str, subject: str, payload: dict[str, object]
@@ -373,7 +705,213 @@ class BrokeredMigrationRunner:
     def target(self) -> DbTarget:
         return self._target
 
+    @staticmethod
+    def _audit_payload(row: dict[str, object]) -> dict[str, object] | None:
+        raw = row.get("payload")
+        if isinstance(raw, dict):
+            return raw
+        if not isinstance(raw, str):
+            return None
+        try:
+            payload = json.loads(raw)
+        except (TypeError, ValueError):
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def reconcile_unfinished(self) -> tuple[ReconciliationResult, ...]:
+        """Resolve durable intents that have no audit outcome.
+
+        This is intended for runner startup, after the previous runner process is
+        gone. PostgreSQL's execution-specific advisory lock also prevents an
+        active transaction from being mistaken for a rollback. A committed
+        receipt proves the migration committed; an absent receipt, observed only
+        after acquiring that lock, proves PostgreSQL did not commit the atomic
+        migration-and-receipt transaction.
+        """
+
+        with self._reconcile_lock:
+            try:
+                verification = self._audit.verify_chain()
+                if not bool(getattr(verification, "ok", False)):
+                    return (
+                        ReconciliationResult(
+                            execution_id="",
+                            intent_seq=None,
+                            state="audit_chain_invalid",
+                            resolved=False,
+                            detail="audit chain is not valid; reconciliation refused",
+                        ),
+                    )
+                rows = self._audit.chained_events()
+            except Exception as exc:  # noqa: BLE001 - audit is an external boundary
+                return (
+                    ReconciliationResult(
+                        execution_id="",
+                        intent_seq=None,
+                        state=AUDIT_UNAVAILABLE,
+                        resolved=False,
+                        detail=f"audit history unavailable: {type(exc).__name__}",
+                    ),
+                )
+
+            outcomes: list[tuple[int | None, dict[str, object]]] = []
+            intents: list[tuple[int | None, dict[str, object]]] = []
+            for row in rows:
+                event = row.get("event")
+                payload = self._audit_payload(row)
+                if payload is None:
+                    return (
+                        ReconciliationResult(
+                            execution_id="",
+                            intent_seq=None,
+                            state="audit_payload_invalid",
+                            resolved=False,
+                            detail="audit payload could not be decoded",
+                        ),
+                    )
+                if event == "execute_outcome":
+                    seq = row.get("seq")
+                    outcomes.append(
+                        (
+                            seq
+                            if isinstance(seq, int) and not isinstance(seq, bool)
+                            else None,
+                            payload,
+                        )
+                    )
+                elif event == "execute_intent":
+                    seq = row.get("seq")
+                    intents.append(
+                        (
+                            seq
+                            if isinstance(seq, int) and not isinstance(seq, bool)
+                            else None,
+                            payload,
+                        )
+                    )
+
+            results: list[ReconciliationResult] = []
+            target_canonical = self._target.identity.canonical
+            for intent_seq, payload in intents:
+                if payload.get("target") != target_canonical:
+                    continue
+                execution_id = payload.get("execution_id")
+                artifact_sha256 = payload.get("artifact_sha256")
+                matching_outcome = False
+                for outcome_seq, outcome_payload in outcomes:
+                    if (
+                        intent_seq is not None
+                        and outcome_seq is not None
+                        and outcome_seq <= intent_seq
+                    ):
+                        continue
+                    if (
+                        outcome_payload.get("target") != target_canonical
+                        or outcome_payload.get("artifact_sha256") != artifact_sha256
+                    ):
+                        continue
+                    outcome_execution_id = outcome_payload.get("execution_id")
+                    outcome_intent_seq = outcome_payload.get("intent_seq")
+                    if (
+                        isinstance(execution_id, str)
+                        and execution_id
+                        and outcome_execution_id == execution_id
+                    ) or (
+                        intent_seq is not None
+                        and outcome_intent_seq == intent_seq
+                    ):
+                        matching_outcome = True
+                        break
+                if matching_outcome:
+                    continue
+                if not isinstance(execution_id, str) or not execution_id:
+                    results.append(
+                        ReconciliationResult(
+                            execution_id="",
+                            intent_seq=intent_seq,
+                            state="legacy_intent",
+                            resolved=False,
+                            detail="intent has no stable execution_id",
+                        )
+                    )
+                    continue
+                if not isinstance(artifact_sha256, str) or not artifact_sha256:
+                    results.append(
+                        ReconciliationResult(
+                            execution_id=execution_id,
+                            intent_seq=intent_seq,
+                            state="invalid_intent",
+                            resolved=False,
+                            detail="intent has no artifact hash",
+                        )
+                    )
+                    continue
+
+                try:
+                    receipt = self._receipt_lookup(
+                        execution_id, artifact_sha256, self._target
+                    )
+                except Exception as exc:  # noqa: BLE001 - DB lookup boundary
+                    receipt = ReceiptStatus(
+                        RECEIPT_UNAVAILABLE,
+                        detail=f"receipt lookup raised {type(exc).__name__}",
+                    )
+                if receipt.state not in {RECEIPT_COMMITTED, RECEIPT_NOT_FOUND}:
+                    results.append(
+                        ReconciliationResult(
+                            execution_id=execution_id,
+                            intent_seq=intent_seq,
+                            state=receipt.state,
+                            resolved=False,
+                            detail=receipt.detail,
+                        )
+                    )
+                    continue
+
+                committed = receipt.state == RECEIPT_COMMITTED
+                reason = (
+                    RECONCILED_COMMITTED
+                    if committed
+                    else RECONCILED_NOT_COMMITTED
+                )
+                outcome = self._record(
+                    "execute_outcome",
+                    target_canonical,
+                    {
+                        "phase": "execute_outcome",
+                        "intent_seq": intent_seq,
+                        "execution_id": execution_id,
+                        "artifact_sha256": artifact_sha256,
+                        "target": target_canonical,
+                        "ok": committed,
+                        "reason": reason,
+                        "reconciled": True,
+                        "receipt_committed_at": receipt.committed_at,
+                    },
+                )
+                results.append(
+                    ReconciliationResult(
+                        execution_id=execution_id,
+                        intent_seq=intent_seq,
+                        state=receipt.state,
+                        resolved=outcome.recorded,
+                        audit_recorded=outcome.recorded,
+                        detail=(
+                            "PostgreSQL receipt proves the migration committed"
+                            if committed
+                            else "no PostgreSQL receipt; transaction did not commit"
+                        ),
+                    )
+                )
+            return tuple(results)
+
     def execute(
+        self, *, approval: Approval, artifact: MigrationArtifact
+    ) -> MigrationResult:
+        with self._execution_lock:
+            return self._execute_locked(approval=approval, artifact=artifact)
+
+    def _execute_locked(
         self, *, approval: Approval, artifact: MigrationArtifact
     ) -> MigrationResult:
         # STEP 1 — verify every bound field before touching anything. A failure
@@ -402,7 +940,34 @@ class BrokeredMigrationRunner:
                 audit_recorded=audit.recorded,
             )
 
-        # STEP 2 — spend the nonce atomically. A replay (already spent) loses the
+        # STEP 2 — a valid approval cannot proceed while an earlier intent for
+        # this target remains ambiguous. Do not spend it: the caller may retry
+        # after recovery succeeds.
+        reconciliation = self.reconcile_unfinished()
+        unresolved = next((item for item in reconciliation if not item.resolved), None)
+        if unresolved is not None:
+            audit = self._record(
+                "refuse",
+                self._target.identity.canonical,
+                {
+                    "phase": "reconcile",
+                    "reason": RECONCILIATION_REQUIRED,
+                    "execution_id": unresolved.execution_id,
+                    "reconciliation_state": unresolved.state,
+                },
+            )
+            return MigrationResult(
+                executed=False,
+                refused=True,
+                reason=RECONCILIATION_REQUIRED,
+                detail=(
+                    "an earlier execution intent could not be reconciled; "
+                    "current approval remains unspent; DB not touched for it"
+                ),
+                audit_recorded=audit.recorded,
+            )
+
+        # STEP 3 — spend the nonce atomically. A replay (already spent) loses the
         # race and is refused here, still before the DB.
         try:
             claimed = self._consumed.claim(approval.nonce, self._now_iso())
@@ -442,7 +1007,13 @@ class BrokeredMigrationRunner:
                 audit_recorded=audit.recorded,
             )
 
-        # STEP 3 — persist a durable execution intent BEFORE touching the DB.
+        execution_id = execution_id_for(
+            approval=approval,
+            artifact=artifact,
+            target=self._target.identity,
+        )
+
+        # STEP 4 — persist a durable execution intent BEFORE touching the DB.
         # If the required audit sink cannot commit the intent, fail closed. The
         # nonce remains spent: an ambiguous audit write must never be made
         # retryable as a fresh approval.
@@ -451,6 +1022,7 @@ class BrokeredMigrationRunner:
             self._target.identity.canonical,
             {
                 "phase": "execute_intent",
+                "execution_id": execution_id,
                 "artifact_sha256": artifact.sha256,
                 "target": self._target.identity.canonical,
             },
@@ -465,12 +1037,18 @@ class BrokeredMigrationRunner:
                     "DB not touched"
                 ),
                 audit_recorded=False,
+                execution_id=execution_id,
             )
 
-        # STEP 4 — authorized, current, bound, first use, durable intent present:
+        # STEP 5 — authorized, current, bound, first use, durable intent present:
         # run the migration.
         try:
-            ok, detail = self._executor(artifact.sql, self._target)
+            ok, detail = self._executor(
+                artifact.sql,
+                self._target,
+                execution_id,
+                artifact.sha256,
+            )
         except Exception as exc:  # noqa: BLE001 - executor is an external boundary
             ok = False
             detail = f"executor raised {type(exc).__name__}"
@@ -480,6 +1058,7 @@ class BrokeredMigrationRunner:
             {
                 "phase": "execute_outcome",
                 "intent_seq": intent.seq,
+                "execution_id": execution_id,
                 "artifact_sha256": artifact.sha256,
                 "target": self._target.identity.canonical,
                 "ok": bool(ok),
@@ -497,6 +1076,7 @@ class BrokeredMigrationRunner:
                     f"seq={intent.seq} exists, but outcome audit failed"
                 ),
                 audit_recorded=False,
+                execution_id=execution_id,
             )
         return MigrationResult(
             executed=ok,
@@ -508,6 +1088,7 @@ class BrokeredMigrationRunner:
                 else f"authorized but migration failed: {detail}"
             ),
             audit_recorded=outcome.recorded,
+            execution_id=execution_id,
         )
 
     def _now_iso(self) -> str:
@@ -547,6 +1128,7 @@ def build_migration_runtime(
     *,
     audit: AuditSink,
     executor: MigrationExecutor = postgres_executor,
+    receipt_lookup: ReceiptLookup | None = None,
     clock: Callable[[], float] = time.time,
 ) -> MigrationRuntime:
     """Build production wiring with a stable key, durable store, and audit."""
@@ -559,6 +1141,7 @@ def build_migration_runtime(
         target=config.target,
         consumed=ConsumedApprovals(config.approval_store_path),
         executor=executor,
+        receipt_lookup=receipt_lookup,
         audit=audit,
         clock=clock,
     )
@@ -570,6 +1153,7 @@ def build_migration_runner(
     *,
     audit: AuditSink,
     executor: MigrationExecutor = postgres_executor,
+    receipt_lookup: ReceiptLookup | None = None,
     clock: Callable[[], float] = time.time,
 ) -> BrokeredMigrationRunner:
     """Build only the runner side of the required production composition.
@@ -580,5 +1164,9 @@ def build_migration_runner(
     """
 
     return build_migration_runtime(
-        config, audit=audit, executor=executor, clock=clock
+        config,
+        audit=audit,
+        executor=executor,
+        receipt_lookup=receipt_lookup,
+        clock=clock,
     ).runner

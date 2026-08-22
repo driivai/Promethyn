@@ -27,6 +27,21 @@ in `spec/invariants.md` is a major version bump.
   user privilege changes, schema changes, and hostile psql command text. CI now
   provisions PostgreSQL and requires live driver, schema, rollback, and
   meta-command tests on every supported Python version.
+- **Crash-reconcilable migration execution.** Every approved run now has a stable
+  execution ID derived from its signed nonce, artifact, and canonical target.
+  The PostgreSQL executor holds an execution-specific advisory lock and commits
+  a receipt in `promethyn_internal.migration_receipts` in the same transaction as
+  the migration. On restart, an intent without an audit outcome is reconciled
+  against that receipt: a matching row proves commit, an absent row after the
+  lock is acquired proves rollback, and an unavailable, active, or conflicting
+  receipt blocks all further migrations. Explicit transaction-control statements
+  are rejected before connection so artifact SQL cannot split the migration from
+  its receipt. Unit tests force termination before execution, during the
+  transaction, after commit, and before outcome recording; mandatory live
+  PostgreSQL tests prove both committed and rolled-back restart recovery.
+  Custom executor integrations now receive the execution ID and artifact digest
+  and must supply a matching receipt lookup; construction rejects an unpaired
+  custom executor rather than silently applying PostgreSQL recovery semantics.
 - **Make the SOFT-lever experiment decidable (SC-2).** The lever machinery from
   the prior change was not *dispatchable* — it had no pre-committed adoption rule
   and could not produce a decision. This change fixes that, entirely offline (no

@@ -60,6 +60,7 @@ runner, and the runner crosses it *only* on a valid, current, bound authorizatio
 | The DB credential | Whoever holds a working credential can bypass the entire gate. Must live only in the runner zone, never in the agent zone. |
 | The approval capability | A forged or reused approval is an execution. Must be unforgeable by the agent and single-use. |
 | The audit ledger | If an adversary who reaches the file can silently rewrite it, the trail is worthless. Must be tamper-evident. |
+| The PostgreSQL execution receipt | Proves whether an intent committed when the runner dies before recording its audit outcome. It must commit atomically with the migration. |
 
 ## 4. Adversary model
 
@@ -139,6 +140,17 @@ test (a check tested only on the happy path is itself a void guard):
   intent before database contact; an unavailable intent append blocks execution. The
   outcome links back to that intent, so a post-execution audit outage leaves a durable,
   explicitly unresolved record rather than making the run disappear.
+- **P10 — Crash-reconcilable execution.** Each intent carries a stable execution ID bound
+  to the approval nonce, artifact hash, and canonical target. The executor holds a
+  PostgreSQL advisory lock for that ID and inserts a matching row in
+  `promethyn_internal.migration_receipts` in the same transaction as the migration. After
+  restart, a matching receipt proves commit; no receipt, observed only after acquiring the
+  lock, proves rollback. An active, unavailable, malformed, or conflicting receipt blocks
+  every later migration. Artifact-level transaction-control statements are rejected before
+  connection so SQL cannot commit separately from its receipt. The runner role therefore
+  requires permission to create the reserved receipt schema/table when absent; a
+  pre-provisioned deployment instead needs `USAGE` on the schema and `SELECT`/`INSERT` on
+  the table.
 
 ## 6. Attack scenarios → defense
 
@@ -154,13 +166,15 @@ test (a check tested only on the happy path is itself a void guard):
 | A8 | Agent fabricates an approval | Unforgeable, gate-issued (P7) | forge-fails |
 | A9 | Verifier can't run; agent hopes it slips through | Fail closed on `Unavailable` (P8) | fail-closed test |
 | A10 | Adversary rewrites the ledger to hide a run | Hash chain detects the edit (P9) | tamper-detection test |
+| A11 | Runner dies after DB commit but before outcome audit | Atomic DB receipt reconstructs commit/rollback and blocks on ambiguity (P10) | restart + mandatory live PostgreSQL tests |
 
 ## 7. In scope vs out of scope (this sprint)
 
 **In scope.** Can the agent get a destructive migration executed *without* a valid, current,
 correctly-bound approval — by reaching the DB directly, or by tricking the gate/runner
-(replay, swap, wrong-target, expired, forged)? And is the audit trail tamper-evident? The
-whole authorization chain from proposal to execution, fail-closed, is in scope.
+(replay, swap, wrong-target, expired, forged)? Is the audit trail tamper-evident, and can
+the runner recover an execution outcome after termination without guessing? The whole
+authorization chain from proposal through crash reconciliation, fail-closed, is in scope.
 
 **Explicitly out of scope — deferred, not forgotten:**
 - **Network egress exfiltration.** An approved migration could, in principle, read data and
