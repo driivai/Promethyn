@@ -14,7 +14,7 @@ instructions and exits — it never fakes a pass.
 | **3** | The same approval is replayed. | **Refused (`replay`)**; the table still exists exactly once — single-use is real. |
 | **4** | A hostile artifact is submitted under a *valid* approval for a different artifact. | **Refused (`artifact_mismatch`)**; the target table survives — the DB is **not touched on a refusal**. |
 | **5** | A forged approval (bad signature) is presented. | **Refused (`invalid_signature`)** — the agent has no signing key, so it cannot mint one. |
-| **6** | The hash-chained ledger of every decision is printed and verified; then one entry is edited. | `verify_chain()` → **VALID**, then **BROKEN at entry 3** — the receipt cannot be quietly rewritten. |
+| **6** | The hash-chained ledger of every decision is printed and verified; then one entry is edited. | `verify_chain()` → **VALID**, then **BROKEN at entry 4** — the receipt cannot be quietly rewritten. |
 
 The load-bearing point across all six: **the agent never holds the credential**,
 and only approved / verified / single-use / correctly-bound actions ever run.
@@ -28,7 +28,10 @@ export PROM_CHOKEPOINT_PG_HOST=127.0.0.1
 export PROM_CHOKEPOINT_PG_PORT=55432
 export PROM_CHOKEPOINT_PG_DB=appdb
 export PROM_CHOKEPOINT_PG_USER=migrator
+export PROM_CHOKEPOINT_PG_SCHEMA=public
 export PROM_CHOKEPOINT_PG_PASSWORD='...'                 # the credential the RUNNER holds
+export PROM_CHOKEPOINT_KEY="$(python -c 'import secrets; print(secrets.token_hex(32))')"
+export PROM_CHOKEPOINT_APPROVAL_DB=.prometheus/chokepoint-consumed.db  # durable replay state
 export PROM_CHOKEPOINT_PG_SOCKDIR=/home/pgproxy/sock      # optional; enables the socket attack in step 1
 
 python demo/run_demo.py
@@ -38,6 +41,11 @@ Any PostgreSQL the `migrator` role can log into works. Step 1's live isolation
 also needs the namespace sandbox (unprivileged user namespaces); where that is
 unavailable the demo says so and points at the committed proof
 (`tests/chokepoint/test_isolation.py`) instead of pretending.
+
+Generate `PROM_CHOKEPOINT_KEY` once and keep it in your secret manager. Reuse the
+same value across gate and runner restarts; rotating it deliberately invalidates
+all outstanding approvals. The command above is for initial setup, not for every
+launch.
 
 ### A throwaway local cluster (optional, for the strongest step 1)
 
@@ -64,6 +72,10 @@ context is constructed without it.
 
 - The demo uses a fresh in-memory ledger per run, so step 6 shows exactly this
   run's decisions. It cleans up the tables it creates.
+- Spent approvals are intentionally different: they live in the durable SQLite
+  file named by `PROM_CHOKEPOINT_APPROVAL_DB` (default
+  `.prometheus/chokepoint-consumed.db`), so restarting the runner cannot make a
+  still-current approval reusable.
 - It is deterministic and re-runnable. Each step prints one human-readable
   `STEP N … RESULT` line, so it reads on a screen-share rather than as a log wall.
 - This is the enforcement **core** (alpha, one protected action — PostgreSQL

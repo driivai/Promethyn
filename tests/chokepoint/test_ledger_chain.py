@@ -8,9 +8,8 @@ from __future__ import annotations
 import json
 import threading
 
-import pytest
-
 from prometheus_protocol.chokepoint import (
+    AUDIT_OUTCOME_UNAVAILABLE,
     ApprovalAuthority,
     BrokeredMigrationRunner,
     ConsumedApprovals,
@@ -34,7 +33,7 @@ from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
 def _ledger_with(n: int) -> SqliteLedger:
     led = SqliteLedger(":memory:")
     for i in range(1, n + 1):
-        led.record_chained(event="execute", subject=f"appdb@h:5432",
+        led.record_chained(event="execute", subject="appdb@h:5432",
                            payload={"i": i, "reason": "ok"}, created_at=f"t{i}")
     return led
 
@@ -264,7 +263,7 @@ def test_concurrent_appends_serialize_into_one_valid_chain(tmp_path):
             for i in range(k):
                 led.record_chained(event="execute", subject=tag,
                                    payload={"i": i}, created_at=f"{tag}-{i}")
-        except Exception as exc:  # a raw sqlite error escaping is the failure
+        except Exception as exc:  # noqa: BLE001 - any escaping error fails the test
             errors.append(exc)
         finally:
             led.close()
@@ -288,7 +287,7 @@ def test_concurrent_appends_serialize_into_one_valid_chain(tmp_path):
 
 # -- integration: the chokepoint's decisions ARE chained, and tamper is caught -
 
-def test_chokepoint_decisions_are_chained_and_tamper_is_detected():
+def test_chokepoint_decisions_are_chained_and_tamper_is_detected(tmp_path):
     led = SqliteLedger(":memory:")
     auth = ApprovalAuthority()
     target = DbTarget(host="127.0.0.1", port=5432, dbname="appdb",
@@ -301,24 +300,77 @@ def test_chokepoint_decisions_are_chained_and_tamper_is_detected():
 
     t = [1000.0]
     runner = BrokeredMigrationRunner(
-        authority=auth, target=target, consumed=ConsumedApprovals(),
+        authority=auth, target=target,
+        consumed=ConsumedApprovals(tmp_path / "consumed.db"),
         executor=_Spy(), audit=led, clock=lambda: t[0],
     )
     judgment = Judgment(verdict=Verdict.PASS, confidence=1.0, authoritative=True)
     approval = auth.authorize(judgment, artifact=art, target=target.identity, now=t[0])
 
-    # The gate records its mint decision; the runner records execute, then refuse.
-    led.record_chained(event="authorize", subject=target.identity,
+    # The gate records mint; the runner records durable intent, outcome, then refusal.
+    led.record_chained(event="authorize", subject=target.identity.canonical,
                       payload={"artifact_sha256": art.sha256}, created_at="t-mint")
     assert runner.execute(approval=approval, artifact=art).executed      # -> execute
     assert runner.execute(approval=approval, artifact=art).refused       # -> refuse (replay)
 
     events = [e["event"] for e in led.chained_events()]
-    assert events == ["authorize", "execute", "refuse"]
+    assert events == ["authorize", "execute_intent", "execute_outcome", "refuse"]
+    outcome_payload = json.loads(led.chained_events()[2]["payload"])
+    assert outcome_payload["intent_seq"] == 2
     assert led.verify_chain().ok
 
     # An adversary edits the "refuse" record to hide the replay attempt.
-    led._conn.execute("UPDATE audit_chain SET event='execute' WHERE seq=3")
+    led._conn.execute("UPDATE audit_chain SET event='execute' WHERE seq=4")
     led._conn.commit()
     r = led.verify_chain()
-    assert r.status == BROKEN and r.broken_index == 3
+    assert r.status == BROKEN and r.broken_index == 4
+
+
+def test_execution_intent_survives_restart_when_outcome_append_fails(tmp_path):
+    path = tmp_path / "durable-audit.db"
+    ledger = SqliteLedger(path)
+
+    class _FailOutcome:
+        def record_chained(self, **event):
+            if event["event"] == "execute_outcome":
+                raise OSError("simulated audit outage")
+            return ledger.record_chained(**event)
+
+    class _Spy:
+        def __call__(self, sql, target):
+            return True, "ok"
+
+    authority = ApprovalAuthority()
+    target = DbTarget(
+        host="127.0.0.1",
+        port=5432,
+        dbname="appdb",
+        user="migrator",
+        password="secret",
+    )
+    artifact = MigrationArtifact("CREATE TABLE durable_intent (id int);")
+    approval = authority.mint(
+        artifact_sha256=artifact.sha256, target=target.identity, now=1_000.0
+    )
+    runner = BrokeredMigrationRunner(
+        authority=authority,
+        target=target,
+        consumed=ConsumedApprovals(tmp_path / "durable-intent-consumed.db"),
+        executor=_Spy(),
+        audit=_FailOutcome(),
+        clock=lambda: 1_001.0,
+    )
+
+    result = runner.execute(approval=approval, artifact=artifact)
+    assert result.executed and result.reason == AUDIT_OUTCOME_UNAVAILABLE
+    runner.close()
+    ledger.close()
+
+    reopened = SqliteLedger(path)
+    try:
+        events = reopened.chained_events()
+        assert [event["event"] for event in events] == ["execute_intent"]
+        assert json.loads(events[0]["payload"])["artifact_sha256"] == artifact.sha256
+        assert reopened.verify_chain().ok
+    finally:
+        reopened.close()

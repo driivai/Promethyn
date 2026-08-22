@@ -12,16 +12,20 @@ import dataclasses
 import pytest
 
 from prometheus_protocol.chokepoint import (
-    ApprovalAuthority,
+    APPROVAL_VERSION,
     ARTIFACT_MISMATCH,
+    EXPIRED,
+    INVALID_SIGNATURE,
+    INVALID_TIME,
+    REPLAY,
+    TARGET_MISMATCH,
+    Approval,
+    ApprovalAuthority,
     BrokeredMigrationRunner,
     ConsumedApprovals,
     DbTarget,
-    EXPIRED,
-    INVALID_SIGNATURE,
     MigrationArtifact,
-    REPLAY,
-    TARGET_MISMATCH,
+    MigrationTarget,
 )
 from prometheus_protocol.core.models import (
     Judgment,
@@ -44,6 +48,15 @@ class _SpyExecutor:
         return self._ok, "spy applied"
 
 
+class _Audit:
+    def __init__(self) -> None:
+        self.seq = 0
+
+    def record_chained(self, **event) -> int:
+        self.seq += 1
+        return self.seq
+
+
 def _clock():
     """A mutable clock: ``t[0]`` is 'now'; tests advance it."""
     t = [1000.0]
@@ -60,22 +73,22 @@ def _pass_judgment() -> Judgment:
                     contributing=("hard-check",))
 
 
-def _runner(authority, target, spy, clock):
+def _runner(authority, target, spy, clock, store_path):
     return BrokeredMigrationRunner(
-        authority=authority, target=target, consumed=ConsumedApprovals(),
-        executor=spy, clock=clock,
+        authority=authority, target=target, consumed=ConsumedApprovals(store_path),
+        executor=spy, audit=_Audit(), clock=clock,
     )
 
 
 # -- happy path: the capability, used once, works -----------------------------
 
-def test_happy_path_executes_once():
+def test_happy_path_executes_once(tmp_path):
     t, clock = _clock()
     auth = ApprovalAuthority()
     target = _target()
     art = MigrationArtifact("CREATE TABLE t (id int);")
     spy = _SpyExecutor()
-    runner = _runner(auth, target, spy, clock)
+    runner = _runner(auth, target, spy, clock, tmp_path / "consumed.db")
 
     approval = auth.authorize(_pass_judgment(), artifact=art,
                               target=target.identity, now=clock())
@@ -87,13 +100,13 @@ def test_happy_path_executes_once():
 
 # -- P5 replay: a used approval fails, and never re-touches the DB ------------
 
-def test_replay_fails():
+def test_replay_fails(tmp_path):
     t, clock = _clock()
     auth = ApprovalAuthority()
     target = _target()
     art = MigrationArtifact("DROP TABLE users;")
     spy = _SpyExecutor()
-    runner = _runner(auth, target, spy, clock)
+    runner = _runner(auth, target, spy, clock, tmp_path / "consumed.db")
     approval = auth.authorize(_pass_judgment(), artifact=art,
                               target=target.identity, now=clock())
 
@@ -107,14 +120,14 @@ def test_replay_fails():
 
 # -- P3 swap: approval for A, artifact B submitted → refused, DB untouched ----
 
-def test_swap_fails():
+def test_swap_fails(tmp_path):
     t, clock = _clock()
     auth = ApprovalAuthority()
     target = _target()
     approved = MigrationArtifact("ALTER TABLE t ADD COLUMN ok int;")
     swapped = MigrationArtifact("DROP TABLE t;")  # a different, hostile artifact
     spy = _SpyExecutor()
-    runner = _runner(auth, target, spy, clock)
+    runner = _runner(auth, target, spy, clock, tmp_path / "consumed.db")
     approval = auth.authorize(_pass_judgment(), artifact=approved,
                               target=target.identity, now=clock())
 
@@ -126,17 +139,23 @@ def test_swap_fails():
 
 # -- P4 wrong target: approval for X, runner bound to Y → refused ------------
 
-def test_wrong_target_fails():
+def test_wrong_target_fails(tmp_path):
     t, clock = _clock()
     auth = ApprovalAuthority()
     runner_target = _target()  # appdb@127.0.0.1:5432
     art = MigrationArtifact("TRUNCATE audit;")
     spy = _SpyExecutor()
-    runner = _runner(auth, runner_target, spy, clock)
+    runner = _runner(auth, runner_target, spy, clock, tmp_path / "consumed.db")
 
     # Mint an approval bound to a DIFFERENT target.
-    approval = auth.mint(artifact_sha256=art.sha256,
-                         target="otherdb@10.0.0.9:5432", now=clock())
+    approval = auth.mint(
+        artifact_sha256=art.sha256,
+        target=MigrationTarget(
+            host="10.0.0.9", port=5432, dbname="otherdb",
+            user="migrator", schema="public",
+        ),
+        now=clock(),
+    )
     result = runner.execute(approval=approval, artifact=art)
 
     assert result.refused and result.reason == TARGET_MISMATCH
@@ -145,13 +164,13 @@ def test_wrong_target_fails():
 
 # -- P6 expiry: past the TTL → refused ---------------------------------------
 
-def test_expired_fails():
+def test_expired_fails(tmp_path):
     t, clock = _clock()
     auth = ApprovalAuthority()
     target = _target()
     art = MigrationArtifact("VACUUM FULL;")
     spy = _SpyExecutor()
-    runner = _runner(auth, target, spy, clock)
+    runner = _runner(auth, target, spy, clock, tmp_path / "consumed.db")
     approval = auth.authorize(_pass_judgment(), artifact=art,
                               target=target.identity, now=clock(), ttl_seconds=90.0)
 
@@ -162,7 +181,28 @@ def test_expired_fails():
     assert spy.calls == []
 
 
-def test_valid_within_ttl_but_expired_one_second_later():
+def test_exact_expiry_is_refused(tmp_path):
+    t, clock = _clock()
+    auth = ApprovalAuthority()
+    target = _target()
+    art = MigrationArtifact("VACUUM FULL;")
+    spy = _SpyExecutor()
+    runner = _runner(auth, target, spy, clock, tmp_path / "consumed.db")
+    approval = auth.mint(
+        artifact_sha256=art.sha256,
+        target=target.identity,
+        now=clock(),
+        ttl_seconds=90.0,
+    )
+
+    t[0] = approval.expires_at
+    result = runner.execute(approval=approval, artifact=art)
+
+    assert result.refused and result.reason == EXPIRED
+    assert spy.calls == []
+
+
+def test_valid_within_ttl_but_expired_one_second_later(tmp_path):
     # Boundary: usable at t+89, refused at t+91 — the window is real.
     t, clock = _clock()
     auth = ApprovalAuthority()
@@ -172,7 +212,7 @@ def test_valid_within_ttl_but_expired_one_second_later():
                               target=target.identity, now=clock(), ttl_seconds=90.0)
 
     spy_ok = _SpyExecutor()
-    r_ok = _runner(auth, target, spy_ok, clock)
+    r_ok = _runner(auth, target, spy_ok, clock, tmp_path / "ok.db")
     t[0] += 89.0
     assert r_ok.execute(approval=approval, artifact=art).executed
 
@@ -180,7 +220,7 @@ def test_valid_within_ttl_but_expired_one_second_later():
     approval2 = auth.authorize(_pass_judgment(), artifact=art,
                                target=target.identity, now=1000.0, ttl_seconds=90.0)
     spy_no = _SpyExecutor()
-    r_no = _runner(auth, target, spy_no, clock)
+    r_no = _runner(auth, target, spy_no, clock, tmp_path / "expired.db")
     t[0] = 1000.0 + 91.0
     res = r_no.execute(approval=approval2, artifact=art)
     assert res.refused and res.reason == EXPIRED and spy_no.calls == []
@@ -188,13 +228,13 @@ def test_valid_within_ttl_but_expired_one_second_later():
 
 # -- P7 forgery: an agent without the key cannot mint or alter an approval ----
 
-def test_forged_mac_fails():
+def test_forged_mac_fails(tmp_path):
     t, clock = _clock()
     auth = ApprovalAuthority()  # runner-zone key the agent does not have
     target = _target()
     art = MigrationArtifact("GRANT ALL ON DATABASE appdb TO attacker;")
     spy = _SpyExecutor()
-    runner = _runner(auth, target, spy, clock)
+    runner = _runner(auth, target, spy, clock, tmp_path / "consumed.db")
 
     # Agent fabricates an approval with a made-up MAC (it has no key).
     forged = auth.mint(artifact_sha256=art.sha256, target=target.identity, now=clock())
@@ -205,14 +245,14 @@ def test_forged_mac_fails():
     assert spy.calls == []
 
 
-def test_tampered_field_fails():
+def test_tampered_field_fails(tmp_path):
     # Take a genuine approval and edit a bound field: the MAC no longer matches.
     t, clock = _clock()
     auth = ApprovalAuthority()
     target = _target()
     art = MigrationArtifact("DELETE FROM ledger;")
     spy = _SpyExecutor()
-    runner = _runner(auth, target, spy, clock)
+    runner = _runner(auth, target, spy, clock, tmp_path / "consumed.db")
     good = auth.mint(artifact_sha256=art.sha256, target=target.identity, now=clock())
 
     # Extend the expiry to defeat the TTL — but the MAC covers expiry.
@@ -223,7 +263,7 @@ def test_tampered_field_fails():
     assert spy.calls == []
 
 
-def test_wrong_key_cannot_verify():
+def test_wrong_key_cannot_verify(tmp_path):
     # An approval minted by a DIFFERENT authority (different key) is rejected —
     # the runner trusts only its own key.
     t, clock = _clock()
@@ -232,7 +272,9 @@ def test_wrong_key_cannot_verify():
     target = _target()
     art = MigrationArtifact("DROP DATABASE appdb;")
     spy = _SpyExecutor()
-    runner = _runner(runner_auth, target, spy, clock)
+    runner = _runner(
+        runner_auth, target, spy, clock, tmp_path / "consumed.db"
+    )
 
     approval = attacker_auth.mint(artifact_sha256=art.sha256,
                                   target=target.identity, now=clock())
@@ -248,8 +290,9 @@ def test_unavailable_yields_no_approval():
     art = MigrationArtifact("CREATE TABLE t (id int);")
     unavailable = Unavailable(verifier_id="subprocess-tests", tier=Tier.HARD,
                               reason=Unavailability.INFRA_FAULT, detail="sandbox down")
-    approval = auth.authorize(unavailable, artifact=art,
-                              target="appdb@h:5432", now=1000.0)
+    approval = auth.authorize(
+        unavailable, artifact=art, target=_target().identity, now=1000.0
+    )
     assert approval is None  # a check that could not run mints nothing
 
 
@@ -257,18 +300,110 @@ def test_fail_verdict_yields_no_approval():
     auth = ApprovalAuthority()
     art = MigrationArtifact("CREATE TABLE t (id int);")
     fail = Judgment(verdict=Verdict.FAIL, confidence=1.0, authoritative=True)
-    assert auth.authorize(fail, artifact=art, target="appdb@h:5432", now=1000.0) is None
+    assert auth.authorize(
+        fail, artifact=art, target=_target().identity, now=1000.0
+    ) is None
 
 
 def test_non_authoritative_pass_yields_no_approval():
     auth = ApprovalAuthority()
     art = MigrationArtifact("CREATE TABLE t (id int);")
     soft_pass = Judgment(verdict=Verdict.PASS, confidence=0.99, authoritative=False)
-    assert auth.authorize(soft_pass, artifact=art, target="appdb@h:5432", now=1000.0) is None
+    assert auth.authorize(
+        soft_pass, artifact=art, target=_target().identity, now=1000.0
+    ) is None
 
 
 def test_abstain_yields_no_approval():
     auth = ApprovalAuthority()
     art = MigrationArtifact("CREATE TABLE t (id int);")
     abstain = Judgment(verdict=Verdict.ABSTAIN, confidence=0.0, authoritative=True)
-    assert auth.authorize(abstain, artifact=art, target="appdb@h:5432", now=1000.0) is None
+    assert auth.authorize(
+        abstain, artifact=art, target=_target().identity, now=1000.0
+    ) is None
+
+
+def test_approval_json_round_trip_is_versioned_and_strict():
+    auth = ApprovalAuthority()
+    target = _target()
+    artifact = MigrationArtifact("SELECT 1;")
+    original = auth.mint(
+        artifact_sha256=artifact.sha256, target=target.identity, now=1000.0
+    )
+
+    restored = Approval.from_json(original.to_json())
+
+    assert restored == original
+    assert restored.version == APPROVAL_VERSION
+    with pytest.raises(ValueError, match="unsupported approval version"):
+        Approval.from_dict({**original.to_dict(), "version": 1})
+    with pytest.raises(ValueError, match="unsupported approval version"):
+        Approval.from_dict({**original.to_dict(), "version": 2.0})
+    with pytest.raises(ValueError, match="missing or unknown"):
+        Approval.from_dict({**original.to_dict(), "extra": True})
+    with pytest.raises(ValueError, match="duplicate approval field"):
+        Approval.from_json('{"version":2,"version":2}')
+
+
+@pytest.mark.parametrize("bad_time", [float("nan"), float("inf"), float("-inf")])
+def test_non_finite_approval_times_fail_closed(tmp_path, bad_time: float):
+    auth = ApprovalAuthority()
+    target = _target()
+    artifact = MigrationArtifact("SELECT 1;")
+    good = auth.mint(
+        artifact_sha256=artifact.sha256, target=target.identity, now=1000.0
+    )
+    malformed = dataclasses.replace(good, expires_at=bad_time)
+    spy = _SpyExecutor()
+    runner = _runner(auth, target, spy, lambda: 1001.0, tmp_path / "time.db")
+
+    result = runner.execute(approval=malformed, artifact=artifact)
+
+    assert result.refused and result.reason == INVALID_TIME
+    assert spy.calls == []
+
+
+def test_approval_is_not_valid_before_issuance(tmp_path):
+    auth = ApprovalAuthority()
+    target = _target()
+    artifact = MigrationArtifact("SELECT 1;")
+    approval = auth.mint(
+        artifact_sha256=artifact.sha256, target=target.identity, now=1000.0
+    )
+    spy = _SpyExecutor()
+    runner = _runner(auth, target, spy, lambda: 999.0, tmp_path / "early.db")
+
+    result = runner.execute(approval=approval, artifact=artifact)
+
+    assert result.refused and result.reason == INVALID_TIME
+    assert spy.calls == []
+
+
+@pytest.mark.parametrize("bad_ttl", [0.0, -1.0, float("nan"), float("inf")])
+def test_mint_rejects_invalid_ttl(bad_ttl: float):
+    auth = ApprovalAuthority()
+    artifact = MigrationArtifact("SELECT 1;")
+    with pytest.raises((TypeError, ValueError)):
+        auth.mint(
+            artifact_sha256=artifact.sha256,
+            target=_target().identity,
+            now=1000.0,
+            ttl_seconds=bad_ttl,
+        )
+
+
+def test_malformed_direct_approval_never_raises_or_reaches_executor(tmp_path):
+    auth = ApprovalAuthority()
+    target = _target()
+    artifact = MigrationArtifact("SELECT 1;")
+    good = auth.mint(
+        artifact_sha256=artifact.sha256, target=target.identity, now=1000.0
+    )
+    malformed = dataclasses.replace(good, nonce=object())  # type: ignore[arg-type]
+    spy = _SpyExecutor()
+    runner = _runner(auth, target, spy, lambda: 1001.0, tmp_path / "malformed.db")
+
+    result = runner.execute(approval=malformed, artifact=artifact)
+
+    assert result.refused and result.reason == INVALID_SIGNATURE
+    assert spy.calls == []

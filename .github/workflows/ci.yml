@@ -11,6 +11,20 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: appdb
+          POSTGRES_USER: migrator
+          POSTGRES_PASSWORD: chokepoint-ci-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U migrator -d appdb"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     strategy:
       fail-fast: false
       matrix:
@@ -51,6 +65,17 @@ jobs:
 
       - name: Repository hygiene
         run: python scripts/check_hygiene.py
+
+      - name: PostgreSQL chokepoint live tests (must run, never skip)
+        env:
+          PROM_REQUIRE_PG: "1"
+          PROM_CHOKEPOINT_PG_HOST: 127.0.0.1
+          PROM_CHOKEPOINT_PG_PORT: "5432"
+          PROM_CHOKEPOINT_PG_DB: appdb
+          PROM_CHOKEPOINT_PG_USER: migrator
+          PROM_CHOKEPOINT_PG_PASSWORD: chokepoint-ci-password
+          PROM_CHOKEPOINT_PG_SCHEMA: public
+        run: python -m pytest -q -rs tests/chokepoint/test_migration_live.py
 
       - name: Enable unprivileged user namespaces (for the namespace sandbox)
         # Ubuntu 24.04 runners restrict unprivileged user namespaces via

@@ -30,12 +30,11 @@ import tempfile
 import time
 
 from prometheus_protocol.chokepoint import (
-    ApprovalAuthority,
-    BrokeredMigrationRunner,
-    ConsumedApprovals,
     DbTarget,
     MigrationArtifact,
-    psql_executor,
+    MigrationRunnerConfig,
+    build_migration_runtime,
+    postgres_executor,
 )
 from prometheus_protocol.core.models import Judgment, Verdict
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
@@ -59,7 +58,7 @@ def _psql(target: DbTarget, sql: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         [shutil.which("psql") or "/usr/bin/psql", "-h", target.host, "-p", str(target.port),
          "-U", target.user, "-d", target.dbname, "-tAc", sql],
-        capture_output=True, text=True, env=env, timeout=30,
+        capture_output=True, text=True, env=env, timeout=30, check=False,
     )
 
 
@@ -73,6 +72,7 @@ def _target_from_env() -> DbTarget | None:
         dbname=os.environ.get("PROM_CHOKEPOINT_PG_DB", "appdb"),
         user=os.environ.get("PROM_CHOKEPOINT_PG_USER", "migrator"),
         password=os.environ.get("PROM_CHOKEPOINT_PG_PASSWORD", ""),
+        schema=os.environ.get("PROM_CHOKEPOINT_PG_SCHEMA", "public"),
     )
 
 
@@ -85,7 +85,10 @@ Point it at a database by exporting:
   export PROM_CHOKEPOINT_PG_PORT=55432
   export PROM_CHOKEPOINT_PG_DB=appdb
   export PROM_CHOKEPOINT_PG_USER=migrator
+  export PROM_CHOKEPOINT_PG_SCHEMA=public
   export PROM_CHOKEPOINT_PG_PASSWORD=...              # the credential the RUNNER holds
+  export PROM_CHOKEPOINT_KEY=<64 hex characters>      # stable approval signing key
+  export PROM_CHOKEPOINT_APPROVAL_DB=.prometheus/chokepoint-consumed.db
   export PROM_CHOKEPOINT_PG_SOCKDIR=/home/pgproxy/sock  # optional; enables the
                                                         # Unix-socket attack in step 1
 
@@ -109,6 +112,20 @@ def require_db() -> DbTarget:
              else "  (no response)")
         sys.exit(2)
     return target
+
+
+def require_signing_key() -> bytes:
+    raw = os.environ.get("PROM_CHOKEPOINT_KEY", "")
+    try:
+        key = bytes.fromhex(raw)
+    except ValueError:
+        key = b""
+    if len(key) < 32:
+        line(_SETUP)
+        line("PROM_CHOKEPOINT_KEY must contain at least 64 hexadecimal characters.")
+        line("Generate one once, store it as a secret, and reuse it across restarts.")
+        sys.exit(2)
+    return key
 
 
 # --------------------------------------------------------------------------
@@ -187,22 +204,33 @@ def _passing_judgment() -> Judgment:
                     contributing=("hard-merge-check",))
 
 
-def run_chokepoint(target: DbTarget) -> None:
+def run_chokepoint(target: DbTarget, signing_key: bytes) -> None:
     # The gate and the runner share one authority (one signing key) — the trusted
-    # zone. The agent never holds it. A fresh in-memory ledger records this run.
-    authority = ApprovalAuthority()
+    # zone. The agent never holds it. The receipt ledger is fresh for the demo;
+    # spent approvals are durable so a restart cannot revive a capability.
     ledger = SqliteLedger(":memory:")
-    runner = BrokeredMigrationRunner(
-        authority=authority, target=target, consumed=ConsumedApprovals(),
-        executor=psql_executor, audit=ledger, clock=time.time,
+    runtime = build_migration_runtime(
+        MigrationRunnerConfig(
+            target=target,
+            signing_key=signing_key,
+            approval_store_path=os.environ.get(
+                "PROM_CHOKEPOINT_APPROVAL_DB",
+                ".prometheus/chokepoint-consumed.db",
+            ),
+        ),
+        audit=ledger,
+        executor=postgres_executor,
+        clock=time.time,
     )
+    authority = runtime.authority
+    runner = runtime.runner
     tbl = f"demo_migration_{int(time.time())}"
     artifact = MigrationArtifact(f"CREATE TABLE {tbl} (id int, note text);")
 
     try:
         # STEP 2 — a valid, approved migration runs exactly once.
         step(2, "an APPROVED migration runs (once)")
-        ledger.record_chained(event="authorize", subject=target.identity,
+        ledger.record_chained(event="authorize", subject=target.identity.canonical,
                              payload={"artifact_sha256": artifact.sha256[:16]},
                              created_at=repr(time.time()))
         approval = authority.authorize(_passing_judgment(), artifact=artifact,
@@ -251,7 +279,7 @@ def run_chokepoint(target: DbTarget) -> None:
         v = ledger.verify_chain()
         line(f"  verify_chain(): {v.render()}")
         line("  now an adversary edits one entry to hide the replay attempt...")
-        ledger._conn.execute("UPDATE audit_chain SET event='authorize' WHERE seq=3")
+        ledger._conn.execute("UPDATE audit_chain SET event='authorize' WHERE seq=4")
         ledger._conn.commit()
         v2 = ledger.verify_chain()
         line(f"  verify_chain(): {v2.render()}")
@@ -259,6 +287,7 @@ def run_chokepoint(target: DbTarget) -> None:
     finally:
         _psql(target, f"DROP TABLE IF EXISTS {tbl}")
         _psql(target, f"DROP TABLE IF EXISTS {tbl}_side")
+        runtime.close()
         ledger.close()
 
 
@@ -267,9 +296,10 @@ def main() -> int:
     line("  PROMETHYN — credential-brokered migration chokepoint (live demo)")
     line(BAR)
     target = require_db()
+    signing_key = require_signing_key()
     line(f"  target: {target.identity}   (the runner holds the credential; the agent does not)")
     step1_direct_attempt(target)
-    run_chokepoint(target)
+    run_chokepoint(target, signing_key)
     line()
     line(BAR)
     line("  The agent never held the credential. Only approved, verified, single-use,")

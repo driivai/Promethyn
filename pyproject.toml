@@ -30,7 +30,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries",
     "Topic :: Software Development :: Quality Assurance",
 ]
-dependencies = []
+dependencies = ["psycopg[binary]>=3.2,<4"]
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "build>=1.0", "mypy>=1.8"]
