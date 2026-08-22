@@ -40,6 +40,9 @@ The agent cannot bypass it, because the agent never holds the keys.
   forged approvals are refused before the database is touched.
 - **IS** a tamper-evident ledger — hash-chained, so an interior edit, deletion, or
   reorder of the audit trail is detected.
+- **IS** crash-reconcilable — the migration and its PostgreSQL execution receipt
+  commit atomically. If the runner dies before writing the audit outcome, restart
+  recovery proves commit versus rollback and blocks on any remaining ambiguity.
 - **IS NOT** a flag-and-warn interceptor watching an agent that still holds the
   keys. The whole point is that it doesn't watch — it *withholds*.
 - **IS NOT** (honestly) a finished product. It is an enforcement **core**, alpha,

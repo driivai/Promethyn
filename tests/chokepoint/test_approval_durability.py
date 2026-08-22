@@ -13,6 +13,10 @@ import pytest
 from prometheus_protocol.chokepoint import (
     AUDIT_OUTCOME_UNAVAILABLE,
     AUDIT_UNAVAILABLE,
+    RECEIPT_COMMITTED,
+    RECEIPT_CONFLICT,
+    RECEIPT_IN_PROGRESS,
+    RECEIPT_NOT_FOUND,
     REPLAY,
     STORE_UNAVAILABLE,
     TARGET_MISMATCH,
@@ -23,8 +27,10 @@ from prometheus_protocol.chokepoint import (
     DbTarget,
     MigrationArtifact,
     MigrationRunnerConfig,
+    ReceiptStatus,
     build_migration_runtime,
     postgres_executor,
+    postgres_receipt_lookup,
 )
 
 _KEY = b"durability-test-key-is-32-bytes!!"
@@ -34,7 +40,13 @@ class _SpyExecutor:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
 
-    def __call__(self, sql: str, target: DbTarget) -> tuple[bool, str]:
+    def __call__(
+        self,
+        sql: str,
+        target: DbTarget,
+        execution_id: str,
+        artifact_sha256: str,
+    ) -> tuple[bool, str]:
         self.calls.append((sql, target.user))
         return True, "ok"
 
@@ -49,8 +61,20 @@ class _Audit:
         with self._lock:
             if event["event"] == self.fail_on:
                 raise OSError("audit unavailable")
-            self.events.append(event)
-            return len(self.events)
+            seq = len(self.events) + 1
+            self.events.append({"seq": seq, **event})
+            return seq
+
+    def chained_events(self) -> list[dict[str, object]]:
+        with self._lock:
+            return list(self.events)
+
+    def verify_chain(self):
+        return type("Verification", (), {"ok": True})()
+
+
+def _no_receipt(execution_id, artifact_sha256, target):
+    return ReceiptStatus(RECEIPT_NOT_FOUND)
 
 
 def _target(*, user: str = "migrator", schema: str = "public") -> DbTarget:
@@ -92,7 +116,8 @@ def _process_execute(
             authority=ApprovalAuthority(key=_KEY),
             target=target,
             consumed=store,
-            executor=lambda sql, bound: (True, "ok"),
+            executor=lambda sql, bound, execution_id, artifact_sha256: (True, "ok"),
+            receipt_lookup=_no_receipt,
             audit=_Audit(),
             clock=lambda: 1_001.0,
         )
@@ -123,6 +148,7 @@ def test_replay_is_refused_after_store_and_runner_restart(tmp_path):
         target=target,
         consumed=first_store,
         executor=first_spy,
+        receipt_lookup=_no_receipt,
         audit=_Audit(),
         clock=lambda: 1_001.0,
     )
@@ -139,6 +165,7 @@ def test_replay_is_refused_after_store_and_runner_restart(tmp_path):
             target=target,
             consumed=second_store,
             executor=second_spy,
+            receipt_lookup=_no_receipt,
             audit=_Audit(),
             clock=lambda: 1_002.0,
         )
@@ -160,6 +187,7 @@ def test_one_shared_store_serializes_thread_race(tmp_path):
         target=target,
         consumed=store,
         executor=spy,
+        receipt_lookup=_no_receipt,
         audit=_Audit(),
         clock=lambda: 1_001.0,
     )
@@ -220,7 +248,8 @@ def test_inherited_store_reconnects_after_fork(tmp_path):
         authority=authority,
         target=target,
         consumed=store,
-        executor=lambda sql, bound: (True, "ok"),
+        executor=lambda sql, bound, execution_id, artifact_sha256: (True, "ok"),
+        receipt_lookup=_no_receipt,
         audit=_Audit(),
         clock=lambda: 1_001.0,
     )
@@ -270,6 +299,7 @@ def test_privilege_or_schema_change_invalidates_approval(
             target=runner_target,
             consumed=store,
             executor=spy,
+            receipt_lookup=_no_receipt,
             audit=_Audit(),
             clock=lambda: 1_001.0,
         )
@@ -310,7 +340,8 @@ def test_production_runtime_uses_stable_key_store_and_required_audit(tmp_path):
     first = build_migration_runtime(
         config,
         audit=audit,
-        executor=lambda sql, bound: (True, "ok"),
+        executor=lambda sql, bound, execution_id, artifact_sha256: (True, "ok"),
+        receipt_lookup=_no_receipt,
         clock=lambda: 1_001.0,
     )
     approval = first.authority.mint(
@@ -322,7 +353,8 @@ def test_production_runtime_uses_stable_key_store_and_required_audit(tmp_path):
     second = build_migration_runtime(
         config,
         audit=audit,
-        executor=lambda sql, bound: (True, "ok"),
+        executor=lambda sql, bound, execution_id, artifact_sha256: (True, "ok"),
+        receipt_lookup=_no_receipt,
         clock=lambda: 1_002.0,
     )
     try:
@@ -360,7 +392,24 @@ def test_runner_rejects_missing_audit_sink(tmp_path):
                 target=_target(),
                 consumed=store,
                 executor=_SpyExecutor(),
+                receipt_lookup=_no_receipt,
                 audit=None,  # type: ignore[arg-type]
+                clock=lambda: 1_001.0,
+            )
+    finally:
+        store.close()
+
+
+def test_custom_executor_requires_matching_receipt_lookup(tmp_path):
+    store = ConsumedApprovals(tmp_path / "missing-receipt-lookup.db")
+    try:
+        with pytest.raises(ValueError, match="requires a matching receipt lookup"):
+            BrokeredMigrationRunner(
+                authority=ApprovalAuthority(key=_KEY),
+                target=_target(),
+                consumed=store,
+                executor=_SpyExecutor(),
+                audit=_Audit(),
                 clock=lambda: 1_001.0,
             )
     finally:
@@ -379,6 +428,7 @@ def test_store_unavailable_refuses_before_executor(tmp_path):
         target=target,
         consumed=store,
         executor=spy,
+        receipt_lookup=_no_receipt,
         audit=audit,
         clock=lambda: 1_001.0,
     )
@@ -402,6 +452,7 @@ def test_execution_intent_audit_failure_refuses_before_executor(tmp_path):
         target=target,
         consumed=ConsumedApprovals(tmp_path / "intent-failure.db"),
         executor=spy,
+        receipt_lookup=_no_receipt,
         audit=audit,
         clock=lambda: 1_001.0,
     )
@@ -432,6 +483,7 @@ def test_outcome_audit_failure_returns_explicit_result_with_durable_intent(tmp_p
         target=target,
         consumed=ConsumedApprovals(tmp_path / "outcome-failure.db"),
         executor=spy,
+        receipt_lookup=_no_receipt,
         audit=audit,
         clock=lambda: 1_001.0,
     )
@@ -474,8 +526,9 @@ def test_store_rejects_unsafe_permissions_symlink_and_corruption(tmp_path):
 
 
 class _FakeCursor:
-    def __init__(self) -> None:
+    def __init__(self, responses=()) -> None:
         self.calls: list[tuple[str, object, dict[str, object]]] = []
+        self.responses = list(responses)
 
     def __enter__(self):
         return self
@@ -486,10 +539,14 @@ class _FakeCursor:
     def execute(self, query, params=None, **kwargs):
         self.calls.append((query, params, kwargs))
 
+    def fetchone(self):
+        return self.responses.pop(0) if self.responses else None
+
 
 class _FakeConnection:
     def __init__(self, cursor: _FakeCursor) -> None:
         self._cursor = cursor
+        self.commits = 0
 
     def __enter__(self):
         return self
@@ -500,18 +557,22 @@ class _FakeConnection:
     def cursor(self):
         return self._cursor
 
+    def commit(self):
+        self.commits += 1
+
 
 class _FakePsycopg:
     class Error(Exception):
         pass
 
-    def __init__(self) -> None:
-        self.cursor = _FakeCursor()
+    def __init__(self, responses=()) -> None:
+        self.cursor = _FakeCursor(responses)
+        self.connection = _FakeConnection(self.cursor)
         self.connect_kwargs: dict[str, object] = {}
 
     def connect(self, **kwargs):
         self.connect_kwargs = kwargs
-        return _FakeConnection(self.cursor)
+        return self.connection
 
 
 @pytest.mark.parametrize("hostile_sql", [r"\! env", r"\connect otherdb", r"\copy t FROM PROGRAM 'id'"])
@@ -524,7 +585,9 @@ def test_driver_executor_treats_psql_meta_commands_only_as_sql(
     )
     target = _target(schema='billing, "private"')
 
-    ok, detail = postgres_executor(hostile_sql, target)
+    ok, detail = postgres_executor(
+        hostile_sql, target, "a" * 64, "b" * 64
+    )
 
     assert ok and detail == ""
     assert driver.connect_kwargs == {
@@ -536,12 +599,83 @@ def test_driver_executor_treats_psql_meta_commands_only_as_sql(
         "connect_timeout": 10,
         "autocommit": False,
     }
-    schema_query, schema_params, _ = driver.cursor.calls[0]
+    assert driver.connection.commits == 1
+    schema_query, schema_params, _ = next(
+        call for call in driver.cursor.calls if "set_config('search_path'" in call[0]
+    )
     assert "quote_ident(%s)" in schema_query
     assert schema_params == (target.schema,)
-    artifact_query, _, artifact_kwargs = driver.cursor.calls[-1]
+    artifact_query, _, artifact_kwargs = next(
+        call for call in driver.cursor.calls if call[0] == hostile_sql
+    )
     assert artifact_query == hostile_sql
     assert artifact_kwargs == {"prepare": False}
+    receipt_query, receipt_params, _ = next(
+        call
+        for call in driver.cursor.calls
+        if "INSERT INTO promethyn_internal.migration_receipts" in call[0]
+    )
+    assert "target_canonical" in receipt_query
+    assert receipt_params == ("a" * 64, "b" * 64, target.identity.canonical)
+
+
+@pytest.mark.parametrize(
+    ("responses", "expected"),
+    [
+        ([(False,)], RECEIPT_IN_PROGRESS),
+        ([(True,), (None,)], RECEIPT_NOT_FOUND),
+        (
+            [
+                (True,),
+                ("promethyn_internal.migration_receipts",),
+                ("b" * 64, _target().identity.canonical, "2026-08-22T12:00:00Z"),
+            ],
+            RECEIPT_COMMITTED,
+        ),
+        (
+            [
+                (True,),
+                ("promethyn_internal.migration_receipts",),
+                ("wrong-hash", _target().identity.canonical, "2026-08-22T12:00:00Z"),
+            ],
+            RECEIPT_CONFLICT,
+        ),
+    ],
+)
+def test_receipt_lookup_distinguishes_every_recovery_state(
+    monkeypatch, responses, expected
+):
+    driver = _FakePsycopg(responses)
+    monkeypatch.setattr(
+        "prometheus_protocol.chokepoint.runner.import_module", lambda _: driver
+    )
+
+    result = postgres_receipt_lookup("a" * 64, "b" * 64, _target())
+
+    assert result.state == expected
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "COMMIT; SELECT 1",
+        "/* harmless */ ROLLBACK",
+        "SELECT 1; -- boundary\nBEGIN; SELECT 2",
+        "SAVEPOINT attacker_boundary",
+    ],
+)
+def test_executor_rejects_transaction_control_before_connect(monkeypatch, sql):
+    def must_not_import(_):
+        raise AssertionError("driver import proves DB path was reached")
+
+    monkeypatch.setattr(
+        "prometheus_protocol.chokepoint.runner.import_module", must_not_import
+    )
+
+    ok, detail = postgres_executor(sql, _target(), "a" * 64, "b" * 64)
+
+    assert not ok
+    assert "transaction-control statements are forbidden" in detail
 
 
 def test_driver_executor_fails_closed_when_driver_is_missing(monkeypatch):
@@ -551,7 +685,7 @@ def test_driver_executor_fails_closed_when_driver_is_missing(monkeypatch):
     monkeypatch.setattr(
         "prometheus_protocol.chokepoint.runner.import_module", unavailable
     )
-    ok, detail = postgres_executor("SELECT 1", _target())
+    ok, detail = postgres_executor("SELECT 1", _target(), "a" * 64, "b" * 64)
     assert not ok
     assert "unavailable" in detail
 
@@ -566,6 +700,6 @@ def test_driver_executor_reports_database_error(monkeypatch):
     monkeypatch.setattr(
         "prometheus_protocol.chokepoint.runner.import_module", lambda _: driver
     )
-    ok, detail = postgres_executor("SELECT 1", _target())
+    ok, detail = postgres_executor("SELECT 1", _target(), "a" * 64, "b" * 64)
     assert not ok
     assert detail == "connection refused"

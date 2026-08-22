@@ -42,6 +42,12 @@ also needs the namespace sandbox (unprivileged user namespaces); where that is
 unavailable the demo says so and points at the committed proof
 (`tests/chokepoint/test_isolation.py`) instead of pretending.
 
+The runner role must also be able to create `promethyn_internal` and its
+`migration_receipts` table when absent. A pre-provisioned deployment can instead
+grant `USAGE` on the schema and `SELECT`/`INSERT` on the table. Promethyn writes
+the receipt there in the same transaction as the approved migration so a restart
+can prove whether the database committed.
+
 Generate `PROM_CHOKEPOINT_KEY` once and keep it in your secret manager. Reuse the
 same value across gate and runner restarts; rotating it deliberately invalidates
 all outstanding approvals. The command above is for initial setup, not for every
