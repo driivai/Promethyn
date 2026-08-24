@@ -1,0 +1,18 @@
+# Canonical commit identity for this repository.
+#
+# Every commit on `main` is authored by GitHub's squash-merge using the merging
+# account's profile identity, which was a personal name/address rather than the
+# project identity. This map makes `git log --use-mailmap` (the default for
+# `git shortlog`, `git blame`, and GitHub's own contributor views) report the
+# canonical identity instead, without rewriting a single commit.
+#
+# Format: <canonical name> <canonical email> <commit name> <commit email>
+#
+# Note: a mailmap must name the old identity in order to redirect it, so the
+# previous address necessarily remains visible in this file. Mailmap fixes
+# attribution and documents provenance; it does not erase the old address from
+# the repository. Only a history rewrite does that — see
+# docs/repository-identity.md for that decision.
+
+DriivAIDev <will@driivai.com> <williamnunlist@gmail.com>
+DriivAIDev <will@driivai.com> Benji Franclin <williamnunlist@gmail.com>

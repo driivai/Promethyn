@@ -31,6 +31,7 @@ from prometheus_protocol.chokepoint import (
     MigrationArtifact,
     postgres_executor,
 )
+from prometheus_protocol.chokepoint.runner import _receipt_text
 from prometheus_protocol.core.models import Judgment, Verdict
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
 
@@ -87,6 +88,16 @@ def _execute(target: DbTarget, query: str) -> None:
 
 
 def _receipt_row(target: DbTarget, execution_id: str):
+    """The receipt row, with its text columns normalized to ``str``.
+
+    A driver may return a ``text`` column as ``str`` or as ``bytes``; comparing
+    ``bytes`` to ``str`` is silently always-unequal, so these assertions would
+    pass or fail on the local driver's whim rather than on the receipt's content.
+    Normalizing here (the same rule the runner applies) makes the live checks
+    representation-independent. The driver-agnostic unit proof of that rule is
+    ``test_receipt_text_normalization.py``.
+    """
+
     with _connect(target) as connection, connection.cursor() as cursor:
         cursor.execute(
             "SELECT pg_catalog.to_regclass("
@@ -101,7 +112,10 @@ def _receipt_row(target: DbTarget, execution_id: str):
             "WHERE execution_id = %s",
             (execution_id,),
         )
-        return cursor.fetchone()
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return (_receipt_text(row[0]), _receipt_text(row[1]), row[2])
 
 
 def _delete_receipt(target: DbTarget, execution_id: str | None) -> None:
