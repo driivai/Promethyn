@@ -313,6 +313,32 @@ def _starts_transaction_control_statement(sql: str) -> bool:
     return False
 
 
+def _receipt_text(value: object) -> str | None:
+    """Normalize one PostgreSQL ``text`` column to ``str`` for comparison.
+
+    A driver may hand a ``text`` column back as ``str`` **or** as ``bytes``
+    (psycopg's client encoding / binary result format, and the build in use, all
+    influence it). Comparing ``bytes`` to ``str`` in Python is silently always
+    unequal — never an error — so a receipt check written against whichever type
+    the local driver happened to return is a check that passes for the wrong
+    reason, and misclassifies a committed migration as a conflict elsewhere. The
+    comparison therefore normalizes explicitly instead of trusting the driver.
+
+    Anything that is not decodable UTF-8 text (or is an unexpected type) yields
+    ``None``, which never equals an expected ``str`` — so an unreadable receipt
+    stays a mismatch, and the caller fails closed.
+    """
+
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        try:
+            return bytes(value).decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+    return None
+
+
 def _is_lower_hex_digest(value: str) -> bool:
     return len(value) == 64 and all(char in "0123456789abcdef" for char in value)
 
@@ -406,7 +432,12 @@ def postgres_executor(
             )
             existing = cursor.fetchone()
             if existing is not None:
-                if existing[0] != artifact_sha256 or existing[1] != target.identity.canonical:
+                # Normalized: a bytes-vs-str comparison here would report a false
+                # conflict on a legitimate retry of the same execution.
+                if (
+                    _receipt_text(existing[0]) != artifact_sha256
+                    or _receipt_text(existing[1]) != target.identity.canonical
+                ):
                     return False, "execution receipt conflicts with artifact or target"
                 return True, "execution receipt already committed"
             cursor.execute(
@@ -493,7 +524,12 @@ def postgres_receipt_lookup(
             row = cursor.fetchone()
             if row is None:
                 return ReceiptStatus(RECEIPT_NOT_FOUND)
-            if row[0] != artifact_sha256 or row[1] != target.identity.canonical:
+            # Normalized: a bytes-vs-str comparison here would misclassify a
+            # COMMITTED migration as a conflict during crash reconciliation.
+            if (
+                _receipt_text(row[0]) != artifact_sha256
+                or _receipt_text(row[1]) != target.identity.canonical
+            ):
                 return ReceiptStatus(
                     RECEIPT_CONFLICT,
                     detail="receipt exists but does not match the intent",
