@@ -429,7 +429,7 @@ def test_no_network_egress_including_dns(sockets):
 # --------------------------------------------------------------------------
 
 _SWEEP_PROBE = """
-import glob, os, time
+import glob, os, stat, time
 # Assembled from halves so this file does not itself contain the needle — the
 # sweep reads every file it can, and a self-match would be a false positive that
 # masks whether anything real leaked.
@@ -476,7 +476,14 @@ for root in roots:
         for name in filenames:
             full = os.path.join(dirpath, name)
             try:
-                if os.path.getsize(full) > 1_000_000:
+                # Regular files ONLY, and lstat so a symlink is never followed.
+                # Opening a FIFO blocks until a writer appears — forever, in
+                # practice — and a probe stuck in open() never reaches its own
+                # deadline. It gets killed, reports nothing, and "no hits" is
+                # indistinguishable from "clean": a sweep that cannot finish is
+                # a void guard, so it must not be able to hang at all.
+                info = os.lstat(full)
+                if not stat.S_ISREG(info.st_mode) or info.st_size > 1_000_000:
                     continue
                 scanned += 1
                 if NEEDLE_BYTES in open(full, "rb").read():
@@ -492,7 +499,33 @@ print("HITS|%s" % ";".join(sorted(set(hits))))
 """
 
 
-def test_the_signing_key_is_unreachable_by_every_inspected_path(_planted_secrets, victim):
+@pytest.fixture
+def fifo_hazard():
+    """A FIFO in a swept directory.
+
+    Regression guard: opening a FIFO blocks until a writer appears, so a sweep
+    that reads whatever it finds hangs there, gets killed, and reports no hits —
+    which reads exactly like "clean". CI runners really do have FIFOs under
+    /run and /tmp; this makes sure the sweep can never be silenced that way.
+    """
+
+    path = os.path.join(tempfile.gettempdir(), f"prom-fifo-{uuid.uuid4().hex}")
+    try:
+        os.mkfifo(path)
+    except (OSError, AttributeError):
+        pytest.skip("cannot create a FIFO here")
+    try:
+        yield path
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+def test_the_signing_key_is_unreachable_by_every_inspected_path(
+    _planted_secrets, victim, fifo_hazard
+):
     """Environment, own procfs entries, every other process's procfs entries, and
     a filesystem sweep of everything the agent can see."""
 
