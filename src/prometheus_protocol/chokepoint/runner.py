@@ -42,7 +42,7 @@ import stat
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib import import_module
 from pathlib import Path
 from typing import Protocol
@@ -121,14 +121,51 @@ class _AuditAppend:
 @dataclass(frozen=True)
 class DbTarget:
     """Connection coordinates for the target DB. The password is the credential
-    the runner exclusively holds; ``identity`` is what an approval binds to."""
+    the runner exclusively holds; ``identity`` is what an approval binds to.
+
+    ``password`` is excluded from ``repr``. A dataclass renders every field by
+    default, so the credential appeared verbatim in any log line, f-string,
+    traceback frame or crash report that touched a target — turning "someone can
+    read a log" into "someone has the production database credential". Redaction
+    is not defence in depth here so much as not handing the blast radius away for
+    free; the credential is reached only through the field itself, which the two
+    connect sites use and nothing else does.
+    """
 
     host: str
     port: int
     dbname: str
     user: str
-    password: str
+    password: str = field(repr=False)
     schema: str = "public"
+    #: Optional: fetch the credential per use instead of holding one.
+    password_provider: Callable[[], str] | None = field(
+        default=None, repr=False, compare=False
+    )
+
+    def __str__(self) -> str:
+        return self.identity.canonical
+
+    def resolve_password(self) -> str:
+        """The credential for ONE connection.
+
+        With a ``password_provider`` the runner holds no standing credential: the
+        secret is fetched at the moment of use and referenced only for the length
+        of the connect call, so a runner sitting idle — the state it is in almost
+        all of the time — has nothing to steal. Without one, the ``password``
+        field is used and the credential lives for the process's lifetime; that
+        remains the default, and ``docs/threat-model.md`` §2 says so rather than
+        implying otherwise.
+
+        No claim is made about erasing it from memory. Python strings are
+        immutable and may be copied by the interpreter, so a provider narrows the
+        *window* from process-lifetime to call-scope — it does not scrub. Claiming
+        a wipe we cannot perform would be the void guard this project is named for.
+        """
+
+        if self.password_provider is not None:
+            return self.password_provider()
+        return self.password
 
     @property
     def identity(self) -> MigrationTarget:
@@ -145,10 +182,17 @@ class DbTarget:
 
 @dataclass(frozen=True)
 class MigrationRunnerConfig:
-    """Required production wiring for the privileged migration runner."""
+    """Required production wiring for the privileged migration runner.
+
+    ``signing_key`` is excluded from ``repr`` for the same reason as the
+    password, and with more at stake: the key mints approvals, so a key in a log
+    is a total bypass of the gate (threat model §1, A1-1 — the same secret, a
+    different exit route). ``bytes`` renders in full by default, so a single
+    ``print(config)`` or a config object caught in a traceback published it.
+    """
 
     target: DbTarget
-    signing_key: bytes
+    signing_key: bytes = field(repr=False)
     approval_store_path: str | Path
 
     def __post_init__(self) -> None:
@@ -387,7 +431,7 @@ def postgres_executor(
             port=target.port,
             dbname=target.dbname,
             user=target.user,
-            password=target.password,
+            password=target.resolve_password(),
             connect_timeout=10,
             autocommit=False,
         ) as connection, connection.cursor() as cursor:
@@ -493,7 +537,7 @@ def postgres_receipt_lookup(
             port=target.port,
             dbname=target.dbname,
             user=target.user,
-            password=target.password,
+            password=target.resolve_password(),
             connect_timeout=10,
             autocommit=False,
         ) as connection, connection.cursor() as cursor:

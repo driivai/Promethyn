@@ -15,10 +15,10 @@ named is a gap that is being managed; a gap that is hidden is a vulnerability
 with better marketing — and by this project's own thesis, a check that is
 present, plausible, and void is the failure mode we exist to name.
 
-> **Status.** Attacker 1 is complete. Attackers 2–5 are listed with their scope
-> so the shape of the work is visible, and are explicitly **not yet assessed** —
-> they are not claimed as closed, and the absence of findings under them means
-> nobody has looked yet.
+> **Status.** Attackers 1 and 2 are complete. Attackers 3–5 are listed with
+> their scope so the shape of the work is visible, and are explicitly **not yet
+> assessed** — they are not claimed as closed, and the absence of findings under
+> them means nobody has looked yet.
 
 ---
 
@@ -175,7 +175,7 @@ rather than invisible.
   addressed and are not claimed to be.
 - **A compromised runner zone.** If the attacker is already executing in the
   runner zone, they hold the signing key and the credential directly, and the
-  chokepoint has nothing left to say. That is attacker 2's subject.
+  chokepoint has nothing left to say. That is attacker 2's subject (§2).
 - **`unsafe` and `container` adapters.** The environment-construction fix is
   applied to the namespace adapter. The `unsafe` adapter is explicitly not a
   sandbox and is opt-in behind `PROM_ALLOW_UNSAFE_EXEC=1`; the container adapter
@@ -186,16 +186,148 @@ rather than invisible.
 
 ---
 
-## Attackers 2–5 — scope stated, not yet assessed
+## Attacker 2 — the runner host, and standing privilege in the runner zone
+
+**Capability.** A local account on the runner host, or a partial compromise of
+the runner zone — a readable log, a crash report, an exception rendered
+somewhere it should not have been. **Full host compromise is explicitly out of
+scope**, and stays out: root on this machine holds the signing key, the database
+credential and the ledger file, so it can mint any approval and write any
+history. Nothing below changes that, and §2.5 says so plainly rather than
+implying a defence that does not exist. What *is* in scope is the blast radius
+before that point, and the standing authority the runner keeps while idle.
+
+### 2.1 What was found
+
+| # | Finding | Severity | Status before |
+|---|---|---|---|
+| B2-1 | The sandbox workspace was `chmod 0777` — world-readable and world-writable, including the window between an artifact being written and being hashed | **High** | Open |
+| B2-2 | The same line re-permissioned any directory it was handed. The repository's own tests passed `workspace="/tmp"`, so **every suite run stripped the sticky bit off the machine's `/tmp`** | **High** | Open, and running in CI |
+| B2-3 | `DbTarget.password` and `MigrationRunnerConfig.signing_key` rendered verbatim in `repr` — so any log line, f-string or traceback carrying them published the credential and the key | **High** | Open |
+| B2-4 | `UnsafeLocalSandbox` spawned candidate code with the inherited environment — the A1-1 defect at a **second** call site | **High** | Open |
+| B2-5 | The runner holds the database credential for the whole process lifetime; nothing existed to hold it for less | Medium | Open |
+
+**B2-2 was measured, not deduced.** Running the pre-fix provenance tests changes
+`/tmp` from `drwxrwxrwt` to `drwxrwxrwx`. Losing the sticky bit means any local
+user can delete or rename any other user's files there — a machine-wide
+downgrade performed by the test suite itself, on every CI run.
+
+**B2-4 is the A1-1 lesson generalised.** Fixing one spawn site fixed one spawn
+site. A second adapter had the same defect, and "it is dev-only and isolates
+nothing anyway" is not an answer: it still executes candidate code with
+`PROM_CHOKEPOINT_KEY` in its environment whenever that key is exported in the
+same shell, which is precisely what `demo/README.md` tells an operator to do.
+
+### 2.2 What is now enforced
+
+- **The workspace is owner-only.** `prepare_workspace` sets `0700` and never
+  widens. Access without widening comes from ownership: a privileged runner
+  `chown`s the directory to the unprivileged container user (`65534`) and the
+  candidate runs as it; an unprivileged runner instead runs the container as its
+  own uid/gid, which already traverses its own `0700` directory. If neither
+  works the run is **refused** — a workspace nobody can reach is a failed run,
+  while a workspace everybody can reach is a silent downgrade.
+- **Shared directories are refused, not re-permissioned.** The sticky bit is the
+  kernel's own marker for a communal drop-box, so a sticky directory is rejected
+  as a workspace outright.
+- **Secrets do not render.** `password` and `signing_key` are `repr=False`;
+  `DbTarget.__str__` returns the credential-free canonical identity, so logging a
+  target still tells an operator which database was touched.
+- **No adapter inherits the runner environment.** `candidate_env` moved to the
+  sandbox port (`base.py`) and every spawning adapter uses it, so the fix is not
+  one adapter away from being wrong again.
+- **A deployment can hold no standing credential.** `DbTarget.password_provider`
+  is consulted per connection, so an idle runner holds nothing worth stealing.
+
+### 2.3 The swap-after-hash question
+
+Between hashing an artifact and executing it, can a local adversary change what
+runs? **No — by construction rather than by check.** `MigrationArtifact` holds
+the SQL string it was built from and hashes that same string, so the executed
+artifact is the hashed artifact with no window in between. There is no path
+carried to the executor that could be made to mean something else.
+
+`MigrationArtifact.from_path` is the safe ingestion point for the ordinary case
+where a migration starts life as a file: one descriptor, opened `O_NOFOLLOW` so
+a symlink swapped in cannot redirect the read and `O_NONBLOCK` so a FIFO cannot
+block the runner indefinitely, checked to be a regular file, then `fstat`-ed and
+read through that same descriptor.
+
+The tests perform the attack rather than describing it: the approved file is
+rewritten in place and replaced by rename, and the benign SQL still reaches the
+executor. One test deliberately simulates the **naive path-carrying design** and
+shows the hostile SQL landing under a still-valid approval — without it, every
+other assertion could be passing because the swap never worked.
+`source_still_matches()` reports tampering as evidence; execution never depends
+on it, because the content is already held.
+
+### 2.4 Every spawn in the runner path
+
+The A1-1 lesson applied exhaustively rather than to the one site that was found:
+
+| Site | Environment | Verdict |
+|---|---|---|
+| `sandbox/namespace.py` — candidate | explicit `candidate_env` | clean |
+| `sandbox/unsafe.py` — candidate | explicit `candidate_env` (**fixed here**) | clean |
+| `sandbox/container.py` — `docker run` | container receives only `PYTHONDONTWRITEBYTECODE`; the runtime does not forward the host environment | clean for the candidate |
+| `sandbox/container.py` — `docker info` probe | inherited | **accepted**: runs the host's own CLI, which needs `DOCKER_HOST`/`PATH`, and passes it no candidate code |
+| `sandbox/_bootstrap.py` — `execv` | inherits the already-constructed environment | clean |
+| `sandbox/_container_bootstrap.py` — `execvp` | inherits the container's environment | clean |
+| `tools/stale_branch_demo.py` — `git` ×4 | inherited | **accepted**: a fixture builder that runs `git` against a throwaway local repository, never candidate code |
+| `demo/run_demo.py` — `psql` | inherited plus `PGPASSWORD` | **accepted, and named**: a demonstration script, not the runner. `PGPASSWORD` in a child environment is readable by same-uid processes; the runner itself never spawns `psql`, connecting over the wire protocol instead |
+
+The chokepoint runner spawns **no** subprocesses at all — it talks to PostgreSQL
+through the driver — so no credential crosses a process boundary in the
+production path.
+
+### 2.5 Residual — what is not covered
+
+- **Full host or root compromise defeats all of it.** Root reads the signing key
+  out of the runner's memory, reads or replaces the credential, rewrites the
+  ledger from genesis (`docs/ledger-integrity.md`: undetectable without an
+  out-of-band anchor), and mints any approval it likes. Every item in §2.2
+  reduces what a *partial* compromise yields. None of them survives root, and no
+  arrangement of them would.
+- **Memory is not scrubbed.** A `password_provider` narrows the credential's
+  window from process-lifetime to call-scope. It does not erase anything: Python
+  strings are immutable and the interpreter may copy them, so the value can
+  persist until garbage collection. A test asserting a wipe would be a void
+  guard.
+- **The provider is opt-in.** The default still holds the credential in the
+  config for the runner's lifetime, because making it mandatory would break
+  every existing caller. Supported and tested, not enforced.
+- **Escape lands as the runner user on an unprivileged host.** Where the runner
+  cannot `chown`, the container runs as the runner's own uid, so a container
+  escape lands there rather than as `nobody`. This is a deliberate trade: an
+  escape past `--cap-drop ALL --security-opt no-new-privileges --read-only
+  --network none` requires a runtime vulnerability, while a world-writable
+  workspace required only a local shell. A privileged runner takes the stronger
+  path automatically.
+- **`0644` files inside the workspace.** Files written there keep the creating
+  process's default mode. They are protected by the `0700` directory, not by
+  their own bits — so a workspace moved somewhere world-traversable would expose
+  them again.
+- **Cross-user denial is proven only where privilege can be dropped.** The mode
+  assertions run everywhere; the test that actually becomes another local user
+  and is refused requires root to drop privilege, so it skips on an unprivileged
+  runner. **Verification procedure there:** as a second local account, attempt
+  `ls`, `cat` and file creation inside a live workspace; all three must fail with
+  `EACCES`.
+- **The runner's own filesystem and network reach are unbounded.** It is an
+  ordinary process: nothing stops it opening other files or hosts. Confining it
+  (systemd hardening, a dedicated service account, a network policy) remains a
+  **deployment recommendation**, not something this code enforces.
+- **`unsafe` remains unsafe.** It now withholds the environment, which is not the
+  same as isolating. It is opt-in behind `PROM_ALLOW_UNSAFE_EXEC=1` and warns on
+  every run.
+
+---
+
+## Attackers 3–5 — scope stated, not yet assessed
 
 Listed so the remaining surface is visible. **No claim is made that any of these
 is closed.** Findings will be added as each class is worked.
 
-- **Attacker 2 — the runner host.** Privilege minimisation for the runner
-  process, including the world-writable (`0777`) container workspace; what an
-  attacker with runner-host write access can do to the ledger, given that a full
-  rewrite from genesis is undetectable without an out-of-band anchor
-  (`docs/ledger-integrity.md` states this limit).
 - **Attacker 3 — the ledger.** Making the tip anchor operational rather than
   available, and finite-range validation for numeric configuration.
 - **Attacker 4 — the network.** Requiring TLS on credentialed endpoints, and

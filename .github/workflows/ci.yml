@@ -101,6 +101,19 @@ jobs:
           PROM_REQUIRE_SANDBOX: "1"
         run: python -m pytest -q tests/conformance -k sandbox
 
+      - name: Cross-user workspace denial (must RUN as root, not skip)
+        # Proving that another local account is refused requires privilege to
+        # drop privilege, so on an unprivileged runner this test skips — and a
+        # security test that skips is a void guard (see threat model §1, A1-4).
+        # Run that one test under sudo, with PROM_REQUIRE_PRIVILEGED=1 so a skip
+        # fails the build instead of passing quietly.
+        run: |
+          sudo -E "$(command -v python)" -m pytest -rA -v \
+            tests/conformance/test_sandbox_privilege.py \
+            -k another_local_user
+        env:
+          PROM_REQUIRE_PRIVILEGED: "1"
+
       - name: Hearth guards must EXECUTE, not skip (fetch-depth 0 makes origin/main resolvable)
         # The four Hearth/default-judge byte-identical tests skipif origin/main is
         # unresolvable — TRUE under the old shallow checkout, so they silently

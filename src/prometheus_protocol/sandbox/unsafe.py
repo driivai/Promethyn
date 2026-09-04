@@ -24,6 +24,7 @@ from typing import Sequence
 from prometheus_protocol.sandbox.base import (
     FSIZE_BYTES,
     Limits,
+    candidate_env,
     Sandbox,
     SandboxResult,
     clip,
@@ -72,6 +73,15 @@ class UnsafeLocalSandbox(Sandbox):
                 timeout=limits.wall_time_s,
                 input=stdin or None,
                 preexec_fn=_rlimits(limits.cpu_time_s, limits.memory_bytes),
+                # This adapter isolates NOTHING — but that is no reason to hand
+                # the candidate the runner's secrets on top. It ran with the
+                # inherited environment, which is the same defect as the one
+                # closed in the namespace adapter (threat model §1, A1-1): the
+                # approval signing key and the database password travel in the
+                # process image, where no amount of not-isolating is required to
+                # read them. Dev-only is not a reason to leak a production key
+                # that happens to be exported in the same shell.
+                env=candidate_env(str(workspace)),
             )
         except subprocess.TimeoutExpired as exc:
             out, truncated = clip(exc.stdout, limits.max_output_bytes)

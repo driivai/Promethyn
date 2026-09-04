@@ -41,9 +41,10 @@ import json
 import math
 import os
 import secrets
+import stat
 import string
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from prometheus_protocol.core.models import Judgment, Unavailable, Verdict
 
@@ -139,15 +140,124 @@ def artifact_hash(sql: str) -> str:
     return hashlib.sha256(sql.encode("utf-8")).hexdigest()
 
 
+#: Refuse absurdly large migration files rather than reading them into memory.
+MAX_ARTIFACT_BYTES = 8 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class ArtifactSource:
+    """Where an artifact's bytes came from, captured from the very descriptor
+    they were read through — so it describes the file that was actually read,
+    not whatever now answers to that path."""
+
+    path: str
+    device: int
+    inode: int
+    size: int
+
+
 @dataclass(frozen=True)
 class MigrationArtifact:
-    """The exact thing to be executed. Its identity is the hash of its content."""
+    """The exact thing to be executed. Its identity is the hash of its content.
+
+    The content lives *here*, as bytes already read, and :attr:`sha256` hashes
+    that same in-memory string — so there is no window between hashing and
+    executing in which a path could be made to mean something else. A migration
+    normally starts life as a file, and the moment a file *path* is what gets
+    carried to execution, a local adversary only has to rewrite it in between:
+    approved artifact hashed, hostile artifact run, the approval still valid for
+    a hash nobody re-checks. :meth:`from_path` is the safe ingestion point, and
+    ``source`` is excluded from equality so an artifact read from disk still
+    compares equal to the same SQL constructed in memory.
+    """
 
     sql: str
+    source: ArtifactSource | None = field(default=None, compare=False)
 
     @property
     def sha256(self) -> str:
         return artifact_hash(self.sql)
+
+    @classmethod
+    def from_path(cls, path: str | os.PathLike[str]) -> MigrationArtifact:
+        """Read a migration file ONCE and keep its bytes.
+
+        Everything is done through a single descriptor: opened ``O_NOFOLLOW`` so
+        a symlink swapped in at the path cannot redirect the read, checked to be
+        a regular file (a FIFO would block forever, a device would not be a
+        migration), then read and ``fstat``-ed through that same descriptor. What
+        gets hashed is what got read; a later rewrite of the path — in place or by
+        rename — cannot reach the returned artifact.
+        """
+
+        # O_NONBLOCK is load-bearing, not tidiness: opening a FIFO read-only
+        # BLOCKS until a writer appears, and the regular-file check below happens
+        # after the open — too late to help. A migration path an adversary can
+        # replace with a named pipe would hang the runner indefinitely, holding
+        # a spent approval and an unreconciled intent. With O_NONBLOCK the open
+        # returns at once (or fails), and the check then refuses it. For a
+        # regular file the flag has no effect.
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+        )
+        descriptor = os.open(path, flags)
+        try:
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode):
+                raise ValueError("migration artifact must be a regular file")
+            if info.st_size > MAX_ARTIFACT_BYTES:
+                raise ValueError(
+                    f"migration artifact is larger than {MAX_ARTIFACT_BYTES} bytes"
+                )
+            chunks: list[bytes] = []
+            total = 0
+            while True:
+                chunk = os.read(descriptor, 1 << 20)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_ARTIFACT_BYTES:
+                    raise ValueError(
+                        f"migration artifact is larger than {MAX_ARTIFACT_BYTES} bytes"
+                    )
+                chunks.append(chunk)
+        finally:
+            os.close(descriptor)
+        raw = b"".join(chunks)
+        try:
+            sql = raw.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError("migration artifact is not valid UTF-8") from exc
+        return cls(
+            sql=sql,
+            source=ArtifactSource(
+                path=os.fspath(path),
+                device=info.st_dev,
+                inode=info.st_ino,
+                size=total,
+            ),
+        )
+
+    def source_still_matches(self) -> bool | None:
+        """Whether the originating file still holds the bytes this artifact was
+        built from. ``None`` when the artifact did not come from a file.
+
+        Purely **evidence**: execution never depends on it, because the content is
+        already held. It answers "was the file tampered with after we read it?",
+        which is worth recording in the audit trail even though the answer cannot
+        change what runs.
+        """
+
+        if self.source is None:
+            return None
+        try:
+            replacement = MigrationArtifact.from_path(self.source.path)
+        except (OSError, ValueError):
+            return False
+        return hmac.compare_digest(replacement.sha256, self.sha256)
 
 
 @dataclass(frozen=True)

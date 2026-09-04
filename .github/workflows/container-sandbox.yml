@@ -18,6 +18,7 @@ on:
     paths:
       - "src/prometheus_protocol/sandbox/**"
       - "tests/conformance/test_sandbox_container_signal.py"
+      - "tests/conformance/test_sandbox_privilege.py"
       - ".github/workflows/container-sandbox.yml"
   workflow_dispatch: {}
 
@@ -51,4 +52,5 @@ jobs:
           PROM_REQUIRE_CONTAINER: "1"
         run: |
           python -m pytest -rA -v \
-            tests/conformance/test_sandbox_container_signal.py -k real_container
+            tests/conformance/test_sandbox_container_signal.py \
+            tests/conformance/test_sandbox_privilege.py -k real_container
