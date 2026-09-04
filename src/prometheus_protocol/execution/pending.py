@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import Callable
 
 from prometheus_protocol.core.interfaces import Ledger
+from prometheus_protocol.core.validation import require_non_negative_int
 from prometheus_protocol.core.models import ExecutableAction, Judgment, Verdict
 from prometheus_protocol.execution.models import (
     HumanDecision,
@@ -119,7 +120,11 @@ class PendingActionService:
     ) -> None:
         self._ledger = ledger
         self._clock = clock or _utc_now_iso
-        self._ttl_seconds = ttl_seconds
+        # 0 disables expiry (documented); a negative value fell into the same
+        # branch and disabled it too, which was never a chosen setting.
+        self._ttl_seconds = require_non_negative_int(
+            ttl_seconds, name="ttl_seconds"
+        )
 
     # -- holding -----------------------------------------------------------
 

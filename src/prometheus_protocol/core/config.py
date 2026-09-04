@@ -13,6 +13,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
+from prometheus_protocol.core.validation import (
+    require_non_negative_int,
+    require_positive,
+    require_positive_int,
+    require_range,
+    require_unit_interval,
+)
+
 PROVIDER_MOCK = "mock"
 PROVIDER_REMOTE = "remote"
 
@@ -108,6 +116,33 @@ class Config:
     max_role_calls: int = 16
 
     request_timeout_s: float = 30.0
+
+    def __post_init__(self) -> None:
+        """Reject non-finite, out-of-range and wrong-signed numeric settings.
+
+        Validated here rather than at each use because this is the one place every
+        value passes through, including :meth:`from_env` — and ``float("nan")``
+        and ``float("inf")`` are both things ``float()`` happily returns for an
+        environment variable. A ``PROM_ESCALATE_BELOW=nan`` would otherwise leave
+        the human-escalation gate present and permanently non-escalating, which
+        is the failure this project exists to name.
+        """
+
+        require_range(
+            self.judge_temperature, name="judge_temperature", minimum=0.0, maximum=2.0
+        )
+        require_positive(self.verifier_timeout_s, name="verifier_timeout_s")
+        require_non_negative_int(self.verifier_memory_mb, name="verifier_memory_mb")
+        require_non_negative_int(self.verifier_cpu_seconds, name="verifier_cpu_seconds")
+        require_non_negative_int(self.verifier_max_processes, name="verifier_max_processes")
+        require_unit_interval(self.gate_threshold, name="gate_threshold")
+        require_non_negative_int(self.retrieval_k, name="retrieval_k")
+        require_unit_interval(self.escalate_below, name="escalate_below")
+        # 0 disables expiry (documented above); negative was never a setting, it
+        # just fell into the same "<= 0" branch and silently disabled it too.
+        require_non_negative_int(self.pending_ttl_seconds, name="pending_ttl_seconds")
+        require_positive_int(self.max_role_calls, name="max_role_calls")
+        require_positive(self.request_timeout_s, name="request_timeout_s")
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "Config":
