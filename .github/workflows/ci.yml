@@ -67,6 +67,12 @@ jobs:
         run: python scripts/check_hygiene.py
 
       - name: PostgreSQL chokepoint live tests (must run, never skip)
+        # Runs the agent-isolation proof too. It used to gate on
+        # PROM_CHOKEPOINT_PG_SOCKDIR, which this workflow sets nowhere and a
+        # containerised database cannot provide — so the repository's
+        # load-bearing "unreachable by every path" proof silently SKIPPED on
+        # every CI run. -rs prints the skip list, so a proof that stops running
+        # is visible instead of invisible.
         env:
           PROM_REQUIRE_PG: "1"
           PROM_CHOKEPOINT_PG_HOST: 127.0.0.1
@@ -75,7 +81,12 @@ jobs:
           PROM_CHOKEPOINT_PG_USER: migrator
           PROM_CHOKEPOINT_PG_PASSWORD: chokepoint-ci-password
           PROM_CHOKEPOINT_PG_SCHEMA: public
-        run: python -m pytest -q -rs tests/chokepoint/test_migration_live.py
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+          python -m pytest -q -rs \
+            tests/chokepoint/test_migration_live.py \
+            tests/chokepoint/test_isolation.py
 
       - name: Enable unprivileged user namespaces (for the namespace sandbox)
         # Ubuntu 24.04 runners restrict unprivileged user namespaces via

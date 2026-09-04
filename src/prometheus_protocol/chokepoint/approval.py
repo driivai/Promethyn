@@ -14,6 +14,13 @@ short window. It is bound by construction, not by convention:
   runner-zone secret key. The agent zone never holds that key (see
   ``docs/chokepoint-threat-model.md`` §4.3), so an agent cannot mint or alter an
   approval: any tampered field or hand-crafted MAC fails ``hmac.compare_digest``.
+  That unreachability is a property of the sandbox, not of this module, and it is
+  proven rather than assumed: ``tests/chokepoint/test_agent_zone_containment.py``
+  plants this key in the runner's environment and sweeps for it from inside the
+  agent context by every path it has. Until PROM-HARDEN-MAX the sandbox inherited
+  the runner's environment wholesale, so an agent could simply read
+  ``PROM_CHOKEPOINT_KEY`` and mint its own approvals — everything below is
+  downstream of a key the attacker would already have held.
 
 Single use (replay protection) is *stateful* and therefore NOT a property of this
 pure module — it is enforced by the runner's atomic consumed-nonce claim

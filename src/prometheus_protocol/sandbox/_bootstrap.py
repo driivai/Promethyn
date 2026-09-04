@@ -19,13 +19,38 @@ them (plus any exit status) forges nothing.
 
 import ctypes
 import ctypes.util
+import errno
 import os
 import resource
 import sys
 
 # Host directories hidden from the candidate (overlaid with empty tmpfs). Kept
 # minimal so the interpreter and its libraries (under /usr, /lib) still load.
-_SENSITIVE = ("/root", "/home")
+#
+# The runtime-socket directories are load-bearing, not hygiene: a Unix domain
+# socket is a *filesystem* object, so it does NOT traverse the network namespace.
+# A stock PostgreSQL listens on ``/tmp/.s.PGSQL.5432`` (source builds) or
+# ``/run/postgresql/.s.PGSQL.5432`` (Debian/Ubuntu packages); with those paths
+# visible, ``--net`` blocks TCP while the candidate still connects over the
+# socket. Hiding /root and /home alone made the chokepoint's "unreachable by
+# every path" property true only for a DB whose socket happened to sit under a
+# hidden path — a check present, plausible, and void everywhere else.
+_SENSITIVE = (
+    "/root",
+    "/home",
+    "/tmp",
+    "/var/tmp",
+    "/dev/shm",
+    "/run",
+    "/var/run",
+)
+
+# Mountpoints used to park the workspace while its parent directory is overlaid,
+# so the overlay above can be UNCONDITIONAL. The first existing directory that is
+# not itself hidden wins.
+_STAGE_CANDIDATES = ("/mnt", "/media", "/srv", "/opt")
+
+MNT_DETACH = 2
 
 _MARKER = "sandbox-bootstrap:"
 # Status-pipe tokens. Kept in sync with ``_start_signal.py`` (this file runs
@@ -64,6 +89,27 @@ def _drop_capabilities(libc) -> None:
         pass
 
 
+def _under(path: str, parent: str) -> bool:
+    """True when ``path`` is ``parent`` itself or lives beneath it."""
+
+    parent = parent.rstrip("/")
+    return path == parent or path.startswith(parent + "/")
+
+
+def _pick_stage(workspace):
+    """A mountpoint outside every hidden directory to park the workspace on."""
+
+    for candidate in _STAGE_CANDIDATES:
+        if not os.path.isdir(candidate):
+            continue
+        if any(_under(candidate, s) for s in _SENSITIVE):
+            continue
+        if _under(workspace, candidate):
+            continue
+        return candidate
+    return None
+
+
 def _signal(status_fd: int, token: bytes) -> None:
     """Best-effort token write to the status pipe; never raises."""
 
@@ -74,7 +120,10 @@ def _signal(status_fd: int, token: bytes) -> None:
 
 
 def _main() -> None:
-    workspace = sys.argv[1]
+    # realpath so the hidden-directory comparisons below see the true location
+    # (/var/run is a symlink to /run on most distributions, and callers may pass
+    # a relative path).
+    workspace = os.path.realpath(sys.argv[1])
     mem, cpu, nproc, fsize = (int(x) for x in sys.argv[2:6])
     status_fd = int(sys.argv[6])
     if sys.argv[7] != "--":
@@ -98,16 +147,60 @@ def _main() -> None:
             raise OSError(err, os.strerror(err), target)
 
     MS_RDONLY, MS_REMOUNT, MS_BIND, MS_REC, MS_PRIVATE = 1, 32, 4096, 16384, 1 << 18
+    MS_NOSUID, MS_NODEV, MS_NOEXEC = 2, 4, 8
 
     try:
         mount("", "/", "", MS_REC | MS_PRIVATE)
         mount(workspace, workspace, "", MS_BIND | MS_REC)  # workspace its own mount
+
+        # If the workspace lives under a directory we are about to hide (the
+        # common case — callers build workspaces with tempfile, i.e. under /tmp),
+        # park it on a staging mountpoint first. The previous code instead SKIPPED
+        # hiding any directory containing the workspace, which silently left /tmp
+        # exposed: the guard stayed present and plausible while doing nothing.
+        stage = None
+        if any(workspace == s.rstrip("/") for s in _SENSITIVE):
+            # The workspace is visible by definition, so a workspace that IS a
+            # hidden directory would re-expose all of it (a workspace *under* one
+            # exposes only itself). Refuse rather than quietly undo the overlay.
+            raise OSError(
+                errno.EINVAL,
+                "workspace cannot be a directory the sandbox must hide",
+                workspace,
+            )
+        if any(_under(workspace, s) for s in _SENSITIVE):
+            stage = _pick_stage(workspace)
+            if stage is None:
+                raise OSError(
+                    errno.ENOENT,
+                    "no staging mountpoint available to hide the workspace's parent",
+                    workspace,
+                )
+            mount(workspace, stage, "", MS_BIND | MS_REC)
+
+        # Unconditional now, and FAIL-CLOSED: a directory that exists but cannot
+        # be overlaid is an isolation failure, not something to shrug past.
         for sensitive in _SENSITIVE:
-            if os.path.isdir(sensitive) and not workspace.startswith(sensitive):
-                try:
-                    mount("tmpfs", sensitive, "tmpfs", 0)
-                except OSError:
-                    pass
+            if os.path.isdir(sensitive):
+                mount("tmpfs", sensitive, "tmpfs", 0)
+
+        if stage is not None:
+            os.makedirs(workspace, exist_ok=True)  # inside the fresh tmpfs
+            mount(stage, workspace, "", MS_BIND | MS_REC)
+            # Drop the staging view. Harmless if it fails — it is only a second
+            # path to the workspace the candidate already has — so it does not
+            # gate isolation.
+            try:
+                libc.umount2(stage.encode(), MNT_DETACH)
+            except Exception:
+                pass
+
+        # A private /proc for this PID namespace. Without it the candidate reads
+        # the HOST procfs: host PIDs, and /proc/<pid>/cmdline of runner-zone
+        # processes — where credentials passed as command-line arguments (a DB
+        # URI, ``--password=``) are plainly readable.
+        mount("proc", "/proc", "proc", MS_NOSUID | MS_NODEV | MS_NOEXEC)
+
         mount("", "/", "", MS_REMOUNT | MS_BIND | MS_RDONLY)  # root read-only
         mount("", workspace, "", MS_REMOUNT | MS_BIND)  # keep workspace writable
     except OSError as exc:

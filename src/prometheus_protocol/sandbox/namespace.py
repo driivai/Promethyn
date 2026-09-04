@@ -39,6 +39,38 @@ from prometheus_protocol.sandbox.cgroup import (
 )
 
 _BOOTSTRAP = Path(__file__).with_name("_bootstrap.py")
+
+# The candidate's environment is BUILT, never inherited.
+#
+# ``subprocess`` passes the parent's environment by default, which handed the
+# candidate every secret the runner-zone process held — including
+# ``PROM_CHOKEPOINT_KEY``, the approval signing key the chokepoint's entire
+# unforgeability claim rests on (``demo/README.md`` documents exporting it into
+# exactly this environment), plus ``PGPASSWORD`` and the rest. An agent that can
+# read the signing key mints its own approvals: the gate becomes theater without
+# a single connection being made. Namespaces cannot help here — the leak crosses
+# in the process image, not over a socket — so the fix has to be a fixed,
+# non-secret environment with nothing inherited.
+_CANDIDATE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+
+def _candidate_env(workspace: str) -> dict[str, str]:
+    """The candidate's complete environment: fixed, non-secret, workspace-rooted.
+
+    An allowlist would still be a denylist in disguise (any future secret whose
+    name nobody thought to ban leaks), so nothing from the parent is carried at
+    all. ``HOME``/``TMPDIR`` point at the workspace because /root, /home and /tmp
+    are hidden inside the sandbox.
+    """
+
+    return {
+        "PATH": _CANDIDATE_PATH,
+        "HOME": workspace,
+        "TMPDIR": workspace,
+        "PWD": workspace,
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+    }
 # Cached result of the functional availability probe (per process).
 _AVAILABLE_CACHE: bool | None = None
 _UNSHARE_FLAGS = (
@@ -151,6 +183,7 @@ class NamespaceSandbox(Sandbox):
                     input=stdin or None,
                     pass_fds=(status_w,),
                     preexec_fn=preexec,
+                    env=_candidate_env(str(workspace)),
                 )
             except subprocess.TimeoutExpired as exc:
                 os.close(status_w)

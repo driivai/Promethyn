@@ -95,9 +95,27 @@ runner, and the runner crosses it *only* on a valid, current, bound authorizatio
      the DB.** This will be proven live at STOP 2, both paths (TCP and socket) shown to
      fail from inside the sandbox and to succeed from the runner.
 
+     > **Update (PROM-HARDEN-MAX, attacker 1).** The gap named here is no longer
+     > discharged by a deployment requirement. The bootstrap now hides `/tmp`,
+     > `/var/tmp`, `/dev/shm`, `/run` and `/var/run` as well, so a socket at either
+     > stock PostgreSQL location is unreachable by construction rather than by the
+     > operator remembering. The overlay is also unconditional: it previously skipped
+     > any directory containing the workspace, and since workspaces come from
+     > `tempfile`, `/tmp` was routinely left exposed. See `docs/threat-model.md` §1.
+
 2. **Obtain a working DB credential.** The credential lives only in the runner's
    environment/process, never on the sandbox's writable workspace, never in an artifact,
    never passed into the agent zone. The agent's context is constructed without it.
+
+   > **Correction (PROM-HARDEN-MAX, attacker 1).** This was written as an achieved
+   > property and was not one. The namespace sandbox launched the candidate with
+   > `subprocess.run(...)` and no `env=` argument, so Python passed the runner's entire
+   > environment through — including `PGPASSWORD` and `PROM_CHOKEPOINT_KEY`, the approval
+   > signing key. An agent holding that key mints its own approvals, so this was a total
+   > bypass that required no connection at all. The agent's environment is now *built*
+   > from six fixed non-secret values rather than inherited, and
+   > `tests/chokepoint/test_agent_zone_containment.py` proves it (and fails when the fix
+   > is removed). See `docs/threat-model.md` §1.
 
 3. **Forge an approval.** The approval is produced by the gate and consumed by the runner
    over a channel the agent cannot write, and is bound cryptographically (content hash +

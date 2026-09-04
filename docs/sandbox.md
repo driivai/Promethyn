@@ -25,7 +25,18 @@ verifier.
 - **Reach the network** — no interfaces / `--network none` (INV-SANDBOX-1).
 - **Touch the host filesystem** — it sees a read-only root with a single
   writable workspace; it cannot write outside the workspace, modify read-only
-  paths, or read sensitive host directories (INV-SANDBOX-2).
+  paths, or read sensitive host directories (INV-SANDBOX-2). The hidden set
+  includes the runtime-socket directories (`/tmp`, `/var/tmp`, `/dev/shm`,
+  `/run`, `/var/run`) as well as `/root` and `/home`, because a Unix domain
+  socket is a filesystem object and does **not** traverse the network namespace:
+  a database socket at a stock location would otherwise be connectable despite
+  `--net`.
+- **Read the runner's secrets out of its own process image** — the candidate's
+  environment is *constructed* (`PATH`, `HOME`, `TMPDIR`, `PWD`, `LANG`,
+  `LC_ALL`), never inherited, and `/proc` is a private mount for its own PID
+  namespace. Otherwise the approval signing key, the database password and the
+  command lines of runner-zone processes are all readable by the candidate —
+  a leak that travels in the process image, where namespaces cannot reach it.
 - **Exhaust host resources** — address space, CPU time, process count, and wall
   clock are bounded (by a cgroup where available, otherwise POSIX rlimits — see
   *Process/resource limiting* below), and the whole process tree is reaped on
@@ -87,8 +98,9 @@ recommended production setting.
 
 Runs the candidate under `unshare` in fresh user + mount + network + PID
 namespaces, then makes the root filesystem read-only with a writable workspace,
-hides sensitive paths, drops all capabilities, sets no-new-privileges, and
-applies POSIX rlimits. No daemon or root required — only a Linux kernel with
+hides sensitive paths (including the runtime-socket directories), mounts a
+private `/proc`, drops all capabilities, sets no-new-privileges, applies POSIX
+rlimits, and hands the candidate a constructed — not inherited — environment. No daemon or root required — only a Linux kernel with
 unprivileged user namespaces enabled (`kernel.unprivileged_userns_clone=1` /
 `user.max_user_namespaces > 0`). This is the adapter the bundled conformance
 tests exercise.
