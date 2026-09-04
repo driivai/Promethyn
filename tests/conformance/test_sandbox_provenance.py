@@ -11,6 +11,12 @@ never a pass or a fail.
 
 These need no container runtime — the pin is checked before the runtime probe —
 so they always run, in CI and locally.
+
+Each passes a PRIVATE ``tmp_path`` as the workspace. They previously passed
+``"/tmp"``, and the adapter re-permissions the workspace it is handed, so the
+tests were re-permissioning the machine's shared scratch directory on every
+run. The adapter now refuses a sticky shared directory outright; these use a
+per-test directory because that is what a workspace actually is.
 """
 
 from __future__ import annotations
@@ -43,28 +49,28 @@ def test_is_digest_pinned_predicate():
 # -- enforcement: bare tag refused, digest-pinned allowed --------------------
 
 
-def test_bare_tag_is_refused_under_digest_pin():
+def test_bare_tag_is_refused_under_digest_pin(tmp_path):
     # runtime forced present so the refusal is proven to precede the runtime use.
     sandbox = ContainerSandbox(runtime="docker", image=_BARE, require_digest_pin=True)
-    res = sandbox.run(argv=["python", "-c", "print(1)"], workspace="/tmp")
+    res = sandbox.run(argv=["python", "-c", "print(1)"], workspace=tmp_path)
     assert _refused_for_pin(res)
 
 
-def test_digest_pinned_image_is_not_refused_by_the_pin_gate():
+def test_digest_pinned_image_is_not_refused_by_the_pin_gate(tmp_path):
     # A pinned image passes the provenance gate; whatever happens next is a
     # downstream result, never the pin refusal.
     sandbox = ContainerSandbox(runtime="docker", image=_PINNED, require_digest_pin=True)
-    res = sandbox.run(argv=["python", "-c", "print(1)"], workspace="/tmp")
+    res = sandbox.run(argv=["python", "-c", "print(1)"], workspace=tmp_path)
     assert not _refused_for_pin(res)
 
 
 # -- default off preserves behaviour ----------------------------------------
 
 
-def test_default_off_does_not_refuse_a_bare_tag():
+def test_default_off_does_not_refuse_a_bare_tag(tmp_path):
     sandbox = ContainerSandbox(runtime="docker", image=_BARE)  # flag defaults off
     assert sandbox.require_digest_pin is False
-    res = sandbox.run(argv=["python", "-c", "print(1)"], workspace="/tmp")
+    res = sandbox.run(argv=["python", "-c", "print(1)"], workspace=tmp_path)
     assert not _refused_for_pin(res)
 
 
@@ -98,9 +104,9 @@ def test_digest_pin_refusal_flows_through_verifier_as_unavailable():
 # -- the container adapter reports the stronger (cgroup) lever ----------------
 
 
-def test_container_reports_cgroup_limiter_on_a_completed_run():
+def test_container_reports_cgroup_limiter_on_a_completed_run(tmp_path):
     # A container refused for provenance never ran, so it does not claim a lever;
     # the limiter default is the conservative rlimit.
     sandbox = ContainerSandbox(runtime="docker", image=_BARE, require_digest_pin=True)
-    res = sandbox.run(argv=["python", "-c", "print(1)"], workspace="/tmp")
+    res = sandbox.run(argv=["python", "-c", "print(1)"], workspace=tmp_path)
     assert res.limiter == "rlimit"  # refused before running: no lever claimed

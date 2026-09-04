@@ -18,6 +18,46 @@ from typing import Sequence
 #: Hard cap on a candidate's on-disk writes, regardless of output limits.
 FSIZE_BYTES = 10 * 1024 * 1024
 
+# The candidate's environment is BUILT, never inherited.
+#
+# ``subprocess`` passes the parent's environment by default, which handed the
+# candidate every secret the runner-zone process held — including
+# ``PROM_CHOKEPOINT_KEY``, the approval signing key the chokepoint's entire
+# unforgeability claim rests on (``demo/README.md`` documents exporting it into
+# exactly this environment), plus ``PGPASSWORD`` and the rest. A candidate that
+# can read the signing key mints its own approvals: the gate falls without a
+# single connection being made. No namespace helps here — the leak crosses in the
+# process image, not over a socket — so the fix is a fixed, non-secret
+# environment with nothing inherited.
+#
+# It lives here, on the port, rather than in one adapter: the same defect was
+# present at two spawn sites, and a per-adapter fix is one new adapter away from
+# being wrong again. Every adapter that spawns a candidate uses this.
+CANDIDATE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+#: The exact variable names a candidate ever receives. Asserted by conformance.
+CANDIDATE_ENV_KEYS = frozenset({"PATH", "HOME", "TMPDIR", "PWD", "LANG", "LC_ALL"})
+
+
+def candidate_env(workspace: str) -> dict[str, str]:
+    """The candidate's complete environment: fixed, non-secret, workspace-rooted.
+
+    Deliberately not an allowlist filtered from the parent — an allowlist is a
+    denylist in disguise, and the next secret to leak is the one whose name
+    nobody thought to ban. Nothing from the parent is carried at all.
+    ``HOME``/``TMPDIR`` point at the workspace because ``/root``, ``/home`` and
+    ``/tmp`` are hidden inside the isolating adapters.
+    """
+
+    return {
+        "PATH": CANDIDATE_PATH,
+        "HOME": workspace,
+        "TMPDIR": workspace,
+        "PWD": workspace,
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+    }
+
 
 @dataclass(frozen=True)
 class Limits:

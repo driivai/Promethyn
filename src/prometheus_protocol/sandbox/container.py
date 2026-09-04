@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import stat
 import subprocess
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -41,6 +42,99 @@ _LOG = logging.getLogger(__name__)
 # Overridable; production should pin by digest, e.g. python:3.12-slim@sha256:...
 _DEFAULT_IMAGE = os.environ.get("PROM_SANDBOX_IMAGE", "python:3.12-slim")
 _WORKDIR = "/workspace"
+
+#: The unprivileged identity the candidate runs as inside the container when the
+#: host is privileged enough to hand it the workspace.
+CONTAINER_UID = 65534
+CONTAINER_GID = 65534
+
+#: The only mode the workspace is ever given: owner-only. Nothing for group, and
+#: nothing for other.
+WORKSPACE_MODE = 0o700
+
+
+def prepare_workspace(workspace: Path | str) -> tuple[str | None, str]:
+    """Make the bind-mounted workspace usable by the container user, owner-only.
+
+    Returns ``(container_user, "")`` for ``--user``, or ``(None, reason)``.
+
+    The workspace is a fresh per-run host directory holding the candidate's code
+    going in and its results coming out. The container runs as a non-root user,
+    which must be able to traverse the directory, read those files, and write
+    back — but the directory must NOT become readable or writable by every other
+    account on the host. It previously did: it was chmod'd ``0o777``, so any
+    local user could read the agent's workspace and, more seriously, alter an
+    artifact between the moment it was written and the moment it was hashed.
+    That is a local-tampering hole open to any unprivileged account, requiring no
+    vulnerability at all.
+
+    Two ways to get access without granting it to the world, in preference order:
+
+    1. **Hand the directory to the unprivileged container user.** Requires
+       privilege to ``chown``, so it is the path taken when the runner is root.
+       The candidate then runs as ``nobody`` and the workspace is ``0700`` owned
+       by ``nobody`` — the strongest arrangement, since an escape lands as an
+       account that owns nothing else.
+    2. **Run the container as the host user.** An unprivileged runner cannot
+       ``chown`` away, but it can run the container under its own uid/gid, which
+       already traverses its own ``0700`` directory. The trade is stated in
+       ``docs/threat-model.md`` §2: an escape then lands as the runner user
+       rather than as ``nobody``. It is the right trade — a container escape past
+       ``--cap-drop ALL --security-opt no-new-privileges --read-only --network
+       none`` needs a runtime vulnerability, while a world-writable workspace
+       needs only a local shell.
+
+    Never falls back to widening the mode: if neither path works the run is
+    refused, because a workspace nobody can reach is a failed run, while a
+    workspace everybody can reach is a silent downgrade.
+    """
+
+    path = os.fspath(workspace)
+
+    # Refuse to touch a SHARED directory. This function changes the mode and
+    # possibly the owner of what it is given, which is correct for a private
+    # per-run directory and destructive for a communal one: handed ``/tmp`` it
+    # would take the whole machine's scratch space away from every other process.
+    # That is not hypothetical — the repository's own provenance tests passed
+    # ``workspace="/tmp"``, and the previous ``chmod(workspace, 0o777)`` quietly
+    # stripped the sticky bit off the CI runner's ``/tmp`` on every run, which is
+    # the very world-writable-path class this hardening is about. The sticky bit
+    # is the kernel's own marker for "shared drop-box", so refuse those outright.
+    try:
+        info = os.stat(path)
+    except OSError as exc:
+        return None, f"workspace is unusable: {exc}"
+    if not stat.S_ISDIR(info.st_mode):
+        return None, "workspace must be a directory"
+    if info.st_mode & stat.S_ISVTX:
+        return None, (
+            "workspace is a shared sticky directory; the sandbox needs a private "
+            "per-run directory it may restrict, and must not re-permission a "
+            "communal one"
+        )
+
+    try:
+        os.chmod(path, WORKSPACE_MODE)
+    except OSError as exc:
+        return None, f"could not restrict workspace permissions: {exc}"
+
+    try:
+        os.chown(path, CONTAINER_UID, CONTAINER_GID)
+    except (OSError, AttributeError) as exc:
+        getuid = getattr(os, "getuid", None)
+        getgid = getattr(os, "getgid", None)
+        if getuid is None or getgid is None:
+            return None, f"cannot determine a container user: {exc}"
+        uid, gid = getuid(), getgid()
+        if uid == 0:
+            # Root that cannot chown means something is wrong with the workspace
+            # itself. Running the candidate as root inside the container instead
+            # would be a real weakening, so refuse rather than quietly do it.
+            return None, f"privileged runner could not hand over the workspace: {exc}"
+        return f"{uid}:{gid}", ""
+    return f"{CONTAINER_UID}:{CONTAINER_GID}", ""
+
+
 # The in-container bootstrap that carries the unforgeable candidate-start signal
 # (see ``_start_signal.py``). It is delivered as ``python -c <source>`` — its
 # source is read here at import and passed on the command line, NEVER staged as a
@@ -165,24 +259,13 @@ class ContainerSandbox(Sandbox):
         if self.runtime is None:
             return SandboxResult(started_ok=False, detail="no container runtime")
 
-        # Make the run's workspace reachable by the NON-ROOT container user
-        # (``--user 65534``). The workspace is a fresh per-run host temp dir the
-        # caller created (typically 0700, owned by the host user); bind-mounted,
-        # the container user cannot traverse it — the exact failure a staged
-        # bootstrap file hit (Errno 13), and one the candidate's own code files
-        # would hit next. The host cannot chown to 65534 without privilege (the CI
-        # runner is unprivileged), so open the *directory* so the container user
-        # can traverse it, read the candidate's code files, and write its results
-        # — the writable workspace the sandbox intends (INV-SANDBOX-2). This is NOT
-        # the forgeable-bootstrap concern EX-1 fixed: the start-signal bootstrap is
-        # delivered via ``-c`` (below), never staged here, so a writable workspace
-        # cannot forge or replace it.
-        try:
-            os.chmod(workspace, 0o777)
-        except OSError as exc:
+        # Give the container user access to the bind-mounted workspace WITHOUT
+        # opening it to every local account. See :func:`prepare_workspace`.
+        container_user, prep_error = prepare_workspace(workspace)
+        if container_user is None:
             return SandboxResult(
                 started_ok=False,
-                detail=f"could not prepare container workspace: {exc}",
+                detail=f"could not prepare container workspace: {prep_error}",
             )
 
         # Rewrite the interpreter path: argv[0] is the host interpreter; in the
@@ -226,7 +309,7 @@ class ContainerSandbox(Sandbox):
             "--pids-limit", str(limits.max_processes),
             "--cap-drop", "ALL",
             "--security-opt", "no-new-privileges",
-            "--user", "65534:65534",
+            "--user", container_user,
             self.image,
             "python", "-c", _BOOTSTRAP_SOURCE, "--",
             *inner_argv,
