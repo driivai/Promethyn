@@ -102,7 +102,10 @@ def run_unsandboxed(source: str, files: dict[str, str] | None = None) -> dict[st
         for name, body in (files or {}).items():
             Path(ws, name).write_text(body, encoding="utf-8")
         proc = subprocess.run(
-            [sys.executable, "probe.py"], cwd=ws, capture_output=True, text=True, timeout=90,
+            # Generous: the probes bound themselves (the sweep by a file budget and
+            # a wall clock), so this only catches a genuine hang. The control walks
+            # real host trees where the sandboxed run sees empty tmpfs.
+            [sys.executable, "probe.py"], cwd=ws, capture_output=True, text=True, timeout=180,
         )
     assert proc.returncode == 0, f"control probe failed: {proc.stderr}"
     parsed: dict[str, str] = {}
@@ -426,7 +429,7 @@ def test_no_network_egress_including_dns(sockets):
 # --------------------------------------------------------------------------
 
 _SWEEP_PROBE = """
-import glob, os
+import glob, os, time
 # Assembled from halves so this file does not itself contain the needle — the
 # sweep reads every file it can, and a self-match would be a false positive that
 # masks whether anything real leaked.
@@ -449,19 +452,26 @@ for pattern in ("/proc/[0-9]*/environ", "/proc/[0-9]*/cmdline"):
         except OSError:
             pass
 # The directories a leaked credential would plausibly land in, plus the
-# workspace itself. Bounded: /proc, /sys and the read-only system trees are
-# excluded and the sweep stops at a file budget, so it cannot outrun the
-# sandbox's wall clock (an expired probe would report no hits and read as clean).
+# workspace itself. Bounded by BOTH a file budget and a wall-clock deadline: the
+# same roots are empty tmpfs inside the sandbox but real host trees outside it,
+# and the unsandboxed control must finish too — a probe killed by a timeout
+# reports nothing, which would read as "clean". The environment and procfs checks
+# above run first, so the control always has its hit regardless of the walk.
 BUDGET = 6000
+DEADLINE = time.monotonic() + 25.0
 scanned = 0
+def spent():
+    return scanned >= BUDGET or time.monotonic() > DEADLINE
 roots = ["/etc", "/tmp", "/var/tmp", "/dev/shm", "/run", "/var/run", "/home", "/root",
          os.getcwd(), os.path.expanduser("~")]
 for root in roots:
-    if scanned >= BUDGET:
+    if spent():
         break
     for dirpath, dirnames, filenames in os.walk(root):
-        if dirpath.startswith(("/proc", "/sys")):
+        if dirpath.startswith(("/proc", "/sys")) or spent():
             dirnames[:] = []
+            if spent():
+                break
             continue
         for name in filenames:
             full = os.path.join(dirpath, name)
@@ -473,7 +483,9 @@ for root in roots:
                     hits.append(full)
             except OSError:
                 pass
-        if scanned >= BUDGET:
+            if scanned >= BUDGET:
+                break
+        if spent():
             break
 print("SCANNED|%d" % scanned)
 print("HITS|%s" % ";".join(sorted(set(hits))))
