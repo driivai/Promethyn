@@ -20,6 +20,10 @@ import time
 from pathlib import Path
 
 from prometheus_protocol.core.interfaces import Verifier
+from prometheus_protocol.core.validation import (
+    require_non_negative_int,
+    require_positive,
+)
 from prometheus_protocol.core.models import (
     Evidence,
     Task,
@@ -131,10 +135,12 @@ class SubprocessVerifier(Verifier):
         max_processes: int = 64,
         sandbox: Sandbox | None = None,
     ) -> None:
-        self.timeout_s = timeout_s
-        self.memory_mb = memory_mb
-        self.cpu_seconds = cpu_seconds
-        self.max_processes = max_processes
+        self.timeout_s = require_positive(timeout_s, name="timeout_s")
+        self.memory_mb = require_non_negative_int(memory_mb, name="memory_mb")
+        self.cpu_seconds = require_non_negative_int(cpu_seconds, name="cpu_seconds")
+        self.max_processes = require_non_negative_int(
+            max_processes, name="max_processes"
+        )
         # The isolation boundary candidate code runs through. Defaults to the
         # configured/auto adapter (an isolating one); never the unsafe runner
         # unless explicitly opted in via PROM_ALLOW_UNSAFE_EXEC.

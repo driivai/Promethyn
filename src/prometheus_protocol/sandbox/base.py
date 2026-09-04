@@ -15,6 +15,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
+from prometheus_protocol.core.validation import (
+    require_non_negative_int,
+    require_positive,
+    require_positive_int,
+)
+
 #: Hard cap on a candidate's on-disk writes, regardless of output limits.
 FSIZE_BYTES = 10 * 1024 * 1024
 
@@ -76,6 +82,20 @@ class Limits:
     max_processes: int = 64
     max_output_bytes: int = 1_000_000
     deny_network: bool = True
+
+    def __post_init__(self) -> None:
+        # These are containment bounds, so a value that quietly removes one is a
+        # sandbox that is still present and no longer bounding. ``wall_time_s`` is
+        # the sharpest: it becomes ``subprocess.run(timeout=…)``, and ``inf`` or
+        # ``nan`` there means a candidate runs forever. The ``<= 0 disables``
+        # readings for cpu/memory/process caps are the adapters' documented
+        # behaviour and stay as they are — but a NEGATIVE value reaching them was
+        # never intentional, it just landed in the same branch.
+        require_positive(self.wall_time_s, name="wall_time_s")
+        require_non_negative_int(self.cpu_time_s, name="cpu_time_s")
+        require_non_negative_int(self.memory_bytes, name="memory_bytes")
+        require_non_negative_int(self.max_processes, name="max_processes")
+        require_positive_int(self.max_output_bytes, name="max_output_bytes")
 
 
 @dataclass(frozen=True)

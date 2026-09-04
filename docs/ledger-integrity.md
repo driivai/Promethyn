@@ -95,19 +95,41 @@ void guard being closed.
 **Does NOT detect on its own — named limits, not silent gaps:**
 - **Pure tail-truncation without an anchor.** Lopping entries off the end leaves a
   shorter but internally-valid chain; the chain alone cannot know entries once
-  existed. *Mitigation, implemented:* `chain_tip()` returns the current
-  `(seq, hash)`; an auditor holds it out-of-band and passes it as `expected_tip`,
-  and `verify_chain` then reports `TRUNCATED`. Without such an anchor, truncation
-  reads as valid — the verifier says "valid (N entries)" — so the honest move is
-  to anchor the tip.
+  existed.
+- **Deletion of the whole ledger without an anchor.** SQLite recreates a missing
+  file and an empty chain is internally consistent, so the cheapest attack there
+  is reads as `chain valid (0 entries)`.
 - **A full rewrite from genesis without an anchor.** An adversary who can rewrite
-  *every* row can recompute a wholly self-consistent chain, and a bare in-file
-  chain with no external reference cannot detect it. The `expected_tip` anchor
-  above closes this — but the anchor must be held **outside** the file (or signed);
-  an attacker who also controls the stored anchor is back to a full rewrite. This
-  is the boundary of "tamper-evidence in one file," deliberately not overclaimed:
-  the chain makes in-file interior tampering evident, and an out-of-band anchor
-  extends that to truncation and prefix-rewrite.
+  *every* row recomputes a wholly self-consistent chain, and a bare in-file chain
+  with no external reference cannot tell the difference.
+
+## The tip anchor — now operational, not merely available
+
+All three limits above are closed by an out-of-band anchor, and PROM-HARDEN-MAX
+§3 made that anchor real rather than possible. `chain_tip()` and
+`verify_chain(expected_tip=…)` had existed since this chain was written, and
+**nothing in the codebase had ever stored a tip** — a capability present,
+plausible, and never exercised, which is this project's own definition of the
+thing it exists to name.
+
+`ledger/tip_anchor.py` persists it. A `SqliteLedger` constructed with a
+`tip_anchor` writes the new tip after every commit, and `verify_chain` consults
+that anchor automatically, so an auditor cannot silently verify without it. The
+anchor refuses to move backwards: a live tip below the anchored one, or a
+different hash at the anchored seq, raises rather than being quietly recorded —
+re-anchoring a shortened chain would destroy the only evidence there was.
+
+**The anchor is worth exactly as much as its separation from the ledger.** An
+anchor file beside the ledger, on the same disk, writable by the same account,
+defends against nothing: whoever rewrites the chain rewrites the anchor with it.
+That case is a passing test
+(`test_an_attacker_who_also_controls_the_anchor_is_NOT_detected`) rather than a
+caveat in prose, so the limit cannot quietly erode. For the anchor to mean
+anything it must live in a trust domain the ledger-file adversary cannot write:
+an append-only or write-once store, another host, a mount that is read-only from
+the ledger host, or a signed digest recorded elsewhere. The code takes a path and
+writes to it; **placement is a deployment property**, and it is the one that
+decides whether any of this closed anything. See `docs/threat-model.md` §3.4.
 
 **Never silently "valid".** If the verifier cannot actually check an entry — a
 missing/None field, or a payload that is not decodable JSON — it returns

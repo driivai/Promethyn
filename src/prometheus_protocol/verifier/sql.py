@@ -57,6 +57,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from prometheus_protocol.core.validation import require_positive
 from prometheus_protocol.core.models import (
     SPLIT_TRAIN,
     SPLITS,
@@ -247,7 +248,7 @@ class SqlVerifier:
 
     def __init__(self, *, sandbox: Sandbox | None = None, timeout_s: float = 10.0) -> None:
         self.sandbox = sandbox if sandbox is not None else build_sandbox()
-        self.timeout_s = timeout_s
+        self.timeout_s = require_positive(timeout_s, name="timeout_s")
         self.verifier_id = self.VERIFIER_ID
         self.tier = self.TIER
 

@@ -10,6 +10,7 @@ skill removed from the registry).
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from dataclasses import asdict
 from pathlib import Path
@@ -17,8 +18,10 @@ from pathlib import Path
 from prometheus_protocol.core.errors import StateError
 from prometheus_protocol.core.interfaces import Ledger
 from prometheus_protocol.core.models import Attempt
+from prometheus_protocol.ledger.tip_anchor import AnchorUnavailable, TipAnchor
 from prometheus_protocol.ledger.audit_chain import (
     GENESIS_ROOT,
+    NOT_VERIFIABLE,
     ChainTip,
     ChainVerification,
     canonical_json,
@@ -197,8 +200,18 @@ def _judgment_from_evidence(evidence_json: str | None) -> dict | None:
 class SqliteLedger(Ledger):
     """SQLite-backed ledger. Pass ``":memory:"`` for an ephemeral instance."""
 
-    def __init__(self, path: Path | str = ":memory:") -> None:
+    def __init__(
+        self,
+        path: Path | str = ":memory:",
+        *,
+        tip_anchor: TipAnchor | None = None,
+    ) -> None:
         self.path = str(path)
+        # The out-of-band anchor that makes a genesis rewrite detectable.
+        # Optional because an in-memory or throwaway ledger has nothing to
+        # anchor against; where one is configured it is consulted on EVERY
+        # verify, so an auditor cannot forget to pass it.
+        self._tip_anchor = tip_anchor
         if self.path != ":memory:":
             Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(self.path)
@@ -689,6 +702,16 @@ class SqliteLedger(Ledger):
                     (seq, created_at, event, subject, payload_canonical, prev_hash, digest),
                 )
                 self._conn.commit()
+                # Anchor AFTER the commit, so the anchored tip never names an
+                # entry the ledger does not have. The reverse order would make a
+                # crash between the two look like truncation.
+                #
+                # A failure here is NOT swallowed: the entry is committed, but an
+                # un-anchored append is one a genesis rewrite could later hide, so
+                # the caller must know the anchor is behind rather than discover
+                # it during an incident.
+                if self._tip_anchor is not None:
+                    self._tip_anchor.write(ChainTip(seq=seq, entry_hash=digest))
                 return seq
             except sqlite3.IntegrityError:
                 self._conn.rollback()  # another writer took this seq; re-read and retry
@@ -712,9 +735,32 @@ class SqliteLedger(Ledger):
         return ChainTip(seq=row["seq"], entry_hash=row["entry_hash"]) if row else None
 
     def verify_chain(self, *, expected_tip: ChainTip | None = None) -> ChainVerification:
-        """Walk and verify the audit chain (delegates to the standalone auditor)."""
+        """Walk and verify the audit chain (delegates to the standalone auditor).
 
-        return verify_rows(self.chained_events(), expected_tip=expected_tip)
+        When this ledger was opened with a ``tip_anchor`` and no explicit tip is
+        supplied, the anchored tip is used — so anchoring is *operational* rather
+        than merely available, and an auditor cannot silently verify without it.
+
+        Never returns ``VALID`` for a chain it could not actually check: a
+        configured anchor that cannot be read, or a ledger whose rows cannot be
+        loaded, is ``NOT_VERIFIABLE``. Couldn't-verify is not verified-clean.
+        """
+
+        if expected_tip is None and self._tip_anchor is not None:
+            try:
+                expected_tip = self._tip_anchor.read()
+            except AnchorUnavailable as exc:
+                return ChainVerification(
+                    NOT_VERIFIABLE, 0, None,
+                    f"the configured tip anchor could not be read: {exc}",
+                )
+        try:
+            rows = self.chained_events()
+        except sqlite3.DatabaseError as exc:
+            return ChainVerification(
+                NOT_VERIFIABLE, 0, None, f"the audit chain could not be read: {exc}",
+            )
+        return verify_rows(rows, expected_tip=expected_tip)
 
     def close(self) -> None:
         self._conn.close()
@@ -746,3 +792,39 @@ class SqliteLedger(Ledger):
         if record.get("judgment"):
             record["judgment"] = _load_json(record["judgment"])
         return record
+
+
+def verify_ledger_file(
+    path: Path | str, *, tip_anchor: TipAnchor | None = None
+) -> ChainVerification:
+    """Verify a ledger on disk and ALWAYS return a verdict, never raise.
+
+    The auditor-facing entry point. :class:`SqliteLedger` raises
+    :class:`StateError` when a file cannot be opened at all — correct fail-closed
+    behaviour, and never a false ``VALID`` — but an auditor sweeping a set of
+    ledgers wants one uniform answer per file. A file that is missing, is not a
+    database, is truncated, or cannot be read comes back ``NOT_VERIFIABLE`` with
+    the reason attached.
+
+    Note the case an anchor exists for: a ledger file the adversary DELETED is
+    recreated empty by SQLite, and an empty chain is internally consistent. With
+    no anchor that reads as ``valid (0 entries)``; with one it is ``TRUNCATED``.
+    Deletion is the cheapest attack on a ledger, and the anchor is what turns it
+    from invisible into loud.
+    """
+
+    location = Path(os.fspath(path))
+    if not location.exists():
+        return ChainVerification(
+            NOT_VERIFIABLE, 0, None, f"no ledger file at {location}",
+        )
+    try:
+        ledger = SqliteLedger(location, tip_anchor=tip_anchor)
+    except (StateError, sqlite3.DatabaseError, OSError) as exc:
+        return ChainVerification(
+            NOT_VERIFIABLE, 0, None, f"the ledger could not be opened: {exc}",
+        )
+    try:
+        return ledger.verify_chain()
+    finally:
+        ledger.close()

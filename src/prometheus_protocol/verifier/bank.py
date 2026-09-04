@@ -12,6 +12,7 @@ import math
 from dataclasses import dataclass
 from typing import Sequence
 
+from prometheus_protocol.core.validation import require_unit_interval
 from prometheus_protocol.core.models import (
     AUTHORITATIVE_TIERS,
     Evidence,
@@ -72,7 +73,9 @@ class VerifierBank:
         escalate_below: float = 0.75,
     ) -> None:
         self._store: TrustStore = store if store is not None else InMemoryTrustStore()
-        self.escalate_below = escalate_below
+        self.escalate_below = require_unit_interval(
+            escalate_below, name="escalate_below"
+        )
         # Ephemeral running means of observed cost/latency, used only to break
         # ties in rank(); not part of the persisted trust state.
         self._cost_sum: dict[str, float] = {}

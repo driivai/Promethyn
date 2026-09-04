@@ -15,10 +15,10 @@ named is a gap that is being managed; a gap that is hidden is a vulnerability
 with better marketing — and by this project's own thesis, a check that is
 present, plausible, and void is the failure mode we exist to name.
 
-> **Status.** Attackers 1 and 2 are complete. Attackers 3–5 are listed with
-> their scope so the shape of the work is visible, and are explicitly **not yet
-> assessed** — they are not claimed as closed, and the absence of findings under
-> them means nobody has looked yet.
+> **Status.** Attackers 1, 2 and 3 are complete. Attackers 4 and 5 are listed
+> with their scope so the shape of the work is visible, and are explicitly
+> **not yet assessed** — they are not claimed as closed, and the absence of
+> findings under them means nobody has looked yet.
 
 ---
 
@@ -323,13 +323,123 @@ production path.
 
 ---
 
-## Attackers 3–5 — scope stated, not yet assessed
+## Attacker 3 — an adversary who reaches the ledger file
 
-Listed so the remaining surface is visible. **No claim is made that any of these
-is closed.** Findings will be added as each class is worked.
+**Capability.** Read and write access to the ledger file, without owning the
+host: a backup agent, a misconfigured shared mount, a lower-privileged service
+account, a stale snapshot with wide permissions. They want the record of what
+was authorised and executed to say something other than what happened.
 
-- **Attacker 3 — the ledger.** Making the tip anchor operational rather than
-  available, and finite-range validation for numeric configuration.
+The chain already stopped the easy versions — an edit, a deletion or a reorder of
+any interior entry breaks every link after it. This class is about the two things
+it could not stop, and about the verifier's own honesty when it cannot run.
+
+### 3.1 What was found
+
+| # | Finding | Severity |
+|---|---|---|
+| C3-1 | The tip anchor was **available but never operational** — `chain_tip()` and `verify_chain(expected_tip=…)` existed, and nothing in the codebase ever stored or supplied a tip. A full genesis rewrite was therefore undetectable in practice | **High** |
+| C3-2 | **Deleting the ledger read as valid.** SQLite recreates a missing file, and an empty chain is internally consistent, so the cheapest possible attack reported `chain valid (0 entries)` | **High** |
+| C3-3 | **22 numeric settings accepted NaN, infinity, negatives and out-of-range values** across `Limits`, `Config`, `VerifierBank`, `SubprocessVerifier`, `SqlVerifier` and `PendingActionService` | **High** |
+
+C3-1 is the shape this project keeps finding in its own work: a capability that
+is present, plausible and never exercised. The anchor was documented, tested as a
+primitive, and load-bearing for the one attack the chain cannot see — and no
+caller had ever written one down.
+
+C3-3 matters because these values do not fail loudly. `confidence < nan` is
+**always False**, so `PROM_ESCALATE_BELOW=nan` leaves the human-escalation gate
+in place and permanently non-escalating. `timeout=inf` never fires. A negative
+TTL lands in the `<= 0` branch that means "expiry disabled". Each one reads as a
+working configuration, and each is reachable from a typo in a deployment
+variable.
+
+### 3.2 What is now enforced
+
+- **The anchor is written on every append** (`ledger/tip_anchor.py`,
+  `SqliteLedger(tip_anchor=…)`), after the commit, so an anchored tip never names
+  an entry the ledger does not have. An anchor write that fails is **not**
+  swallowed: an un-anchored append is one a later rewrite could hide.
+- **`verify_chain` consults the configured anchor without being asked**, so an
+  auditor cannot silently verify without it — the difference between operational
+  and available.
+- **The anchor refuses to move backwards.** A live tip below the anchored one, or
+  a different hash at the anchored seq, raises rather than being recorded.
+  Quietly re-anchoring a shortened chain would erase the only evidence there was.
+- **Numeric settings are validated at construction** (`core/validation.py`),
+  rejecting NaN, infinities, wrong signs and out-of-range values — never
+  clamping, because a clamp hides the misconfiguration the operator needs to see.
+
+### 3.3 What the anchor does and does not detect
+
+| Attack | Without an anchor | With an anchor out of reach |
+|---|---|---|
+| Edit / delete / reorder an interior entry | **detected** (chain break) | detected |
+| Append with a forged `prev_hash` | **detected** | detected |
+| Truncate the tail | reads as valid | **detected** (`TRUNCATED`) |
+| Delete the ledger entirely | reads as `valid (0 entries)` | **detected** (`TRUNCATED`) |
+| Full rewrite from genesis | reads as valid | **detected** (`BROKEN` at the anchored seq) |
+| Full rewrite **plus** rewriting the anchor | reads as valid | **NOT detected** |
+
+The last row is the residual, and it is a *passing test* in
+`tests/chokepoint/test_tip_anchor.py` rather than a sentence in a document —
+`test_an_attacker_who_also_controls_the_anchor_is_NOT_detected` performs the
+rewrite, rewrites the anchor to match, and asserts the result comes back
+**valid**. Recording it that way keeps the limit from quietly eroding.
+
+### 3.4 The trust boundary — the whole value of the anchor
+
+**The anchor is worth exactly as much as the separation between it and the
+ledger, and nothing more.** An anchor file in the same directory, on the same
+disk, writable by the same account, defends against nothing: an attacker who can
+rewrite the chain can rewrite the anchor in the same breath. It would look like
+protection and be theatre.
+
+For it to mean anything, the anchor must live in a trust domain the ledger-file
+adversary cannot write. In rough order of strength:
+
+1. an append-only or write-once store — object storage with object-lock or a WORM
+   volume, where even a valid credential cannot overwrite history;
+2. a different host the ledger's account cannot reach, pulling or receiving the
+   tip;
+3. a mount that is read-only from the ledger host's perspective;
+4. a periodic out-of-band record — a signed digest posted somewhere durable, or
+   simply written down.
+
+The code cannot verify any of this and does not pretend to: `FileTipAnchor` takes
+a path and writes to it. **Placement is a deployment property**, and it is the
+one that decides whether §3 closed anything at all.
+
+### 3.5 Residual — what is not covered
+
+- **An attacker who controls both the ledger and the anchor is not detected.**
+  This is the §2.5 root case in another guise, and it is stated here rather than
+  buried: root, or any compromise spanning both stores, defeats the whole scheme.
+- **The anchor is opt-in.** A `SqliteLedger` built without one behaves exactly as
+  before. Making it mandatory would break in-memory and throwaway ledgers, which
+  have nothing meaningful to anchor. Supported, wired and tested — not enforced.
+- **Detection, not prevention.** Everything here makes tampering *evident* after
+  the fact. Nothing stops a writer with file access from making the change.
+- **A gap between the last append and a crash** is not covered by a cadence the
+  code controls: the anchor is written per-append, so a crash *between* the
+  commit and the anchor write leaves the anchor one entry behind. That reads as a
+  valid chain with one honest extra entry, not as tampering.
+- **Numeric validation covers the fields enumerated in §3.1.** It is a fixed list,
+  not a mechanism that catches a numeric field added later — a new unvalidated
+  setting would be a new hole. The helpers exist to make adding validation cheap;
+  nothing forces a future field through them.
+- **`0` still means "disabled"** for the cpu, memory, process and TTL settings.
+  That is pre-existing documented behaviour and was deliberately preserved; only
+  negatives, which reached the same branch by accident, are now refused. An
+  operator can still switch those caps off on purpose.
+
+---
+
+## Attackers 4–5 — scope stated, not yet assessed
+
+Listed so the remaining surface is visible. **No claim is made that either of
+these is closed.** Findings will be added as each class is worked.
+
 - **Attacker 4 — the network.** Requiring TLS on credentialed endpoints, and
   bounding provider responses.
 - **Attacker 5 — misconfiguration.** Structurally enforced security
