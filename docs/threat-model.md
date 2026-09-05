@@ -15,10 +15,41 @@ named is a gap that is being managed; a gap that is hidden is a vulnerability
 with better marketing — and by this project's own thesis, a check that is
 present, plausible, and void is the failure mode we exist to name.
 
-> **Status.** Attackers 1 through 4 are complete. Attacker 5 is listed with its
-> scope so the shape of the work is visible, and is explicitly **not yet
-> assessed** — it is not claimed as closed, and the absence of findings under it
-> means nobody has looked yet.
+> **Status.** All five attacker classes are complete; this document is the
+> final state of PROM-HARDEN-MAX and the one to hand to a design partner's
+> security team or to an independent auditor. Each class states what is
+> enforced, what is a deployment recommendation, which test proves each claim,
+> and what remains open. Nothing is closed by assertion.
+
+## Design principles the whole model rests on
+
+1. **Couldn't-verify is never verified-clean.** A check that could not run
+   returns `Unavailable` — no verdict at all — at every tier. It is never a
+   PASS, and never an ABSTAIN that reads as an opinion (EX-1; §4 extends it to
+   the transport layer; §3 to the ledger's own verifier).
+2. **A requested security property that cannot be honoured is refused, never
+   degraded.** Asking for digest pinning with an adapter that runs no image,
+   asking for isolation when only the unsafe runner exists for a remote model,
+   asking for plaintext to a remote host: each is a `ConfigError` at
+   construction, not a quietly weaker object (§5).
+3. **A security requirement is the OR of its sources.** A `Config` value and an
+   environment variable can each raise a requirement; neither lowers the other.
+4. **Every negative has a positive control.** "Blocked" means nothing if the
+   target was never reachable; every containment test first proves the thing it
+   then proves refused.
+5. **A named gap is managed; a hidden gap is a vulnerability.** Every section
+   ends with what is *not* covered, and the honest limits are recorded as
+   passing tests where they can be (§3's attacker-controls-the-anchor case).
+
+## The model on one page
+
+| # | Attacker | Surface | Enforced by construction | Deployment recommendation | Proven by | Residual (headline) |
+|---|---|---|---|---|---|---|
+| 1 | The sandboxed agent | env, filesystem, sockets, `/proc`, network | constructed environment; socket dirs hidden; private `/proc`; no interfaces | microVM for hostile multi-tenant work | `test_agent_zone_containment.py`, `test_isolation.py` | kernel / namespace escape |
+| 2 | The runner host | workspace mode, secrets in `repr`, spawn env, artifact bytes | `0700` workspace; redacted secrets; every spawn env-clean; bytes-not-paths | service account, filesystem/network confinement | `test_sandbox_privilege.py`, `test_credential_hygiene.py`, `test_artifact_integrity.py` | root defeats all of it |
+| 3 | The ledger file | chain rewrite, deletion, numeric settings | anchor written per append and consulted on verify; refuses to rewind; NaN/inf/range refused | anchor on a medium the adversary cannot write | `test_tip_anchor.py`, `test_ledger_verify_failure_modes.py`, `test_numeric_config_validation.py` | attacker controls both ledger and anchor |
+| 4 | The network | credentialed HTTP | `https://` required; redirects refused; bounded reads under a deadline; failures typed and `Unavailable` | certificate pinning per deployment | `test_transport_hardening.py` | system trust store; proxy env is host-controlled |
+| 5 | Misconfiguration | every security flag and combination | requirement honoured or refused; dead-flag mechanism; coherent combinations; hardened defaults | pin the sandbox image | `test_security_posture.py` | `require_digest_pin` off by default; anchor opt-in |
 
 ---
 
@@ -573,13 +604,121 @@ a review — it is called out at the top of the pull request.
 
 ---
 
-## Attacker 5 — scope stated, not yet assessed
+## Attacker 5 — misconfiguration
 
-Listed so the remaining surface is visible. **No claim is made that it is
-closed.** Findings will be added when the class is worked.
-- **Attacker 5 — misconfiguration.** Structurally enforced security
-  configuration, so an insecure deployment is refused rather than merely
-  discouraged (`require_digest_pin` is the model).
+**Capability.** Not an intruder: the operator, or the deployment, getting a
+setting wrong — and, more precisely, a control that is *set* and not *honoured*,
+or that can be silently downgraded. This is the last class because it decides
+whether the first four mean anything: a defence that can be switched off by a
+typo, or asked for and quietly not provided, protects nothing.
+
+### 5.1 What was found
+
+| # | Finding | Severity |
+|---|---|---|
+| E5-1 | `Config.require_digest_pin` was **read by nothing**. `build_sandbox` took only a name and built `ContainerSandbox()` bare; only the environment variable path worked. `Config(require_digest_pin=True)` produced a container sandbox reporting `False` — measured | **High** |
+| E5-2 | With the requirement set and an adapter that cannot pin (namespace, unsafe, or `auto` with no container runtime), nothing refused: the sandbox was built without the property | **High** |
+| E5-3 | `Limits.deny_network` was read by no adapter. `True` (the default) changed nothing on the isolating adapters (they deny unconditionally) and was not honoured by the unsafe one; `False` was silently ignored | Medium |
+| E5-4 | `provider=remote` with `sandbox=unsafe` — a remote model's output executed with no isolation — was accepted, at load and via `auto`'s opt-in fallback | **High** |
+| E5-5 | An unknown sandbox name was accepted at `Config` load and failed only at the first run | Low |
+
+E5-1 is the shape this project keeps finding in its own work, and it is the
+reason this class exists: the setting was documented, tested as an environment
+variable, and wired to nothing as a field. The audit that named it was right.
+
+### 5.2 What is now enforced
+
+- **The requirement reaches the sandbox, or construction refuses.**
+  `build_sandbox` takes `require_digest_pin`; every builder in
+  `runtime/factory.py` obtains its sandbox through `build_sandbox_for(config)`,
+  the single place the property is honoured. With the container adapter it is
+  passed through. With any adapter that runs no image, or under `auto` with no
+  container runtime, it is a `ConfigError` — never a sandbox that lacks it.
+  Under `auto`, the requirement *decides* the adapter: the container adapter is
+  selected even where namespace would ordinarily be preferred.
+- **The requirement is the OR of its sources.** `Config.require_digest_pin` and
+  `PROM_REQUIRE_DIGEST_PIN` can each raise it; a programmatic `Config(False)`
+  beside the environment variable does not switch pinning off.
+- **Incoherent combinations are refused at load**, with the reason:
+  `require_digest_pin=True` with `sandbox=namespace|unsafe`; `provider=remote`
+  with `sandbox=unsafe`; an unknown sandbox name. The runtime half of the
+  remote rule is enforced too: `auto` may fall back to the unsafe adapter for
+  the mock provider under the opt-in, and refuses to for a remote one.
+- **A knob that cannot grant what it names is refused.** `Limits(deny_network=False)`
+  raises: no isolating adapter grants network access, so the field states the
+  invariant rather than pretending to switch it.
+- **High-risk routing is not a Config field.** `build_execution_controller`
+  hardcodes `route_high_risk=True`; the most permissive `escalate_below` a
+  Config can express (`0.0`) still routes high-risk actions to a human.
+- **The class, as a mechanism.** `Config.SECURITY_FIELDS` declares every
+  security-relevant field. A conformance test parses the source tree and fails
+  if any declared field is read nowhere outside `config.py`; a second fails if a
+  field whose *name* looks like a security flag is not declared. The next dead
+  flag fails CI instead of shipping.
+
+### 5.3 The sweep — every security setting, and what happens when it cannot be met
+
+| Setting | Source | Honoured by | If it cannot be honoured | Status |
+|---|---|---|---|---|
+| `require_digest_pin` | Config, env | `build_sandbox` → container adapter refuses bare tags | **refused at construction** | fixed (E5-1, E5-2) |
+| `sandbox` | Config, env | `build_sandbox` | unknown name refused at load; `unsafe` needs the env opt-in | fixed (E5-5) |
+| `PROM_ALLOW_UNSAFE_EXEC` | env only | `build_sandbox` | without it, `unsafe` is refused and `auto` falls to `NullSandbox` (refuses to run) | enforced |
+| `allow_insecure_loopback` | Config, env | `validate_endpoint` at load and construction | plaintext to a remote host is refused regardless | enforced (§4) |
+| `api_base` / `judge_api_base` scheme | Config, env | `validate_endpoint` | refused at load | enforced (§4) |
+| `provider_max_response_bytes`, `request_timeout_s` | Config, env | `RemoteModelProvider` | out of range refused at load; exceeded at runtime → typed error, `Unavailable` | enforced (§3, §4) |
+| `verifier_*` caps, `Limits` | Config, env | sandbox adapters | NaN/inf/negative refused at load; `0` documented as "no cap" | enforced (§3) |
+| `Limits.deny_network` | code | invariant on isolating adapters | `False` refused | fixed (E5-3) |
+| `escalate_below`, `gate_threshold` | Config, env | `ActionGate`, `PromotionGate` | out of `[0,1]` refused at load | enforced (§3) |
+| `route_high_risk` | hardcoded | `ActionGate` | not configurable | enforced |
+| `pending_ttl_seconds` | Config, env | `PendingActionService` | negative refused; `0` documented as "no expiry" | enforced (§3) |
+| `enable_model_judge` | Config, env | `build_orchestrator` | a provider without `assess` → every verify is `Unavailable`, visibly; not refused (advisory feature, not a security requirement) | honoured |
+| `MigrationRunnerConfig` | code | chokepoint runner | key under 32 bytes or no durable store → refused at construction | enforced (§1) |
+| ledger `tip_anchor` | code | `SqliteLedger` | opt-in; a configured anchor that cannot be read → `NOT_VERIFIABLE` | enforced when set (§3) |
+
+### 5.4 Default posture
+
+A `Config()` with nothing set: mock provider (no network), `sandbox=auto`
+(isolating adapters only; with nothing isolating available and no opt-in it
+builds a `NullSandbox` that refuses to run code), plaintext loopback off, model
+judge off, human holds expire, escalation floor `0.75` with high-risk routing
+hardcoded on, every cap finite and positive. Asserted by
+`test_defaults_are_the_hardened_posture`.
+
+**Two defaults are not the hardened posture, stated rather than hidden:**
+
+- **`require_digest_pin=False`.** Digest pinning is a property of a container
+  image, and the shipped default image is a floating tag by design so the code
+  stays vendor- and architecture-neutral; a pinned digest is a per-deployment
+  value that would go stale in the repository. `auto` prefers the namespace
+  adapter, which runs no image to substitute, and the container adapter warns
+  on every unpinned construction. Turning the default on would make every
+  deployment with a container runtime and no pinned image refuse to run — the
+  right posture for production, and a production deployment sets it. It is the
+  recommended production setting and the one flag this model asks an operator
+  to remember.
+- **The ledger tip anchor is opt-in** (§3.5). A ledger with no anchor behaves as
+  it always did; in-memory and throwaway ledgers have nothing to anchor.
+
+### 5.5 Residual — what is not covered
+
+- **Two of the defaults above are permissive**, for the stated reasons. An
+  operator who forgets `require_digest_pin` on a container-only host runs an
+  unpinned image, with a warning.
+- **The dead-flag mechanism sees attribute reads, not enforcement.** It proves
+  a field is *consumed* somewhere; whether the consumer honours it correctly is
+  what the per-flag tests in §5.3 are for. A field read only to be logged would
+  pass the mechanism and fail nothing else — a limit of static reading, named.
+- **Environment-only settings bypass `Config`.** `PROM_SANDBOX_IMAGE` and
+  `PROM_ALLOW_UNSAFE_EXEC` are read from the environment directly. They are
+  validated where they are read, but they are not on `SECURITY_FIELDS` because
+  they are not fields; a future one is not caught by the mechanism.
+- **`enable_model_judge` with a provider that cannot assess is not refused.**
+  Every verify is a visible `Unavailable` rather than a silent abstention (§4),
+  and the judge is advisory; refusing at load was judged more disruptive than
+  the failure it would prevent.
+- **Coherence rules are a fixed list.** The five combinations checked are the
+  ones found; a new setting introduces new combinations that nothing enumerates
+  automatically.
 
 ---
 

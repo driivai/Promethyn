@@ -72,8 +72,9 @@ class Limits:
     ``memory_bytes <= 0`` disables the address-space cap (it can prevent some
     interpreters from starting if set too low). The filesystem policy is fixed
     by the adapter: the ``workspace`` is read-write, the rest of the filesystem
-    is read-only or hidden. ``deny_network`` is always honoured by an isolating
-    adapter.
+    is read-only or hidden. ``deny_network`` is an invariant, not a knob: every
+    isolating adapter denies the network unconditionally, and ``False`` is
+    refused at construction rather than silently ignored.
     """
 
     wall_time_s: float = 5.0
@@ -96,6 +97,18 @@ class Limits:
         require_non_negative_int(self.memory_bytes, name="memory_bytes")
         require_non_negative_int(self.max_processes, name="max_processes")
         require_positive_int(self.max_output_bytes, name="max_output_bytes")
+        # ``deny_network`` was a field no adapter read: every isolating adapter
+        # denies the network unconditionally, and the unsafe adapter denies
+        # nothing, so the value changed no behaviour either way. A knob that
+        # cannot grant what it names is refused rather than ignored — asking to
+        # lower isolation is not a setting, it is a request that will not be
+        # honoured, and it must say so (threat model §5).
+        if self.deny_network is not True:
+            raise ValueError(
+                "deny_network=False cannot be honoured: no isolating adapter "
+                "grants a candidate network access. The field exists to state "
+                "the invariant, not to switch it off."
+            )
 
 
 @dataclass(frozen=True)
