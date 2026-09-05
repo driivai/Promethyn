@@ -94,6 +94,15 @@ repointed at a different image after it was vetted; the flag closes that
 substitution window. It is off by default for dev convenience and is the
 recommended production setting.
 
+The requirement is honoured or refused, never dropped (threat model §5). It is
+the OR of its two sources — `Config.require_digest_pin` and the environment
+variable — so either can raise it and neither lowers the other. Set it with an
+adapter that runs no image (`namespace`, `unsafe`), or under `auto` with no
+container runtime present, and construction fails with a `ConfigError` naming
+the reason, rather than returning a sandbox that quietly lacks what was asked
+for. Before PROM-HARDEN-MAX the Config field was read by nothing: a deployment
+that asked for pinning through it got a sandbox reporting `False`.
+
 ### Namespace (`namespace`) — daemonless default where no runtime exists
 
 Runs the candidate under `unshare` in fresh user + mount + network + PID

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Mapping
 
 from prometheus_protocol.core.endpoint import validate_endpoint
+from prometheus_protocol.core.errors import ConfigError
 from prometheus_protocol.core.validation import (
     require_int_in_range,
     require_non_negative_int,
@@ -25,6 +26,37 @@ from prometheus_protocol.core.validation import (
 
 PROVIDER_MOCK = "mock"
 PROVIDER_REMOTE = "remote"
+
+#: The sandbox adapters ``build_sandbox`` knows. Validated at load so an unknown
+#: name fails here, not at the first run.
+SANDBOX_NAMES = ("auto", "namespace", "container", "unsafe")
+
+#: Every Config field that expresses a security requirement or a security bound.
+#:
+#: A field listed here must be CONSUMED by the code that honours it. A
+#: conformance test parses the source tree and fails if any of these is read
+#: nowhere outside this module — which is exactly how ``require_digest_pin``
+#: shipped: a setting an operator could turn on, that ``build_sandbox`` never
+#: received, so a deployment asking for digest pinning got a sandbox reporting
+#: ``False`` (threat model §5). The same test fails if a field whose NAME looks
+#: like a security flag (``require_*``, ``allow_*``, ``enforce_*``, ``deny_*``,
+#: ``strict*``) is added without being listed here, so the list ratchets both
+#: ways: it cannot silently miss a flag, and a flag cannot silently do nothing.
+SECURITY_FIELDS = (
+    "sandbox",
+    "require_digest_pin",
+    "allow_insecure_loopback",
+    "escalate_below",
+    "gate_threshold",
+    "pending_ttl_seconds",
+    "verifier_timeout_s",
+    "verifier_memory_mb",
+    "verifier_cpu_seconds",
+    "verifier_max_processes",
+    "request_timeout_s",
+    "provider_max_response_bytes",
+    "max_role_calls",
+)
 
 
 def _as_bool(value: str | None, default: bool) -> bool:
@@ -170,6 +202,30 @@ class Config:
                     name=field_name,
                     allow_insecure_loopback=self.allow_insecure_loopback,
                 )
+
+        # -- coherence: combinations that are each valid and jointly unsafe ----
+        # Refused here, at load, with the reason. A requested security property
+        # that the rest of the configuration makes impossible to honour is not
+        # dropped and not deferred to the first run (threat model §5).
+        sandbox = (self.sandbox or "auto").strip().lower()
+        if sandbox not in SANDBOX_NAMES:
+            raise ConfigError(
+                f"unknown sandbox {self.sandbox!r}; expected one of {', '.join(SANDBOX_NAMES)}"
+            )
+        if self.require_digest_pin and sandbox in ("namespace", "unsafe"):
+            raise ConfigError(
+                f"require_digest_pin=True cannot be honoured by sandbox={sandbox!r}: "
+                "digest pinning is a property of a container image, and that "
+                "adapter runs none. Select sandbox=container (or auto, which "
+                "will then insist on it) or withdraw the requirement."
+            )
+        if self.provider == PROVIDER_REMOTE and sandbox == "unsafe":
+            raise ConfigError(
+                "provider=remote with sandbox=unsafe would execute a remote "
+                "model's output with no isolation at all. The unsafe adapter "
+                "exists for offline development against the mock provider; "
+                "it is refused for remote output even with PROM_ALLOW_UNSAFE_EXEC."
+            )
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "Config":

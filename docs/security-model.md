@@ -1,5 +1,10 @@
 # Security Model
 
+> The adversarial assessment — five attacker classes, what is proven by which
+> test, and what remains open — is `docs/threat-model.md`. This page describes
+> the verifier's execution boundary; the threat model is the document to hand
+> to a reviewer.
+
 ## Threat: executing proposed code
 
 The verifier runs code it did not write. In the reference implementation that

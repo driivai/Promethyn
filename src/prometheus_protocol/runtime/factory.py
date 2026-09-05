@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 
+from prometheus_protocol.core.errors import ConfigError
 from prometheus_protocol.core.config import PROVIDER_REMOTE, Config
 from prometheus_protocol.core.interfaces import Ledger, Provider, Verifier
 from prometheus_protocol.execution.controller import ExecutionController
@@ -24,6 +25,7 @@ from prometheus_protocol.provider.remote import RemoteModelProvider
 from prometheus_protocol.registry.markdown_registry import MarkdownSkillRegistry
 from prometheus_protocol.runtime.orchestrator import Orchestrator
 from prometheus_protocol.sandbox import build_sandbox
+from prometheus_protocol.sandbox.base import Sandbox
 from prometheus_protocol.swarm.debate import DebateLayer
 from prometheus_protocol.swarm.executor import RecordingExecutor
 from prometheus_protocol.swarm.runtime import SwarmRuntime
@@ -121,6 +123,31 @@ def build_judge_provider(
     return build_provider(config, solution_book)
 
 
+def build_sandbox_for(config: Config, *, env=None) -> Sandbox:
+    """The sandbox this configuration requests — honoured, or refused.
+
+    Every builder in this module gets its sandbox here, so the two checks that
+    turn a requested property into an enforced one happen in exactly one place:
+
+    * the digest-pin requirement is passed through to ``build_sandbox`` (it used
+      to be read by nothing — threat model §5, E5-1);
+    * a remote provider's output is never executed without isolation. ``auto``
+      may fall back to the unsafe adapter when the operator opted in and nothing
+      isolating is available; with the mock provider that is a development
+      convenience, with a remote model it is the exact threat the sandbox
+      exists for, so the combination is refused here as well as at Config load.
+    """
+
+    sandbox = build_sandbox(config.sandbox, env=env, require_digest_pin=config.require_digest_pin)
+    if config.provider == PROVIDER_REMOTE and not sandbox.isolating:
+        raise ConfigError(
+            f"provider=remote resolved to the non-isolating {sandbox.name!r} sandbox: "
+            "a remote model's output will not be executed without isolation. "
+            "Provide an isolating runtime or use the mock provider."
+        )
+    return sandbox
+
+
 def build_orchestrator(
     config: Config | None = None,
     *,
@@ -134,7 +161,7 @@ def build_orchestrator(
         memory_mb=config.verifier_memory_mb,
         cpu_seconds=config.verifier_cpu_seconds,
         max_processes=config.verifier_max_processes,
-        sandbox=build_sandbox(config.sandbox),
+        sandbox=build_sandbox_for(config),
     )
 
     # Persist trust alongside the ledger; use an in-memory store when the ledger
@@ -206,7 +233,7 @@ def build_swarm_runtime(
         memory_mb=config.verifier_memory_mb,
         cpu_seconds=config.verifier_cpu_seconds,
         max_processes=config.verifier_max_processes,
-        sandbox=build_sandbox(config.sandbox),
+        sandbox=build_sandbox_for(config),
     )
     _LOG.info("swarm runtime built (max_role_calls=%d)", config.max_role_calls)
     return SwarmRuntime(
@@ -250,7 +277,7 @@ def build_execution_controller(
     _LOG.info("execution controller built (escalate_below=%.2f)", config.escalate_below)
     return ExecutionController(
         gate=ActionGate(escalate_below=config.escalate_below, route_high_risk=True),
-        executor=SandboxExecutor(sandbox=build_sandbox(config.sandbox), limits=limits),
+        executor=SandboxExecutor(sandbox=build_sandbox_for(config), limits=limits),
         ledger=ledger if ledger is not None else SqliteLedger(config.ledger_path),
         ttl_seconds=config.pending_ttl_seconds,
     )
