@@ -3,7 +3,15 @@
 from __future__ import annotations
 
 from prometheus_protocol.core.interfaces import Provider
-from prometheus_protocol.core.models import Case, Evidence, Task, Tier, Verdict
+from prometheus_protocol.core.models import (
+    Case,
+    Evidence,
+    Task,
+    Tier,
+    Unavailability,
+    Unavailable,
+    Verdict,
+)
 from prometheus_protocol.provider.mock import MockProvider
 from prometheus_protocol.verifier import trust
 from prometheus_protocol.verifier.bank import VerifierBank
@@ -67,15 +75,24 @@ def test_strict_parsing_ignores_code_shaped_reply():
     assert _verify("the solution passes the tests").verdict == Verdict.ABSTAIN
 
 
-def test_provider_error_is_abstain():
-    evidence = ModelJudgeVerifier(ExplodingProvider()).verify(code="x", task=TASK)
-    assert evidence.verdict == Verdict.ABSTAIN
+def test_provider_error_is_unavailable_not_abstain():
+    # A judge that could not be reached has not abstained — it has not run. The
+    # two used to be the same ABSTAIN, so a dead endpoint looked like a working
+    # judge with nothing to say (threat model §4). It is now a could-not-run with
+    # no verdict attribute at all.
+    result = ModelJudgeVerifier(ExplodingProvider()).verify(code="x", task=TASK)
+    assert isinstance(result, Unavailable)
+    assert result.reason == Unavailability.INFRA_FAULT
+    assert result.tier == Tier.SOFT
+    assert not hasattr(result, "verdict")
 
 
-def test_unsupported_provider_is_abstain():
-    # MockProvider does not implement assess(); the judge treats it as no opinion.
-    evidence = ModelJudgeVerifier(MockProvider()).verify(code="x", task=TASK)
-    assert evidence.verdict == Verdict.ABSTAIN
+def test_unsupported_provider_is_unavailable():
+    # MockProvider does not implement assess(): the judge cannot run on it, which
+    # is a could-not-run, not an opinion.
+    result = ModelJudgeVerifier(MockProvider()).verify(code="x", task=TASK)
+    assert isinstance(result, Unavailable)
+    assert result.reason == Unavailability.INFRA_FAULT
 
 
 def test_abstain_creates_no_calibration_sample():

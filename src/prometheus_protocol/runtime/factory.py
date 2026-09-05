@@ -95,6 +95,8 @@ def build_judge_provider(
                     else config.api_key
                 ),
                 timeout_s=config.request_timeout_s,
+                allow_insecure_loopback=config.allow_insecure_loopback,
+                max_response_bytes=config.provider_max_response_bytes,
             )
         # Offline: a distinct judge identity gets its own provider instance, so
         # routing is observable in tests. Judge behaviour is unchanged (the mock

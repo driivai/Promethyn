@@ -18,8 +18,10 @@ The consequences are structural, not stylistic:
 * Its authority is bounded by its MEASURED false-PASS against gold labels
   (``benchmarks/grounding_eval.py``) — measured first, weighted second.
 * A malformed or unparseable reply is an ABSTAIN — never an invented verdict,
-  never a coerced confidence. An unavailable provider is likewise "no
-  opinion".
+  never a coerced confidence. An unavailable provider is NOT "no opinion": it
+  is a could-not-run, returned as ``Unavailable`` with no verdict, so a
+  transport failure can never be read as the judge declining (threat model
+  §4).
 
 The verdict vocabulary is the domain's (SUPPORTED / NOT-SUPPORTED / ABSTAIN),
 mapped onto the protocol's PASS / FAIL / ABSTAIN. The production prompt asks
@@ -36,7 +38,7 @@ import time
 from dataclasses import dataclass
 
 from prometheus_protocol.core.interfaces import Provider, Verifier
-from prometheus_protocol.core.models import Evidence, Tier, Verdict
+from prometheus_protocol.core.models import Evidence, Tier, Unavailability, Unavailable, Verdict
 
 #: The production grounding-judge prompt. One verdict token, then a stated
 #: confidence in [0, 1]. Judgment is entailment-by-the-source ONLY.
@@ -103,17 +105,21 @@ class GroundingVerifier(Verifier):
         self.tier = self.TIER
         self._system_prompt = system_prompt
 
-    def verify(self, *, code: str, task: GroundingTask) -> Evidence:
+    def verify(self, *, code: str, task: GroundingTask) -> Evidence | Unavailable:
         """Judge ``code`` (the candidate claim) against the task's source."""
 
         prompt = build_grounding_prompt(source=task.source, claim=code)
         started = time.monotonic()
         try:
             response = self._provider.assess(prompt=prompt, system=self._system_prompt)
-        except Exception as exc:  # contained advisor: any failure is "no opinion"
-            duration = time.monotonic() - started
-            return self._evidence(
-                Verdict.ABSTAIN, duration, detail=f"judge unavailable: {exc}"
+        except Exception as exc:
+            # Could not run is not "no opinion" — see ModelJudgeVerifier.verify.
+            # A transport failure is reported as exactly that, never as ABSTAIN.
+            return Unavailable(
+                verifier_id=self.verifier_id,
+                tier=self.tier,
+                reason=Unavailability.INFRA_FAULT,
+                detail=_clip(f"judge could not run: {type(exc).__name__}: {exc}"),
             )
         duration = time.monotonic() - started
         verdict = parse_grounding_verdict(response)

@@ -4,8 +4,10 @@ Each of the shipped domains — code (HARD), SQL (HARD), grounding (SOFT) —
 fills in a :class:`VerifierCase`. That the three pass :func:`check_verifier`
 unchanged is the proof that the extension contract describes the real seam,
 not an aspiration. The fault injector for a HARD verifier is ``NullSandbox``
-(it refuses to start, so the verifier must ABSTAIN); for the soft grounding
-judge it is a provider that raises (any provider failure is "no opinion").
+(it refuses to start); for the soft grounding judge it is a provider that
+raises. Either way the source could not be used at all, so the verifier must
+return ``Unavailable`` — could-not-run — never an abstention, which would read
+as an opinion it did not form (threat model §4).
 """
 
 from __future__ import annotations

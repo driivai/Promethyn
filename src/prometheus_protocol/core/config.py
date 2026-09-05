@@ -13,7 +13,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
+from prometheus_protocol.core.endpoint import validate_endpoint
 from prometheus_protocol.core.validation import (
+    require_int_in_range,
     require_non_negative_int,
     require_positive,
     require_positive_int,
@@ -117,6 +119,15 @@ class Config:
 
     request_timeout_s: float = 30.0
 
+    # Transport hardening (threat model §4). A remote endpoint must be https://;
+    # plaintext is allowed only to a loopback host and only with this opt-out,
+    # which logs a warning at construction. There is no opt-out for a remote
+    # plaintext endpoint: a credential sent there crosses the network in clear.
+    allow_insecure_loopback: bool = False
+    # Ceiling on a provider response body. A response that exceeds it is refused
+    # outright — never truncated and parsed as if complete.
+    provider_max_response_bytes: int = 4 * 1024 * 1024
+
     def __post_init__(self) -> None:
         """Reject non-finite, out-of-range and wrong-signed numeric settings.
 
@@ -143,6 +154,22 @@ class Config:
         require_non_negative_int(self.pending_ttl_seconds, name="pending_ttl_seconds")
         require_positive_int(self.max_role_calls, name="max_role_calls")
         require_positive(self.request_timeout_s, name="request_timeout_s")
+        require_int_in_range(
+            self.provider_max_response_bytes,
+            name="provider_max_response_bytes",
+            minimum=1024,
+            maximum=1 << 30,
+        )
+        # Endpoints are refused at load, not at the first request: by then the
+        # Authorization header has been built and is about to leave.
+        for field_name in ("api_base", "judge_api_base"):
+            value = getattr(self, field_name)
+            if value:
+                validate_endpoint(
+                    value,
+                    name=field_name,
+                    allow_insecure_loopback=self.allow_insecure_loopback,
+                )
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "Config":
@@ -175,4 +202,8 @@ class Config:
             pending_ttl_seconds=_as_int(env.get("PROM_PENDING_TTL"), 86_400),
             max_role_calls=_as_int(env.get("PROM_MAX_ROLE_CALLS"), 16),
             request_timeout_s=_as_float(env.get("PROM_REQUEST_TIMEOUT_S"), 30.0),
+            allow_insecure_loopback=_as_bool(env.get("PROM_ALLOW_INSECURE_LOOPBACK"), False),
+            provider_max_response_bytes=_as_int(
+                env.get("PROM_PROVIDER_MAX_RESPONSE_BYTES"), 4 * 1024 * 1024
+            ),
         )

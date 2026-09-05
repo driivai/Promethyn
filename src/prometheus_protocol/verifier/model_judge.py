@@ -7,9 +7,12 @@ its weight: zero until calibrated against the authoritative reference, never
 above it. A HARD verdict, when present, always decides the result; the judge
 only modulates fused *confidence* and accrues calibration history.
 
-Determinism: with a scripted provider the verdict is reproducible. Like the
-hard runner, an ABSTAIN (the judge declines or the provider can't be reached)
-creates no calibration sample.
+Determinism: with a scripted provider the verdict is reproducible. An ABSTAIN
+(the judge ran and declined) creates no calibration sample. A provider that
+cannot be reached is not an ABSTAIN at all: ``verify`` returns ``Unavailable``
+(could-not-run, no verdict), exactly as the hard runner does when its sandbox
+cannot start — so a dead or hostile endpoint is never mistaken for a working
+judge with nothing to say (threat model §4).
 """
 
 from __future__ import annotations
@@ -18,7 +21,7 @@ import re
 import time
 
 from prometheus_protocol.core.interfaces import Provider, Verifier
-from prometheus_protocol.core.models import Evidence, Task, Tier, Verdict
+from prometheus_protocol.core.models import Evidence, Task, Tier, Unavailability, Unavailable, Verdict
 
 _JUDGE_SYSTEM_PROMPT = (
     "You are a strict, independent reviewer. Decide whether the candidate "
@@ -55,17 +58,29 @@ class ModelJudgeVerifier(Verifier):
         self.tier = self.TIER
         self._system_prompt = system_prompt
 
-    def verify(self, *, code: str, task: Task) -> Evidence:
+    def verify(self, *, code: str, task: Task) -> Evidence | Unavailable:
         # The judge sees the task description and the candidate code only — never
         # the hidden cases. It is blind to tests, like the proposer.
         prompt = _build_prompt(task, code)
         started = time.monotonic()
         try:
             response = self._provider.assess(prompt=prompt, system=self._system_prompt)
-        except Exception as exc:  # contained advisor: any failure is "no opinion"
-            duration = time.monotonic() - started
-            return self._evidence(
-                Verdict.ABSTAIN, duration, detail=f"judge unavailable: {exc}"
+        except Exception as exc:
+            # The judge could not RUN — a timeout, a refused certificate, a
+            # response bomb, a provider with no ``assess`` at all. That is not an
+            # opinion, and it must not be reported as one: an ABSTAIN here is
+            # indistinguishable from the model saying "I cannot decide", which
+            # means a network adversary can manufacture abstentions at will and a
+            # dead endpoint looks like a working judge with nothing to say. This
+            # is the EX-1 distinction (``Unavailable`` carries no verdict) applied
+            # at the transport layer. Advisory tier, so the bank never lets it
+            # stand in for an authoritative check — but it is now visible AS a
+            # could-not-run, and creates no calibration sample.
+            return Unavailable(
+                verifier_id=self.verifier_id,
+                tier=self.tier,
+                reason=Unavailability.INFRA_FAULT,
+                detail=_clip(f"judge could not run: {type(exc).__name__}: {exc}"),
             )
         duration = time.monotonic() - started
         verdict = _parse_verdict(response)
