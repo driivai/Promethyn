@@ -130,13 +130,20 @@ def test_endpoint_knobs_without_independent_judge_model_warn(caplog):
 # -- parity: judge verdicts are unchanged by the wiring ------------------------
 
 
-def test_mock_judge_verdict_is_unchanged_by_independence():
+def test_mock_judge_outcome_is_unchanged_by_independence():
     # The offline provider does not implement assess() either way, so the judge
-    # abstains identically whether shared or independent.
+    # cannot run on it — identically whether shared or independent. That is a
+    # could-not-run (Unavailable, no verdict), not an abstention; the parity
+    # point is that the wiring changes nothing about the outcome.
+    from prometheus_protocol.core.models import Unavailable
+
     shared = ModelJudgeVerifier(factory.build_judge_provider(Config()))
     independent = ModelJudgeVerifier(
         factory.build_judge_provider(Config(judge_model="judge-x"))
     )
     code = "def f(n):\n    return n\n"
-    assert shared.verify(code=code, task=_TASK).verdict == Verdict.ABSTAIN
-    assert independent.verify(code=code, task=_TASK).verdict == Verdict.ABSTAIN
+    shared_result = shared.verify(code=code, task=_TASK)
+    independent_result = independent.verify(code=code, task=_TASK)
+    assert isinstance(shared_result, Unavailable)
+    assert isinstance(independent_result, Unavailable)
+    assert shared_result.reason == independent_result.reason

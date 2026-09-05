@@ -46,17 +46,25 @@ The fields that matter to the runtime:
    and thereby reach autonomous execution — this is enforced, not trusted.**
 
 2. **Fault distinction.** A candidate at fault is a `FAIL` (a wrong answer, a
-   crash on the candidate's own code, a query error on a valid schema). A
-   fault that cannot be pinned on the candidate is an `ABSTAIN` (isolation did
-   not start, a timeout, the run was never confirmed to begin, a broken
-   reference). **Never guess a verdict** when you could not verify.
+   crash on the candidate's own code, a query error on a valid schema). A run
+   that happened but could not settle the question is an `ABSTAIN` (a runaway
+   candidate stopped by the wall clock, a reply the judge could not parse). A
+   check that could not *run at all* — isolation did not start, the run was
+   never confirmed to begin, a broken reference, a provider that could not be
+   reached — is `Unavailable`: a could-not-run carrying no verdict, at any
+   tier. **Never guess a verdict** when you could not verify, and never report
+   "I did not run" as "I had no opinion" — a dead source would then look like a
+   working check with nothing to say.
 
-3. **Fail-closed.** If you cannot obtain isolation or ground truth, `ABSTAIN`
-   (or, for an action, block) — never fall back to an unverified pass. The
-   HARD verifiers do this by running through an isolating `Sandbox` that
-   refuses to start when no isolating adapter is available (`NullSandbox`);
-   the soft grounding judge does it by treating any provider failure as "no
-   opinion".
+3. **Fail-closed.** If you cannot obtain isolation or ground truth at all,
+   return `Unavailable` (or, for an action, block) — never fall back to an
+   unverified pass, and never to an `ABSTAIN`, which reads as an opinion you
+   did not form. The HARD verifiers do this by running through an isolating
+   `Sandbox` that refuses to start when no isolating adapter is available
+   (`NullSandbox`); the soft judges do it by returning `Unavailable` when the
+   provider cannot be reached — a timeout, a refused certificate, a response
+   over the size ceiling (`docs/threat-model.md` §4). A judge that *ran* and
+   declined is still an `ABSTAIN`; the two are certified by separate checks.
 
 4. **Adversarial soundness (verifier-appropriate).** A candidate crafted to
    pass by coincidence or by exploiting the comparison must be caught or
@@ -166,7 +174,7 @@ case = VerifierCase(
     name="my-domain",
     verifier=MyVerifier(),
     tier=Tier.HARD,
-    # a verifier whose ground truth is broken must ABSTAIN on this example:
+    # a verifier whose ground truth is broken must return Unavailable here:
     failclosed=(MyVerifier(sandbox=NullSandbox()), (candidate, task)),
     passing=(correct_candidate, task),     # must PASS (needs your runtime)
     failing=(faulty_candidate, task),      # must FAIL (candidate fault)
@@ -225,8 +233,8 @@ carries a `Provider` and fails closed when it can't be reached. The contract
 handles this honestly by making the extender supply the fail-closed injector
 (`NullSandbox` for one, a raising provider for the other) rather than
 pretending one mechanism fits all — the guarantee ("cannot obtain ground
-truth ⇒ ABSTAIN") is uniform; the *source* of ground truth is not, and the
-contract says so.
+truth ⇒ `Unavailable`, a could-not-run") is uniform; the *source* of ground
+truth is not, and the contract says so.
 
 **What the suite does NOT yet catch**, stated plainly so it is not mistaken
 for more than it is:

@@ -343,7 +343,7 @@ def test_judge_temperature_defaults_to_zero_everywhere():
 
     from prometheus_protocol.provider.remote import RemoteModelProvider
 
-    p = RemoteModelProvider(api_base="http://x", model="m")
+    p = RemoteModelProvider(api_base="https://x", model="m")
     assert p.assess_temperature == 0.0
     # 0.0 normalises to int 0 in the request payload -> byte-identical default.
     assert (p.assess_temperature or 0) == 0 and isinstance(p.assess_temperature or 0, int)
@@ -391,6 +391,20 @@ _EX1_CHANGED = frozenset({
     "src/prometheus_protocol/execution/pending.py",
 })
 
+# PROM-HARDEN-MAX attacker 4 (the transport adversary) changed exactly these two
+# frozen files, and nothing else on the protected list: a provider that cannot be
+# reached — timeout, refused certificate, response bomb — is now returned as
+# ``Unavailable`` (could-not-run, no verdict) instead of an ``ABSTAIN`` Evidence.
+# The ABSTAIN was the EX-1 defect at the transport layer: a dead or hostile
+# endpoint read as a working judge with nothing to say, and a network adversary
+# could manufacture abstentions at will. Same sanction discipline as EX-1: the
+# delta is named here so the guard still fails on ANY other protected change.
+_HARDEN4_CHANGED = frozenset({
+    "src/prometheus_protocol/verifier/model_judge.py",
+    "src/prometheus_protocol/verifier/grounding.py",
+})
+_SANCTIONED = _EX1_CHANGED | _HARDEN4_CHANGED
+
 
 def _git(*args: str) -> subprocess.CompletedProcess:
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -405,5 +419,5 @@ def test_hearth_and_default_judge_path_unchanged_versus_main():
     diff = _git("diff", "--name-only", "origin/main", "--", *_UNCHANGED_FILES)
     assert diff.returncode == 0, diff.stderr
     changed = [line for line in diff.stdout.splitlines() if line.strip()]
-    unsanctioned = [f for f in changed if f not in _EX1_CHANGED]
+    unsanctioned = [f for f in changed if f not in _SANCTIONED]
     assert unsanctioned == [], f"unsanctioned protected change vs origin/main: {unsanctioned}"

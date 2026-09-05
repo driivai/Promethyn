@@ -43,6 +43,8 @@ from prometheus_protocol.core.models import (
     Evidence,
     ExecutableAction,
     Tier,
+    Unavailability,
+    Unavailable,
     Verdict,
 )
 from prometheus_protocol.execution.controller import ExecutionController
@@ -104,9 +106,13 @@ def test_grounding_evidence_is_soft_tier_and_strictly_parsed():
     for malformed in ("", "NOT", "unsupported", "It looks fine.", "TRUE 0.9"):
         evidence = _soft(malformed)
         assert (evidence.tier, evidence.verdict) == (Tier.SOFT, Verdict.ABSTAIN), malformed
+    # A provider that cannot be reached is not an abstention: the judge did not
+    # run. It comes back as Unavailable, with no verdict at all (threat model §4).
     unavailable = _soft(RuntimeError("gateway down"))
-    assert unavailable.verdict == Verdict.ABSTAIN
-    assert "judge unavailable" in unavailable.detail
+    assert isinstance(unavailable, Unavailable)
+    assert unavailable.reason == Unavailability.INFRA_FAULT
+    assert not hasattr(unavailable, "verdict")
+    assert "could not run" in unavailable.detail
 
 
 def test_grounding_judge_cannot_masquerade_as_hard():

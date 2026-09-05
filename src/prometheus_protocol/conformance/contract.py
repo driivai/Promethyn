@@ -22,9 +22,11 @@ The REQUIRED GUARANTEES, each mapped to a mechanical check below:
   tier the platform assigns, never something the verifier can assert.
 * **fault distinction** — a candidate at fault yields FAIL; a run whose fault
   cannot be pinned on the candidate yields ABSTAIN. Never a guessed verdict.
-* **fail-closed** — if the verifier cannot obtain isolation or ground truth,
-  it ABSTAINs rather than guessing. This is checked by injecting a
-  ground-truth source that refuses to start and asserting ABSTAIN.
+* **fail-closed** — if the verifier cannot obtain isolation or ground truth at
+  all, it returns ``Unavailable`` (could-not-run, no verdict) rather than
+  guessing — and rather than abstaining, since an abstention reads as a formed
+  opinion. Checked at every tier by injecting a ground-truth source that
+  refuses to start (or a provider that raises) and asserting ``Unavailable``.
 * **adversarial soundness** (verifier-appropriate, optional) — a candidate
   crafted to pass by coincidence or by exploiting the comparison is caught or
   correctly ABSTAINed. The extender supplies the probe; the contract cannot
@@ -84,9 +86,9 @@ class VerifierCase:
     tier: Tier
     #: A verifier whose ground-truth source is broken (isolation refuses to
     #: start, or the provider raises) paired with an example it is asked to
-    #: judge. Running it MUST yield ABSTAIN — the fail-closed guarantee. This
-    #: is the one behavioural check that needs no real runtime, so it is
-    #: required.
+    #: judge. Running it MUST yield ``Unavailable`` — could-not-run, no verdict —
+    #: the fail-closed guarantee, at every tier. This is the one behavioural
+    #: check that needs no real runtime, so it is required.
     failclosed: "tuple[Verifier, Example]"
     #: A (candidate, task) the verifier must PASS. Optional: HARD verifiers
     #: need the isolation runtime to run these, so a caller without it skips
@@ -200,39 +202,34 @@ def check_verifier(
     ))
 
     # -- fail-closed (always runnable: the injected source refuses to run) --
-    # The contract is tier-dependent and by-construction:
-    #   * an AUTHORITATIVE (executable) verifier that could not run must return a
-    #     could-not-execute OUTCOME (Unavailable) — a non-verdict carrying no
-    #     ``verdict`` at all. It may NOT return an ABSTAIN: an authoritative check
-    #     that could not execute must never degrade into an abstention (EX-1). A
-    #     type-level distinction, not a convention.
-    #   * an ADVISORY judge that cannot form an opinion abstains (Evidence,
-    #     ABSTAIN) — a genuine "no opinion", which is its correct fail-closed.
+    # The injected fault is a ground-truth source that cannot be USED at all —
+    # isolation that refuses to start, a provider that raises. A verifier facing
+    # that has not formed any opinion, so the only honest outcome is a
+    # could-not-run: ``Unavailable``, a non-verdict carrying no ``verdict`` at
+    # all. That holds at every tier:
+    #   * an AUTHORITATIVE check that could not execute must never degrade into
+    #     an abstention (EX-1) — a type-level distinction, not a convention;
+    #   * an ADVISORY judge whose provider could not be reached has likewise not
+    #     run. Until PROM-HARDEN-MAX it was allowed to report ABSTAIN here, which
+    #     made a dead or hostile endpoint indistinguishable from a working judge
+    #     with nothing to say, and let a network adversary manufacture
+    #     abstentions at will (threat model §4). "Ran and declined" is a real
+    #     ABSTAIN and is certified separately by the adversarial-soundness check;
+    #     it is not what this fault injects.
     fc_verifier, (fc_code, fc_task) = case.failclosed
     fc_evidence = fc_verifier.verify(code=fc_code, task=fc_task)
-    if case.tier in AUTHORITATIVE_TIERS:
-        fc_ok = isinstance(fc_evidence, Unavailable)
-        fc_detail = (
-            "with ground truth unavailable the executable verifier returned "
-            + (
-                "an Unavailable (could-not-execute — no verdict to guess or abstain)"
-                if fc_ok
-                else f"{getattr(fc_evidence, 'verdict', fc_evidence)!r} "
-                "(an authoritative check that could not run must return Unavailable, "
-                "never a verdict or an abstention)"
-            )
+    fc_ok = isinstance(fc_evidence, Unavailable)
+    who = "executable verifier" if case.tier in AUTHORITATIVE_TIERS else "advisory judge"
+    fc_detail = (
+        f"with its ground-truth source unusable the {who} returned "
+        + (
+            "an Unavailable (could-not-run — no verdict to guess or abstain)"
+            if fc_ok
+            else f"{getattr(fc_evidence, 'verdict', fc_evidence)!r} "
+            "(a verifier that could not run must return Unavailable at any tier — "
+            "never a verdict, and never an abstention that reads as an opinion)"
         )
-    else:
-        fc_ok = isinstance(fc_evidence, Evidence) and fc_evidence.verdict == Verdict.ABSTAIN
-        fc_detail = (
-            "with no opinion the advisory judge returned "
-            + (
-                "ABSTAIN (refuses to guess)"
-                if fc_ok
-                else f"{getattr(fc_evidence, 'verdict', fc_evidence)!r} "
-                "(an advisory judge with no opinion must ABSTAIN)"
-            )
-        )
+    )
     checks.append(CheckResult("fail-closed", fc_ok, fc_detail))
 
     # -- emits its declared tier (catches a soft process stamping HARD) -----

@@ -209,6 +209,18 @@ def _git(*args: str) -> subprocess.CompletedProcess:
     )
 
 
+# PROM-HARDEN-MAX attacker 4 (the transport adversary) changed exactly one file on
+# this list: ``verifier/grounding.py`` now returns ``Unavailable`` (could-not-run,
+# no verdict) when its provider cannot be reached, instead of an ``ABSTAIN``
+# Evidence — the EX-1 defect at the transport layer (a dead endpoint read as a
+# judge with nothing to say). Named here, as EX-1's delta is, so the guard still
+# fails on ANY other Hearth change.
+_HARDEN4_CHANGED = frozenset({
+    "src/prometheus_protocol/verifier/grounding.py",
+})
+_SANCTIONED = _EX1_CHANGED | _HARDEN4_CHANGED
+
+
 @pytest.mark.skipif(
     _git("rev-parse", "--verify", "origin/main").returncode != 0,
     reason="origin/main not available in this checkout",
@@ -221,5 +233,5 @@ def test_hearth_is_unchanged_versus_main():
     diff = _git("diff", "--name-only", "origin/main", "--", *_HEARTH_FILES)
     assert diff.returncode == 0, diff.stderr
     changed = [line for line in diff.stdout.splitlines() if line.strip()]
-    unsanctioned = [f for f in changed if f not in _EX1_CHANGED]
+    unsanctioned = [f for f in changed if f not in _SANCTIONED]
     assert unsanctioned == [], f"unsanctioned Hearth change vs origin/main: {unsanctioned}"

@@ -78,6 +78,8 @@ def _remote_judge_provider(config, model: str, *, temperature: float) -> Provide
         api_key=config.judge_api_key or config.api_key,
         timeout_s=config.request_timeout_s,
         assess_temperature=temperature,
+        allow_insecure_loopback=config.allow_insecure_loopback,
+        max_response_bytes=config.provider_max_response_bytes,
     )
 
 

@@ -15,10 +15,10 @@ named is a gap that is being managed; a gap that is hidden is a vulnerability
 with better marketing — and by this project's own thesis, a check that is
 present, plausible, and void is the failure mode we exist to name.
 
-> **Status.** Attackers 1, 2 and 3 are complete. Attackers 4 and 5 are listed
-> with their scope so the shape of the work is visible, and are explicitly
-> **not yet assessed** — they are not claimed as closed, and the absence of
-> findings under them means nobody has looked yet.
+> **Status.** Attackers 1 through 4 are complete. Attacker 5 is listed with its
+> scope so the shape of the work is visible, and is explicitly **not yet
+> assessed** — it is not claimed as closed, and the absence of findings under it
+> means nobody has looked yet.
 
 ---
 
@@ -435,13 +435,148 @@ one that decides whether §3 closed anything at all.
 
 ---
 
-## Attackers 4–5 — scope stated, not yet assessed
+## Attacker 4 — the network between Promethyn and its endpoints
 
-Listed so the remaining surface is visible. **No claim is made that either of
-these is closed.** Findings will be added as each class is worked.
+**Capability.** A position on the path between Promethyn and any remote endpoint
+it calls: a hostile network, a compromised proxy, a poisoned resolver, or the
+endpoint itself gone bad. They can read plaintext, inject responses, redirect,
+stall, and send as many bytes as they like.
 
-- **Attacker 4 — the network.** Requiring TLS on credentialed endpoints, and
-  bounding provider responses.
+### 4.0 The sweep — how many places talk to the network
+
+One. `RemoteModelProvider._post` in `provider/remote.py` is the only code in the
+repository that opens a network connection; the proposer, the model judge, the
+grounding judge, the swarm roles and the calibration benchmarks all reach the
+network through it. The hits a grep turns up elsewhere are dataclasses named
+`VerificationRequest`, not HTTP. So the class is closed at one chokepoint, and a
+second call site would have to be *written*, not found.
+
+| Outbound call | Carries | Path | TLS required | Body read |
+|---|---|---|---|---|
+| `propose_solution` | `Authorization: Bearer` | `_post` | yes | bounded |
+| `assess` (model judge, grounding judge, calibration eval) | `Authorization: Bearer` | `_post` | yes | bounded |
+| `generate` (swarm roles) | `Authorization: Bearer` | `_post` | yes | bounded |
+| HTTP error bodies (quoted into messages) | — | `_post` | — | bounded, 64 KiB |
+
+### 4.1 What was found
+
+Each measured on the pre-fix code against a local server, not inferred.
+
+| # | Finding | Severity |
+|---|---|---|
+| D4-1 | `http://` with an API key was accepted at construction; a typo in `PROM_API_BASE` sent the bearer token in cleartext | **High** |
+| D4-2 | **The bearer token followed a `302` to another origin** — `urllib` copies request headers onto the redirected request, so a scheme check on the configured URL alone closes nothing | **High** |
+| D4-3 | Response bodies were read whole: a response bomb reached **262 MB read, 525 MB peak** in three seconds and escaped as a raw `http.client.IncompleteRead` | **High** |
+| D4-4 | `timeout=` bounded each socket read, not the exchange: a server sending one byte every half second ran **6.0 s against `timeout_s=1.0`**, and would run forever | **High** |
+| D4-5 | A judge whose provider could not be reached returned an `ABSTAIN` verdict — the EX-1 defect at the transport layer: a dead or hostile endpoint read as a working judge with nothing to say | **Medium** |
+
+### 4.2 What is now enforced
+
+- **Every endpoint must be `https://`, refused at construction and at
+  `Config` load** (`core/endpoint.py`). Not only credentialed ones: an
+  unauthenticated plaintext judge lets the network *answer* the judge, which is
+  a different attack on the same trust, so it is one rule. `file://`, embedded
+  URL credentials (they would be logged with the URL) and query strings on a
+  base are refused too.
+- **Plaintext to loopback only, only with `PROM_ALLOW_INSECURE_LOOPBACK=1`,
+  and it logs a WARNING at construction.** Loopback is decided from the URL
+  literal — `127/8`, `::1`, or the name `localhost` — never by resolving
+  anything. There is **no opt-out for a remote plaintext endpoint.**
+- **Redirects are refused outright.** An API base that redirects a credentialed
+  request is a leak, whatever it points at. The refusal names the target's
+  origin only; an attacker-chosen `Location` is never echoed in full.
+- **Certificates are verified through an explicit default context**, exposed on
+  the provider so a test asserts `CERT_REQUIRED` and hostname checking rather
+  than trusting a library default.
+- **Every body is read in bounded chunks under one deadline for the whole
+  exchange**, using `read1` (one receive per call — `read(n)` on a chunked body
+  loops until *n* bytes or EOF, which is exactly how a drip defeated the first
+  version of this fix). A body over the ceiling is **refused, never
+  truncated**: a truncated body that happens to parse — a complete answer
+  followed by padding — would be reported as a normal answer, and that test
+  exists. A declared `Content-Length` over the ceiling is refused before a byte
+  is read. HTTP error bodies are read under the same bounds.
+- **Every transport failure is a distinct `ProviderError` subclass** —
+  `ProviderTimeout`, `ProviderTLSError`, `ProviderRedirectRefused`,
+  `ProviderResponseTooLarge`, `ProviderHTTPError`, `ProviderMalformedResponse`,
+  `ProviderTransportError` — and nothing else leaves `_post`.
+- **A judge that cannot run returns `Unavailable(INFRA_FAULT)`**, not an
+  `ABSTAIN` Evidence, from both `ModelJudgeVerifier` and `GroundingVerifier`.
+  It carries no verdict, creates no calibration sample, and the bank never lets
+  it stand in for an authoritative check. A model that *ran* and said
+  `ABSTAIN` is still an `ABSTAIN` — the distinction cuts both ways.
+
+### 4.3 Transport failure modes — each fails closed, each distinctly
+
+| Failure | Provider raises | Judge returns | Through the bank |
+|---|---|---|---|
+| connection refused | `ProviderTransportError` | `Unavailable` | never `PASS` |
+| no answer within the deadline | `ProviderTimeout` | `Unavailable` | never `PASS` |
+| slow drip past the deadline | `ProviderTimeout` | `Unavailable` | never `PASS` |
+| self-signed / untrusted certificate | `ProviderTLSError` | `Unavailable` | never `PASS` |
+| `https://` to a plaintext server | `ProviderTLSError` | `Unavailable` | never `PASS` |
+| redirect, to anywhere | `ProviderRedirectRefused` | `Unavailable` | never `PASS` |
+| body over the ceiling / declared oversize | `ProviderResponseTooLarge` | `Unavailable` | never `PASS` |
+| HTTP 5xx (bomb-sized error body included) | `ProviderHTTPError` | `Unavailable` | never `PASS` |
+| non-JSON, non-UTF-8, non-object, wrong shape | `ProviderMalformedResponse` | `Unavailable` | never `PASS` |
+| a working endpoint | — | `Evidence` with the model's verdict | as before |
+
+The judge row is the load-bearing one. Alone, an unavailable soft judge yields a
+non-authoritative abstention from the bank — nothing to go on, never a pass.
+Beside an authoritative `PASS`, the hard verdict decides and the judge that
+never ran contributes **no** calibration sample: it did not abstain, it did not
+run.
+
+### 4.4 The frozen default-judge path
+
+`verifier/model_judge.py` and `verifier/grounding.py` are on the repository's
+frozen list (`tests/conformance/test_soft_levers.py`), which fails on any
+unsanctioned change to them. D4-5 changes both. The sanction follows EX-1's
+precedent exactly: the two files are named in a `_HARDEN4_CHANGED` block with
+the reason, so the guard still fails on any *other* protected change. That
+block is the one thing in this class that needs an explicit ruling rather than
+a review — it is called out at the top of the pull request.
+
+### 4.5 Residual — what is not covered
+
+- **The trust root is the system certificate store.** A CA compromise, or a
+  rogue CA installed on the host, passes verification. There is no certificate
+  pinning; pinning a vendor-neutral gateway would need a pin per deployment, and
+  that is a deployment decision, not one this code can make.
+- **Proxy environment variables are honoured.** `HTTPS_PROXY` and friends route
+  every call through whatever they name — required for real deployments, and
+  the way this repository's own CI egresses. A host that can set them can
+  redirect the connection; that is the runner-host adversary (§2), not the
+  network's.
+- **`localhost` trusts `/etc/hosts`.** The loopback literal is not resolved, but
+  the name `localhost` is whatever the host's resolver says it is. Same
+  boundary as above.
+- **The deadline bound is `timeout_s` plus one in-flight receive.** The
+  per-read socket timeout is shrunk to what remains of the deadline through a
+  CPython-internal attribute; if that attribute is absent (another
+  interpreter), the deadline check alone still bounds the exchange, at up to
+  `2 × timeout_s`. Never unbounded, not exactly `timeout_s`.
+- **A soft-tier `Unavailable` is not carried on the fused Judgment.** The bank
+  carries *authoritative* unavailability (HARD/HUMAN) downstream; an advisory
+  judge that could not run is visible as its own result and in logs, and yields
+  a non-authoritative abstention from the bank. Widening the Judgment is a
+  Hearth change and was not made here.
+- **Swarm proposal generation degrades silently.** `swarm/roles.py` turns any
+  provider failure into "no proposal". That is fail-closed — nothing is
+  promoted from nothing — but it is not *distinct*: a dead endpoint and a model
+  that produced nothing look the same to the swarm. Named, not fixed: it is not
+  a verification path, and the transport failure underneath it is now a typed
+  error a future change can act on.
+- **The error body is quoted.** Up to 500 characters of an endpoint's error
+  response are repeated in the exception message. That is attacker-influenced
+  text in a log line, bounded and not parsed for meaning.
+
+---
+
+## Attacker 5 — scope stated, not yet assessed
+
+Listed so the remaining surface is visible. **No claim is made that it is
+closed.** Findings will be added when the class is worked.
 - **Attacker 5 — misconfiguration.** Structurally enforced security
   configuration, so an insecure deployment is refused rather than merely
   discouraged (`require_digest_pin` is the model).
