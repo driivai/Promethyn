@@ -37,21 +37,18 @@ _CODE_FAIL = "def add(a, b):\n    return a - b\n"
 
 
 def _code_adversarial() -> tuple[bool, str]:
-    """A candidate that PRINTS a pass but returns wrong answers must FAIL.
-
-    Ground truth is read from a result file the runner writes, never from
-    stdout, so a candidate cannot forge a verdict by printing one.
-    """
+    """Writing the historical verdict file cannot award a candidate a pass."""
 
     liar = (
-        "print('all tests passed')\n"
-        "def add(a, b):\n    return 42\n"
+        "import json, os\n"
+        "json.dump({'passed':3,'total':3,'failures':[]}, open('result.json','w'))\n"
+        "os._exit(0)\n"
     )
     ev = SubprocessVerifier(memory_mb=0).verify(code=liar, task=_CODE_TASK)
     ok = ev.verdict == Verdict.FAIL
     return ok, (
-        "a candidate that prints a fake pass but returns wrong answers is "
-        f"FAILed ({ev.verdict.value}; stdout cannot forge a verdict)"
+        "a candidate that writes forged pass counts without returning values is "
+        f"FAILed ({ev.verdict.value}; only the parent computes verdicts)"
     )
 
 

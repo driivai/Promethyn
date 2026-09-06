@@ -7,6 +7,16 @@ in `spec/invariants.md` is a major version bump.
 
 ## [Unreleased]
 
+### Fixed
+- **P0: candidate-forged verifier verdicts.** Expected answers, comparisons and
+  pass counts now stay in the trusted parent. The sandbox returns bounded,
+  type-preserving data only; candidate-written `result.json` is ignored.
+  Malformed/incomplete responses, custom return objects, truncated output and
+  abnormal exits cannot pass. Unsupported trusted task values refuse execution.
+  Candidate prints now appear in evidence stderr. Regression coverage includes
+  the original forged-file attack, protocol manipulation and real-sandbox CI
+  tests for both namespace and container adapters.
+
 ### Changed
 - **Relicensed to proprietary (PROM-IP).** The Apache-2.0 `LICENSE` is replaced
   by a placeholder proprietary notice naming DriivAIDev; `NOTICE`,

@@ -66,6 +66,38 @@ present, plausible, and void is the failure mode we exist to name.
 
 ## Attacker 1 — the sandboxed agent
 
+### P0 follow-up — candidate-controlled verification harness
+
+The independent review found a separate trust-boundary defect in the Python
+verifier: the candidate shared a process and writable workspace with the
+comparison harness. It could write `result.json` containing forged pass counts
+and exit successfully without running any cases. Sandbox isolation did not
+authenticate those counts. The previous claim that keeping verdicts off stdout
+prevented forgery was incorrect.
+
+`verifier/runner.py` now keeps expected answers, comparison and verdict aggregation
+in the trusted parent. The sandbox receives arguments and returns bounded,
+data-only values through `verifier/_value_codec.py`; it never supplies authoritative
+counts. The parent does not read candidate-written result files or reconstruct
+candidate Python objects. See `docs/security-model.md` for supported types,
+limits and failure classification.
+
+`tests/unit/test_verifier_boundary.py` covers the original attack, harness
+monkeypatching, custom equality objects, forged responses, malformed payloads,
+resource/start-signal precedence and checks that expectations are absent from
+the sandbox port and staged files. These local subprocess fixtures prove the
+protocol boundary, **not isolation**. `test_sandbox_verifier_boundary.py` runs
+positive and adversarial controls through real namespaces and containers;
+CI requires the relevant runtime rather than accepting skips. A local skip is
+not evidence of containment.
+
+**Residual:** this verifies outputs, not execution of a particular algorithm.
+A candidate that knows the correct answers can return them directly. Inputs
+are necessarily visible, public fixtures are not secrets, and the explicit
+unsafe adapter cannot protect parent memory or files. The design still depends
+on isolation from the trusted parent; it does not protect against a sandbox
+escape or a compromised host.
+
 **Capability.** Arbitrary code execution inside the sandbox, full knowledge of
 this repository (it is public), and unlimited attempts. It wants to run SQL
 against the production database — either by reaching the database directly, or
