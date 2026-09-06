@@ -34,6 +34,15 @@ present, plausible, and void is the failure mode we exist to name.
 
 ## Design principles the whole model rests on
 
+**Execution recovery follow-up (F2/F3):** negative executor results and lost
+COMMIT responses no longer establish rollback. Unknown events leave an intent
+pending until receipt reconciliation proves its outcome. A cross-process guard
+also covers the interval before the executor connects, so recovery cannot
+declare a suspended live owner rolled back. This guard requires a shared store
+and ledger on one trusted host/local filesystem, not independent or multi-host
+runners. See `docs/chokepoint-threat-model.md`, “Recovery follow-up: F2/F3,” for
+the deployment/upgrade requirements and regression coverage.
+
 1. **Couldn't-verify is never verified-clean.** A check that could not run
    returns `Unavailable` — no verdict at all — at every tier. It is never a
    PASS, and never an ABSTAIN that reads as an opinion (EX-1; §4 extends it to

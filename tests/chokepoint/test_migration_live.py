@@ -10,26 +10,37 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import multiprocessing
 import os
+import signal
 import time
+import uuid
 from pathlib import Path
 
 import psycopg
 import pytest
+from _pg_fault_proxy import DropCommitResponse
 
 from prometheus_protocol.chokepoint import (
     AUDIT_OUTCOME_UNAVAILABLE,
+    EXECUTION_BUSY,
+    EXECUTION_UNKNOWN,
     RECEIPT_COMMITTED,
+    RECEIPT_IN_PROGRESS,
     RECEIPT_NOT_FOUND,
+    RECEIPT_UNAVAILABLE,
     RECONCILED_COMMITTED,
     RECONCILED_NOT_COMMITTED,
+    RECONCILIATION_REQUIRED,
     REPLAY,
     ApprovalAuthority,
     BrokeredMigrationRunner,
     ConsumedApprovals,
     DbTarget,
     MigrationArtifact,
+    ReceiptStatus,
     postgres_executor,
+    postgres_receipt_lookup,
 )
 from prometheus_protocol.chokepoint.runner import _receipt_text
 from prometheus_protocol.core.models import Judgment, Verdict
@@ -122,6 +133,10 @@ def _delete_receipt(target: DbTarget, execution_id: str | None) -> None:
     if execution_id is None:
         return
     with _connect(target) as connection, connection.cursor() as cursor:
+        cursor.execute("SELECT to_regclass('promethyn_internal.migration_receipts')")
+        relation = cursor.fetchone()
+        if relation is None or relation[0] is None:
+            return
         cursor.execute(
             "DELETE FROM promethyn_internal.migration_receipts "
             "WHERE execution_id = %s",
@@ -405,3 +420,207 @@ def test_live_restart_proves_failed_transaction_did_not_commit(tmp_path):
         restarted.close()
         reopened.close()
         _execute(target, f"DROP TABLE IF EXISTS {table}")
+
+
+def test_live_lost_commit_response_remains_pending_until_receipt_recovery(tmp_path):
+    target = _require_db()
+    table = "lost_commit_" + uuid.uuid4().hex
+    with DropCommitResponse(target) as proxy:
+        bound = dataclasses.replace(target, host="127.0.0.1", port=proxy.port)
+        store_path = tmp_path / "consumed.db"
+        runner, artifact, approval, audit = _runner_and_approval(
+            bound, store_path, f"CREATE TABLE {table} (id int); INSERT INTO {table} VALUES (1)"
+        )
+        authority = runner._authority
+        execution_id = None
+        restarted = None
+        try:
+            result = runner.execute(approval=approval, artifact=artifact)
+            execution_id = result.execution_id
+            assert proxy.dropped.wait(2), proxy.errors
+            assert not proxy.errors
+            assert result.reason == result.execution_state == EXECUTION_UNKNOWN
+            assert not result.executed and not result.refused
+            # The real PostgreSQL transaction committed, but its confirmation
+            # never reached the production executor over the wire.
+            assert _scalar(target, f"SELECT count(*) FROM {table}") == 1
+            assert _receipt_row(target, execution_id) is not None
+            assert [e["event"] for e in audit.chained_events()] == ["execute_intent", "execute_unknown"]
+            runner.close()
+            restarted = BrokeredMigrationRunner(
+                authority=authority, target=bound, consumed=ConsumedApprovals(store_path),
+                audit=audit, clock=time.time,
+                receipt_lookup=lambda *a: ReceiptStatus(RECEIPT_UNAVAILABLE),
+            )
+            second_artifact = MigrationArtifact(f"INSERT INTO {table} VALUES (2)")
+            second_approval = authority.mint(artifact_sha256=second_artifact.sha256,
+                                             target=bound.identity, now=time.time())
+            blocked = restarted.execute(approval=second_approval, artifact=second_artifact)
+            assert blocked.reason == RECONCILIATION_REQUIRED
+            assert _scalar(target, f"SELECT count(*) FROM {table}") == 1
+            restarted._receipt_lookup = postgres_receipt_lookup
+            report = restarted.reconcile_unfinished()
+            assert len(report) == 1 and report[0].resolved and report[0].state == RECEIPT_COMMITTED
+            assert restarted.execute(approval=approval, artifact=artifact).reason == REPLAY
+            assert restarted.execute(approval=second_approval, artifact=second_artifact).executed
+            assert _scalar(target, f"SELECT count(*) FROM {table}") == 2
+        finally:
+            runner.close()
+            if restarted:
+                restarted.close()
+            audit.close()
+            _execute(target, f"DROP TABLE IF EXISTS {table}")
+            _delete_receipt(target, execution_id)
+
+
+def _live_paused_owner(target, store_path, audit_path, approval, artifact, pipe, pause_after_intent):
+    """Spawned runner using real PostgreSQL; pipe barriers carry no shared mutex."""
+    ledger = SqliteLedger(audit_path)
+
+    class Audit:
+        def record_chained(self, **event):
+            seq = ledger.record_chained(**event)
+            if event["event"] == "execute_intent":
+                pipe.send(event["payload"]["execution_id"])
+                if pause_after_intent:
+                    pipe.recv()
+            return seq
+
+        def chained_events(self):
+            return ledger.chained_events()
+
+        def verify_chain(self):
+            return ledger.verify_chain()
+
+    runner = BrokeredMigrationRunner(
+        authority=ApprovalAuthority(key=b"live-recovery-authority-key-32-bytes"),
+        target=target, consumed=ConsumedApprovals(store_path), audit=Audit(), clock=time.time,
+    )
+    try:
+        pipe.send(runner.execute(approval=approval, artifact=artifact))
+    finally:
+        runner.close()
+        ledger.close()
+        pipe.close()
+
+
+@pytest.mark.parametrize("terminate", [False, True])
+def test_live_suspended_owner_cannot_be_declared_rolled_back(tmp_path, terminate):
+    target = _require_db()
+    table = "paused_owner_" + uuid.uuid4().hex
+    authority = ApprovalAuthority(key=b"live-recovery-authority-key-32-bytes")
+    artifact = MigrationArtifact(f"CREATE TABLE {table} (id int)")
+    approval = authority.mint(artifact_sha256=artifact.sha256, target=target.identity, now=time.time())
+    context = multiprocessing.get_context("spawn")
+    parent, child = context.Pipe()
+    store_path, audit_path = tmp_path / "store.db", tmp_path / "audit.db"
+    process = context.Process(target=_live_paused_owner,
+        args=(target, store_path, audit_path, approval, artifact, child, True))
+    process.start()
+    child.close()
+    restarted = ledger = None
+    execution_id = None
+    stopped = False
+    try:
+        assert parent.poll(10), "runner did not publish intent"
+        execution_id = parent.recv()
+        os.kill(process.pid, signal.SIGSTOP)
+        stopped = True
+        ledger = SqliteLedger(audit_path)
+        restarted = BrokeredMigrationRunner(authority=authority, target=target,
+            consumed=ConsumedApprovals(store_path), audit=ledger, clock=time.time)
+        report = restarted.reconcile_unfinished()
+        assert len(report) == 1 and report[0].state == EXECUTION_BUSY and not report[0].resolved
+        assert _scalar(target, f"SELECT to_regclass('{table}') IS NULL") is True
+        assert not any(e["event"] == "execute_outcome" for e in ledger.chained_events())
+        if terminate:
+            process.kill()
+            process.join(5)
+            stopped = False
+            report = restarted.reconcile_unfinished()
+            assert len(report) == 1 and report[0].state == RECEIPT_NOT_FOUND and report[0].resolved
+            assert restarted.execute(approval=approval, artifact=artifact).reason == REPLAY
+        else:
+            os.kill(process.pid, signal.SIGCONT)
+            stopped = False
+            parent.send("resume")
+            assert parent.poll(15)
+            assert parent.recv().executed
+            process.join(5)
+            assert process.exitcode == 0
+            assert restarted.reconcile_unfinished() == ()
+            assert _scalar(target, f"SELECT to_regclass('{table}') IS NOT NULL") is True
+    finally:
+        if stopped:
+            os.kill(process.pid, signal.SIGCONT)
+        if process.is_alive():
+            process.kill()
+        process.join(5)
+        parent.close()
+        if restarted:
+            restarted.close()
+        if ledger:
+            ledger.close()
+        _execute(target, f"DROP TABLE IF EXISTS {table}")
+        _delete_receipt(target, execution_id)
+
+
+def test_live_dead_client_with_active_transaction_stays_pending(tmp_path):
+    target = _require_db()
+    table = "active_owner_" + uuid.uuid4().hex
+    authority = ApprovalAuthority(key=b"live-recovery-authority-key-32-bytes")
+    artifact = MigrationArtifact(f"CREATE TABLE {table} (id int); SELECT pg_sleep(30)")
+    approval = authority.mint(artifact_sha256=artifact.sha256, target=target.identity, now=time.time())
+    context = multiprocessing.get_context("spawn")
+    parent, child = context.Pipe()
+    store_path, audit_path = tmp_path / "store.db", tmp_path / "audit.db"
+    process = context.Process(target=_live_paused_owner,
+        args=(target, store_path, audit_path, approval, artifact, child, False))
+    process.start()
+    child.close()
+    restarted = ledger = None
+    execution_id = backend_pid = None
+    try:
+        assert parent.poll(10)
+        execution_id = parent.recv()
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            with _connect(target) as connection:
+                row = connection.execute("SELECT pid FROM pg_stat_activity WHERE query = %s AND state='active'",
+                                         (artifact.sql,)).fetchone()
+            if row:
+                backend_pid = row[0]
+                break
+            time.sleep(0.05)
+        assert backend_pid is not None, "migration did not start in PostgreSQL"
+        process.kill()
+        process.join(5)
+        ledger = SqliteLedger(audit_path)
+        restarted = BrokeredMigrationRunner(authority=authority, target=target,
+            consumed=ConsumedApprovals(store_path), audit=ledger, clock=time.time)
+        report = restarted.reconcile_unfinished()
+        assert len(report) == 1 and report[0].state == RECEIPT_IN_PROGRESS and not report[0].resolved
+        with _connect(target) as connection:
+            assert connection.execute("SELECT pg_terminate_backend(%s)", (backend_pid,)).fetchone()[0]
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            report = restarted.reconcile_unfinished()
+            if report[0].resolved:
+                break
+            time.sleep(0.05)
+        assert report[0].resolved and report[0].state == RECEIPT_NOT_FOUND
+        assert _scalar(target, f"SELECT to_regclass('{table}') IS NULL") is True
+    finally:
+        if process.is_alive():
+            process.kill()
+        process.join(5)
+        parent.close()
+        if backend_pid is not None:
+            with _connect(target) as connection:
+                connection.execute("SELECT pg_terminate_backend(%s)", (backend_pid,))
+        if restarted:
+            restarted.close()
+        if ledger:
+            ledger.close()
+        _execute(target, f"DROP TABLE IF EXISTS {table}")
+        _delete_receipt(target, execution_id)
