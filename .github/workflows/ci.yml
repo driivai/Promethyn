@@ -47,7 +47,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install (editable + dev extra)
-        run: python -m pip install -e ".[dev]"
+        run: python -m pip install -e ".[dev]" -c constraints.txt
 
       - name: Compile
         run: python -m compileall -q src tests scripts
@@ -65,6 +65,13 @@ jobs:
 
       - name: Repository hygiene
         run: python scripts/check_hygiene.py
+
+      - name: IP consistency (owner, license, no stray former license)
+        # What a prime's counsel verifies by hand (docs/IP-READINESS.md §7),
+        # verified on every build. The --history mode, which requires the
+        # canonical identity on every commit reachable from main, is enabled
+        # once the provenance rewrite has run (docs/repository-identity.md §4).
+        run: python scripts/check_ip_consistency.py
 
       - name: PostgreSQL chokepoint live tests (must run, never skip)
         # Runs the agent-isolation proof too. It used to gate on

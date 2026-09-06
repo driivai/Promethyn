@@ -179,9 +179,16 @@ Production executors for commercial systems may be commercial, but the open-sour
 
 ## 12. License position
 
-The intended open-source license for the public protocol, SDKs, local runtime, conformance tests, and reference implementations is Apache License 2.0.
+> **Superseded (PROM-IP).** This section described the open-source license
+> intended for an open-core split. As recorded in `docs/LICENSE-HISTORY.md`,
+> the repository is **proprietary** from the relicense commit onward: no part of
+> it is currently offered under Apache-2.0, and any future open-core release is
+> a separate decision to be recorded there. The paragraphs below are kept as
+> the design intent they were, with that status.
 
-Apache-2.0 is intended to support broad adoption, commercial use, enterprise review, and ecosystem development while preserving copyright and patent grant terms under the license.
+The license intended for a future open-core release of the public protocol, SDKs, local runtime, conformance tests, and reference implementations was Apache License 2.0.
+
+Apache-2.0 was chosen for that intent because it supports broad adoption, commercial use, enterprise review, and ecosystem development while preserving copyright and patent grant terms under the license.
 
 Commercial cloud services, hosted infrastructure, enterprise dashboards, managed deployments, premium integrations, and support services may be proprietary unless explicitly released under the open-source license.
 
@@ -189,7 +196,7 @@ This document is not legal advice. License structure, contribution terms, and co
 
 ## 13. Name, trademark, and conformance mark
 
-Apache-2.0 governs the code. It does not govern the name.
+The code license — Apache-2.0 for the versions that carried it, the proprietary notice now — governs the code. It does not govern the name.
 
 Because a permissive license permits anyone to fork and modify the protocol code — including in ways that weaken its safety semantics — copyright is not the lever that protects the protocol's integrity. The project name and conformance mark are.
 

@@ -7,6 +7,22 @@ in `spec/invariants.md` is a major version bump.
 
 ## [Unreleased]
 
+### Changed
+- **Relicensed to proprietary (PROM-IP).** The Apache-2.0 `LICENSE` is replaced
+  by a placeholder proprietary notice naming DriivAIDev; `NOTICE`,
+  `pyproject.toml` (`license = "LicenseRef-Proprietary"`, `authors`), the
+  README and the site say the same. Commercial and OEM terms are separate
+  written agreements. The boundary is recorded in `docs/LICENSE-HISTORY.md`:
+  Apache-2.0 through commit `0c782e5`, proprietary from the relicense commit;
+  copies obtained under Apache-2.0 remain under it. New for diligence:
+  `docs/IP-READINESS.md` (the one-page summary), `docs/DEPENDENCY-LICENSES.md`
+  (every dependency, its license and obligation, including the LGPL position
+  on `psycopg`), `docs/sbom.cdx.json` (CycloneDX 1.6), `constraints.txt`
+  (the closure pinned; CI installs under it) and
+  `scripts/check_ip_consistency.py` (CI gate: one owner, one license, no
+  stray former license). The commit-provenance rewrite is documented in
+  `docs/repository-identity.md` and executed separately.
+
 ### Added
 - **Durable, privilege-complete migration approvals.** The brokered migration
   runner now requires a filesystem-backed consumed-approval store; spent nonces

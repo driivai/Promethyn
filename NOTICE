@@ -1,7 +1,10 @@
 Promethyn
-Copyright 2026 William Nunlist
+Copyright (c) 2026 DriivAIDev. All rights reserved.
 
-This product includes software developed for the Promethyn project
-(https://github.com/driivai/Promethyn).
+This product is proprietary software of DriivAIDev
+(https://github.com/driivai/Promethyn). It is not open source.
 
-Licensed under the Apache License, Version 2.0.
+See LICENSE for the placeholder notice, docs/LICENSE-HISTORY.md for the license
+history (an open-source license through the recorded commit; proprietary from
+the next), and docs/DEPENDENCY-LICENSES.md for the licenses of the third-party
+components this product uses.

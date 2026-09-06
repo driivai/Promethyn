@@ -247,7 +247,7 @@ Promethyn is not a base model, a wrapper around one provider, a prompt library, 
 
 ## License
 
-Apache-2.0. See [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE). The Python package installs as `prometheus_protocol`; the project and brand name is Promethyn.
+Proprietary — Copyright (c) 2026 DriivAIDev, all rights reserved. The in-repo [`LICENSE`](LICENSE) is a placeholder notice, not a license agreement; commercial, OEM and evaluation terms are separate written agreements (licensing inquiries: will@driivai.com). Earlier versions were released under an open-source license; which one, and the exact commit boundary, is recorded in [`docs/LICENSE-HISTORY.md`](docs/LICENSE-HISTORY.md), and the licenses of third-party components in [`docs/DEPENDENCY-LICENSES.md`](docs/DEPENDENCY-LICENSES.md). The Python package installs as `prometheus_protocol`; the project and brand name is Promethyn.
 
 ## Contributing
 
