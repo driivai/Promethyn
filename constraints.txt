@@ -1,0 +1,34 @@
+# Exact versions of every package in the runtime + dev dependency closure, as
+# resolved on 2026-09-06 (Python 3.10–3.12, Linux x86-64). pyproject.toml keeps
+# ranges, as a library should; this file pins the deployable closure so a build
+# is reproducible and the SBOM (docs/sbom.cdx.json) describes what actually
+# installs. CI installs under it: pip install -e ".[dev]" -c constraints.txt
+#
+# Regenerate: fresh venv, pip install ".[dev]", pip freeze — then review
+# docs/DEPENDENCY-LICENSES.md for any new package.
+#
+# runtime
+psycopg==3.3.5
+psycopg-binary==3.3.5
+cryptography==50.0.1
+cffi==2.1.1
+pycparser==3.0
+# dev: pytest
+pytest==9.1.1
+iniconfig==2.3.0
+pluggy==1.6.0
+packaging==26.3
+pygments==2.21.0
+colorama==0.4.6
+exceptiongroup==1.3.1
+tomli==2.4.1
+# dev: build
+build==1.6.0
+pyproject_hooks==1.2.0
+# dev: mypy
+mypy==2.3.1
+mypy_extensions==1.1.0
+typing_extensions==4.16.0
+pathspec==1.1.1
+librt==0.15.0
+ast_serialize==0.9.0

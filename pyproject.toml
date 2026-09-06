@@ -8,9 +8,12 @@ version = "0.1.0"
 description = "A verifiable, reversible, self-improving learning runtime."
 readme = "README.md"
 requires-python = ">=3.10"
-license = "Apache-2.0"
-license-files = ["LICENSE"]
-authors = [{ name = "William Nunlist" }]
+# Proprietary (PEP 639 license expression). The in-repo LICENSE is a placeholder
+# notice; commercial terms are a separate agreement. History in
+# docs/LICENSE-HISTORY.md.
+license = "LicenseRef-Proprietary"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "DriivAIDev", email = "will@driivai.com" }]
 keywords = [
     "verifiable",
     "reproducible",
