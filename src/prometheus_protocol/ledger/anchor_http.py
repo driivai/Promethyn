@@ -7,7 +7,9 @@ service can front it:
 
 ``POST <url>``
     Body: one anchor record, ``{"version": 1, "seq": N, "entry_hash": "…"}``.
-    Reply: ``{"index": k}`` with 200 or 201. The log appends; it never edits.
+    Reply: ``{"index": k}`` with 200 or 201, where k is a non-negative integer.
+    Success also requires GET history to return the exact canonical submitted
+    record at k. The log appends; it never edits.
 
 ``GET <url>``
     Reply: ``{"entries": [record, …]}``, oldest first — the whole history.
@@ -23,18 +25,23 @@ operator can, and that is the stated residual.
 
 This is the second credentialed client in the codebase, so it carries the same
 transport disciplines as the first (``core/transport.py``): ``https://``
-required for any remote host, redirects refused, every body read under a total
-deadline and a size ceiling, and every failure surfaced as
+required for any remote host, redirects refused, body reads with deadline
+checks and a size ceiling, and transport failures surfaced as
 :class:`AnchorUnavailable` — never a partial read parsed as a shorter history,
 never a swallowed error. Nothing from the endpoint is trusted for its
 *meaning*: a record it returns is validated field by field, and its content is
 only ever pinned against the chain.
+
+Read-back requires read-after-write consistency; it does not prove physical
+durability or protect against a dishonest log operator. The whole-exchange
+deadline defect (F6) is separate and remains open.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import math
 import time
 import urllib.error
 import urllib.request
@@ -69,6 +76,39 @@ _ERRORS = TransportErrors(
 )
 
 
+def _unique_object(pairs: list[tuple[str, object]]) -> dict:
+    result: dict = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON field")
+        result[key] = value
+    return result
+
+
+def _reject_constant(value: str) -> None:
+    raise ValueError("non-finite JSON number")
+
+
+def _finite_float(value: str) -> float:
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError("non-finite JSON number")
+    return result
+
+
+def _json_object(raw: bytes) -> dict:
+    try:
+        data = json.loads(
+            raw.decode("utf-8"), object_pairs_hook=_unique_object,
+            parse_constant=_reject_constant, parse_float=_finite_float,
+        )
+    except (UnicodeDecodeError, ValueError, RecursionError) as exc:
+        raise AnchorUnavailable("anchor log record or response is not unambiguous JSON") from exc
+    if not isinstance(data, dict):
+        raise AnchorUnavailable("anchor log returned JSON that is not an object")
+    return data
+
+
 class HttpAppendOnlyLog:
     """The :class:`~prometheus_protocol.ledger.anchor_targets.AppendOnlyLog`
     port over the wire protocol above."""
@@ -97,9 +137,17 @@ class HttpAppendOnlyLog:
     # -- the port ------------------------------------------------------------
 
     def append(self, record: bytes) -> int:
-        data = self._exchange("POST", self.url, body=bytes(record))
+        # Bind the acknowledgement to the canonical object actually sent. An
+        # index alone (even a plausible one) is not evidence of an append.
+        body = self._record_bytes(_json_object(bytes(record)), where="append")
+        data = self._exchange("POST", self.url, body=body)
         index = data.get("index")
-        return index if isinstance(index, int) and not isinstance(index, bool) else -1
+        if not isinstance(index, int) or isinstance(index, bool) or index < 0:
+            raise AnchorUnavailable("anchor log returned no valid append index")
+        records = self.entries()
+        if index >= len(records) or records[index] != body:
+            raise AnchorUnavailable("anchor log append was not confirmed at its returned index")
+        return index
 
     def entries(self) -> list[bytes]:
         data = self._exchange("GET", self.url)
@@ -119,7 +167,10 @@ class HttpAppendOnlyLog:
     def _record_bytes(entry: object, *, where: str) -> bytes:
         if not isinstance(entry, dict):
             raise AnchorUnavailable(f"anchor log {where} is not a record object")
-        return canonical_json(entry).encode("utf-8")
+        try:
+            return canonical_json(entry).encode("utf-8")
+        except (TypeError, ValueError, RecursionError) as exc:
+            raise AnchorUnavailable("anchor log record cannot be canonically encoded") from exc
 
     # -- transport -----------------------------------------------------------
 
@@ -133,8 +184,8 @@ class HttpAppendOnlyLog:
             headers["Authorization"] = f"Bearer {self._token}"
         request = urllib.request.Request(url, data=body, headers=headers, method=method)
 
-        # One deadline for the whole exchange; ``timeout=`` alone is per socket
-        # operation, and the deadline is what bounds the total.
+        # Deadline checks between body reads supplement per-socket timeouts.
+        # They do not yet bound every exchange phase (F6).
         deadline = time.monotonic() + self.timeout_s
         try:
             response = self._opener.open(request, timeout=self.timeout_s)
@@ -149,6 +200,8 @@ class HttpAppendOnlyLog:
                 detail = quoted.decode("utf-8", "replace")[:500]
             except AnchorUnavailable as inner:
                 detail = f"<error body not read: {inner}>"
+            finally:
+                exc.close()
             raise AnchorUnavailable(
                 f"anchor log returned HTTP {exc.code} to {method}: {detail}"
             ) from exc
@@ -159,14 +212,12 @@ class HttpAppendOnlyLog:
             raise classified from exc
 
         with response:
+            if response.status not in ({200, 201} if method == "POST" else {200}):
+                raise AnchorUnavailable(
+                    f"anchor log returned unexpected HTTP {response.status} to {method}"
+                )
             raw = read_bounded(
                 response, deadline, limit=self.max_response_bytes,
                 timeout_s=self.timeout_s, errors=_ERRORS,
             )
-        try:
-            data = json.loads(raw.decode("utf-8"))
-        except (UnicodeDecodeError, ValueError) as exc:
-            raise AnchorUnavailable(f"anchor log returned a non-JSON body: {exc}") from exc
-        if not isinstance(data, dict):
-            raise AnchorUnavailable("anchor log returned JSON that is not an object")
-        return data
+        return _json_object(raw)

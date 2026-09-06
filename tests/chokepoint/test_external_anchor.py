@@ -112,6 +112,9 @@ class _LogHandler(BaseHTTPRequestHandler):
 
     def _json(self, status: int, payload) -> None:
         body = json.dumps(payload).encode("utf-8")
+        self._body(status, body)
+
+    def _body(self, status: int, body: bytes) -> None:
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -143,14 +146,27 @@ class _LogHandler(BaseHTTPRequestHandler):
         if not isinstance(record, dict):
             self._json(400, {"error": "not an object"})
             return
+        if server.post_mode == "no_store":
+            self._json(201, {"index": 0})
+            return
+        if server.post_mode == "wrong_record":
+            record["entry_hash"] = "f" * 64
         with server.lock:
             server.records.append(record)
             index = len(server.records) - 1
-        self._json(201, {"index": index})
+            if server.post_mode == "concurrent_append":
+                server.records.append({**record, "seq": record["seq"] + 1})
+        if server.ack_body is not None:
+            self._body(server.post_status, server.ack_body)
+        else:
+            self._json(server.post_status, {"index": index})
 
     def do_GET(self) -> None:  # noqa: N802
         server = self.server
         mode = server.mode
+        if server.post_mode == "readback_down" and server.records:
+            self._json(500, {"error": "read-back unavailable"})
+            return
         if mode == "http500":
             self._json(500, {"error": "boom"})
             return
@@ -192,7 +208,7 @@ class _LogHandler(BaseHTTPRequestHandler):
         if self.path.rstrip("/").endswith("/latest"):
             self._json(200, {"entry": records[-1] if records else None})
         else:
-            self._json(200, {"entries": records})
+            self._json(server.get_status, {"entries": records})
 
 
 class _LogServer(ThreadingHTTPServer):
@@ -205,6 +221,10 @@ class _LogServer(ThreadingHTTPServer):
         self.lock = threading.Lock()
         self.stop = threading.Event()
         self.mode = "ok"
+        self.post_mode = "ok"
+        self.ack_body: bytes | None = None
+        self.post_status = 201
+        self.get_status = 200
         self.token: str | None = None
         self._thread = threading.Thread(
             target=self.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
@@ -538,7 +558,11 @@ def test_a_failed_remote_append_is_raised_within_the_deadline(tmp_path, log_serv
     ledger.close()
 
 
-def test_the_runner_refuses_to_execute_when_the_intent_cannot_be_anchored(tmp_path):
+@pytest.mark.parametrize("failure", ["down_store", "empty_ack", "no_store", "wrong_record",
+                                     "readback_down"])
+def test_the_runner_refuses_to_execute_when_the_intent_cannot_be_anchored(
+    tmp_path, log_server, failure,
+):
     """Fail-closed on the write, end to end: the chokepoint runner records the
     execution intent through the anchored ledger; when the anchor is down the
     append raises, the runner treats the intent as unrecorded, refuses, and the
@@ -552,7 +576,15 @@ def test_the_runner_refuses_to_execute_when_the_intent_cannot_be_anchored(tmp_pa
             return True, "ok"
 
     spy = _Spy()
-    audit = SqliteLedger(tmp_path / "audit.db", tip_anchor=ObjectLockTipAnchor(_DownStore()))
+    if failure == "down_store":
+        anchor = ObjectLockTipAnchor(_DownStore())
+    else:
+        if failure == "empty_ack":
+            log_server.ack_body = b"{}"
+        else:
+            log_server.post_mode = failure
+        anchor = LogTipAnchor(HttpAppendOnlyLog(log_server.url, allow_insecure_loopback=True))
+    audit = SqliteLedger(tmp_path / "audit.db", tip_anchor=anchor)
     authority = ApprovalAuthority()
     target = DbTarget(host="127.0.0.1", port=5432, dbname="appdb", user="migrator", password="s")
     artifact = MigrationArtifact("CREATE TABLE witnessed (id int);")
@@ -579,6 +611,124 @@ def test_the_runner_refuses_to_execute_when_the_intent_cannot_be_anchored(tmp_pa
 # ===========================================================================
 # 5. Couldn't-verify is not verified-clean, for every target
 # ===========================================================================
+
+
+@pytest.mark.parametrize("ack", [
+    b"{}", b'{"index":null}', b'{"index":true}', b'{"index":false}',
+    b'{"index":-1}', b'{"index":"0"}', b'{"index":0.0}', b'{"index":[]}',
+    b'{"index":999}', b'{"index":0,"index":0}', b'{"index":NaN}',
+    b'{"index":Infinity}', b'{"index":0,"extra":1e999}', b"[]", b"not JSON",
+])
+def test_http_append_refuses_invalid_or_unbound_acknowledgements(log_server, ack):
+    log_server.ack_body = ack
+    log = HttpAppendOnlyLog(log_server.url, allow_insecure_loopback=True)
+    with pytest.raises(AnchorUnavailable):
+        log.append(encode_tip(ChainTip(seq=1, entry_hash="a" * 64)).encode())
+
+
+@pytest.mark.parametrize("mode", ["no_store", "wrong_record", "readback_down"])
+def test_http_append_requires_exact_record_readback(log_server, mode):
+    log_server.post_mode = mode
+    log = HttpAppendOnlyLog(log_server.url, allow_insecure_loopback=True)
+    with pytest.raises(AnchorUnavailable):
+        log.append(encode_tip(ChainTip(seq=1, entry_hash="a" * 64)).encode())
+
+
+@pytest.mark.parametrize("record", [b'{"seq":1,"seq":2}', b'{"extra":1e999}'],
+                         ids=["duplicate_field", "float_overflow"])
+def test_ambiguous_or_unencodable_record_is_refused_before_post(log_server, record):
+    log = HttpAppendOnlyLog(log_server.url, allow_insecure_loopback=True)
+    with pytest.raises(AnchorUnavailable):
+        log.append(record)
+    assert log_server.records == []
+    assert log_server.seen_auth == []
+
+
+def test_parser_recursion_failure_is_typed_and_refuses_before_post(log_server, monkeypatch):
+    # Interpreter recursion limits differ; inject the actual parser failure
+    # rather than assuming a fixed nesting count fails on every Python version.
+    def exhausted(*args, **kwargs):
+        raise RecursionError("parser exhausted")
+
+    log = HttpAppendOnlyLog(log_server.url, allow_insecure_loopback=True)
+    monkeypatch.setattr("prometheus_protocol.ledger.anchor_http.json.loads", exhausted)
+    with pytest.raises(AnchorUnavailable):
+        log.append(b"{}")
+    assert log_server.records == []
+    assert log_server.seen_auth == []
+
+
+def test_http_append_rejects_index_of_an_older_different_record(log_server):
+    log = HttpAppendOnlyLog(log_server.url, allow_insecure_loopback=True)
+    assert log.append(encode_tip(ChainTip(seq=1, entry_hash="a" * 64)).encode()) == 0
+    log_server.ack_body = b'{"index":0}'
+    with pytest.raises(AnchorUnavailable, match="not confirmed"):
+        log.append(encode_tip(ChainTip(seq=2, entry_hash="b" * 64)).encode())
+
+
+@pytest.mark.parametrize("status", [200, 201])
+@pytest.mark.parametrize("mode", ["ok", "concurrent_append"])
+def test_http_append_confirms_index_not_latest_and_canonicalizes_input(log_server, status, mode):
+    log_server.post_status = status
+    log_server.post_mode = mode
+    log = HttpAppendOnlyLog(log_server.url, allow_insecure_loopback=True)
+    record = {"version": 1, "seq": 1, "entry_hash": "a" * 64}
+    assert log.append(json.dumps(record, indent=2).encode()) == 0
+    assert log.entries()[0] == canonical_json(record).encode()
+    if mode == "concurrent_append":
+        assert log.latest() != log.entries()[0]
+
+
+@pytest.mark.parametrize("method,status", [("POST", 202), ("POST", 206), ("GET", 201),
+                                           ("GET", 202), ("GET", 206)])
+def test_anchor_rejects_unexpected_success_status(log_server, method, status):
+    log = HttpAppendOnlyLog(log_server.url, allow_insecure_loopback=True)
+    log_server.post_status = status if method == "POST" else 201
+    log_server.get_status = status if method == "GET" else 200
+    with pytest.raises(AnchorUnavailable, match="unexpected HTTP"):
+        log.append(encode_tip(ChainTip(seq=1, entry_hash="a" * 64)).encode())
+
+
+@pytest.mark.parametrize("index", [None, True, False, -1, "0", 0.0, 0, 99])
+def test_custom_log_port_cannot_bypass_ack_validation(index):
+    class _FalseAck(MemoryAppendOnlyLog):
+        def append(self, record):
+            return index  # claims success but stores nothing
+
+    with pytest.raises(AnchorUnavailable):
+        LogTipAnchor(_FalseAck()).write(ChainTip(seq=1, entry_hash="a" * 64))
+
+
+def test_custom_log_port_cannot_substitute_record_at_ack_index():
+    class _Substituting(MemoryAppendOnlyLog):
+        def append(self, record):
+            return super().append(encode_tip(ChainTip(seq=1, entry_hash="f" * 64)).encode())
+
+    with pytest.raises(AnchorUnavailable, match="not confirmed"):
+        LogTipAnchor(_Substituting()).write(ChainTip(seq=1, entry_hash="a" * 64))
+
+
+def test_latest_only_claim_does_not_make_a_write_idempotent():
+    tip = ChainTip(seq=1, entry_hash="a" * 64)
+
+    class _FalseLatest(MemoryAppendOnlyLog):
+        def latest(self):
+            return encode_tip(tip).encode()
+
+        def append(self, record):
+            return 0  # no entry to back either claim
+
+    with pytest.raises(AnchorUnavailable, match="not confirmed"):
+        LogTipAnchor(_FalseLatest()).write(tip)
+
+
+def test_confirmed_history_makes_retry_idempotent():
+    log = MemoryAppendOnlyLog()
+    anchor = LogTipAnchor(log)
+    tip = ChainTip(seq=1, entry_hash="a" * 64)
+    anchor.write(tip)
+    anchor.write(tip)
+    assert log.entries() == [encode_tip(tip).encode()]
 
 
 def test_an_unreadable_object_store_is_not_verifiable(tmp_path):

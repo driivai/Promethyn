@@ -8,6 +8,16 @@ in `spec/invariants.md` is a major version bump.
 ## [Unreleased]
 
 ### Fixed
+- **F4/F5: anchor acknowledgement and HTTP response integrity.** Append success
+  now requires an expected HTTP status, a non-negative integer index, and
+  read-back of the exact canonical submitted record at that index. Custom log
+  ports are checked too; idempotent writes require history evidence, not a
+  `/latest` claim. Both HTTP clients reject short Content-Length bodies,
+  ambiguous framing, and incomplete or malformed chunk endings. Real-socket
+  regressions cover valid responses, false acknowledgements, no-executor
+  refusals and `NOT_VERIFIABLE` on incomplete history. Read-after-write
+  consistency is required; dishonest witness operators remain outside this
+  guarantee. Whole-exchange deadlines (F6) and expiry (F7) are not changed.
 - **F2/F3: execution recovery uncertainty and ownership.** Database outcomes are
   now explicit: committed, definitely not committed, or unknown. Unknown outcomes
   remain pending and block later migrations until receipt reconciliation proves

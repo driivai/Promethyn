@@ -385,7 +385,7 @@ class AppendOnlyLog(Protocol):
     whether anyone else can is the log operator's property, not this code's."""
 
     def append(self, record: bytes) -> int:
-        """Append ``record``; return its index."""
+        """Append ``record``; return its non-negative index, readable in entries()."""
 
     def entries(self) -> list[bytes]:
         """Every record, oldest first."""
@@ -440,15 +440,6 @@ class LogTipAnchor:
             for index, body in enumerate(entries)
         ]
 
-    def _latest(self) -> ChainTip | None:
-        try:
-            body = self._log.latest()
-        except AnchorUnavailable:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            raise AnchorUnavailable(f"anchor {self.name} could not be read: {exc}") from exc
-        return decode_record(body, where=f"{self.name}#latest") if body is not None else None
-
     def read(self) -> ChainTip | None:
         history = self.history()
         if not history:
@@ -457,11 +448,18 @@ class LogTipAnchor:
         return max(reversed(history), key=lambda tip: tip.seq)
 
     def write(self, tip: ChainTip) -> None:
-        latest = self._latest()
-        if check_monotonic([latest] if latest is not None else [], tip, where=self.name):
+        # Idempotence must be backed by the same history used by verification,
+        # not a possibly inconsistent /latest response.
+        if check_monotonic(self.history(), tip, where=self.name):
             return
+        body = encode_tip(tip).encode("utf-8")
         try:
-            self._log.append(encode_tip(tip).encode("utf-8"))
+            index = self._log.append(body)
+            if not isinstance(index, int) or isinstance(index, bool) or index < 0:
+                raise AnchorUnavailable("anchor log returned no valid append index")
+            records = self._log.entries()
+            if index >= len(records) or records[index] != body:
+                raise AnchorUnavailable("anchor log append was not confirmed at its returned index")
         except AnchorUnavailable:
             raise
         except Exception as exc:  # noqa: BLE001

@@ -120,6 +120,13 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             if mode == "ok":
                 self._fixed(200, PASS_BODY)
+            elif mode == "short_length":
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(PASS_BODY) + 100))
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.wfile.write(PASS_BODY)
+                self.close_connection = True
             elif mode == "redirect":
                 self.send_response(302)
                 self.send_header(
@@ -388,6 +395,22 @@ def test_a_self_signed_certificate_is_refused(endpoint, self_signed):
     # The provider, which trusts only the system store, refuses it — distinctly.
     provider = _provider(tls.base)
     with pytest.raises(ProviderTLSError):
+        provider.assess(prompt="x")
+
+    # The shared strict HTTPS response adapter must also accept a legitimate
+    # response, with verification still enabled and this test CA trusted.
+    provider._ssl_context.load_verify_locations(cafile=str(cert))
+    assert provider.assess(prompt="x") == "PASS"
+
+
+def test_https_also_refuses_a_complete_json_prefix_of_a_short_body(endpoint, self_signed):
+    key, cert = self_signed
+    server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    server_context.load_cert_chain(str(cert), str(key))
+    tls = endpoint("short_length", tls_context=server_context)
+    provider = _provider(tls.base)
+    provider._ssl_context.load_verify_locations(cafile=str(cert))
+    with pytest.raises(ProviderTransportError, match="incomplete response"):
         provider.assess(prompt="x")
 
 
