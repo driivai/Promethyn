@@ -25,9 +25,12 @@ present, plausible, and void is the failure mode we exist to name.
 > privileged insider. The PIH sprints that follow it do not claim to prevent
 > one. Each introduces a **witness the insider cannot control**, converting a
 > residual from "undetectable, silent" to "detectable, witnessed". PIH-1 (§3)
-> made the ledger anchor external, append-only and continuous. Every "what it
-> does not cover" survives here as a passing test, because an overclaim is the
-> exact defect this program exists to catch.
+> made the ledger anchor external, append-only and continuous. PIH-2 (§2.6,
+> `docs/key-custody.md`) moved approval signing to an external KMS / HSM whose
+> key never exists on the host, so a forgery must ask the KMS and the KMS
+> writes it down — detection, not prevention. Every "what it does not cover"
+> survives here as a passing test, because an overclaim is the exact defect
+> this program exists to catch.
 
 ## Design principles the whole model rests on
 
@@ -54,7 +57,7 @@ present, plausible, and void is the failure mode we exist to name.
 | # | Attacker | Surface | Enforced by construction | Deployment recommendation | Proven by | Residual (headline) |
 |---|---|---|---|---|---|---|
 | 1 | The sandboxed agent | env, filesystem, sockets, `/proc`, network | constructed environment; socket dirs hidden; private `/proc`; no interfaces | microVM for hostile multi-tenant work | `test_agent_zone_containment.py`, `test_isolation.py` | kernel / namespace escape |
-| 2 | The runner host | workspace mode, secrets in `repr`, spawn env, artifact bytes | `0700` workspace; redacted secrets; every spawn env-clean; bytes-not-paths | service account, filesystem/network confinement | `test_sandbox_privilege.py`, `test_credential_hygiene.py`, `test_artifact_integrity.py` | root defeats all of it |
+| 2 | The runner host (and, with PIH-2, the insider who reads its memory) | workspace mode, secrets in `repr`, spawn env, artifact bytes, the signing key | `0700` workspace; redacted secrets; every spawn env-clean; bytes-not-paths; approval signing through an external KMS whose key never exists on the host, every Sign logged by the KMS; a KMS failure mints nothing | service account, filesystem/network confinement; the KMS access policy (invoke ≠ administer ≠ audit); `PROM_REQUIRE_EXTERNAL_SIGNER=1` | `test_sandbox_privilege.py`, `test_credential_hygiene.py`, `test_artifact_integrity.py`, `test_key_custody.py` | an insider holding Sign-invoke gets a valid signature (witnessed, not prevented); root still holds the database credential |
 | 3 | The ledger file (and, with PIH-1, the insider who rewrites it) | chain rewrite, deletion, numeric settings | tip anchored to an external append-only target after every append; the whole anchor history pinned on verify; refuses to rewind; a failed anchor write raised, the runner refuses; NaN/inf/range refused | object-lock retention that outlasts the audit horizon, or a log run by another party; `PROM_REQUIRE_LEDGER_ANCHOR=1` | `test_external_anchor.py`, `test_tip_anchor.py`, `test_ledger_verify_failure_modes.py`, `test_numeric_config_validation.py` | authority over the anchor medium: retention lapsed or bypassed, the log's operator |
 | 4 | The network | credentialed HTTP | `https://` required; redirects refused; bounded reads under a deadline; failures typed and `Unavailable` | certificate pinning per deployment | `test_transport_hardening.py` | system trust store; proxy env is host-controlled |
 | 5 | Misconfiguration | every security flag and combination | requirement honoured or refused; dead-flag mechanism; coherent combinations; hardened defaults | pin the sandbox image | `test_security_posture.py` | `require_digest_pin` and `require_ledger_anchor` off by default |
@@ -229,12 +232,19 @@ rather than invisible.
 
 **Capability.** A local account on the runner host, or a partial compromise of
 the runner zone — a readable log, a crash report, an exception rendered
-somewhere it should not have been. **Full host compromise is explicitly out of
-scope**, and stays out: root on this machine holds the signing key, the database
-credential and the ledger file, so it can mint any approval and write any
-history. Nothing below changes that, and §2.5 says so plainly rather than
-implying a defence that does not exist. What *is* in scope is the blast radius
-before that point, and the standing authority the runner keeps while idle.
+somewhere it should not have been. **Full host compromise was explicitly out of
+scope** for PROM-HARDEN-MAX: root on this machine held the signing key, the
+database credential and the ledger file, so it could mint any approval and
+write any history, and §2.5 said so plainly rather than implying a defence that
+did not exist. What *was* in scope is the blast radius before that point, and
+the standing authority the runner keeps while idle.
+
+The insider-hardening sprints take root on as a *witnessed* adversary rather
+than an out-of-scope one. PIH-1 (§3) put the ledger's tip on a medium root
+cannot rewrite. PIH-2 (§2.6) put the signing key in a KMS root cannot read, so
+minting an approval means asking the KMS, and the KMS records the request.
+Root still holds the database credential and can still run SQL with it; that
+path is not the chokepoint's to stop, and nothing here claims to.
 
 ### 2.1 What was found
 
@@ -277,6 +287,9 @@ same shell, which is precisely what `demo/README.md` tells an operator to do.
   one adapter away from being wrong again.
 - **A deployment can hold no standing credential.** `DbTarget.password_provider`
   is consulted per connection, so an idle runner holds nothing worth stealing.
+- **A deployment can hold no signing key at all** (PIH-2, §2.6). With
+  `MigrationRunnerConfig(signer=KmsSigner(…))` the private key exists only in
+  the KMS; a verify-only host holds the public key and cannot mint.
 
 ### 2.3 The swap-after-hash question
 
@@ -321,12 +334,16 @@ production path.
 
 ### 2.5 Residual — what is not covered
 
-- **Full host or root compromise defeats all of it.** Root reads the signing key
-  out of the runner's memory, reads or replaces the credential, rewrites the
-  ledger from genesis (`docs/ledger-integrity.md`: undetectable without an
-  out-of-band anchor), and mints any approval it likes. Every item in §2.2
-  reduces what a *partial* compromise yields. None of them survives root, and no
-  arrangement of them would.
+- **Full host or root compromise still defeats the *confidentiality* items, and
+  is now witnessed rather than silent for the rest.** Root reads or replaces
+  the database credential and runs SQL with it directly — the chokepoint is
+  not what stands between root and the database. What root can no longer do
+  *silently*: read the signing key (it is in the KMS, §2.6; forging means a
+  logged Sign request) and rewrite the ledger from genesis (the anchor is on a
+  medium root cannot rewrite, §3). Every item in §2.2 reduces what a *partial*
+  compromise yields; the two PIH witnesses are what a *full* compromise now
+  leaves behind. An insider who holds the KMS Sign-invoke permission is the
+  §2.6 residual: valid signatures, every one recorded.
 - **Memory is not scrubbed.** A `password_provider` narrows the credential's
   window from process-lifetime to call-scope. It does not erase anything: Python
   strings are immutable and the interpreter may copy them, so the value can
@@ -359,6 +376,59 @@ production path.
 - **`unsafe` remains unsafe.** It now withholds the environment, which is not the
   same as isolating. It is opt-in behind `PROM_ALLOW_UNSAFE_EXEC=1` and warns on
   every run.
+
+### 2.6 PIH-2 — key custody: the signing key leaves the host
+
+**The finding.** Every approval was sealed by an HMAC over a key held as bytes
+in the runner process. The agent could not reach it (§1). Root could: a memory
+read, a core dump, a debugger — and a copy of bytes leaves no trace, so a
+forged approval was indistinguishable from a real one and nobody was told.
+`docs/key-custody.md` is the full statement; the essentials:
+
+- **The signer is a port** (`chokepoint/signer.py`). `LocalHmacSigner` keeps the
+  key in the process and is **non-protecting against a host-level insider** —
+  development only, warned about at build, refused under the requirement.
+  `KmsSigner` signs through a two-operation `KmsPort` (`sign`,
+  `get_public_key`) neither of which can return key material; the private key
+  exists only in the KMS / HSM. `PublicKeyVerifier` is a host that can check
+  approvals and never mint one.
+- **The scheme** is ECDSA over P-256 with SHA-256, DER signatures, over the
+  approval's *unchanged* canonical bytes — the one scheme AWS KMS, Google
+  Cloud KMS and PKCS#11 HSMs all offer. Verification uses the public key, so
+  the verify side holds nothing a forger could use, needs no KMS credential,
+  and keeps working through a KMS outage while minting, correctly, does not.
+  Artifact and target binding, expiry, single use and the fail-closed
+  `authorize` are untouched; a test pins the canonical bytes to their pre-PIH-2
+  digest.
+- **The witness.** Every Sign is a record in the KMS's audit trail —
+  CloudTrail, Cloud Audit Logs, the HSM's log — written by the service, not the
+  caller, so the runner host cannot erase it. `unwitnessed_digests` and
+  `unexplained_records` let an auditor reconcile approvals against that trail:
+  a Sign record no authorised approval accounts for is the forgery signal.
+  **Detection, not prevention:** the KMS signs for whoever holds the invoke
+  permission.
+- **Fail-closed.** A KMS that is unreachable, denies the call, times out, or
+  answers with something that is not a signature under its own public key
+  raises a distinct `SignerUnavailable` subclass and mints nothing — proven end
+  to end through the chokepoint runner: database untouched, executor never
+  called. There is no path from a configured `KmsSigner` to a local key.
+- **The requirement.** `require_external_signer` (`PROM_REQUIRE_EXTERNAL_SIGNER`,
+  on `SECURITY_FIELDS`) is the OR of its sources and refuses a local key as
+  "cannot be honoured".
+- **No KMS SDK is bundled.** `MemoryKms` carries the medium's semantics —
+  unextractability proven by walking the surface against the real scalar,
+  per-request logging including denied attempts, separation of administration
+  from invocation, a fault surface — and the port's mapping to each real KMS is
+  documented call by call with the procedure for proving an adapter.
+
+**Residual.** An insider who holds the Sign-invoke permission obtains valid
+signatures — `test_an_insider_with_sign_invoke_gets_a_valid_signature_AND_is_logged`
+has the runner execute their hostile SQL — and is caught only by the log entry
+they leave. Stopping them takes two-party control (PIH-3, buyer-gated). The
+witness is worth exactly the separation the deployment enforces between who
+may invoke Sign, who administers the key, and who reads the trail; the access
+policy that does so is a documented deployment artifact, and the code cannot
+check that it was set.
 
 ---
 
@@ -754,7 +824,8 @@ variable, and wired to nothing as a field. The audit that named it was right.
 | `route_high_risk` | hardcoded | `ActionGate` | not configurable | enforced |
 | `pending_ttl_seconds` | Config, env | `PendingActionService` | negative refused; `0` documented as "no expiry" | enforced (§3) |
 | `enable_model_judge` | Config, env | `build_orchestrator` | a provider without `assess` → every verify is `Unavailable`, visibly; not refused (advisory feature, not a security requirement) | honoured |
-| `MigrationRunnerConfig` | code | chokepoint runner | key under 32 bytes or no durable store → refused at construction | enforced (§1) |
+| `MigrationRunnerConfig` | code | chokepoint runner | key under 32 bytes, no durable store, or neither/both of `signing_key` and `signer` → refused at construction | enforced (§1, §2.6) |
+| `require_external_signer` | Config, env, runner config (OR of sources) | `resolve_signer` at build | a local HMAC key → **refused at construction** ("cannot be honoured"); a KMS failure at build → no signer | enforced (§2.6, PIH-2) |
 | `ledger_anchor` | Config, env | `build_ledger` → the anchor target; written after every append, pinned on every verify | malformed or plaintext-to-remote refused at load; a target that cannot be read → `NOT_VERIFIABLE`; a target that cannot be written → `AnchorUnavailable` raised, the runner refuses | enforced when set (§3, PIH-1) |
 | `require_ledger_anchor` | Config, env (OR of sources) | `build_ledger` | no anchor, or a `file://` one → **refused at construction** ("cannot be honoured") | enforced (§3, PIH-1) |
 | `ledger_anchor_retention_days` | Config, env | object-lock targets (requested per record) | out of `[1, 36500]` refused at load; the medium's honouring of it is a deployment property | enforced at load (§3.4) |
@@ -768,7 +839,7 @@ judge off, human holds expire, escalation floor `0.75` with high-risk routing
 hardcoded on, every cap finite and positive. Asserted by
 `test_defaults_are_the_hardened_posture`.
 
-**Two defaults are not the hardened posture, stated rather than hidden:**
+**Three defaults are not the hardened posture, stated rather than hidden:**
 
 - **`require_digest_pin=False`.** Digest pinning is a property of a container
   image, and the shipped default image is a floating tag by design so the code
@@ -785,13 +856,19 @@ hardcoded on, every cap finite and positive. Asserted by
   and throwaway ledgers have nothing to anchor and a development install has no
   witness to point at. Production sets `PROM_REQUIRE_LEDGER_ANCHOR=1`, which
   refuses an unanchored ledger and a `file://` anchor alike.
+- **`require_external_signer=False`** (§2.6). A development install has no KMS
+  to point at, and the in-memory KMS is a test double, not a place for a
+  production key; the local key is warned about at build as non-protecting.
+  Production sets `PROM_REQUIRE_EXTERNAL_SIGNER=1`, which refuses it.
 
 ### 5.5 Residual — what is not covered
 
-- **Two of the defaults above are permissive**, for the stated reasons. An
+- **Three of the defaults above are permissive**, for the stated reasons. An
   operator who forgets `require_digest_pin` on a container-only host runs an
   unpinned image, with a warning; one who forgets `require_ledger_anchor` runs
-  an unwitnessed ledger, with a warning on every open.
+  an unwitnessed ledger, with a warning on every open; one who forgets
+  `require_external_signer` signs with a key root can read, with a warning at
+  build.
 - **The dead-flag mechanism sees attribute reads, not enforcement.** It proves
   a field is *consumed* somewhere; whether the consumer honours it correctly is
   what the per-flag tests in §5.3 are for. A field read only to be logged would

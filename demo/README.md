@@ -53,6 +53,13 @@ same value across gate and runner restarts; rotating it deliberately invalidates
 all outstanding approvals. The command above is for initial setup, not for every
 launch.
 
+`PROM_CHOKEPOINT_KEY` is a **local** HMAC key: bytes in the runner process, which
+root on the host can read and use with no record anywhere. It is the development
+path and the demo warns about it as non-protecting at build. Production signs
+approvals through an external KMS / HSM instead (`MigrationRunnerConfig(signer=
+KmsSigner(...))`) and sets `PROM_REQUIRE_EXTERNAL_SIGNER=1`, which refuses a
+local key — see `docs/key-custody.md`.
+
 ### A throwaway local cluster (optional, for the strongest step 1)
 
 Placing the socket under a sandbox-hidden path (`/home/<user>/...`) makes step 1

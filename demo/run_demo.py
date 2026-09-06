@@ -36,6 +36,7 @@ from prometheus_protocol.chokepoint import (
     build_migration_runtime,
     postgres_executor,
 )
+from prometheus_protocol.core.config import Config
 from prometheus_protocol.core.models import Judgment, Verdict
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
 
@@ -205,9 +206,13 @@ def _passing_judgment() -> Judgment:
 
 
 def run_chokepoint(target: DbTarget, signing_key: bytes) -> None:
-    # The gate and the runner share one authority (one signing key) — the trusted
-    # zone. The agent never holds it. The receipt ledger is fresh for the demo;
-    # spent approvals are durable so a restart cannot revive a capability.
+    # The gate and the runner share one authority — the trusted zone. The agent
+    # never holds its key. The demo signs with a LOCAL key (PROM_CHOKEPOINT_KEY),
+    # which is non-protecting against root on this host and is warned about at
+    # build; production passes signer=KmsSigner(...) instead and sets
+    # PROM_REQUIRE_EXTERNAL_SIGNER=1 (docs/key-custody.md). The receipt ledger is
+    # fresh for the demo; spent approvals are durable so a restart cannot revive
+    # a capability.
     ledger = SqliteLedger(":memory:")
     runtime = build_migration_runtime(
         MigrationRunnerConfig(
@@ -221,6 +226,7 @@ def run_chokepoint(target: DbTarget, signing_key: bytes) -> None:
         audit=ledger,
         executor=postgres_executor,
         clock=time.time,
+        settings=Config.from_env(),
     )
     authority = runtime.authority
     runner = runtime.runner

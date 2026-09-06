@@ -30,7 +30,13 @@ classifiers = [
     "Topic :: Software Development :: Libraries",
     "Topic :: Software Development :: Quality Assurance",
 ]
-dependencies = ["psycopg[binary]>=3.2,<4"]
+dependencies = [
+    "psycopg[binary]>=3.2,<4",
+    # Asymmetric approval signing (ECDSA P-256) for the external-signer path
+    # (docs/key-custody.md). Standard-library Python has no asymmetric
+    # primitives, and implementing one here would be the wrong kind of custody.
+    "cryptography>=41",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "build>=1.0", "mypy>=1.8"]

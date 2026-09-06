@@ -60,6 +60,7 @@ SECURITY_FIELDS = (
     "ledger_anchor",
     "ledger_anchor_retention_days",
     "require_ledger_anchor",
+    "require_external_signer",
 )
 
 
@@ -182,6 +183,14 @@ class Config:
     # anchor. Off by default so development and in-memory ledgers work; the
     # production posture sets PROM_REQUIRE_LEDGER_ANCHOR=1 (§5.4).
     require_ledger_anchor: bool = False
+
+    # Approval key custody (threat model §2.6; docs/key-custody.md). When set,
+    # the chokepoint refuses to build with a local HMAC key — a key root on the
+    # host can read and use silently — and insists on an external signer (a
+    # KMS / HSM whose private key never exists on the host, and which logs
+    # every Sign). Off by default: a development install has no KMS to point
+    # at; the production posture sets PROM_REQUIRE_EXTERNAL_SIGNER=1 (§5.4).
+    require_external_signer: bool = False
 
     def __post_init__(self) -> None:
         """Reject non-finite, out-of-range and wrong-signed numeric settings.
@@ -324,4 +333,5 @@ class Config:
                 env.get("PROM_LEDGER_ANCHOR_RETENTION_DAYS"), 3650
             ),
             require_ledger_anchor=_as_bool(env.get("PROM_REQUIRE_LEDGER_ANCHOR"), False),
+            require_external_signer=_as_bool(env.get("PROM_REQUIRE_EXTERNAL_SIGNER"), False),
         )
