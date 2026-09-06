@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
+from prometheus_protocol.core.anchor_spec import ANCHOR_FILE, parse_anchor_spec
 from prometheus_protocol.core.endpoint import validate_endpoint
 from prometheus_protocol.core.errors import ConfigError
 from prometheus_protocol.core.validation import (
@@ -56,6 +57,9 @@ SECURITY_FIELDS = (
     "request_timeout_s",
     "provider_max_response_bytes",
     "max_role_calls",
+    "ledger_anchor",
+    "ledger_anchor_retention_days",
+    "require_ledger_anchor",
 )
 
 
@@ -160,6 +164,25 @@ class Config:
     # outright — never truncated and parsed as if complete.
     provider_max_response_bytes: int = 4 * 1024 * 1024
 
+    # Ledger tip anchoring (threat model §3; docs/ledger-integrity.md). Where the
+    # audit chain's tip is written after every append, so a rewrite of the chain
+    # from genesis, or its deletion, is detectable against a witness the ledger
+    # host cannot silence: file:///path (development, NON-PROTECTING — it
+    # rewrites one file the ledger adversary can rewrite too), worm:///directory
+    # (one immutable record per tip on a write-once mount) or https://host/path
+    # (a remote append-only log run by another party). Unset means unanchored,
+    # which the runtime warns about on every file-backed ledger it opens.
+    ledger_anchor: str | None = None
+    # Bearer credential for the https:// log. Never logged.
+    ledger_anchor_token: str | None = None
+    # Retention requested per record on an object-lock medium. The window is
+    # exactly the period over which a rewrite stays detectable; ten years.
+    ledger_anchor_retention_days: int = 3650
+    # Production gate: refuse to build a ledger without an append-only external
+    # anchor. Off by default so development and in-memory ledgers work; the
+    # production posture sets PROM_REQUIRE_LEDGER_ANCHOR=1 (§5.4).
+    require_ledger_anchor: bool = False
+
     def __post_init__(self) -> None:
         """Reject non-finite, out-of-range and wrong-signed numeric settings.
 
@@ -227,6 +250,38 @@ class Config:
                 "it is refused for remote output even with PROM_ALLOW_UNSAFE_EXEC."
             )
 
+        # -- the ledger anchor: parsed at load, and a requirement it cannot
+        # meet is refused here rather than producing an unanchored ledger.
+        require_int_in_range(
+            self.ledger_anchor_retention_days,
+            name="ledger_anchor_retention_days",
+            minimum=1,
+            maximum=36_500,
+        )
+        anchor = None
+        if self.ledger_anchor:
+            anchor = parse_anchor_spec(
+                self.ledger_anchor,
+                name="ledger_anchor",
+                allow_insecure_loopback=self.allow_insecure_loopback,
+            )
+        if self.require_ledger_anchor:
+            if anchor is None:
+                raise ConfigError(
+                    "require_ledger_anchor=True cannot be honoured: no ledger_anchor "
+                    "is configured. Set PROM_LEDGER_ANCHOR to worm:///directory (a "
+                    "write-once mount) or https://host/path (an append-only log run "
+                    "by another party), or withdraw the requirement."
+                )
+            if anchor.kind == ANCHOR_FILE:
+                raise ConfigError(
+                    "require_ledger_anchor=True cannot be honoured by a file:// "
+                    "anchor: a single local file is rewritten in place and is "
+                    "non-protecting against anyone who can write the ledger's host. "
+                    "The requirement is for an external append-only witness; use "
+                    "worm:// or https://, or withdraw the requirement."
+                )
+
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "Config":
         env = os.environ if env is None else env
@@ -262,4 +317,11 @@ class Config:
             provider_max_response_bytes=_as_int(
                 env.get("PROM_PROVIDER_MAX_RESPONSE_BYTES"), 4 * 1024 * 1024
             ),
+            # Empty means unanchored, and an empty token means none.
+            ledger_anchor=env.get("PROM_LEDGER_ANCHOR") or None,
+            ledger_anchor_token=env.get("PROM_LEDGER_ANCHOR_TOKEN") or None,
+            ledger_anchor_retention_days=_as_int(
+                env.get("PROM_LEDGER_ANCHOR_RETENTION_DAYS"), 3650
+            ),
+            require_ledger_anchor=_as_bool(env.get("PROM_REQUIRE_LEDGER_ANCHOR"), False),
         )

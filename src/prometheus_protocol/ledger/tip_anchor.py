@@ -14,15 +14,30 @@ it automatically.
 
 **The trust boundary is the whole point, so it is stated plainly.** The anchor
 helps if and only if it lives somewhere the ledger-file adversary cannot write.
-That means a different trust domain — another host, an append-only or
-write-once store, an object store with object-lock, a WORM volume, a printed or
-signed digest. An anchor file sitting in the same directory as the ledger, on
-the same medium, owned by the same account, protects against nothing: an
-attacker who rewrites the chain simply rewrites the anchor to match. That case
-is not defended, and pretending otherwise would be theater. See
-``docs/threat-model.md`` §3.
+Three families of target exist (``docs/ledger-integrity.md``):
 
-Two behaviours make the anchor useful rather than decorative:
+* :class:`FileTipAnchor` (here) — one mutable file, rewritten in place.
+  **Non-protecting.** An anchor file sitting in the same directory as the
+  ledger, on the same medium, owned by the same account, protects against
+  nothing: an attacker who rewrites the chain simply rewrites the anchor to
+  match. That case is not defended — it is a passing test — and pretending
+  otherwise would be theatre. Development only.
+* ``ObjectLockTipAnchor`` (``ledger/anchor_targets.py``) — one immutable record
+  per anchored tip on a write-once medium: an object-locked bucket under
+  retention, or a WORM volume. Even the credential that writes records cannot
+  overwrite or delete one while retention holds.
+* ``LogTipAnchor`` (``ledger/anchor_targets.py``) — one record per tip appended
+  to a log the ledger host can only append to, run by a party the ledger-host
+  adversary is not.
+
+The two append-only families expose the **whole anchored history**, and the
+verifier pins every record in it. That is what makes an immutable medium worth
+having: a forged record appended by someone holding the write credential does
+not mask the honest records before it. What remains, and is stated in the
+threat model, is the adversary who holds authority over the *medium* — retention
+lapsed or bypassed, or the log's own operator. See ``docs/threat-model.md`` §3.
+
+Two behaviours make every target useful rather than decorative:
 
 * **It is written on every append**, so it is never stale by more entries than
   the process has crashed through.
@@ -38,7 +53,7 @@ import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Iterable, Protocol
 
 from prometheus_protocol.ledger.audit_chain import ChainTip
 
@@ -50,7 +65,10 @@ class AnchorUnavailable(RuntimeError):
 
     Deliberately NOT swallowed by the verifier: an anchor that was configured
     and cannot be read leaves verification unable to answer the question it was
-    configured to answer, which is ``NOT_VERIFIABLE``, never ``VALID``.
+    configured to answer, which is ``NOT_VERIFIABLE``, never ``VALID``. And not
+    swallowed by the ledger's append either: an entry whose anchor write failed
+    is one a later rewrite could hide, so the caller learns now, not during an
+    incident.
     """
 
 
@@ -66,8 +84,15 @@ class AnchorRewind(AnchorUnavailable):
 class TipAnchor(Protocol):
     """Somewhere a chain tip can be kept out of the ledger adversary's reach."""
 
+    #: Short label for logs and the CLI.
+    name: str
+    #: True when the target keeps every anchored tip as its own record, never
+    #: overwrites or deletes one, and reads the whole history back. False for
+    #: the single-file target, which is only as safe as its placement.
+    append_only: bool
+
     def read(self) -> ChainTip | None:
-        """The anchored tip, or ``None`` if nothing has been anchored yet.
+        """The latest anchored tip, or ``None`` if nothing has been anchored yet.
 
         Raises :class:`AnchorUnavailable` when a tip exists but cannot be read —
         distinct from "no anchor", because the two must never be conflated.
@@ -76,19 +101,116 @@ class TipAnchor(Protocol):
     def write(self, tip: ChainTip) -> None:
         """Record ``tip``. Raises :class:`AnchorRewind` if it moves backwards."""
 
+    def history(self) -> list[ChainTip]:
+        """Every anchored tip in the order written. The verifier pins them all."""
+
+
+# -- the record, and the guard every target applies ------------------------
+
+
+def encode_tip(tip: ChainTip) -> str:
+    """The one canonical serialization of an anchor record."""
+
+    payload = {"version": ANCHOR_VERSION, "seq": tip.seq, "entry_hash": tip.entry_hash}
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+def decode_tip(payload: object, *, where: str) -> ChainTip:
+    """Validate a decoded record or raise :class:`AnchorUnavailable`.
+
+    A malformed record must never degrade to "verify without one" — that would
+    turn a tampered anchor into a clean bill of health.
+    """
+
+    if not isinstance(payload, dict):
+        raise AnchorUnavailable(f"anchor at {where} is not an object")
+    if payload.get("version") != ANCHOR_VERSION:
+        raise AnchorUnavailable(
+            f"anchor at {where} has unsupported version {payload.get('version')!r}"
+        )
+    seq, entry_hash = payload.get("seq"), payload.get("entry_hash")
+    if not isinstance(seq, int) or isinstance(seq, bool) or seq < 1:
+        raise AnchorUnavailable(f"anchor at {where} has an invalid seq {seq!r}")
+    if not isinstance(entry_hash, str) or len(entry_hash) != 64:
+        raise AnchorUnavailable(f"anchor at {where} has an invalid entry_hash")
+    try:
+        bytes.fromhex(entry_hash)
+    except ValueError as exc:
+        raise AnchorUnavailable(f"anchor at {where} entry_hash is not hex") from exc
+    return ChainTip(seq=seq, entry_hash=entry_hash)
+
+
+def decode_record(body: bytes | str, *, where: str) -> ChainTip:
+    """Decode one stored record (bytes or text) into a tip, or raise."""
+
+    try:
+        text = body.decode("utf-8") if isinstance(body, bytes) else body
+        payload = json.loads(text)
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise AnchorUnavailable(f"anchor at {where} is not valid JSON: {exc}") from exc
+    return decode_tip(payload, where=where)
+
+
+def check_monotonic(held: Iterable[ChainTip], tip: ChainTip, *, where: str) -> bool:
+    """The guard every target applies before writing.
+
+    Refuses a rewind (``tip.seq`` below the highest anchored seq) and a different
+    hash at an already-anchored seq — both are the tampering the anchor exists
+    to show, and recording over them would erase the evidence. Returns ``True``
+    when ``tip`` is already anchored exactly (the write is idempotent), ``False``
+    when it is new.
+    """
+
+    already = False
+    latest = 0
+    for current in held:
+        latest = max(latest, current.seq)
+        if current.seq == tip.seq:
+            if current.entry_hash != tip.entry_hash:
+                raise AnchorRewind(
+                    f"refusing to re-anchor seq {tip.seq} with a different hash at "
+                    f"{where}: the entry at that position was rewritten"
+                )
+            already = True
+    if tip.seq < latest:
+        raise AnchorRewind(
+            f"refusing to anchor seq {tip.seq} over {latest} at {where}: the chain "
+            "has shortened, which is the tampering this anchor exists to show"
+        )
+    return already
+
+
+def anchor_history(anchor: TipAnchor) -> list[ChainTip]:
+    """Every tip ``anchor`` holds — the whole history where the target keeps
+    one, the single latest tip where it does not."""
+
+    history = getattr(anchor, "history", None)
+    if callable(history):
+        return list(history())
+    tip = anchor.read()
+    return [tip] if tip is not None else []
+
+
+# -- the single-file target: development only ------------------------------
+
 
 @dataclass(frozen=True)
 class FileTipAnchor:
-    """A tip anchor kept as a small JSON file.
+    """A tip anchor kept as one small JSON file, rewritten in place.
 
-    Intended for a path on a *different medium* from the ledger — a read-only
-    mount from another host, an append-only volume, a synced secret store. The
-    class cannot check that, and does not pretend to: placing this file beside
-    the ledger yields a value that looks like protection and is not.
+    **Non-protecting.** It holds no history and refuses nothing: placing this
+    file beside the ledger yields a value that looks like protection and is not,
+    and placing it on a write-once medium does not help either, because it
+    overwrites. It exists for development and for the passing test that records
+    what an anchor on the adversary's own medium is worth. The runtime warns
+    when it is the configured target.
 
     Writes are atomic (temp file plus rename) so a crash mid-write cannot leave a
     half-written anchor that reads as corrupt, and the file is created ``0600``.
     """
+
+    name = "file"
+    append_only = False
 
     path: Path
 
@@ -102,45 +224,16 @@ class FileTipAnchor:
             return None
         except OSError as exc:
             raise AnchorUnavailable(f"anchor at {self.path} could not be read: {exc}") from exc
-        try:
-            payload = json.loads(raw)
-        except ValueError as exc:
-            raise AnchorUnavailable(f"anchor at {self.path} is not valid JSON: {exc}") from exc
-        if not isinstance(payload, dict):
-            raise AnchorUnavailable(f"anchor at {self.path} is not an object")
-        if payload.get("version") != ANCHOR_VERSION:
-            raise AnchorUnavailable(
-                f"anchor at {self.path} has unsupported version {payload.get('version')!r}"
-            )
-        seq, entry_hash = payload.get("seq"), payload.get("entry_hash")
-        if not isinstance(seq, int) or isinstance(seq, bool) or seq < 1:
-            raise AnchorUnavailable(f"anchor at {self.path} has an invalid seq {seq!r}")
-        if not isinstance(entry_hash, str) or len(entry_hash) != 64:
-            raise AnchorUnavailable(f"anchor at {self.path} has an invalid entry_hash")
-        try:
-            bytes.fromhex(entry_hash)
-        except ValueError as exc:
-            raise AnchorUnavailable(f"anchor at {self.path} entry_hash is not hex") from exc
-        return ChainTip(seq=seq, entry_hash=entry_hash)
+        return decode_record(raw, where=str(self.path))
+
+    def history(self) -> list[ChainTip]:
+        tip = self.read()
+        return [tip] if tip is not None else []
 
     def write(self, tip: ChainTip) -> None:
-        current = self.read()  # raises AnchorUnavailable on a corrupt anchor
-        if current is not None and tip.seq < current.seq:
-            raise AnchorRewind(
-                f"refusing to anchor seq {tip.seq} over {current.seq}: the chain "
-                "has shortened, which is the tampering this anchor exists to show"
-            )
-        if current is not None and tip.seq == current.seq and tip.entry_hash != current.entry_hash:
-            raise AnchorRewind(
-                f"refusing to re-anchor seq {tip.seq} with a different hash: the "
-                "entry at that position was rewritten"
-            )
-        payload = {
-            "version": ANCHOR_VERSION,
-            "seq": tip.seq,
-            "entry_hash": tip.entry_hash,
-        }
-        body = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        if check_monotonic(self.history(), tip, where=str(self.path)):
+            return  # already anchored exactly; nothing to rewrite
+        body = encode_tip(tip)
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             # Atomic: a crash mid-write leaves the previous anchor intact rather

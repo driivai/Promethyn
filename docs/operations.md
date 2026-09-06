@@ -6,6 +6,38 @@ execution was refused gets re-driven. The decision semantics themselves are
 specified in `spec/invariants.md` (INV-EXEC-1..4) and are not changed by
 anything here.
 
+## Anchoring the audit chain (`PROM_LEDGER_ANCHOR`)
+
+The audit hash chain detects edits, but an adversary who can rewrite the whole
+ledger file — the privileged insider — recomputes a consistent chain and the
+chain alone cannot tell. The tip of the chain is therefore anchored after every
+append to a witness outside the ledger host's authority
+(`docs/ledger-integrity.md`, "External anchor targets"):
+
+```
+PROM_LEDGER_ANCHOR=worm:///mnt/worm/promethyn-anchors       # a WORM-mounted directory
+PROM_LEDGER_ANCHOR=https://witness.example/ledgers/prod    # an append-only log run by another party
+PROM_LEDGER_ANCHOR_TOKEN=…                                 # the log's bearer credential (append + read only)
+PROM_LEDGER_ANCHOR_RETENTION_DAYS=3650                     # object-lock retention requested per record
+PROM_REQUIRE_LEDGER_ANCHOR=1                               # production: refuse an unanchored ledger
+```
+
+`file:///path/tip.json` also works and is **non-protecting** — a single file on
+the host, rewritten in place, which the same adversary rewrites too. It is for
+development, the runtime warns when it is used, and it is refused under
+`PROM_REQUIRE_LEDGER_ANCHOR=1`.
+
+Verify from a host other than the ledger's where you can, and on a schedule:
+
+```
+0 * * * * PROM_LEDGER_PATH=/var/lib/promethyn/ledger.db PROM_LEDGER_ANCHOR=… prometheus-protocol audit --verify-chain || alert
+```
+
+exits 2 for anything but `VALID` — `BROKEN`, `TRUNCATED` and `NOT_VERIFIABLE`
+alike. What the anchor detects, and what it does not (an adversary with
+authority over the anchor medium itself), is stated in `docs/threat-model.md`
+§3.3–§3.5.
+
 ## Pending-action expiry (TTL)
 
 A routed action halts as a *pending* hold and stays approvable for
