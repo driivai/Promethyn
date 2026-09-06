@@ -25,8 +25,15 @@ import argparse
 import re
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
+
+try:  # Python 3.11+
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10: the dev closure ships tomli
+    try:
+        import tomli as tomllib  # type: ignore[no-redef]
+    except ModuleNotFoundError:
+        tomllib = None  # type: ignore[assignment]  # regex fallback below
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -63,6 +70,24 @@ def _read(rel: str) -> str:
     return (REPO_ROOT / rel).read_text(encoding="utf-8", errors="replace")
 
 
+def _project_table(pyproject: str) -> dict:
+    """The ``[project]`` table, via a TOML parser where one exists and a narrow
+    regex otherwise — the three fields this gate reads are single-line."""
+
+    if tomllib is not None:
+        return tomllib.loads(pyproject)["project"]
+    table: dict = {}
+    match = re.search(r'^license\s*=\s*"([^"]*)"', pyproject, re.M)
+    table["license"] = match.group(1) if match else None
+    table["authors"] = [
+        {"name": m.group(1), "email": m.group(2)}
+        for m in re.finditer(r'\{\s*name\s*=\s*"([^"]*)"\s*,\s*email\s*=\s*"([^"]*)"\s*\}', pyproject)
+    ]
+    classifiers = re.search(r"^classifiers\s*=\s*\[(.*?)\]", pyproject, re.M | re.S)
+    table["classifiers"] = re.findall(r'"([^"]*)"', classifiers.group(1)) if classifiers else []
+    return table
+
+
 def check_declarations() -> list[str]:
     findings: list[str] = []
 
@@ -76,7 +101,7 @@ def check_declarations() -> list[str]:
     if OWNER not in notice or "proprietary" not in notice.lower():
         findings.append("NOTICE does not name the owner as proprietary")
 
-    project = tomllib.loads(_read("pyproject.toml"))["project"]
+    project = _project_table(_read("pyproject.toml"))
     if project.get("license") != LICENSE_EXPRESSION:
         findings.append(f"pyproject.toml license is {project.get('license')!r}, not {LICENSE_EXPRESSION!r}")
     authors = project.get("authors") or []
