@@ -13,10 +13,14 @@ import pytest
 from prometheus_protocol.chokepoint import (
     AUDIT_OUTCOME_UNAVAILABLE,
     AUDIT_UNAVAILABLE,
+    EXECUTION_COMMITTED,
+    EXECUTION_NOT_COMMITTED,
+    EXECUTION_UNKNOWN,
     RECEIPT_COMMITTED,
     RECEIPT_CONFLICT,
     RECEIPT_IN_PROGRESS,
     RECEIPT_NOT_FOUND,
+    RECONCILIATION_REQUIRED,
     REPLAY,
     STORE_UNAVAILABLE,
     TARGET_MISMATCH,
@@ -235,7 +239,8 @@ def test_independent_processes_cannot_both_spend_approval(tmp_path):
         assert process.exitcode == 0
 
     assert sum(executed for executed, _, _ in outcomes) == 1
-    assert sum(refused and reason == REPLAY for _, refused, reason in outcomes) == 1
+    assert sum(refused and reason in {REPLAY, RECONCILIATION_REQUIRED}
+               for _, refused, reason in outcomes) == 1
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="fork is unavailable")
@@ -585,11 +590,11 @@ def test_driver_executor_treats_psql_meta_commands_only_as_sql(
     )
     target = _target(schema='billing, "private"')
 
-    ok, detail = postgres_executor(
+    result = postgres_executor(
         hostile_sql, target, "a" * 64, "b" * 64
     )
 
-    assert ok and detail == ""
+    assert result.state == EXECUTION_COMMITTED and result.detail == ""
     assert driver.connect_kwargs == {
         "host": target.host,
         "port": target.port,
@@ -599,7 +604,7 @@ def test_driver_executor_treats_psql_meta_commands_only_as_sql(
         "connect_timeout": 10,
         "autocommit": False,
     }
-    assert driver.connection.commits == 1
+    assert driver.connection.commits == 2
     schema_query, schema_params, _ = next(
         call for call in driver.cursor.calls if "set_config('search_path'" in call[0]
     )
@@ -672,7 +677,9 @@ def test_executor_rejects_transaction_control_before_connect(monkeypatch, sql):
         "prometheus_protocol.chokepoint.runner.import_module", must_not_import
     )
 
-    ok, detail = postgres_executor(sql, _target(), "a" * 64, "b" * 64)
+    result = postgres_executor(sql, _target(), "a" * 64, "b" * 64)
+    ok, detail = result.state == EXECUTION_COMMITTED, result.detail
+    assert result.state == EXECUTION_NOT_COMMITTED
 
     assert not ok
     assert "transaction-control statements are forbidden" in detail
@@ -685,7 +692,9 @@ def test_driver_executor_fails_closed_when_driver_is_missing(monkeypatch):
     monkeypatch.setattr(
         "prometheus_protocol.chokepoint.runner.import_module", unavailable
     )
-    ok, detail = postgres_executor("SELECT 1", _target(), "a" * 64, "b" * 64)
+    result = postgres_executor("SELECT 1", _target(), "a" * 64, "b" * 64)
+    ok, detail = result.state == EXECUTION_COMMITTED, result.detail
+    assert result.state == EXECUTION_NOT_COMMITTED
     assert not ok
     assert "unavailable" in detail
 
@@ -700,6 +709,8 @@ def test_driver_executor_reports_database_error(monkeypatch):
     monkeypatch.setattr(
         "prometheus_protocol.chokepoint.runner.import_module", lambda _: driver
     )
-    ok, detail = postgres_executor("SELECT 1", _target(), "a" * 64, "b" * 64)
+    result = postgres_executor("SELECT 1", _target(), "a" * 64, "b" * 64)
+    ok, detail = result.state == EXECUTION_COMMITTED, result.detail
+    assert result.state == EXECUTION_UNKNOWN
     assert not ok
     assert detail == "connection refused"

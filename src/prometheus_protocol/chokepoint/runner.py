@@ -11,16 +11,17 @@ Order of enforcement in :meth:`execute` (each step fail-closed):
 
 1. re-hash the artifact and verify the approval (signature, artifact, target,
    expiry) — a bound-field failure refuses *before* any DB contact;
-2. reconcile any older unfinished intent; ambiguity blocks this approval without
-   spending it;
+2. acquire cross-process execution/recovery ownership and reconcile older
+   unfinished intents; contention or ambiguity blocks without spending approval;
 3. atomically **spend** the approval's nonce — a second use of the same approval
    loses the race and is refused as a replay;
 4. durably record an execution intent — an unavailable audit sink refuses before
    database contact;
 5. only then run the migration and insert its execution receipt in the same
    PostgreSQL transaction;
-6. append an outcome linked to that intent. After a crash, the receipt proves
-   commit versus rollback before another migration is allowed to run.
+6. append a proven outcome or a nonterminal unknown event linked to that intent,
+   then release ownership. Only receipt reconciliation can resolve uncertainty
+   before another migration is allowed to run.
 
 The runner is bound to ONE target and ONE credential at construction (like the
 git tool is bound to one repo): an approval naming a different target fails step
@@ -42,7 +43,8 @@ import sqlite3
 import stat
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from importlib import import_module
 from pathlib import Path
@@ -72,6 +74,7 @@ def external_signer_required(env: Mapping[str, str] | None = None) -> bool:
     env = os.environ if env is None else env
     return (env.get(EXTERNAL_SIGNER_REQUIRED_ENV) or "").strip().lower() in _TRUE
 
+
 REPLAY = "replay"
 STORE_UNAVAILABLE = "approval_store_unavailable"
 AUDIT_UNAVAILABLE = "audit_unavailable"
@@ -79,6 +82,10 @@ AUDIT_OUTCOME_UNAVAILABLE = "audit_outcome_unavailable"
 RECONCILIATION_REQUIRED = "reconciliation_required"
 RECONCILED_COMMITTED = "reconciled_committed"
 RECONCILED_NOT_COMMITTED = "reconciled_not_committed"
+EXECUTION_UNKNOWN = "execution_unknown"
+EXECUTION_NOT_COMMITTED = "not_committed"
+EXECUTION_COMMITTED = "committed"
+EXECUTION_BUSY = "execution_busy"
 
 RECEIPT_COMMITTED = "committed"
 RECEIPT_NOT_FOUND = "not_found"
@@ -90,12 +97,17 @@ _RECEIPT_SCHEMA = "promethyn_internal"
 _RECEIPT_TABLE = "migration_receipts"
 
 
+class _OwnershipUnavailable(RuntimeError):
+    """The cross-process guard could not be acquired safely."""
+
+
 @dataclass(frozen=True)
 class MigrationResult:
     """What the runner did. ``executed`` is True only when the DB was touched and
     the migration succeeded; ``refused`` is True when the requested migration was
-    not run. Exactly one of the two is True, except an authorized migration that
-    ran but errored (``executed=False, refused=False``)."""
+    not run. An authorized operation that errored or has an unknown outcome has
+    ``executed=False, refused=False``. Inspect ``execution_state``: False does
+    not prove rollback and must never trigger an automatic SQL retry."""
 
     executed: bool
     refused: bool
@@ -103,6 +115,24 @@ class MigrationResult:
     detail: str = ""
     audit_recorded: bool = False
     execution_id: str | None = None
+    # None on pre-execution refusals; never infer rollback from executed=False.
+    execution_state: str | None = None
+
+
+@dataclass(frozen=True)
+class ExecutorResult:
+    """Only an acknowledged commit/rollback is a terminal database outcome."""
+
+    state: str
+    detail: str = ""
+
+    def __post_init__(self) -> None:
+        if self.state not in {
+            EXECUTION_COMMITTED,
+            EXECUTION_NOT_COMMITTED,
+            EXECUTION_UNKNOWN,
+        }:
+            raise ValueError("invalid executor outcome state")
 
 
 @dataclass(frozen=True)
@@ -248,9 +278,9 @@ class MigrationRunnerConfig:
                 "signer holds its key on this host (a local HMAC key root can read "
                 "and use silently). Configure a KmsSigner, or withdraw the requirement."
             )
-        if not isinstance(self.approval_store_path, (str, os.PathLike)) or not os.fspath(
-            self.approval_store_path
-        ):
+        if not isinstance(
+            self.approval_store_path, (str, os.PathLike)
+        ) or not os.fspath(self.approval_store_path):
             raise ValueError("migration runner approval_store_path is required")
         # Force validation of every canonical target field at configuration time.
         _ = self.target.identity
@@ -259,7 +289,10 @@ class MigrationRunnerConfig:
 class MigrationExecutor(Protocol):
     """Runs approved SQL against the target. Injected so tests can supply a spy
     that proves a refusal never reaches the DB. A custom implementation must
-    atomically persist the receipt described by its matching ``ReceiptLookup``."""
+    atomically persist the receipt described by its matching ``ReceiptLookup``.
+    Execution is synchronous: no detached work may continue after returning.
+    Prefer ExecutorResult; legacy (True, detail) acknowledges commit, but legacy
+    (False, detail) is UNKNOWN, never proof of rollback."""
 
     def __call__(
         self,
@@ -267,7 +300,7 @@ class MigrationExecutor(Protocol):
         target: DbTarget,
         execution_id: str,
         artifact_sha256: str,
-    ) -> tuple[bool, str]: ...
+    ) -> ExecutorResult | tuple[bool, str]: ...
 
 
 class ReceiptLookup(Protocol):
@@ -440,7 +473,7 @@ def postgres_executor(
     target: DbTarget,
     execution_id: str,
     artifact_sha256: str,
-) -> tuple[bool, str]:
+) -> ExecutorResult:
     """Apply approved SQL and its receipt in one PostgreSQL transaction.
 
     This deliberately does *not* shell out to ``psql``. A psql input file has a
@@ -461,28 +494,40 @@ def postgres_executor(
     if not _is_lower_hex_digest(execution_id) or not _is_lower_hex_digest(
         artifact_sha256
     ):
-        return False, "invalid execution ID or artifact digest"
+        return ExecutorResult(
+            EXECUTION_NOT_COMMITTED, "invalid execution ID or artifact digest"
+        )
     if _starts_transaction_control_statement(sql):
-        return False, (
-            "transaction-control statements are forbidden; migration and receipt "
-            "must commit atomically"
+        return ExecutorResult(
+            EXECUTION_NOT_COMMITTED,
+            (
+                "transaction-control statements are forbidden; migration and receipt "
+                "must commit atomically"
+            ),
         )
 
     try:
         psycopg = import_module("psycopg")
     except ImportError:
-        return False, "psycopg is unavailable; refusing to execute migration"
+        return ExecutorResult(
+            EXECUTION_NOT_COMMITTED,
+            "psycopg is unavailable; refusing to execute migration",
+        )
 
+    confirmed: ExecutorResult | None = None
     try:
-        with psycopg.connect(
-            host=target.host,
-            port=target.port,
-            dbname=target.dbname,
-            user=target.user,
-            password=target.resolve_password(),
-            connect_timeout=10,
-            autocommit=False,
-        ) as connection, connection.cursor() as cursor:
+        with (
+            psycopg.connect(
+                host=target.host,
+                port=target.port,
+                dbname=target.dbname,
+                user=target.user,
+                password=target.resolve_password(),
+                connect_timeout=10,
+                autocommit=False,
+            ) as connection,
+            connection.cursor() as cursor,
+        ):
             cursor.execute(
                 "SELECT pg_catalog.pg_advisory_lock("
                 "pg_catalog.hashtextextended(%s, 0))",
@@ -493,9 +538,7 @@ def postgres_executor(
                 "pg_catalog.hashtextextended("
                 "'promethyn-receipt-bootstrap-v1', 0))"
             )
-            cursor.execute(
-                "SELECT pg_catalog.to_regnamespace(%s)", (_RECEIPT_SCHEMA,)
-            )
+            cursor.execute("SELECT pg_catalog.to_regnamespace(%s)", (_RECEIPT_SCHEMA,))
             namespace = cursor.fetchone()
             if namespace is None or namespace[0] is None:
                 cursor.execute(f"CREATE SCHEMA {_RECEIPT_SCHEMA}")
@@ -530,27 +573,47 @@ def postgres_executor(
                     _receipt_text(existing[0]) != artifact_sha256
                     or _receipt_text(existing[1]) != target.identity.canonical
                 ):
-                    return False, "execution receipt conflicts with artifact or target"
-                return True, "execution receipt already committed"
+                    return ExecutorResult(
+                        EXECUTION_UNKNOWN,
+                        "execution receipt conflicts with artifact or target",
+                    )
+                confirmed = ExecutorResult(
+                    EXECUTION_COMMITTED, "execution receipt already committed"
+                )
+                return confirmed
             cursor.execute(
                 "SELECT pg_catalog.set_config("
                 "'search_path', pg_catalog.quote_ident(%s), true)",
                 (target.schema,),
             )
             cursor.execute(
-                "SELECT pg_catalog.set_config("
-                "'statement_timeout', '60000', true)"
+                "SELECT pg_catalog.set_config('statement_timeout', '60000', true)"
             )
-            cursor.execute(sql, prepare=False)
-            cursor.execute(
-                f"INSERT INTO {_RECEIPT_SCHEMA}.{_RECEIPT_TABLE} "
-                "(execution_id, artifact_sha256, target_canonical) "
-                "VALUES (%s, %s, %s)",
-                (execution_id, artifact_sha256, target.identity.canonical),
-            )
+            try:
+                cursor.execute(sql, prepare=False)
+                cursor.execute(
+                    f"INSERT INTO {_RECEIPT_SCHEMA}.{_RECEIPT_TABLE} "
+                    "(execution_id, artifact_sha256, target_canonical) "
+                    "VALUES (%s, %s, %s)",
+                    (execution_id, artifact_sha256, target.identity.canonical),
+                )
+            except psycopg.Error as exc:
+                # An exception does not establish rollback. Require an explicit
+                # successful rollback while still holding the receipt lock.
+                connection.rollback()
+                confirmed = ExecutorResult(
+                    EXECUTION_NOT_COMMITTED, str(exc).strip()[:500]
+                )
+                return confirmed
+            # Keep this outside the rollback handler: COMMIT may have succeeded
+            # even if its response is lost. A later rollback cannot undo it.
+            connection.commit()
+            confirmed = ExecutorResult(EXECUTION_COMMITTED)
     except psycopg.Error as exc:
-        return False, str(exc).strip()[:500]
-    return True, ""
+        return confirmed or ExecutorResult(EXECUTION_UNKNOWN, str(exc).strip()[:500])
+    return confirmed or ExecutorResult(
+        EXECUTION_UNKNOWN, "no confirmed database outcome"
+    )
 
 
 def postgres_receipt_lookup(
@@ -560,7 +623,9 @@ def postgres_receipt_lookup(
 
     The executor holds the same advisory lock until commit/rollback. A lookup
     that cannot acquire it reports ``in_progress`` rather than falsely treating
-    an uncommitted receipt as a rollback.
+    an uncommitted receipt as a rollback. NOT_FOUND alone does not establish
+    rollback: the runner must ALSO own the cross-process store guard so an
+    earlier owner cannot connect and execute after this lookup returns.
     """
 
     if not _is_lower_hex_digest(execution_id) or not _is_lower_hex_digest(
@@ -580,15 +645,18 @@ def postgres_receipt_lookup(
         )
 
     try:
-        with psycopg.connect(
-            host=target.host,
-            port=target.port,
-            dbname=target.dbname,
-            user=target.user,
-            password=target.resolve_password(),
-            connect_timeout=10,
-            autocommit=False,
-        ) as connection, connection.cursor() as cursor:
+        with (
+            psycopg.connect(
+                host=target.host,
+                port=target.port,
+                dbname=target.dbname,
+                user=target.user,
+                password=target.resolve_password(),
+                connect_timeout=10,
+                autocommit=False,
+            ) as connection,
+            connection.cursor() as cursor,
+        ):
             cursor.execute(
                 "SELECT pg_catalog.pg_try_advisory_xact_lock("
                 "pg_catalog.hashtextextended(%s, 0))",
@@ -680,6 +748,8 @@ class ConsumedApprovals:
             else:
                 os.close(descriptor)
         self._validate_file(durable_path)
+        info = durable_path.stat()
+        self._file_identity = (info.st_dev, info.st_ino)
         self.path = durable_path
         self._lock = threading.RLock()
         self._pid = os.getpid()
@@ -767,6 +837,58 @@ class ConsumedApprovals:
                 conn.rollback()
                 raise
 
+    @contextmanager
+    def execution_guard(self) -> Iterator[bool]:
+        """Exclusive nonblocking ownership across execution AND recovery.
+
+        All runners must share this store and the audit ledger on one trusted
+        host/local filesystem. A companion lock file avoids interference with
+        SQLite's own locking (notably on macOS). It spans the pre-connection interval without a SQLite write
+        transaction. A suspended owner retains the lock; a dead owner cannot
+        resume, and any surviving DB transaction retains its receipt lock.
+
+        No lease expiry or time-based takeover is safe here. Do not unlink or
+        replace the store while runners exist, or fork an active runner.
+        """
+        fd = None
+        try:
+            import fcntl
+
+            with self._lock:
+                self._connection()  # Refuse a closed store; refresh after fork.
+            flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+            lock_path = self.path.with_name(self.path.name + ".execution.lock")
+            fd = os.open(lock_path, flags, 0o600)
+            info = os.fstat(fd)
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_mode & 0o077
+                or info.st_uid != os.geteuid()
+            ):
+                raise OSError("unsafe execution lock file")
+            store_info = self.path.stat()
+            if (store_info.st_dev, store_info.st_ino) != self._file_identity:
+                raise OSError(
+                    "approval store was replaced; execution ownership unavailable"
+                )
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                owned = False
+            else:
+                owned = True
+        except (OSError, RuntimeError, ImportError, sqlite3.Error) as exc:
+            if fd is not None:
+                os.close(fd)
+            raise _OwnershipUnavailable(type(exc).__name__) from exc
+        try:
+            yield owned
+        finally:
+            # Closing this separately-opened descriptor releases ownership on
+            # normal return, exceptions and process death. It is not inherited
+            # by exec (Python opens descriptors non-inheritable).
+            os.close(fd)
+
     def close(self) -> None:
         with self._lock:
             if self._conn is not None:
@@ -847,14 +969,37 @@ class BrokeredMigrationRunner:
         return payload if isinstance(payload, dict) else None
 
     def reconcile_unfinished(self) -> tuple[ReconciliationResult, ...]:
-        """Resolve durable intents that have no audit outcome.
+        """Resolve pending intents only under cross-process execution ownership."""
 
-        This is intended for runner startup, after the previous runner process is
-        gone. PostgreSQL's execution-specific advisory lock also prevents an
-        active transaction from being mistaken for a rollback. A committed
-        receipt proves the migration committed; an absent receipt, observed only
-        after acquiring that lock, proves PostgreSQL did not commit the atomic
-        migration-and-receipt transaction.
+        try:
+            with self._consumed.execution_guard() as owned:
+                if not owned:
+                    return (
+                        ReconciliationResult(
+                            "",
+                            None,
+                            EXECUTION_BUSY,
+                            False,
+                            detail="another runner owns execution/recovery",
+                        ),
+                    )
+                return self._reconcile_owned()
+        except _OwnershipUnavailable as exc:
+            return (
+                ReconciliationResult(
+                    "",
+                    None,
+                    STORE_UNAVAILABLE,
+                    False,
+                    detail=f"execution ownership unavailable: {type(exc).__name__}",
+                ),
+            )
+
+    def _reconcile_owned(self) -> tuple[ReconciliationResult, ...]:
+        """Caller owns the durable store lock; no earlier live owner can resume.
+
+        The DB receipt lock separately protects a transaction that outlives a
+        dead client. Only after both locks may absence prove non-commit.
         """
 
         with self._reconcile_lock:
@@ -927,6 +1072,21 @@ class BrokeredMigrationRunner:
                 artifact_sha256 = payload.get("artifact_sha256")
                 matching_outcome = False
                 for outcome_seq, outcome_payload in outcomes:
+                    # Old false outcomes included ambiguous connection errors.
+                    # Revisit them on upgrade. Only explicitly proven outcomes
+                    # (or historical acknowledged successes) resolve an intent.
+                    state = outcome_payload.get("execution_state")
+                    terminal = (
+                        state == EXECUTION_COMMITTED
+                        and outcome_payload.get("ok") is True
+                    ) or (
+                        state == EXECUTION_NOT_COMMITTED
+                        and outcome_payload.get("ok") is False
+                    )
+                    if state is None:
+                        terminal = outcome_payload.get("ok") is True
+                    if not terminal:
+                        continue
                     if (
                         intent_seq is not None
                         and outcome_seq is not None
@@ -944,10 +1104,7 @@ class BrokeredMigrationRunner:
                         isinstance(execution_id, str)
                         and execution_id
                         and outcome_execution_id == execution_id
-                    ) or (
-                        intent_seq is not None
-                        and outcome_intent_seq == intent_seq
-                    ):
+                    ) or (intent_seq is not None and outcome_intent_seq == intent_seq):
                         matching_outcome = True
                         break
                 if matching_outcome:
@@ -984,6 +1141,12 @@ class BrokeredMigrationRunner:
                         RECEIPT_UNAVAILABLE,
                         detail=f"receipt lookup raised {type(exc).__name__}",
                     )
+                if not isinstance(receipt, ReceiptStatus) or not isinstance(
+                    receipt.state, str
+                ):
+                    receipt = ReceiptStatus(
+                        RECEIPT_UNAVAILABLE, detail="invalid receipt lookup response"
+                    )
                 if receipt.state not in {RECEIPT_COMMITTED, RECEIPT_NOT_FOUND}:
                     results.append(
                         ReconciliationResult(
@@ -997,11 +1160,7 @@ class BrokeredMigrationRunner:
                     continue
 
                 committed = receipt.state == RECEIPT_COMMITTED
-                reason = (
-                    RECONCILED_COMMITTED
-                    if committed
-                    else RECONCILED_NOT_COMMITTED
-                )
+                reason = RECONCILED_COMMITTED if committed else RECONCILED_NOT_COMMITTED
                 outcome = self._record(
                     "execute_outcome",
                     target_canonical,
@@ -1012,6 +1171,9 @@ class BrokeredMigrationRunner:
                         "artifact_sha256": artifact_sha256,
                         "target": target_canonical,
                         "ok": committed,
+                        "execution_state": EXECUTION_COMMITTED
+                        if committed
+                        else EXECUTION_NOT_COMMITTED,
                         "reason": reason,
                         "reconciled": True,
                         "receipt_committed_at": receipt.committed_at,
@@ -1068,10 +1230,41 @@ class BrokeredMigrationRunner:
                 audit_recorded=audit.recorded,
             )
 
+        try:
+            with self._consumed.execution_guard() as owned:
+                if not owned:
+                    return MigrationResult(
+                        False,
+                        True,
+                        RECONCILIATION_REQUIRED,
+                        "another runner owns execution/recovery; approval remains unspent",
+                    )
+                return self._execute_owned(approval=approval, artifact=artifact)
+        except _OwnershipUnavailable as exc:
+            audit = self._record(
+                "refuse",
+                self._target.identity.canonical,
+                {
+                    "phase": "ownership",
+                    "reason": STORE_UNAVAILABLE,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            return MigrationResult(
+                False,
+                True,
+                STORE_UNAVAILABLE,
+                f"execution ownership unavailable: {type(exc).__name__}",
+                audit_recorded=audit.recorded,
+            )
+
+    def _execute_owned(
+        self, *, approval: Approval, artifact: MigrationArtifact
+    ) -> MigrationResult:
         # STEP 2 — a valid approval cannot proceed while an earlier intent for
         # this target remains ambiguous. Do not spend it: the caller may retry
         # after recovery succeeds.
-        reconciliation = self.reconcile_unfinished()
+        reconciliation = self._reconcile_owned()
         unresolved = next((item for item in reconciliation if not item.resolved), None)
         if unresolved is not None:
             audit = self._record(
@@ -1171,30 +1364,63 @@ class BrokeredMigrationRunner:
         # STEP 5 — authorized, current, bound, first use, durable intent present:
         # run the migration.
         try:
-            ok, detail = self._executor(
+            response = self._executor(
                 artifact.sql,
                 self._target,
                 execution_id,
                 artifact.sha256,
             )
+            if isinstance(response, ExecutorResult):
+                execution = response
+            elif (
+                type(response) is tuple
+                and len(response) == 2
+                and type(response[0]) is bool
+                and type(response[1]) is str
+            ):
+                # Alpha custom executors may still return (bool, detail). True
+                # acknowledges commit; False NEVER establishes rollback.
+                execution = ExecutorResult(
+                    EXECUTION_COMMITTED if response[0] else EXECUTION_UNKNOWN,
+                    response[1],
+                )
+            else:
+                execution = ExecutorResult(
+                    EXECUTION_UNKNOWN, "invalid executor response"
+                )
         except Exception as exc:  # noqa: BLE001 - executor is an external boundary
-            ok = False
-            detail = f"executor raised {type(exc).__name__}"
+            execution = ExecutorResult(
+                EXECUTION_UNKNOWN, f"executor raised {type(exc).__name__}"
+            )
+        ok = execution.state == EXECUTION_COMMITTED
+        detail = execution.detail
+        reason = (
+            "ok"
+            if ok
+            else "migration_error"
+            if execution.state == EXECUTION_NOT_COMMITTED
+            else EXECUTION_UNKNOWN
+        )
         outcome = self._record(
-            "execute_outcome",
+            "execute_unknown"
+            if execution.state == EXECUTION_UNKNOWN
+            else "execute_outcome",
             self._target.identity.canonical,
             {
-                "phase": "execute_outcome",
+                "phase": "execute_unknown"
+                if execution.state == EXECUTION_UNKNOWN
+                else "execute_outcome",
                 "intent_seq": intent.seq,
                 "execution_id": execution_id,
                 "artifact_sha256": artifact.sha256,
                 "target": self._target.identity.canonical,
                 "ok": bool(ok),
-                "reason": "ok" if ok else "migration_error",
+                "reason": reason,
+                "execution_state": execution.state,
             },
         )
         if not outcome.recorded:
-            migration_state = "succeeded" if ok else f"failed: {detail}"
+            migration_state = "succeeded" if ok else f"{execution.state}: {detail}"
             return MigrationResult(
                 executed=ok,
                 refused=False,
@@ -1205,18 +1431,20 @@ class BrokeredMigrationRunner:
                 ),
                 audit_recorded=False,
                 execution_id=execution_id,
+                execution_state=execution.state,
             )
         return MigrationResult(
             executed=ok,
             refused=False,
-            reason="ok" if ok else "migration_error",
+            reason=reason,
             detail=(
                 f"migration applied to {self._target.identity.canonical}"
                 if ok
-                else f"authorized but migration failed: {detail}"
+                else f"authorized migration {execution.state}: {detail}"
             ),
             audit_recorded=outcome.recorded,
             execution_id=execution_id,
+            execution_state=execution.state,
         )
 
     def _now_iso(self) -> str:
@@ -1313,7 +1541,9 @@ def build_migration_runtime(
 
     if audit is None:
         raise ValueError("migration runner audit sink is required")
-    authority = ApprovalAuthority(signer=resolve_signer(config, settings=settings, env=env))
+    authority = ApprovalAuthority(
+        signer=resolve_signer(config, settings=settings, env=env)
+    )
     runner = BrokeredMigrationRunner(
         authority=authority,
         target=config.target,

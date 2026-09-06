@@ -162,13 +162,55 @@ test (a check tested only on the happy path is itself a void guard):
   to the approval nonce, artifact hash, and canonical target. The executor holds a
   PostgreSQL advisory lock for that ID and inserts a matching row in
   `promethyn_internal.migration_receipts` in the same transaction as the migration. After
-  restart, a matching receipt proves commit; no receipt, observed only after acquiring the
-  lock, proves rollback. An active, unavailable, malformed, or conflicting receipt blocks
-  every later migration. Artifact-level transaction-control statements are rejected before
+  restart, a matching receipt proves commit. An absent receipt proves non-commit only
+  after acquiring **both** the trusted cross-process execution/recovery guard and the
+  PostgreSQL receipt lock: the earlier owner cannot resume and no transaction is active.
+  An active, unavailable, malformed, or conflicting receipt blocks
+  every later migration for that canonical target. Artifact-level transaction-control statements are rejected before
   connection so SQL cannot commit separately from its receipt. The runner role therefore
   requires permission to create the reserved receipt schema/table when absent; a
   pre-provisioned deployment instead needs `USAGE` on the schema and `SELECT`/`INSERT` on
   the table.
+
+### Recovery follow-up: F2/F3
+
+An executor exception or negative boolean is not proof of rollback: COMMIT may
+have reached PostgreSQL while its response was lost. The executor now reports
+`committed`, `not_committed`, or `execution_unknown`. The latter creates an
+`execute_unknown` event and leaves the intent pending. Only an acknowledged
+commit, acknowledged rollback, pre-execution refusal, or successful receipt
+reconciliation produces a terminal outcome. A rollback attempted after losing
+a COMMIT response cannot resolve the uncertainty. Callers must inspect
+`MigrationResult.execution_state`, not infer rollback from `executed=False`.
+
+Recovery revisits historical false outcomes without an explicit execution state;
+old `migration_error` events could represent committed transactions. An old
+acknowledged success remains terminal. Reconciliation does not execute SQL again.
+
+The guard is a nonblocking OS file lock on `<approval-store>.execution.lock`,
+held from before reconciliation through nonce claim, intent append, execution,
+and outcome append. It also gates standalone reconciliation. Contention refuses
+the new migration without consuming its approval. Process suspension retains
+ownership; process death releases it. A surviving PostgreSQL transaction is
+separately protected by its session advisory lock. No age-based takeover is used.
+
+**Deployment boundary:** all runner processes must use the same approval store
+and audit ledger on the same trusted host and local filesystem. The guard
+serializes all targets sharing that store. Do not replace/unlink either the
+store or its lock file while runners exist, fork an active runner, or mix old
+unguarded runners with new runners during upgrade: stop the old processes first.
+Missing OS locking support and unsafe lock files refuse execution. Network
+filesystems, independent stores/ledgers, multi-host execution and asynchronously
+detached custom executors are not supported by this ownership model; they need
+distributed fencing. Custom executors must stop all execution activity before
+returning, and persist receipts atomically with approved SQL.
+
+`tests/chokepoint/test_execution_recovery.py` exercises unknown/legacy outcomes,
+commit-vs-rollback acknowledgment, threads, and suspended/killed processes.
+`test_migration_live.py` adds real PostgreSQL tests for a dropped COMMIT response,
+suspension immediately after intent append, and an active database transaction
+surviving client death. The existing `PROM_REQUIRE_PG=1` CI step includes them;
+a local skip is not evidence of database correctness.
 
 ## 6. Attack scenarios → defense
 

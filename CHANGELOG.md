@@ -8,6 +8,14 @@ in `spec/invariants.md` is a major version bump.
 ## [Unreleased]
 
 ### Fixed
+- **F2/F3: execution recovery uncertainty and ownership.** Database outcomes are
+  now explicit: committed, definitely not committed, or unknown. Unknown outcomes
+  remain pending and block later migrations until receipt reconciliation proves
+  the result; historical ambiguous failure records are revisited. A required
+  cross-process guard spans intent publication, execution and recovery in the
+  supported shared-store, single-host deployment. Suspended owners cannot be
+  declared rolled back. Adds real PostgreSQL commit-response-loss and process
+  lifecycle regressions to the existing mandatory live-test job.
 - **P0: candidate-forged verifier verdicts.** Expected answers, comparisons and
   pass counts now stay in the trusted parent. The sandbox returns bounded,
   type-preserving data only; candidate-written `result.json` is ignored.
