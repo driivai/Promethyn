@@ -259,9 +259,8 @@ class RemoteModelProvider(Provider):
             headers["Authorization"] = f"Bearer {self.api_key}"
         request = urllib.request.Request(url, data=body, headers=headers, method="POST")
 
-        # One deadline for the whole exchange. ``timeout=`` alone is per socket
-        # operation, so a server that sends a byte just inside it, forever, is
-        # never timed out; the deadline is what bounds the total.
+        # Deadline checks between body reads supplement per-socket timeouts.
+        # They do not yet bound every exchange phase (F6).
         deadline = time.monotonic() + self.timeout_s
         try:
             response = self._opener.open(request, timeout=self.timeout_s)
@@ -275,6 +274,8 @@ class RemoteModelProvider(Provider):
                 detail = quoted.decode("utf-8", "replace")[:500]
             except ProviderError as inner:
                 detail = f"<error body not read: {type(inner).__name__}>"
+            finally:
+                exc.close()
             raise ProviderHTTPError(
                 exc.code, f"endpoint returned HTTP {exc.code}: {detail}"
             ) from exc

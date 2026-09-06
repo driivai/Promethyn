@@ -304,6 +304,37 @@ GET  <url>              → 200 {"entries":[record, …]}   (oldest first, the w
 GET  <url>/latest       → 200 {"entry": record | null}
 ```
 
+F4/F5 tighten success without changing the index-only acknowledgement schema:
+
+- POST must return **200 or 201**, with a non-boolean, non-negative integer
+  `index`. GET must return **200**, not e.g. 202 or partial-content 206.
+- An acknowledgement alone is insufficient. The HTTP adapter reads the whole
+  history and requires the **exact canonical JSON record sent** at that index.
+  Comparing `/latest` would be wrong if another writer appended in between.
+  `LogTipAnchor` independently checks the log port's index and record, including
+  custom adapters. Idempotent retries use confirmed history, never `/latest`.
+- Responses and submitted objects reject duplicate JSON fields and non-finite
+  numbers. Missing, malformed, unbound or unreadable confirmations raise
+  `AnchorUnavailable`. A stored-but-unconfirmed write is not reported successful;
+  a later retry can succeed once the matching record is visible in history.
+- The service must provide **read-after-write consistency** and enforce its
+  promised durability and append-only permissions. Read-back catches a faulty
+  acknowledgement; it is **not a signed persistence receipt**, proof of fsync,
+  or protection against an operator who lies on both POST and GET.
+
+The shared transport validates HTTP framing before parsing JSON. It rejects
+short bodies relative to Content-Length, duplicate lengths (even identical),
+invalid lengths (only 1–20 ASCII decimal digits after outer whitespace), combined
+Content-Length/Transfer-Encoding, and transfer encodings other than a single
+`chunked`. Chunk sizes, separators and final trailer termination must be valid
+CRLF-delimited framing. Metadata lines are capped at 8 KiB and trailers at
+64 KiB. Valid chunk extensions and trailers remain supported. A complete JSON
+prefix of an incomplete HTTP message is an error, not an empty verified history.
+Close-delimited responses remain supported: EOF is their HTTP boundary, so this
+cannot detect a server that intentionally sends a semantically incomplete but
+correctly framed history. Whole-exchange deadline enforcement is **still F6**;
+this change must not be read as fixing DNS/header/metadata slow-drip timing.
+
 `Authorization: Bearer <PROM_LEDGER_ANCHOR_TOKEN>` on every request when a token
 is configured. The log must only ever append; the credential must not be able
 to do anything else. Records returned by the log are validated field by field
@@ -362,7 +393,9 @@ rewrite of the audit chain from genesis, or its deletion, is undetectable"*); a
   to anchor, and a development install has no witness to point at. The default
   is a warning; the production posture is `PROM_REQUIRE_LEDGER_ANCHOR=1`,
   which refuses instead. Stated in `docs/threat-model.md` §5.4.
-- **The history grows by one record per append and is read whole on verify.**
+- **The history grows by one record per append and is read whole on verify and
+  log writes.** A new HTTP-backed log write performs three history reads: the
+  monotonic/idempotence check, HTTP adapter confirmation, and log-port confirmation.
   The remote log's read ceiling is 64 MiB, room for several hundred thousand
   records; the directory and bucket targets list every key. Pruning old
   records is a log-operator decision that trades detection window for size,

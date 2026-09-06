@@ -555,8 +555,10 @@ no test of which skips):
 - **A failed anchor write is raised, never swallowed, and the runner fails
   closed.** `record_chained` raises `AnchorUnavailable`; the chokepoint runner
   treats a pre-execution intent that cannot be anchored as a hard refusal — the
-  database untouched, the executor never called. A remote target that answers
-  500, hangs or drips is surfaced within the deadline.
+  database untouched, the executor never called. F4/F5 additionally require a
+  valid append index and read-back of the exact submitted record there; a 2xx
+  empty acknowledgement or a no-op write cannot authorize execution. Idempotence
+  uses history evidence, not `/latest`. Whole-exchange timing remains F6.
 - **The operator's entry point:** `prometheus-protocol audit --verify-chain`,
   exit 2 for anything but `VALID`.
 
@@ -642,7 +644,8 @@ controls both.
   *between* the two leaves the anchor one entry behind. That reads as a valid
   chain with one honest extra entry, not as tampering.
 - **The anchor history grows by one record per append** and is read whole on
-  verify. The remote log's read ceiling is 64 MiB — room for several hundred
+  verify and log writes (including read-back confirmation). The remote log's
+  read ceiling is 64 MiB — room for several hundred
   thousand records — and pruning is a log-operator decision that trades the
   detection window for size; nothing here does it.
 - **A verifier pointed at the wrong anchor sees nothing.** Whoever can change
@@ -712,14 +715,21 @@ Each measured on the pre-fix code against a local server, not inferred.
 - **Certificates are verified through an explicit default context**, exposed on
   the provider so a test asserts `CERT_REQUIRED` and hostname checking rather
   than trusting a library default.
-- **Every body is read in bounded chunks under one deadline for the whole
-  exchange**, using `read1` (one receive per call — `read(n)` on a chunked body
+- **Every body is read in bounded chunks with deadline checks between reads**,
+  using `read1` (one body receive per call — `read(n)` on a chunked body
   loops until *n* bytes or EOF, which is exactly how a drip defeated the first
   version of this fix). A body over the ceiling is **refused, never
   truncated**: a truncated body that happens to parse — a complete answer
   followed by padding — would be reported as a normal answer, and that test
   exists. A declared `Content-Length` over the ceiling is refused before a byte
   is read. HTTP error bodies are read under the same bounds.
+- **F5 checks response completeness before JSON parsing** in both the provider
+  and anchor. A short Content-Length body, contradictory/unsupported framing,
+  missing final chunk terminator or malformed chunk boundary raises a typed
+  transport failure. Incomplete anchor history yields `NOT_VERIFIABLE`, never
+  `VALID`. Positive controls and malformed responses use real sockets in
+  `tests/conformance/test_response_integrity.py`. Supported framing and its
+  intentional strictness are specified in `docs/ledger-integrity.md`.
 - **Every transport failure is a distinct `ProviderError` subclass** —
   `ProviderTimeout`, `ProviderTLSError`, `ProviderRedirectRefused`,
   `ProviderResponseTooLarge`, `ProviderHTTPError`, `ProviderMalformedResponse`,
@@ -775,11 +785,11 @@ a review — it is called out at the top of the pull request.
 - **`localhost` trusts `/etc/hosts`.** The loopback literal is not resolved, but
   the name `localhost` is whatever the host's resolver says it is. Same
   boundary as above.
-- **The deadline bound is `timeout_s` plus one in-flight receive.** The
-  per-read socket timeout is shrunk to what remains of the deadline through a
-  CPython-internal attribute; if that attribute is absent (another
-  interpreter), the deadline check alone still bounds the exchange, at up to
-  `2 × timeout_s`. Never unbounded, not exactly `timeout_s`.
+- **A whole-exchange deadline is not yet enforced (F6).** Body reads check a
+  monotonic deadline and shrink a reachable socket's timeout, but DNS, headers
+  and multi-receive chunk metadata can exceed it; error wrappers may hide the
+  socket. Earlier claims of a `timeout_s` or `2 × timeout_s` total bound were
+  too strong. F4/F5 validate completeness, not a global wall-clock bound.
 - **A soft-tier `Unavailable` is not carried on the fused Judgment.** The bank
   carries *authoritative* unavailability (HARD/HUMAN) downstream; an advisory
   judge that could not run is visible as its own result and in logs, and yields

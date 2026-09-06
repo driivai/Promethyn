@@ -3,10 +3,14 @@
 The transport adversary (``docs/threat-model.md`` §4) was answered once, in
 ``provider/remote.py``: redirects refused because ``urllib`` re-sends the
 ``Authorization`` header wherever a ``302`` points; every body read in bounded
-chunks under a *total* deadline; a body over the ceiling refused outright rather
+chunks with deadline checks; a body over the ceiling refused outright rather
 than truncated and parsed. The external ledger anchor (§3, PIH-1) is a second
 credentialed client, and a second copy of those disciplines is a second place
 for them to drift. They live here instead, and both clients call them.
+
+F4/F5 require complete, unambiguous supported response framing. Deadline checks
+between body reads do not yet bound DNS, headers or all chunk-metadata reads;
+that separate whole-exchange deadline issue (F6) remains open.
 
 Callers keep their own exception hierarchies — a provider caller catches
 ``ProviderTimeout``, an anchor caller catches ``AnchorUnavailable`` — so the
@@ -17,6 +21,7 @@ than forcing one hierarchy on everyone.
 from __future__ import annotations
 
 import http.client
+import re
 import socket
 import ssl
 import time
@@ -99,6 +104,112 @@ class RefuseRedirects(urllib.request.HTTPRedirectHandler):
         )
 
 
+def _header_values(stream, name: str) -> list[str]:
+    headers = getattr(stream, "headers", None)
+    if headers is None:
+        return []
+    if hasattr(headers, "get_all"):
+        return headers.get_all(name, [])
+    value = headers.get(name)
+    return [] if value is None else [value]
+
+
+def declared_length(stream) -> int | None:
+    """Validate supported framing, refusing ambiguous or malformed lengths."""
+
+    lengths = _header_values(stream, "Content-Length")
+    encodings = _header_values(stream, "Transfer-Encoding")
+    if encodings and (
+        lengths or len(encodings) != 1 or encodings[0].strip().lower() != "chunked"
+    ):
+        raise http.client.HTTPException("unsupported or ambiguous response framing")
+    if not lengths:
+        return None
+    if (len(lengths) != 1 or len(lengths[0].strip()) > 20
+            or re.fullmatch(r"[0-9]+", lengths[0].strip()) is None):
+        raise http.client.HTTPException("invalid or repeated Content-Length")
+    try:
+        return int(lengths[0].strip())
+    except ValueError as exc:
+        raise http.client.HTTPException("invalid Content-Length") from exc
+
+
+# CPython's chunk decoder accepts EOF in place of the final trailer terminator
+# and discards the two bytes after each chunk without checking they are CRLF.
+# Override those boundaries; retain read1's one-body-receive behaviour.
+_TOKEN = rb"[!#$%&'*+.^_`|~0-9A-Za-z-]+"
+_QUOTED = rb'"(?:[\t !#-\[\]-~\x80-\xff]|\\[\t -~\x80-\xff])*"'
+_CHUNK_LINE = re.compile(
+    rb"([0-9A-Fa-f]+)(?:[ \t]*;[ \t]*" + _TOKEN
+    + rb"(?:[ \t]*=[ \t]*(?:" + _TOKEN + rb"|" + _QUOTED + rb"))?)*\r\n"
+)
+_TRAILER_LINE = re.compile(_TOKEN + rb":[\t\x20-\x7e\x80-\xff]*\r\n")
+_FRAMING_LINE_LIMIT = 8192
+_TRAILER_LIMIT = 64 * 1024
+
+
+class _StrictHTTPResponse(http.client.HTTPResponse):
+    def begin(self) -> None:
+        super().begin()
+        declared_length(self)
+        if _header_values(self, "Transfer-Encoding"):
+            self.chunked = True
+            self.chunk_left = None
+            self.length = None
+
+    def _read_next_chunk_size(self):
+        line = self.fp.readline(_FRAMING_LINE_LIMIT + 1)
+        match = _CHUNK_LINE.fullmatch(line)
+        if len(line) > _FRAMING_LINE_LIMIT or match is None:
+            raise http.client.HTTPException("invalid or incomplete chunk-size line")
+        return int(match.group(1), 16)
+
+    def _read_and_discard_trailer(self):
+        total = 0
+        while True:
+            line = self.fp.readline(_FRAMING_LINE_LIMIT + 1)
+            total += len(line)
+            if total > _TRAILER_LIMIT or len(line) > _FRAMING_LINE_LIMIT:
+                raise http.client.HTTPException("response trailers exceed framing limit")
+            if line == b"\r\n":
+                return
+            if _TRAILER_LINE.fullmatch(line) is None:
+                raise http.client.HTTPException("invalid or incomplete response trailer")
+            if line.split(b":", 1)[0].lower() in {b"content-length", b"transfer-encoding"}:
+                raise http.client.HTTPException("framing field in response trailer")
+
+    def _get_chunk_left(self):
+        chunk_left = self.chunk_left
+        if not chunk_left:
+            if chunk_left is not None and self._safe_read(2) != b"\r\n":
+                raise http.client.HTTPException("invalid chunk terminator")
+            chunk_left = self._read_next_chunk_size()
+            if chunk_left == 0:
+                self._read_and_discard_trailer()
+                self._close_conn()
+                chunk_left = None
+            self.chunk_left = chunk_left
+        return chunk_left
+
+
+class _HTTPConnection(http.client.HTTPConnection):
+    response_class = _StrictHTTPResponse
+
+
+class _HTTPSConnection(http.client.HTTPSConnection):
+    response_class = _StrictHTTPResponse
+
+
+class _HTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        return self.do_open(_HTTPConnection, req)
+
+
+class _HTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        return self.do_open(_HTTPSConnection, req, context=self._context)
+
+
 def build_opener(
     errors: TransportErrors = DEFAULT_ERRORS,
 ) -> tuple[urllib.request.OpenerDirector, ssl.SSLContext]:
@@ -111,28 +222,17 @@ def build_opener(
 
     context = ssl.create_default_context()
     opener = urllib.request.build_opener(
-        urllib.request.HTTPSHandler(context=context), RefuseRedirects(errors)
+        _HTTPHandler(), _HTTPSHandler(context=context), RefuseRedirects(errors)
     )
     return opener, context
-
-
-def declared_length(stream) -> int | None:
-    headers = getattr(stream, "headers", None)
-    value = headers.get("Content-Length") if headers is not None else None
-    if value is None:
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
 
 
 def socket_of(stream):
     """The underlying socket of an ``http.client`` response, if reachable.
 
     CPython keeps it at ``response.fp.raw._sock``. That is an implementation
-    detail, so its absence is tolerated (the deadline check still bounds the
-    total); its presence lets the per-read timeout shrink to the deadline.
+    detail, so its absence is tolerated; its presence lets the per-read timeout
+    shrink to the deadline. This is not a whole-exchange time bound (F6).
     """
 
     raw = getattr(getattr(stream, "fp", None), "raw", None)
@@ -189,7 +289,10 @@ def read_bounded(
     exists to avoid. Both exits are distinct exceptions.
     """
 
-    declared = declared_length(stream)
+    try:
+        declared = declared_length(stream)
+    except http.client.HTTPException as exc:
+        raise errors.transport(str(exc)) from exc
     if declared is not None and declared > limit:
         raise errors.too_large(
             f"endpoint declared a {declared}-byte body; the ceiling is {limit} bytes"
@@ -212,9 +315,8 @@ def read_bounded(
             )
         if sock is not None:
             # Tighten the per-read timeout to what is left of the deadline so a
-            # drip cannot stretch one read past it. Best effort: the deadline
-            # check above still bounds the total to at most one extra
-            # ``timeout_s`` if the socket cannot be reached.
+            # body drip cannot stretch one receive past it. Best effort only:
+            # headers and multi-receive chunk metadata still need F6's fix.
             try:
                 sock.settimeout(min(remaining, timeout_s))
             except OSError:
@@ -233,6 +335,10 @@ def read_bounded(
         except (http.client.HTTPException, OSError) as exc:
             raise errors.transport(f"read failed: {exc}") from exc
         if not chunk:
+            if declared is not None and total != declared:
+                raise errors.transport(
+                    f"incomplete response: expected {declared} bytes, received {total}"
+                )
             break
         total += len(chunk)
         if total > limit:
