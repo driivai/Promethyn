@@ -332,8 +332,27 @@ CRLF-delimited framing. Metadata lines are capped at 8 KiB and trailers at
 prefix of an incomplete HTTP message is an error, not an empty verified history.
 Close-delimited responses remain supported: EOF is their HTTP boundary, so this
 cannot detect a server that intentionally sends a semantically incomplete but
-correctly framed history. Whole-exchange deadline enforcement is **still F6**;
-this change must not be read as fixing DNS/header/metadata slow-drip timing.
+correctly framed history.
+
+F6 adds one **monotonic deadline per HTTP request**, beginning immediately before
+network work: DNS, TCP address attempts, optional proxy CONNECT, TLS, request
+writes, status/headers, framing and body all spend the same budget. The socket
+reader applies the remaining timeout below buffering; header and chunk-metadata
+drips cannot reset it. A DNS lookup runs in a short-lived isolated Python process
+with an empty environment, host/port-only stdin and closed inherited descriptors.
+On timeout it is killed and reaped; no resolver thread is left running. Failure
+to launch or read the resolver refuses the request with no unbounded fallback.
+
+The budget is **per request**, not per whole ledger operation: POST, read-back
+and other history requests each get a budget. Process startup/cleanup and OS
+scheduling add overhead; a stuck kernel is not bounded by this mechanism.
+Request serialization and response JSON parsing are outside the network budget.
+Timing out cannot undo a POST already accepted by the witness; confirmation
+remains required and no automatic POST retry is introduced. Each DNS lookup
+starts an isolated interpreter, adding process/latency overhead. Deployment must
+allow that spawn and ship `core/_dns_worker.py`; ambient resolver overrides such
+as `RES_OPTIONS` or `LOCALDOMAIN` are not inherited. System resolver configuration
+still applies. F7's approval-at-execution expiry check is separate and unchanged.
 
 `Authorization: Bearer <PROM_LEDGER_ANCHOR_TOKEN>` on every request when a token
 is configured. The log must only ever append; the credential must not be able

@@ -33,8 +33,9 @@ never a swallowed error. Nothing from the endpoint is trusted for its
 only ever pinned against the chain.
 
 Read-back requires read-after-write consistency; it does not prove physical
-durability or protect against a dishonest log operator. The whole-exchange
-deadline defect (F6) is separate and remains open.
+durability or protect against a dishonest log operator. Each request has one
+monotonic deadline across DNS, TCP/TLS, writes, headers, framing and body. An
+append and its confirmation are separate requests with separate budgets.
 """
 
 from __future__ import annotations
@@ -184,9 +185,10 @@ class HttpAppendOnlyLog:
             headers["Authorization"] = f"Bearer {self._token}"
         request = urllib.request.Request(url, data=body, headers=headers, method=method)
 
-        # Deadline checks between body reads supplement per-socket timeouts.
-        # They do not yet bound every exchange phase (F6).
+        # One monotonic deadline for DNS, TCP/TLS, writes, headers and body.
+        # Pass it to the transport before opener.open begins network work.
         deadline = time.monotonic() + self.timeout_s
+        request._prom_deadline = deadline
         try:
             response = self._opener.open(request, timeout=self.timeout_s)
         except AnchorUnavailable:

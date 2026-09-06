@@ -259,9 +259,10 @@ class RemoteModelProvider(Provider):
             headers["Authorization"] = f"Bearer {self.api_key}"
         request = urllib.request.Request(url, data=body, headers=headers, method="POST")
 
-        # Deadline checks between body reads supplement per-socket timeouts.
-        # They do not yet bound every exchange phase (F6).
+        # One monotonic deadline for DNS, TCP/TLS, writes, headers and body.
+        # Pass it to the transport before opener.open begins network work.
         deadline = time.monotonic() + self.timeout_s
+        request._prom_deadline = deadline
         try:
             response = self._opener.open(request, timeout=self.timeout_s)
         except ProviderError:
@@ -272,6 +273,8 @@ class RemoteModelProvider(Provider):
             try:
                 quoted = self._read_bounded(exc, deadline, limit=_ERROR_BODY_BYTES)
                 detail = quoted.decode("utf-8", "replace")[:500]
+            except ProviderTimeout:
+                raise
             except ProviderError as inner:
                 detail = f"<error body not read: {type(inner).__name__}>"
             finally:

@@ -8,9 +8,11 @@ than truncated and parsed. The external ledger anchor (§3, PIH-1) is a second
 credentialed client, and a second copy of those disciplines is a second place
 for them to drift. They live here instead, and both clients call them.
 
-F4/F5 require complete, unambiguous supported response framing. Deadline checks
-between body reads do not yet bound DNS, headers or all chunk-metadata reads;
-that separate whole-exchange deadline issue (F6) remains open.
+F4/F5 require complete, unambiguous supported response framing. F6 carries one
+monotonic deadline through a killable DNS resolver, TCP attempts, TLS, writes,
+and reads below buffering (including proxy CONNECT, headers and chunk metadata).
+No timed-out resolver thread is abandoned. Scheduling and OS startup/cleanup
+can add overhead; this is not a hard real-time guarantee against a stalled OS.
 
 Callers keep their own exception hierarchies — a provider caller catches
 ``ProviderTimeout``, an anchor caller catches ``AnchorUnavailable`` — so the
@@ -29,6 +31,9 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from urllib.parse import urlsplit
+
+from prometheus_protocol.core._deadline import DeadlineSocket, connect, remaining
+from prometheus_protocol.core.validation import require_positive
 
 #: One receive per read call (``read1``); the deadline is checked between them.
 READ_CHUNK = 64 * 1024
@@ -195,19 +200,61 @@ class _StrictHTTPResponse(http.client.HTTPResponse):
 class _HTTPConnection(http.client.HTTPConnection):
     response_class = _StrictHTTPResponse
 
+    def __init__(self, *args, deadline: float, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._create_connection = lambda address, timeout, source_address: connect(
+            address, deadline, source_address,
+        )
+
 
 class _HTTPSConnection(http.client.HTTPSConnection):
     response_class = _StrictHTTPResponse
 
+    def __init__(self, *args, deadline: float, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._deadline = deadline
+        self._create_connection = lambda address, timeout, source_address: connect(
+            address, deadline, source_address,
+        )
+
+    def connect(self):
+        # TCP and an optional proxy CONNECT both use deadline-aware sockets.
+        http.client.HTTPConnection.connect(self)
+        raw = self.sock.socket
+        try:
+            raw.settimeout(remaining(self._deadline))
+            tls = self._context.wrap_socket(
+                raw, server_hostname=self._tunnel_host or self.host,
+                do_handshake_on_connect=False,
+            )
+            # Own the SSL socket before handshaking, so errors close it too.
+            self.sock = DeadlineSocket(tls, self._deadline)
+            tls.settimeout(remaining(self._deadline))
+            tls.do_handshake()
+            remaining(self._deadline)
+        except BaseException:
+            self.close()
+            raise
+
+
+def _request_deadline(req) -> float:
+    deadline = getattr(req, "_prom_deadline", None)
+    if deadline is None:
+        deadline = time.monotonic() + require_positive(req.timeout, name="HTTP timeout")
+    remaining(deadline)
+    return deadline
+
 
 class _HTTPHandler(urllib.request.HTTPHandler):
     def http_open(self, req):
-        return self.do_open(_HTTPConnection, req)
+        return self.do_open(_HTTPConnection, req, deadline=_request_deadline(req))
 
 
 class _HTTPSHandler(urllib.request.HTTPSHandler):
     def https_open(self, req):
-        return self.do_open(_HTTPSConnection, req, context=self._context)
+        return self.do_open(
+            _HTTPSConnection, req, context=self._context, deadline=_request_deadline(req),
+        )
 
 
 def build_opener(
@@ -232,7 +279,9 @@ def socket_of(stream):
 
     CPython keeps it at ``response.fp.raw._sock``. That is an implementation
     detail, so its absence is tolerated; its presence lets the per-read timeout
-    shrink to the deadline. This is not a whole-exchange time bound (F6).
+    shrink to the deadline. The production response also carries its own
+    deadline below buffering, so error wrappers need not expose this attribute
+    for header/framing/body timeouts to remain enforced.
     """
 
     raw = getattr(getattr(stream, "fp", None), "raw", None)
@@ -315,8 +364,8 @@ def read_bounded(
             )
         if sock is not None:
             # Tighten the per-read timeout to what is left of the deadline so a
-            # body drip cannot stretch one receive past it. Best effort only:
-            # headers and multi-receive chunk metadata still need F6's fix.
+            # body drip cannot stretch one receive past it. The production
+            # socket reader also checks below buffering for headers/metadata.
             try:
                 sock.settimeout(min(remaining, timeout_s))
             except OSError:

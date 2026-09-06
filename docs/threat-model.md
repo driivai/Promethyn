@@ -558,7 +558,8 @@ no test of which skips):
   database untouched, the executor never called. F4/F5 additionally require a
   valid append index and read-back of the exact submitted record there; a 2xx
   empty acknowledgement or a no-op write cannot authorize execution. Idempotence
-  uses history evidence, not `/latest`. Whole-exchange timing remains F6.
+  uses history evidence, not `/latest`. F6 bounds each network request with one
+  monotonic budget; multiple requests in a ledger operation have separate budgets.
 - **The operator's entry point:** `prometheus-protocol audit --verify-chain`,
   exit 2 for anything but `VALID`.
 
@@ -730,6 +731,17 @@ Each measured on the pre-fix code against a local server, not inferred.
   `VALID`. Positive controls and malformed responses use real sockets in
   `tests/conformance/test_response_integrity.py`. Supported framing and its
   intentional strictness are specified in `docs/ledger-integrity.md`.
+- **F6 carries one monotonic budget across the network request**, starting
+  immediately before network work: DNS, all connection attempts, proxy CONNECT,
+  TLS, request writes, status/headers, chunk framing and response body (including
+  errors). Every receive below buffering gets the remaining time, rather than
+  a fresh inactivity timeout. DNS runs in a disposable isolated interpreter:
+  host/port-only stdin, empty environment, closed inherited FDs. Timeout kills
+  and reaps that process; there is no thread that continues resolving afterward
+  and no fallback to unbounded DNS. Concurrent requests do not share deadline
+  state. Tests in `tests/conformance/test_transport_deadline.py` cover slow
+  headers, chunk sizes/trailers, TLS, proxy CONNECT, shared phase budgets,
+  blocked writes, resolver cleanup and absence of inherited credentials/FDs.
 - **Every transport failure is a distinct `ProviderError` subclass** —
   `ProviderTimeout`, `ProviderTLSError`, `ProviderRedirectRefused`,
   `ProviderResponseTooLarge`, `ProviderHTTPError`, `ProviderMalformedResponse`,
@@ -785,11 +797,20 @@ a review — it is called out at the top of the pull request.
 - **`localhost` trusts `/etc/hosts`.** The loopback literal is not resolved, but
   the name `localhost` is whatever the host's resolver says it is. Same
   boundary as above.
-- **A whole-exchange deadline is not yet enforced (F6).** Body reads check a
-  monotonic deadline and shrink a reachable socket's timeout, but DNS, headers
-  and multi-receive chunk metadata can exceed it; error wrappers may hide the
-  socket. Earlier claims of a `timeout_s` or `2 × timeout_s` total bound were
-  too strong. F4/F5 validate completeness, not a global wall-clock bound.
+- **Deadlines are not hard real-time guarantees.** F6 bounds network waits with
+  a shared monotonic budget; process creation/reaping and OS scheduling add
+  overhead and cannot bound a stalled kernel. Serialization and response JSON
+  parsing are outside that budget. One ledger operation can perform several
+  separately budgeted requests. Cancellation cannot retract bytes already sent
+  or undo a remote POST. This is not an exactly-once transport or F7's approval
+  expiry enforcement.
+- **The resolver adds a process boundary and overhead.** Each lookup launches
+  an isolated interpreter. Missing worker code, denied process creation or
+  invalid resolver output fails closed, not over to an unbounded resolver.
+  The child uses system DNS configuration but does not inherit environment
+  overrides (e.g. `LOCALDOMAIN`, `RES_OPTIONS`) or credentials. Proxy environment
+  configuration remains in the parent; the child receives only the selected
+  host and port. Deployments need process capacity for concurrent lookups.
 - **A soft-tier `Unavailable` is not carried on the fused Judgment.** The bank
   carries *authoritative* unavailability (HARD/HUMAN) downstream; an advisory
   judge that could not run is visible as its own result and in logs, and yields
