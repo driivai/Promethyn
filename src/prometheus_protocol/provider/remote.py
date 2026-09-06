@@ -12,10 +12,11 @@ construction:
 
 The request is deterministic where the endpoint allows it (temperature 0).
 
-This is the ONLY place Promethyn opens a network connection, so the transport
-adversary (``docs/threat-model.md`` §4) is answered here, once, for every
-credentialed call — the proposer, the judge, and the swarm roles all pass
-through :meth:`RemoteModelProvider._post`:
+Every model call Promethyn makes — the proposer, the judge, and the swarm
+roles — passes through :meth:`RemoteModelProvider._post`, so the transport
+adversary (``docs/threat-model.md`` §4) is answered here for all of them. The
+disciplines themselves live in ``core/transport.py``, shared with the external
+ledger anchor (§3), which is the only other credentialed client:
 
 * the endpoint is validated at construction — ``https://`` for any remote host,
   plaintext only to loopback and only with a loud opt-out
@@ -36,22 +37,24 @@ through :meth:`RemoteModelProvider._post`:
 
 from __future__ import annotations
 
-import http.client
 import json
 import logging
-import socket
-import ssl
 import time
 import urllib.error
 import urllib.request
 from typing import Sequence
-from urllib.parse import urlsplit
 
 from prometheus_protocol.core.config import Config
 from prometheus_protocol.core.endpoint import validate_endpoint
 from prometheus_protocol.core.errors import ConfigError
 from prometheus_protocol.core.interfaces import Provider
 from prometheus_protocol.core.models import Skill
+from prometheus_protocol.core.transport import (
+    TransportErrors,
+    build_opener,
+    classify_open_error,
+    read_bounded,
+)
 from prometheus_protocol.core.validation import require_int_in_range, require_positive
 
 _LOG = logging.getLogger(__name__)
@@ -66,7 +69,6 @@ MIN_MAX_RESPONSE_BYTES = 1024
 MAX_MAX_RESPONSE_BYTES = 1 << 30
 #: An HTTP error body is only ever quoted, so it needs far less room.
 _ERROR_BODY_BYTES = 64 * 1024
-_READ_CHUNK = 64 * 1024
 
 _DEFAULT_SYSTEM_PROMPT = (
     "You write small, correct Python functions. Reply with only the function "
@@ -130,32 +132,15 @@ class ProviderMalformedResponse(ProviderError):
     """A complete body that is not UTF-8 JSON in the expected shape."""
 
 
-class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
-    """Every redirect is refused, whatever the target.
-
-    ``urllib`` copies the request headers — ``Authorization`` included — onto the
-    redirected request, and turns a ``POST`` into a ``GET``. A network adversary
-    who can inject one ``302`` therefore collects the bearer token at any origin
-    they name, over any scheme. An API base that redirects is misconfigured; an
-    API base that redirects a credentialed request is a leak.
-    """
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D401
-        raise ProviderRedirectRefused(
-            f"endpoint answered HTTP {code} redirecting to {_origin_only(newurl)}; "
-            "redirects are refused because the request carries a credential"
-        )
-
-
-def _origin_only(url: str) -> str:
-    """Scheme and host of an attacker-supplied URL, for a message. Nothing else
-    from it is repeated."""
-
-    try:
-        parts = urlsplit(url)
-        return f"{parts.scheme}://{parts.hostname}"
-    except ValueError:
-        return "<unparseable url>"
+#: The provider's own classes for each transport failure, so a caller keeps
+#: catching ``ProviderTimeout`` and friends while the mechanics are shared.
+_ERRORS = TransportErrors(
+    transport=ProviderTransportError,
+    timeout=ProviderTimeout,
+    tls=ProviderTLSError,
+    redirect=ProviderRedirectRefused,
+    too_large=ProviderResponseTooLarge,
+)
 
 
 class RemoteModelProvider(Provider):
@@ -201,11 +186,7 @@ class RemoteModelProvider(Provider):
         # Explicit so it can be asserted: the default context verifies the chain
         # and checks the hostname. Relying on "the library default does that" is
         # a claim; an attribute a test reads is a fact.
-        self._ssl_context = ssl.create_default_context()
-        self._opener = urllib.request.build_opener(
-            urllib.request.HTTPSHandler(context=self._ssl_context),
-            _RefuseRedirects(),
-        )
+        self._opener, self._ssl_context = build_opener(_ERRORS)
 
     @classmethod
     def from_config(cls, config: Config) -> "RemoteModelProvider":
@@ -297,14 +278,11 @@ class RemoteModelProvider(Provider):
             raise ProviderHTTPError(
                 exc.code, f"endpoint returned HTTP {exc.code}: {detail}"
             ) from exc
-        except urllib.error.URLError as exc:
-            raise _classify_url_error(exc) from exc
-        except (socket.timeout, TimeoutError) as exc:
-            raise ProviderTimeout(f"endpoint did not answer within {self.timeout_s}s") from exc
-        except ssl.SSLError as exc:
-            raise ProviderTLSError(f"TLS failure: {exc}") from exc
-        except (http.client.HTTPException, OSError) as exc:
-            raise ProviderTransportError(f"could not reach endpoint: {exc}") from exc
+        except Exception as exc:
+            classified = classify_open_error(exc, timeout_s=self.timeout_s, errors=_ERRORS)
+            if classified is None:
+                raise
+            raise classified from exc
 
         with response:
             raw = self._read_bounded(response, deadline, limit=self.max_response_bytes)
@@ -321,103 +299,12 @@ class RemoteModelProvider(Provider):
         return data
 
     def _read_bounded(self, stream, deadline: float, *, limit: int) -> bytes:
-        """Read a body in chunks, under ``limit`` bytes and before ``deadline``.
+        """Read a body under ``limit`` bytes and before ``deadline``; refused,
+        never truncated, past either (``core/transport.py``)."""
 
-        A body that exceeds the limit is refused, not truncated: a truncated body
-        that happens to parse — a complete JSON object followed by padding, say —
-        would be reported as a normal answer, which is the void guard this method
-        exists to avoid. Both exits are distinct exceptions.
-        """
-
-        declared = _declared_length(stream)
-        if declared is not None and declared > limit:
-            raise ProviderResponseTooLarge(
-                f"endpoint declared a {declared}-byte body; the ceiling is {limit} bytes"
-            )
-        sock = _socket_of(stream)
-        # ``read1`` returns after ONE receive; ``read(n)`` on a chunked body loops
-        # over chunks until n bytes or EOF, so a server dripping one byte per
-        # chunk would hold a single read() open for the whole body and the
-        # deadline check below would never run. Measured: a 4-second drip ran to
-        # completion against a 1-second deadline with read(). read1 is what makes
-        # "check the clock between reads" actually mean something.
-        read_once = getattr(stream, "read1", None) or stream.read
-        chunks: list[bytes] = []
-        total = 0
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise ProviderTimeout(
-                    f"response not complete within {self.timeout_s}s "
-                    f"({total} bytes received)"
-                )
-            if sock is not None:
-                # Tighten the per-read timeout to what is left of the deadline so
-                # a drip cannot stretch one read past it. Best effort: the deadline
-                # check above still bounds the total to at most one extra
-                # ``timeout_s`` if the socket cannot be reached.
-                try:
-                    sock.settimeout(min(remaining, self.timeout_s))
-                except OSError:
-                    sock = None
-            try:
-                chunk = read_once(min(_READ_CHUNK, limit - total + 1))
-            except (socket.timeout, TimeoutError) as exc:
-                raise ProviderTimeout(
-                    f"response stalled; not complete within {self.timeout_s}s "
-                    f"({total} bytes received)"
-                ) from exc
-            except http.client.IncompleteRead as exc:
-                raise ProviderTransportError(
-                    f"connection closed mid-body after {total} bytes"
-                ) from exc
-            except ssl.SSLError as exc:
-                raise ProviderTLSError(f"TLS failure while reading: {exc}") from exc
-            except (http.client.HTTPException, OSError) as exc:
-                raise ProviderTransportError(f"read failed: {exc}") from exc
-            if not chunk:
-                break
-            total += len(chunk)
-            if total > limit:
-                raise ProviderResponseTooLarge(
-                    f"response exceeded {limit} bytes; refusing to parse a partial "
-                    "body as if it were complete"
-                )
-            chunks.append(chunk)
-        return b"".join(chunks)
-
-
-def _declared_length(stream) -> int | None:
-    headers = getattr(stream, "headers", None)
-    value = headers.get("Content-Length") if headers is not None else None
-    if value is None:
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _socket_of(stream):
-    """The underlying socket of an ``http.client`` response, if reachable.
-
-    CPython keeps it at ``response.fp.raw._sock``. That is an implementation
-    detail, so its absence is tolerated (the deadline check still bounds the
-    total); its presence lets the per-read timeout shrink to the deadline.
-    """
-
-    raw = getattr(getattr(stream, "fp", None), "raw", None)
-    sock = getattr(raw, "_sock", None)
-    return sock if hasattr(sock, "settimeout") else None
-
-
-def _classify_url_error(exc: urllib.error.URLError) -> ProviderError:
-    reason = getattr(exc, "reason", None)
-    if isinstance(reason, ssl.SSLError):
-        return ProviderTLSError(f"TLS failure: {reason}")
-    if isinstance(reason, (socket.timeout, TimeoutError)):
-        return ProviderTimeout("endpoint did not answer within the deadline")
-    return ProviderTransportError(f"could not reach endpoint: {reason}")
+        return read_bounded(
+            stream, deadline, limit=limit, timeout_s=self.timeout_s, errors=_ERRORS
+        )
 
 
 def _build_user_message(

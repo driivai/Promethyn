@@ -8,7 +8,11 @@ is made by configuration rather than by code edits.
 from __future__ import annotations
 
 import logging
+import os
+from pathlib import Path
+from typing import Mapping
 
+from prometheus_protocol.core.anchor_spec import parse_anchor_spec
 from prometheus_protocol.core.errors import ConfigError
 from prometheus_protocol.core.config import PROVIDER_REMOTE, Config
 from prometheus_protocol.core.interfaces import Ledger, Provider, Verifier
@@ -17,7 +21,9 @@ from prometheus_protocol.execution.executor import SandboxExecutor
 from prometheus_protocol.forge.miner import LessonForge
 from prometheus_protocol.gate.authorization import ActionGate
 from prometheus_protocol.gate.promotion import PromotionGate
+from prometheus_protocol.ledger.anchor_targets import build_tip_anchor
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
+from prometheus_protocol.ledger.tip_anchor import TipAnchor
 from prometheus_protocol.sandbox import Limits
 from prometheus_protocol.memory.tiers import InMemoryTier, MemoryTier
 from prometheus_protocol.provider.mock import MOCK_MODEL, MockProvider, SolutionBook
@@ -148,6 +154,95 @@ def build_sandbox_for(config: Config, *, env=None) -> Sandbox:
     return sandbox
 
 
+#: The environment gate for the ledger anchor requirement, read here as well
+#: as by ``Config.from_env`` so it is the OR of its sources: a programmatic
+#: ``Config(require_ledger_anchor=False)`` beside the variable does not lower it.
+LEDGER_ANCHOR_REQUIRED_ENV = "PROM_REQUIRE_LEDGER_ANCHOR"
+_TRUE = {"1", "true", "yes", "on"}
+
+
+def ledger_anchor_required(env: Mapping[str, str] | None = None) -> bool:
+    env = os.environ if env is None else env
+    return (env.get(LEDGER_ANCHOR_REQUIRED_ENV) or "").strip().lower() in _TRUE
+
+
+def build_tip_anchor_for(config: Config, *, env: Mapping[str, str] | None = None) -> TipAnchor | None:
+    """The anchor target ``config`` names, or ``None`` when unanchored.
+
+    A requirement that cannot be honoured is refused here, not degraded: with
+    the anchor required and none configured, or a ``file://`` one (a single
+    local file the ledger adversary can rewrite too), this raises rather than
+    returning a ledger that quietly lacks its witness. The same rules hold at
+    ``Config`` load; this is the runtime half, and the one the environment
+    variable reaches.
+    """
+
+    required = config.require_ledger_anchor or ledger_anchor_required(env)
+    if not config.ledger_anchor:
+        if required:
+            raise ConfigError(
+                "a ledger tip anchor is required "
+                f"({LEDGER_ANCHOR_REQUIRED_ENV}=1 or require_ledger_anchor=True) and "
+                "none is configured. Set PROM_LEDGER_ANCHOR to worm:///directory "
+                "or https://host/path (docs/ledger-integrity.md)."
+            )
+        return None
+    spec = parse_anchor_spec(
+        config.ledger_anchor,
+        name="ledger_anchor",
+        allow_insecure_loopback=config.allow_insecure_loopback,
+    )
+    if required and not spec.append_only:
+        raise ConfigError(
+            "a required ledger anchor cannot be honoured by "
+            f"{config.ledger_anchor!r}: a single local file is rewritten in place "
+            "and is non-protecting. Use worm:// or https://."
+        )
+    return build_tip_anchor(
+        spec,
+        token=config.ledger_anchor_token,
+        retain_for_s=config.ledger_anchor_retention_days * 86_400.0,
+        timeout_s=config.request_timeout_s,
+        allow_insecure_loopback=config.allow_insecure_loopback,
+    )
+
+
+def build_ledger(
+    config: Config,
+    *,
+    env: Mapping[str, str] | None = None,
+    path: Path | str | None = None,
+) -> SqliteLedger:
+    """The production ledger, opened with the configured anchor.
+
+    Every builder in this module and every CLI command gets its ledger here, so
+    continuous anchoring is a property of the production path rather than an
+    option a caller remembers: each audit-chain append writes the tip to the
+    target, each verify consults the target's whole history. An unanchored
+    file-backed ledger is allowed (development) and warned about; an anchor that
+    is a single local file is warned about as non-protecting.
+    """
+
+    anchor = build_tip_anchor_for(config, env=env)
+    location = config.ledger_path if path is None else path
+    if anchor is None:
+        if str(location) != ":memory:":
+            _LOG.warning(
+                "ledger %s has NO tip anchor: a rewrite of the audit chain from "
+                "genesis, or its deletion, is undetectable. Set PROM_LEDGER_ANCHOR "
+                "to worm:///directory or https://host/path (docs/ledger-integrity.md).",
+                location,
+            )
+    elif not anchor.append_only:
+        _LOG.warning(
+            "ledger anchor %s is a single local file: NON-PROTECTING against "
+            "anyone who can write the ledger host, which is the adversary it "
+            "exists for. Development only; production uses worm:// or https://.",
+            config.ledger_anchor,
+        )
+    return SqliteLedger(location, tip_anchor=anchor)
+
+
 def build_orchestrator(
     config: Config | None = None,
     *,
@@ -198,7 +293,7 @@ def build_orchestrator(
         verifier=verifier,
         registry=MarkdownSkillRegistry(config.registry_dir),
         gate=PromotionGate(threshold=config.gate_threshold),
-        ledger=SqliteLedger(config.ledger_path),
+        ledger=build_ledger(config),
         forge=LessonForge(),
         config=config,
         memory=memory if memory is not None else InMemoryTier(),
@@ -244,7 +339,7 @@ def build_swarm_runtime(
         bank=VerifierBank(trust_store),
         gate=ActionGate(),
         executor=RecordingExecutor(),
-        ledger=ledger if ledger is not None else SqliteLedger(config.ledger_path),
+        ledger=ledger if ledger is not None else build_ledger(config),
         provider=provider,
         memory=memory,
         code_verifier=code_verifier,
@@ -278,6 +373,6 @@ def build_execution_controller(
     return ExecutionController(
         gate=ActionGate(escalate_below=config.escalate_below, route_high_risk=True),
         executor=SandboxExecutor(sandbox=build_sandbox_for(config), limits=limits),
-        ledger=ledger if ledger is not None else SqliteLedger(config.ledger_path),
+        ledger=ledger if ledger is not None else build_ledger(config),
         ttl_seconds=config.pending_ttl_seconds,
     )

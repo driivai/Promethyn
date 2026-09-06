@@ -21,6 +21,14 @@ present, plausible, and void is the failure mode we exist to name.
 > enforced, what is a deployment recommendation, which test proves each claim,
 > and what remains open. Nothing is closed by assertion.
 
+> **Insider hardening (PIH).** PROM-HARDEN-MAX modelled adversaries short of a
+> privileged insider. The PIH sprints that follow it do not claim to prevent
+> one. Each introduces a **witness the insider cannot control**, converting a
+> residual from "undetectable, silent" to "detectable, witnessed". PIH-1 (§3)
+> made the ledger anchor external, append-only and continuous. Every "what it
+> does not cover" survives here as a passing test, because an overclaim is the
+> exact defect this program exists to catch.
+
 ## Design principles the whole model rests on
 
 1. **Couldn't-verify is never verified-clean.** A check that could not run
@@ -47,9 +55,9 @@ present, plausible, and void is the failure mode we exist to name.
 |---|---|---|---|---|---|---|
 | 1 | The sandboxed agent | env, filesystem, sockets, `/proc`, network | constructed environment; socket dirs hidden; private `/proc`; no interfaces | microVM for hostile multi-tenant work | `test_agent_zone_containment.py`, `test_isolation.py` | kernel / namespace escape |
 | 2 | The runner host | workspace mode, secrets in `repr`, spawn env, artifact bytes | `0700` workspace; redacted secrets; every spawn env-clean; bytes-not-paths | service account, filesystem/network confinement | `test_sandbox_privilege.py`, `test_credential_hygiene.py`, `test_artifact_integrity.py` | root defeats all of it |
-| 3 | The ledger file | chain rewrite, deletion, numeric settings | anchor written per append and consulted on verify; refuses to rewind; NaN/inf/range refused | anchor on a medium the adversary cannot write | `test_tip_anchor.py`, `test_ledger_verify_failure_modes.py`, `test_numeric_config_validation.py` | attacker controls both ledger and anchor |
+| 3 | The ledger file (and, with PIH-1, the insider who rewrites it) | chain rewrite, deletion, numeric settings | tip anchored to an external append-only target after every append; the whole anchor history pinned on verify; refuses to rewind; a failed anchor write raised, the runner refuses; NaN/inf/range refused | object-lock retention that outlasts the audit horizon, or a log run by another party; `PROM_REQUIRE_LEDGER_ANCHOR=1` | `test_external_anchor.py`, `test_tip_anchor.py`, `test_ledger_verify_failure_modes.py`, `test_numeric_config_validation.py` | authority over the anchor medium: retention lapsed or bypassed, the log's operator |
 | 4 | The network | credentialed HTTP | `https://` required; redirects refused; bounded reads under a deadline; failures typed and `Unavailable` | certificate pinning per deployment | `test_transport_hardening.py` | system trust store; proxy env is host-controlled |
-| 5 | Misconfiguration | every security flag and combination | requirement honoured or refused; dead-flag mechanism; coherent combinations; hardened defaults | pin the sandbox image | `test_security_posture.py` | `require_digest_pin` off by default; anchor opt-in |
+| 5 | Misconfiguration | every security flag and combination | requirement honoured or refused; dead-flag mechanism; coherent combinations; hardened defaults | pin the sandbox image | `test_security_posture.py` | `require_digest_pin` and `require_ledger_anchor` off by default |
 
 ---
 
@@ -365,6 +373,13 @@ The chain already stopped the easy versions — an edit, a deletion or a reorder
 any interior entry breaks every link after it. This class is about the two things
 it could not stop, and about the verifier's own honesty when it cannot run.
 
+**PIH-1 extends this class to the privileged insider** — root on the ledger
+host, who rewrites the ledger from genesis. The Attacker-3 anchor made that
+detectable only if its one file sat somewhere root could not write, which on the
+same host is nowhere. PIH-1 makes the anchor external, append-only and
+continuous, so the witness is a medium or a party outside the host's authority
+(§3.2–§3.5; `docs/ledger-integrity.md`, "External anchor targets").
+
 ### 3.1 What was found
 
 | # | Finding | Severity |
@@ -401,60 +416,127 @@ variable.
   rejecting NaN, infinities, wrong signs and out-of-range values — never
   clamping, because a clamp hides the misconfiguration the operator needs to see.
 
+**Added by PIH-1** (`ledger/anchor_targets.py`, `ledger/anchor_http.py`,
+`runtime/factory.py::build_ledger`; proven in `tests/chokepoint/test_external_anchor.py`,
+no test of which skips):
+
+- **The anchor is external and append-only.** Two target families keep every
+  anchored tip as its **own record, created once and never overwritten or
+  deleted by this code**: an object-lock / WORM target (one immutable record
+  per tip, exclusive create, on a write-once medium — a directory on a WORM
+  mount via `worm://`, or an object-locked bucket through a three-operation
+  port) and a remote append-only log over TLS (`https://`). The single-file
+  target remains for development, is flagged `append_only = False`, is called
+  **non-protecting** in the docs and by a runtime warning, and is refused when
+  the anchor is required.
+- **The verifier pins the whole anchor history**, not the newest record. A
+  forged record appended with the anchor's write credential does not mask the
+  honest records before it: the verifier reports `BROKEN` naming the conflict
+  in the anchor history itself. What the adversary needs is authority over the
+  medium, which is the boundary (§3.4).
+- **Anchoring is continuous and in the production path.** Every production
+  ledger is opened through `build_ledger`, so every audit-chain append writes
+  the tip to the configured target after the commit is durable, and every
+  verify consults the target. A file-backed ledger with no anchor is warned
+  about on every open; `PROM_REQUIRE_LEDGER_ANCHOR=1` refuses it instead, and
+  refuses a `file://` target as one that "cannot be honoured". The requirement
+  is the OR of its sources.
+- **A failed anchor write is raised, never swallowed, and the runner fails
+  closed.** `record_chained` raises `AnchorUnavailable`; the chokepoint runner
+  treats a pre-execution intent that cannot be anchored as a hard refusal — the
+  database untouched, the executor never called. A remote target that answers
+  500, hangs or drips is surfaced within the deadline.
+- **The operator's entry point:** `prometheus-protocol audit --verify-chain`,
+  exit 2 for anything but `VALID`.
+
 ### 3.3 What the anchor does and does not detect
 
-| Attack | Without an anchor | With an anchor out of reach |
-|---|---|---|
-| Edit / delete / reorder an interior entry | **detected** (chain break) | detected |
-| Append with a forged `prev_hash` | **detected** | detected |
-| Truncate the tail | reads as valid | **detected** (`TRUNCATED`) |
-| Delete the ledger entirely | reads as `valid (0 entries)` | **detected** (`TRUNCATED`) |
-| Full rewrite from genesis | reads as valid | **detected** (`BROKEN` at the anchored seq) |
-| Full rewrite **plus** rewriting the anchor | reads as valid | **NOT detected** |
+| Attack | Without an anchor | Local file on the same medium | External append-only target |
+|---|---|---|---|
+| Edit / delete / reorder an interior entry | **detected** (chain break) | detected | detected |
+| Append with a forged `prev_hash` | **detected** | detected | detected |
+| Truncate the tail | reads as valid | `TRUNCATED` ¹ | **`TRUNCATED`** |
+| Delete the ledger entirely | reads as `valid (0 entries)` | `TRUNCATED` ¹ | **`TRUNCATED`** |
+| Full rewrite from genesis | reads as valid | `BROKEN` ¹ | **`BROKEN` at the first anchored seq** |
+| Full rewrite **plus** a forged anchor record written with the anchor's write credential | reads as valid | **NOT detected** | **`BROKEN`** (conflicting history) |
+| Full rewrite **plus** authority over the anchor medium (retention lapsed or bypassed; the log's operator) | reads as valid | NOT detected | **NOT detected** |
 
-The last row is the residual, and it is a *passing test* in
-`tests/chokepoint/test_tip_anchor.py` rather than a sentence in a document —
-`test_an_attacker_who_also_controls_the_anchor_is_NOT_detected` performs the
-rewrite, rewrites the anchor to match, and asserts the result comes back
-**valid**. Recording it that way keeps the limit from quietly eroding.
+¹ Only while the adversary has left the file alone, which on the same medium
+nothing obliges them to do. The local file is the theatre case.
+
+The last row is the residual, and it is a set of *passing tests* rather than a
+sentence in a document — `test_an_attacker_who_also_controls_the_anchor_is_NOT_detected`
+(the local file, `test_tip_anchor.py`),
+`test_an_adversary_with_authority_over_the_medium_is_NOT_detected_once_retention_lapses`
+and `test_the_log_operator_is_NOT_detected` (`test_external_anchor.py`) each
+perform the rewrite, exercise the authority, and assert the result comes back
+**valid**. Recording it that way keeps the limit from quietly eroding. Every
+rewrite in those files is real: the forged chain is asserted `VALID` on its own
+terms before the anchor is consulted.
 
 ### 3.4 The trust boundary — the whole value of the anchor
 
 **The anchor is worth exactly as much as the separation between it and the
-ledger, and nothing more.** An anchor file in the same directory, on the same
-disk, writable by the same account, defends against nothing: an attacker who can
-rewrite the chain can rewrite the anchor in the same breath. It would look like
-protection and be theatre.
+ledger-writer's authority, for exactly as long as that separation lasts.** An
+anchor file in the same directory, on the same disk, writable by the same
+account, defends against nothing: an attacker who can rewrite the chain can
+rewrite the anchor in the same breath. It would look like protection and be
+theatre.
 
-For it to mean anything, the anchor must live in a trust domain the ledger-file
-adversary cannot write. In rough order of strength:
+For the external targets the boundary is stated precisely, because it is what
+a deployment must actually provide:
 
-1. an append-only or write-once store — object storage with object-lock or a WORM
-   volume, where even a valid credential cannot overwrite history;
-2. a different host the ledger's account cannot reach, pulling or receiving the
-   tip;
-3. a mount that is read-only from the ledger host's perspective;
-4. a periodic out-of-band record — a signed digest posted somewhere durable, or
-   simply written down.
+1. **Object lock: the retention window.** In compliance mode no principal — the
+   writing credential, the bucket owner, the account administrator — can delete
+   or shorten a locked version before its retain-until date; after it, anyone
+   with delete permission can. The window must outlast the period over which a
+   rewrite must stay detectable. The default requested per record is 3650 days
+   (`PROM_LEDGER_ANCHOR_RETENTION_DAYS`); shorter is the residual, not a saving.
+   Governance mode, which a privileged principal can bypass, does not give this
+   property.
+2. **WORM directory: the mount.** The code creates exclusively and never
+   deletes; whether anyone else can is the volume's property. On a plain
+   filesystem `worm://` is a name, not a guarantee, and the code cannot tell.
+3. **Remote log: the operator.** The ledger host's credential may only append
+   and read; the party running the log can replace its storage. The log must be
+   run by a party the ledger-host adversary is not.
 
-The code cannot verify any of this and does not pretend to: `FileTipAnchor` takes
-a path and writes to it. **Placement is a deployment property**, and it is the
-one that decides whether §3 closed anything at all.
+The code verifies none of this and does not pretend to. **Placement is a
+deployment property**, and it is the one that decides whether §3 closed
+anything at all. Detection holds when the anchor medium is genuinely outside
+the ledger-writer's authority; it does not hold when the same adversary
+controls both.
 
 ### 3.5 Residual — what is not covered
 
-- **An attacker who controls both the ledger and the anchor is not detected.**
-  This is the §2.5 root case in another guise, and it is stated here rather than
-  buried: root, or any compromise spanning both stores, defeats the whole scheme.
-- **The anchor is opt-in.** A `SqliteLedger` built without one behaves exactly as
-  before. Making it mandatory would break in-memory and throwaway ledgers, which
-  have nothing meaningful to anchor. Supported, wired and tested — not enforced.
+- **An adversary with authority over the anchor medium is not detected.** This
+  is the §2.5 root case in another guise: root who also holds the bucket after
+  retention lapsed, or who runs the log, defeats the whole scheme. The passing
+  tests in §3.3 record it. Root on the ledger host *alone*, with the witness
+  outside their authority, is now detected — that is what PIH-1 changed.
+- **The retention window is a deployment choice**, and the code only *requests*
+  it; the WORM directory target ignores it, since retention there is the
+  mount's. An adapter for a real bucket is the deployment's and must be proven
+  against the real bucket (`docs/ledger-integrity.md` gives the procedure); no
+  cloud SDK is bundled, because an adapter the CI cannot exercise is a guard
+  nobody has seen work.
+- **Anchoring is off by default** (§5.4). In-memory and throwaway ledgers have
+  nothing to anchor and a development install has no witness to point at. The
+  default is a warning on every unanchored file-backed open; the production
+  posture is `PROM_REQUIRE_LEDGER_ANCHOR=1`, which refuses.
 - **Detection, not prevention.** Everything here makes tampering *evident* after
   the fact. Nothing stops a writer with file access from making the change.
 - **A gap between the last append and a crash** is not covered by a cadence the
-  code controls: the anchor is written per-append, so a crash *between* the
-  commit and the anchor write leaves the anchor one entry behind. That reads as a
-  valid chain with one honest extra entry, not as tampering.
+  code controls: the anchor is written per-append, after the commit, so a crash
+  *between* the two leaves the anchor one entry behind. That reads as a valid
+  chain with one honest extra entry, not as tampering.
+- **The anchor history grows by one record per append** and is read whole on
+  verify. The remote log's read ceiling is 64 MiB — room for several hundred
+  thousand records — and pruning is a log-operator decision that trades the
+  detection window for size; nothing here does it.
+- **A verifier pointed at the wrong anchor sees nothing.** Whoever can change
+  `PROM_LEDGER_ANCHOR` on the verifying host can point it at an empty prefix.
+  That is the silent-config-downgrade class, PIH-4a's subject, not this one's.
 - **Numeric validation covers the fields enumerated in §3.1.** It is a fixed list,
   not a mechanism that catches a numeric field added later — a new unvalidated
   setting would be a new hole. The helpers exist to make adding validation cheap;
@@ -673,7 +755,9 @@ variable, and wired to nothing as a field. The audit that named it was right.
 | `pending_ttl_seconds` | Config, env | `PendingActionService` | negative refused; `0` documented as "no expiry" | enforced (§3) |
 | `enable_model_judge` | Config, env | `build_orchestrator` | a provider without `assess` → every verify is `Unavailable`, visibly; not refused (advisory feature, not a security requirement) | honoured |
 | `MigrationRunnerConfig` | code | chokepoint runner | key under 32 bytes or no durable store → refused at construction | enforced (§1) |
-| ledger `tip_anchor` | code | `SqliteLedger` | opt-in; a configured anchor that cannot be read → `NOT_VERIFIABLE` | enforced when set (§3) |
+| `ledger_anchor` | Config, env | `build_ledger` → the anchor target; written after every append, pinned on every verify | malformed or plaintext-to-remote refused at load; a target that cannot be read → `NOT_VERIFIABLE`; a target that cannot be written → `AnchorUnavailable` raised, the runner refuses | enforced when set (§3, PIH-1) |
+| `require_ledger_anchor` | Config, env (OR of sources) | `build_ledger` | no anchor, or a `file://` one → **refused at construction** ("cannot be honoured") | enforced (§3, PIH-1) |
+| `ledger_anchor_retention_days` | Config, env | object-lock targets (requested per record) | out of `[1, 36500]` refused at load; the medium's honouring of it is a deployment property | enforced at load (§3.4) |
 
 ### 5.4 Default posture
 
@@ -696,14 +780,18 @@ hardcoded on, every cap finite and positive. Asserted by
   right posture for production, and a production deployment sets it. It is the
   recommended production setting and the one flag this model asks an operator
   to remember.
-- **The ledger tip anchor is opt-in** (§3.5). A ledger with no anchor behaves as
-  it always did; in-memory and throwaway ledgers have nothing to anchor.
+- **`require_ledger_anchor=False`** (§3.5). A file-backed ledger with no anchor
+  opens with a warning that a rewrite from genesis is undetectable; in-memory
+  and throwaway ledgers have nothing to anchor and a development install has no
+  witness to point at. Production sets `PROM_REQUIRE_LEDGER_ANCHOR=1`, which
+  refuses an unanchored ledger and a `file://` anchor alike.
 
 ### 5.5 Residual — what is not covered
 
 - **Two of the defaults above are permissive**, for the stated reasons. An
   operator who forgets `require_digest_pin` on a container-only host runs an
-  unpinned image, with a warning.
+  unpinned image, with a warning; one who forgets `require_ledger_anchor` runs
+  an unwitnessed ledger, with a warning on every open.
 - **The dead-flag mechanism sees attribute reads, not enforcement.** It proves
   a field is *consumed* somewhere; whether the consumer honours it correctly is
   what the per-flag tests in §5.3 are for. A field read only to be logged would

@@ -35,6 +35,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
+from typing import Iterable
 
 _DOMAIN = b"prom-audit-chain-v1\x00"
 
@@ -115,18 +116,50 @@ class ChainVerification:
         return f"chain {self.status.upper()}{where}: {self.detail}"
 
 
-def verify_rows(rows: list[dict], *, expected_tip: ChainTip | None = None) -> ChainVerification:
+def _pins(
+    expected_tip: ChainTip | None, expected_tips: Iterable[ChainTip] | None
+) -> tuple[dict[int, str], dict[int, tuple[str, str]]]:
+    """Every anchored (seq → hash) to pin, and the seqs the anchors disagree on."""
+
+    pins: dict[int, str] = {}
+    conflicts: dict[int, tuple[str, str]] = {}
+    tips = list(expected_tips or [])
+    if expected_tip is not None:
+        tips.append(expected_tip)
+    for tip in tips:
+        held = pins.setdefault(tip.seq, tip.entry_hash)
+        if held != tip.entry_hash and tip.seq not in conflicts:
+            conflicts[tip.seq] = (held, tip.entry_hash)
+    return pins, conflicts
+
+
+def verify_rows(
+    rows: list[dict],
+    *,
+    expected_tip: ChainTip | None = None,
+    expected_tips: Iterable[ChainTip] | None = None,
+) -> ChainVerification:
     """Walk the chain in storage order from genesis; report the FIRST failure.
 
     ``rows`` must be in insertion (id) order — NOT sorted by ``seq`` — so a
     reorder that rewrites the ``seq`` column is still caught as a discontinuity.
     Returns the first broken/not-verifiable link with its index and a specific
     reason, never a bare boolean.
+
+    ``expected_tip`` pins one out-of-band tip. ``expected_tips`` pins every tip
+    in an anchor *history* — an append-only target holds one record per append
+    — and every pinned entry must still hash to its anchored value. That is what
+    makes an immutable anchor medium worth having: a forged record appended to
+    the anchor by someone holding its write credential does not mask the honest
+    records before it, because those are still pinned. Two records that disagree
+    about one seq are a conflict no chain can satisfy, reported as ``BROKEN`` at
+    that seq and naming the anchor history itself as the evidence.
     """
 
+    pins, conflicts = _pins(expected_tip, expected_tips)
+    seen: dict[int, str] = {}
     expected_prev = GENESIS_ROOT
     expected_seq = 1
-    anchored_hash: str | None = None
     for row in rows:
         seq = row.get("seq")
         stored_hash = row.get("entry_hash")
@@ -178,31 +211,49 @@ def verify_rows(rows: list[dict], *, expected_tip: ChainTip | None = None) -> Ch
                 f"content edited: stored hash {stored_hash[:16]}…, "
                 f"recomputed {recomputed[:16]}…")
 
-        # Pin the entry AT the anchored seq: its hash must still equal the
+        # Pin the entry AT each anchored seq: its hash must still equal the
         # out-of-band anchor no matter how far the chain has since grown, so a
         # rewrite-then-extend cannot slip past by merely making the chain longer.
-        if expected_tip is not None and seq == expected_tip.seq:
-            anchored_hash = stored_hash
+        if seq in pins:
+            seen[seq] = stored_hash
         expected_prev = stored_hash
         expected_seq += 1
 
     length = expected_seq - 1
 
     # Truncation / rewrite is only detectable against an out-of-band anchor.
-    if expected_tip is not None:
-        if length < expected_tip.seq:
+    # Rewrites at anchored points the chain still reaches are reported first,
+    # lowest seq first, because a rewrite is the more severe finding and one
+    # chain can be both rewritten and shortened.
+    for seq in sorted(pins):
+        if seq > length:
+            break
+        if seq in conflicts:
+            first, second = conflicts[seq]
             return ChainVerification(
-                TRUNCATED, length, length,
-                f"chain ends at seq {length} but the anchored tip is seq "
-                f"{expected_tip.seq}: {expected_tip.seq - length} entrie(s) truncated")
-        # length >= tip.seq: seqs are contiguous, so an entry with seq == tip.seq
-        # was walked and anchored_hash is set. It must still equal the anchored
-        # value, else the prefix up to the anchor was rewritten — including a
-        # rewrite that then extended the chain past the anchor point.
-        if anchored_hash != expected_tip.entry_hash:
+                BROKEN, seq, seq,
+                f"the anchor history holds two different hashes for seq {seq} "
+                f"({first[:16]}…, {second[:16]}…): a record was written past the "
+                "anchor's own guard, so something holding the anchor's write "
+                "credential forged or rewrote a tip; the chain can match at most "
+                "one of them")
+        # seqs are contiguous, so an entry with this seq was walked and seen[seq]
+        # is set. It must still equal the anchored value, else the prefix up to
+        # that anchor was rewritten — including a rewrite that then extended the
+        # chain past the anchor point.
+        if seen.get(seq) != pins[seq]:
             return ChainVerification(
-                BROKEN, expected_tip.seq, expected_tip.seq,
+                BROKEN, seq, seq,
                 "entry at the anchored seq does not match the anchored tip "
                 "(chain rewritten)")
+    if pins and max(pins) > length:
+        top = max(pins)
+        note = ""
+        if any(seq > length for seq in conflicts):
+            note = "; the anchor history also holds conflicting records past the chain's end"
+        return ChainVerification(
+            TRUNCATED, length, length,
+            f"chain ends at seq {length} but the anchored tip is seq {top}: "
+            f"{top - length} entrie(s) truncated{note}")
 
     return ChainVerification(VALID, length, None, "")

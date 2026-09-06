@@ -38,6 +38,7 @@ from prometheus_protocol.provider.remote import ProviderError
 from prometheus_protocol.registry.markdown_registry import MarkdownSkillRegistry
 from prometheus_protocol.runtime.factory import (
     build_execution_controller,
+    build_ledger,
     build_orchestrator,
 )
 from prometheus_protocol.verifier.bank import VerifierBank
@@ -149,14 +150,21 @@ def _cmd_status(args: argparse.Namespace) -> int:
 
 
 def _cmd_audit(args: argparse.Namespace) -> int:
-    """Summarise or query the experience ledger. Strictly read-only."""
+    """Summarise or query the experience ledger. Strictly read-only.
+
+    ``--verify-chain`` walks the audit chain against the configured tip anchor
+    and exits non-zero for anything but ``VALID`` — ``BROKEN``, ``TRUNCATED``
+    and ``NOT_VERIFIABLE`` alike, because couldn't-verify is not verified-clean.
+    """
 
     config = Config.from_env()
     if config.ledger_path != Path(":memory:") and not Path(config.ledger_path).exists():
         print(f"no ledger found at {config.ledger_path}")
         return 1
-    ledger = SqliteLedger(config.ledger_path)
+    ledger = build_ledger(config)
     try:
+        if args.verify_chain:
+            return _verify_chain(config, ledger)
         if args.executed_below is not None:
             _print_executions(
                 ledger.executions_below_confidence(args.executed_below),
@@ -176,6 +184,18 @@ def _cmd_audit(args: argparse.Namespace) -> int:
     finally:
         ledger.close()
     return 0
+
+
+def _verify_chain(config: Config, ledger: SqliteLedger) -> int:
+    anchor = ledger.tip_anchor
+    if anchor is None:
+        print("anchor      : (none) — a rewrite from genesis or a deletion is NOT detectable")
+    else:
+        posture = "append-only history" if anchor.append_only else "single file, NON-PROTECTING"
+        print(f"anchor      : {anchor.name} ({posture}) {config.ledger_anchor}")
+    verification = ledger.verify_chain()
+    print(f"audit chain : {verification.render()}")
+    return 0 if verification.ok else 2
 
 
 def _print_executions(rows: list[dict], title: str) -> None:
@@ -235,7 +255,7 @@ def _cmd_migrate(args: argparse.Namespace) -> int:
     if config.ledger_path == Path(":memory:") or not Path(config.ledger_path).exists():
         print(f"no ledger found at {config.ledger_path}")
         return 1
-    ledger = SqliteLedger(config.ledger_path)
+    ledger = build_ledger(config)
     try:
         report = ledger.backfill()
     finally:
@@ -258,7 +278,7 @@ def _open_ledger_for_pending(config: Config) -> SqliteLedger | None:
     if config.ledger_path == Path(":memory:") or not Path(config.ledger_path).exists():
         print(f"no ledger found at {config.ledger_path}")
         return None
-    return SqliteLedger(config.ledger_path)
+    return build_ledger(config)
 
 
 def _cmd_pending(args: argparse.Namespace) -> int:
@@ -506,6 +526,13 @@ def build_parser() -> argparse.ArgumentParser:
     audit.add_argument(
         "--human-log", action="store_true",
         help="show the human-decision log (approve / reject / expire)",
+    )
+    audit.add_argument(
+        "--verify-chain", action="store_true",
+        help=(
+            "verify the audit hash chain against the configured tip anchor "
+            "(PROM_LEDGER_ANCHOR); exit 2 unless VALID"
+        ),
     )
     sub.add_parser("migrate", help="backfill judgment columns for historical ledger rows")
     sub.add_parser(
