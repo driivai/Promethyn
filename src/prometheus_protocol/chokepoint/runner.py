@@ -36,12 +36,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import sqlite3
 import stat
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from importlib import import_module
 from pathlib import Path
@@ -54,6 +55,22 @@ from prometheus_protocol.chokepoint.approval import (
     MigrationTarget,
     VerifyResult,
 )
+from prometheus_protocol.chokepoint.signer import ApprovalSigner, LocalHmacSigner
+from prometheus_protocol.core.errors import ConfigError
+
+_LOG = logging.getLogger(__name__)
+
+#: The environment gate for external key custody, read here as well as by
+#: ``Config.from_env`` so the requirement is the OR of its sources: a
+#: programmatic ``require_external_signer=False`` beside the variable does not
+#: lower it (threat model §2.6; ``docs/key-custody.md``).
+EXTERNAL_SIGNER_REQUIRED_ENV = "PROM_REQUIRE_EXTERNAL_SIGNER"
+_TRUE = {"1", "true", "yes", "on"}
+
+
+def external_signer_required(env: Mapping[str, str] | None = None) -> bool:
+    env = os.environ if env is None else env
+    return (env.get(EXTERNAL_SIGNER_REQUIRED_ENV) or "").strip().lower() in _TRUE
 
 REPLAY = "replay"
 STORE_UNAVAILABLE = "approval_store_unavailable"
@@ -184,22 +201,53 @@ class DbTarget:
 class MigrationRunnerConfig:
     """Required production wiring for the privileged migration runner.
 
-    ``signing_key`` is excluded from ``repr`` for the same reason as the
-    password, and with more at stake: the key mints approvals, so a key in a log
-    is a total bypass of the gate (threat model §1, A1-1 — the same secret, a
-    different exit route). ``bytes`` renders in full by default, so a single
-    ``print(config)`` or a config object caught in a traceback published it.
+    Exactly one of ``signing_key`` (a local HMAC key — development, and
+    **non-protecting against a host-level insider**, who reads it out of the
+    process) or ``signer`` (an external KMS / HSM signer whose private key
+    never exists on this host; ``docs/key-custody.md``) is given.
+    ``require_external_signer`` refuses the local key as a requirement that
+    cannot be honoured; it is the OR of this field, ``Config`` and
+    ``PROM_REQUIRE_EXTERNAL_SIGNER`` at build time.
+
+    ``signing_key`` and ``signer`` are excluded from ``repr`` for the same
+    reason as the password, and with more at stake: the key mints approvals, so
+    a key in a log is a total bypass of the gate (threat model §1, A1-1 — the
+    same secret, a different exit route). ``bytes`` renders in full by default,
+    so a single ``print(config)`` or a config object caught in a traceback
+    published it.
     """
 
     target: DbTarget
-    signing_key: bytes = field(repr=False)
     approval_store_path: str | Path
+    signing_key: bytes | None = field(default=None, repr=False)
+    signer: ApprovalSigner | None = field(default=None, repr=False)
+    require_external_signer: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.target, DbTarget):
             raise TypeError("migration runner target must be a DbTarget")
-        if not isinstance(self.signing_key, bytes) or len(self.signing_key) < 32:
+        if (self.signing_key is None) == (self.signer is None):
+            raise ValueError(
+                "migration runner needs exactly one of signing_key (local, "
+                "non-protecting) or signer (external)"
+            )
+        if self.signing_key is not None and (
+            not isinstance(self.signing_key, bytes) or len(self.signing_key) < 32
+        ):
             raise ValueError("migration runner signing key must be at least 32 bytes")
+        if self.signer is not None and not (
+            callable(getattr(self.signer, "sign", None))
+            and callable(getattr(self.signer, "verify", None))
+        ):
+            raise TypeError("migration runner signer must sign and verify")
+        if self.require_external_signer and (
+            self.signer is None or not getattr(self.signer, "external", False)
+        ):
+            raise ConfigError(
+                "require_external_signer=True cannot be honoured: the configured "
+                "signer holds its key on this host (a local HMAC key root can read "
+                "and use silently). Configure a KmsSigner, or withdraw the requirement."
+            )
         if not isinstance(self.approval_store_path, (str, os.PathLike)) or not os.fspath(
             self.approval_store_path
         ):
@@ -1203,6 +1251,49 @@ class MigrationRuntime:
         self.close()
 
 
+def resolve_signer(
+    config: MigrationRunnerConfig,
+    *,
+    settings: object | None = None,
+    env: Mapping[str, str] | None = None,
+) -> ApprovalSigner:
+    """The signer this configuration requests — honoured, or refused.
+
+    The requirement for external custody is the OR of its sources: the runner
+    config, the runtime ``Config`` (``settings.require_external_signer``) and
+    ``PROM_REQUIRE_EXTERNAL_SIGNER``. Under it a local key is refused as a
+    requirement that cannot be honoured — never quietly accepted, and there is
+    no path here from a configured external signer to a local key. Without it
+    a local key is allowed and warned about as non-protecting.
+    """
+
+    required = (
+        bool(config.require_external_signer)
+        or bool(getattr(settings, "require_external_signer", False))
+        or external_signer_required(env)
+    )
+    if config.signer is not None:
+        signer = config.signer
+    else:
+        signer = LocalHmacSigner(config.signing_key)
+    if required and not getattr(signer, "external", False):
+        raise ConfigError(
+            "an external approval signer is required "
+            f"({EXTERNAL_SIGNER_REQUIRED_ENV}=1 or require_external_signer=True) "
+            "and the configured signer holds its key on this host. Configure a "
+            "KmsSigner (docs/key-custody.md), or withdraw the requirement."
+        )
+    if not getattr(signer, "external", False):
+        _LOG.warning(
+            "approval signing uses a LOCAL key (%s): NON-PROTECTING against a "
+            "host-level insider, who reads it from the process and mints "
+            "approvals with no record anywhere. Development only; production "
+            "signs through an external KMS (docs/key-custody.md).",
+            getattr(signer, "key_id", "?"),
+        )
+    return signer
+
+
 def build_migration_runtime(
     config: MigrationRunnerConfig,
     *,
@@ -1210,12 +1301,19 @@ def build_migration_runtime(
     executor: MigrationExecutor = postgres_executor,
     receipt_lookup: ReceiptLookup | None = None,
     clock: Callable[[], float] = time.time,
+    settings: object | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> MigrationRuntime:
-    """Build production wiring with a stable key, durable store, and audit."""
+    """Build production wiring with a stable signer, durable store, and audit.
+
+    ``settings`` is the runtime :class:`~prometheus_protocol.core.config.Config`
+    when the caller has one; its ``require_external_signer`` is one of the
+    sources of the custody requirement (:func:`resolve_signer`).
+    """
 
     if audit is None:
         raise ValueError("migration runner audit sink is required")
-    authority = ApprovalAuthority(key=config.signing_key)
+    authority = ApprovalAuthority(signer=resolve_signer(config, settings=settings, env=env))
     runner = BrokeredMigrationRunner(
         authority=authority,
         target=config.target,
@@ -1235,6 +1333,8 @@ def build_migration_runner(
     executor: MigrationExecutor = postgres_executor,
     receipt_lookup: ReceiptLookup | None = None,
     clock: Callable[[], float] = time.time,
+    settings: object | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> BrokeredMigrationRunner:
     """Build only the runner side of the required production composition.
 
@@ -1249,4 +1349,6 @@ def build_migration_runner(
         executor=executor,
         receipt_lookup=receipt_lookup,
         clock=clock,
+        settings=settings,
+        env=env,
     ).runner

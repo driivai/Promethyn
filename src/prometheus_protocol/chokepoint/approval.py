@@ -10,17 +10,22 @@ short window. It is bound by construction, not by convention:
 * **target binding** — it names the exact target; use against another target
   fails;
 * **expiry** — it carries an absolute expiry; past it, it fails;
-* **unforgeability** — every field is covered by an HMAC-SHA256 over a
-  runner-zone secret key. The agent zone never holds that key (see
+* **unforgeability** — every field is sealed by a signature over the canonical
+  bytes, made by an :class:`~prometheus_protocol.chokepoint.signer.ApprovalSigner`:
+  HMAC-SHA256 with a runner-zone key (development), or ECDSA P-256 through an
+  external KMS / HSM whose private key never exists on the host (PIH-2,
+  ``docs/key-custody.md``). The agent zone never holds either (see
   ``docs/chokepoint-threat-model.md`` §4.3), so an agent cannot mint or alter an
-  approval: any tampered field or hand-crafted MAC fails ``hmac.compare_digest``.
+  approval: any tampered field or hand-crafted signature fails verification.
   That unreachability is a property of the sandbox, not of this module, and it is
   proven rather than assumed: ``tests/chokepoint/test_agent_zone_containment.py``
-  plants this key in the runner's environment and sweeps for it from inside the
-  agent context by every path it has. Until PROM-HARDEN-MAX the sandbox inherited
-  the runner's environment wholesale, so an agent could simply read
+  plants the local key in the runner's environment and sweeps for it from inside
+  the agent context by every path it has. Until PROM-HARDEN-MAX the sandbox
+  inherited the runner's environment wholesale, so an agent could simply read
   ``PROM_CHOKEPOINT_KEY`` and mint its own approvals — everything below is
-  downstream of a key the attacker would already have held.
+  downstream of a key the attacker would already have held. Root on the host
+  could always read that key; with the external signer, root must ask the KMS
+  to sign, and the KMS records the request. Detection, not prevention.
 
 Single use (replay protection) is *stateful* and therefore NOT a property of this
 pure module — it is enforced by the runner's atomic consumed-nonce claim
@@ -46,6 +51,12 @@ import string
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
+from prometheus_protocol.chokepoint.signer import (
+    HMAC_SHA256,
+    SCHEMES,
+    ApprovalSigner,
+    LocalHmacSigner,
+)
 from prometheus_protocol.core.models import Judgment, Unavailable, Verdict
 
 #: Default approval lifetime. The window clocks *mint → execute* — an automated
@@ -53,7 +64,16 @@ from prometheus_protocol.core.models import Judgment, Unavailable, Verdict
 #: happens before minting. 90s is ample for that hop and short enough that a
 #: captured approval is stale before it is useful.
 DEFAULT_TTL_SECONDS = 90.0
-APPROVAL_VERSION = 2
+#: The envelope version. v3 (PIH-2) names the scheme and key the signature was
+#: made with; the *binding* — the canonical bytes the signature seals — is the
+#: v2 binding unchanged, and a test pins its digest.
+APPROVAL_VERSION = 3
+#: Bounds on the envelope's signature field, in hex characters: an HMAC is
+#: exactly 64; a DER-encoded P-256 ECDSA signature is 140–144. Anything outside
+#: is not a signature this module would ever produce.
+_SIGNATURE_HEX_MIN = 64
+_SIGNATURE_HEX_MAX = 256
+_KEY_ID_MAX = 128
 
 
 @dataclass(frozen=True)
@@ -264,10 +284,12 @@ class MigrationArtifact:
 class Approval:
     """A signed, single-use capability to run one artifact against one target.
 
-    All fields except ``mac`` are covered by ``mac``; the ``mac`` is an
-    HMAC-SHA256 over them keyed by a runner-zone secret. It is inert data — it
-    authorizes nothing until :meth:`ApprovalAuthority.verify` accepts it and the
-    runner spends its ``nonce``.
+    The bound fields — artifact, target, nonce, issuance, expiry — are sealed
+    by ``signature``, made with ``scheme`` under the key named by ``key_id``
+    (an HMAC over a runner-zone key, or an ECDSA signature by an external KMS).
+    It is inert data — it authorizes nothing until
+    :meth:`ApprovalAuthority.verify` accepts it and the runner spends its
+    ``nonce``.
     """
 
     artifact_sha256: str
@@ -275,7 +297,9 @@ class Approval:
     nonce: str
     issued_at: float
     expires_at: float
-    mac: str
+    scheme: str
+    key_id: str
+    signature: str
     version: int = APPROVAL_VERSION
 
     def to_dict(self) -> dict[str, object]:
@@ -286,7 +310,9 @@ class Approval:
             "nonce": self.nonce,
             "issued_at": self.issued_at,
             "expires_at": self.expires_at,
-            "mac": self.mac,
+            "scheme": self.scheme,
+            "key_id": self.key_id,
+            "signature": self.signature,
         }
 
     def to_json(self) -> str:
@@ -309,7 +335,9 @@ class Approval:
             "nonce",
             "issued_at",
             "expires_at",
-            "mac",
+            "scheme",
+            "key_id",
+            "signature",
         }
         if set(value) != expected:
             raise ValueError("approval has missing or unknown fields")
@@ -327,7 +355,9 @@ class Approval:
             value["artifact_sha256"], name="artifact_sha256", length=64
         )
         nonce = _required_hex(value["nonce"], name="nonce", length=32)
-        mac = _required_hex(value["mac"], name="mac", length=64)
+        scheme = _required_scheme(value["scheme"])
+        key_id = _required_key_id(value["key_id"])
+        signature = _required_signature_hex(value["signature"], scheme=scheme)
         issued_at = _required_finite_number(value["issued_at"], name="issued_at")
         expires_at = _required_finite_number(value["expires_at"], name="expires_at")
         if expires_at <= issued_at:
@@ -338,7 +368,9 @@ class Approval:
             nonce=nonce,
             issued_at=issued_at,
             expires_at=expires_at,
-            mac=mac,
+            scheme=scheme,
+            key_id=key_id,
+            signature=signature,
         )
 
     @classmethod
@@ -398,6 +430,54 @@ def _required_finite_number(value: object, *, name: str) -> float:
     return result
 
 
+def _required_scheme(value: object) -> str:
+    if not isinstance(value, str) or value not in SCHEMES:
+        raise ValueError(f"approval scheme must be one of {', '.join(SCHEMES)}")
+    return value
+
+
+def _required_key_id(value: object) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > _KEY_ID_MAX
+        or any(ord(character) < 0x21 or ord(character) > 0x7E for character in value)
+    ):
+        raise ValueError(
+            f"approval key_id must be 1-{_KEY_ID_MAX} printable ASCII characters"
+        )
+    return value
+
+
+def _required_signature_hex(value: object, *, scheme: str) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) % 2
+        or not _SIGNATURE_HEX_MIN <= len(value) <= _SIGNATURE_HEX_MAX
+        or any(character not in string.hexdigits for character in value)
+    ):
+        raise ValueError("approval signature must be an even-length hexadecimal string")
+    if scheme == HMAC_SHA256 and len(value) != 64:
+        raise ValueError("an hmac-sha256 approval signature must be 64 hexadecimal characters")
+    return value.lower()
+
+
+def approval_digest(approval: Approval) -> str:
+    """The SHA-256 (hex) of the bytes an approval's signature seals — the value
+    an external KMS logs for each Sign request, so an auditor can match every
+    approval to its record (``kms_model.unwitnessed_digests``)."""
+
+    return hashlib.sha256(
+        _canonical(
+            approval.artifact_sha256,
+            approval.target,
+            approval.nonce,
+            approval.issued_at,
+            approval.expires_at,
+        )
+    ).hexdigest()
+
+
 def _length_prefix(value: str) -> bytes:
     encoded = value.encode("utf-8")
     return len(encoded).to_bytes(8, "big") + encoded
@@ -426,21 +506,44 @@ def _canonical(
 
 
 class ApprovalAuthority:
-    """Holds the runner-zone signing key; mints and verifies approvals.
+    """Mints and verifies approvals through an :class:`ApprovalSigner`.
 
-    The key lives only where an ``ApprovalAuthority`` is constructed — the gate
-    and the runner, both in the trusted zone. It is never written to the agent's
-    workspace, never placed in an artifact, never handed to the agent. Default is
-    a fresh 32-byte random key; a runner may instead pass a key sourced from its
-    own environment (``PROM_CHOKEPOINT_KEY``) so gate and runner share one.
+    With the default local signer the key lives only where the authority is
+    constructed — the gate and the runner, both in the trusted zone. It is never
+    written to the agent's workspace, never placed in an artifact, never handed
+    to the agent. Default is a fresh 32-byte random key; a runner may instead
+    pass a key sourced from its own environment (``PROM_CHOKEPOINT_KEY``) so
+    gate and runner share one. That key is readable by root on the host, which
+    is the residual the external signer answers: pass ``signer=KmsSigner(…)``
+    and no private key exists on the host at all (``docs/key-custody.md``).
     """
 
-    def __init__(self, *, key: bytes | None = None) -> None:
-        self._key = key if key is not None else os.urandom(32)
-        if not isinstance(self._key, bytes) or len(self._key) < 32:
-            raise ValueError("approval signing key must be at least 32 bytes")
+    def __init__(
+        self, *, key: bytes | None = None, signer: ApprovalSigner | None = None
+    ) -> None:
+        if signer is not None and key is not None:
+            raise ValueError("pass a signing key or a signer, not both")
+        if signer is None:
+            signer = LocalHmacSigner(key if key is not None else os.urandom(32))
+        self._signer = signer
 
-    def _mac(
+    @property
+    def signer(self) -> ApprovalSigner:
+        return self._signer
+
+    @property
+    def external(self) -> bool:
+        """True when no private key exists on this host."""
+
+        return bool(self._signer.external)
+
+    def __repr__(self) -> str:
+        return (
+            f"ApprovalAuthority(scheme={self._signer.scheme!r}, "
+            f"key_id={self._signer.key_id!r}, external={self.external})"
+        )
+
+    def _sign(
         self,
         artifact_sha256: str,
         target: MigrationTarget,
@@ -448,11 +551,12 @@ class ApprovalAuthority:
         issued_at: float,
         expires_at: float,
     ) -> str:
-        return hmac.new(
-            self._key,
-            _canonical(artifact_sha256, target, nonce, issued_at, expires_at),
-            hashlib.sha256,
-        ).hexdigest()
+        """Seal the canonical bytes. Raises ``SignerUnavailable`` — never
+        returns a placeholder — when the signer cannot sign."""
+
+        return self._signer.sign(
+            _canonical(artifact_sha256, target, nonce, issued_at, expires_at)
+        ).hex()
 
     def mint(
         self,
@@ -478,14 +582,16 @@ class ApprovalAuthority:
         expires_at = now + ttl_seconds
         if not math.isfinite(expires_at):
             raise ValueError("approval expires_at must be finite")
-        mac = self._mac(checked_hash, target, nonce, now, expires_at)
+        signature = self._sign(checked_hash, target, nonce, now, expires_at)
         return Approval(
             artifact_sha256=checked_hash,
             target=target,
             nonce=nonce,
             issued_at=now,
             expires_at=expires_at,
-            mac=mac,
+            scheme=self._signer.scheme,
+            key_id=self._signer.key_id,
+            signature=signature,
             version=APPROVAL_VERSION,
         )
 
@@ -503,7 +609,9 @@ class ApprovalAuthority:
         Fail-closed by construction: an ``Unavailable`` (a check that could not
         run), a ``FAIL``, or a non-authoritative verdict produces no capability,
         so the migration cannot execute. Mirrors ``gate.authorization.ActionGate``
-        semantics for the migration action.
+        semantics for the migration action. A signer that cannot sign raises
+        ``SignerUnavailable`` — distinct from ``None``, because "could not sign"
+        must never be read as "not authorised" or as "signed".
         """
 
         if isinstance(judgment, Unavailable):
@@ -547,8 +655,18 @@ class ApprovalAuthority:
                 approval.artifact_sha256, name="artifact_sha256", length=64
             )
             nonce = _required_hex(approval.nonce, name="nonce", length=32)
-            mac = _required_hex(approval.mac, name="mac", length=64)
+            scheme = _required_scheme(approval.scheme)
+            key_id = _required_key_id(approval.key_id)
+            signature = bytes.fromhex(
+                _required_signature_hex(approval.signature, scheme=scheme)
+            )
         except (TypeError, ValueError):
+            return VerifyResult(False, INVALID_SIGNATURE)
+        # The envelope must name THIS authority's scheme and key: a signature
+        # under some other key, or another scheme, is not one to try.
+        if scheme != self._signer.scheme or not hmac.compare_digest(
+            key_id, self._signer.key_id
+        ):
             return VerifyResult(False, INVALID_SIGNATURE)
         try:
             checked_now = _required_finite_number(now, name="now")
@@ -562,14 +680,8 @@ class ApprovalAuthority:
             return VerifyResult(False, INVALID_TIME)
         if expires_at <= issued_at:
             return VerifyResult(False, INVALID_TIME)
-        expected = self._mac(
-            artifact_sha256,
-            approval.target,
-            nonce,
-            issued_at,
-            expires_at,
-        )
-        if not hmac.compare_digest(expected, mac):
+        sealed = _canonical(artifact_sha256, approval.target, nonce, issued_at, expires_at)
+        if not self._signer.verify(sealed, signature):
             return VerifyResult(False, INVALID_SIGNATURE)
         if not hmac.compare_digest(artifact_sha256, artifact.sha256):
             return VerifyResult(False, ARTIFACT_MISMATCH)

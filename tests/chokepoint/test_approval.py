@@ -302,7 +302,7 @@ def test_forged_mac_fails(tmp_path):
 
     # Agent fabricates an approval with a made-up MAC (it has no key).
     forged = auth.mint(artifact_sha256=art.sha256, target=target.identity, now=clock())
-    forged = dataclasses.replace(forged, mac="deadbeef" * 8)
+    forged = dataclasses.replace(forged, signature="deadbeef" * 8)
     result = runner.execute(approval=forged, artifact=art)
 
     assert result.refused and result.reason == INVALID_SIGNATURE
