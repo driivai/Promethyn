@@ -13,17 +13,13 @@ for trusted/mock dev examples, never for untrusted code.
 
 from __future__ import annotations
 
-import json
+import math
 import sys
 import tempfile
 import time
 from pathlib import Path
 
 from prometheus_protocol.core.interfaces import Verifier
-from prometheus_protocol.core.validation import (
-    require_non_negative_int,
-    require_positive,
-)
 from prometheus_protocol.core.models import (
     Evidence,
     Task,
@@ -32,69 +28,54 @@ from prometheus_protocol.core.models import (
     Unavailable,
     Verdict,
 )
+from prometheus_protocol.core.validation import (
+    require_non_negative_int,
+    require_positive,
+)
 from prometheus_protocol.sandbox import Limits, Sandbox, build_sandbox
+from prometheus_protocol.verifier import _value_codec
 
-# The harness that runs inside the child process. It imports the candidate as
-# a module, calls the entry point for each hidden case, and writes a JSON
-# verdict to a result file (kept off stdout so candidate prints cannot corrupt
-# it).
-_RUNNER_TEMPLATE = '''\
-import json, math, os, sys, traceback
+# Everything in this harness is candidate-controlled. It returns DATA, never
+# verdicts. Expected answers and comparisons stay exclusively in the parent.
+_RUNNER_TEMPLATE = """\
+import contextlib, os, sys, traceback
 
 # Isolated mode (-I) does not prepend the script directory to sys.path, so add
 # it back explicitly to import the candidate as the ``solution`` module.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-CASES = {cases!r}
+from _value_codec import dumps, loads
+ARGS = loads({args_wire!r})
 ENTRY = {entry!r}
-RESULT_PATH = {result!r}
-
-
-def _equal(a, b):
-    if isinstance(a, bool) or isinstance(b, bool):
-        return a is b
-    if isinstance(a, float) or isinstance(b, float):
-        try:
-            return math.isclose(a, b, rel_tol=1e-9, abs_tol=1e-9)
-        except TypeError:
-            return a == b
-    return a == b
-
-
-def _write(total, passed, failures):
-    with open(RESULT_PATH, "w", encoding="utf-8") as fh:
-        json.dump({{"total": total, "passed": passed, "failures": failures}}, fh)
 
 
 def main():
-    total = len(CASES)
-    failures = []
     try:
         import solution
     except BaseException:
         last = traceback.format_exc().strip().splitlines()[-1]
-        _write(total, 0, ["import error: " + last])
-        return
+        return [("error", "import error: " + last) for _ in ARGS]
     fn = getattr(solution, ENTRY, None)
     if not callable(fn):
-        _write(total, 0, ["entry point %r is not callable" % ENTRY])
-        return
-    passed = 0
-    for i, (args, expected) in enumerate(CASES):
+        return [("error", "entry point %r is not callable" % ENTRY) for _ in ARGS]
+    results = []
+    for args in ARGS:
         try:
-            got = fn(*args)
+            # Snapshot the return value before a later call mutates it; never
+            # pickle or transfer an object with candidate-defined operators.
+            got = loads(dumps(fn(*args)))
+            results.append(("ok", got))
         except BaseException as exc:
-            failures.append("case %d raised %s: %s" % (i, type(exc).__name__, exc))
-            continue
-        if _equal(got, expected):
-            passed += 1
-        else:
-            failures.append("case %d: expected %r, got %r" % (i, expected, got))
-    _write(total, passed, failures)
+            results.append(("error", type(exc).__name__ + ": " + str(exc)))
+    return results
 
 
-main()
-'''
+# Ordinary prints are diagnostics. A malicious process can replace this stream
+# entirely, but can only submit values for the parent's independent comparison.
+with contextlib.redirect_stdout(sys.stderr):
+    response = dumps(main())
+sys.stdout.write(response)
+"""
 
 
 class SubprocessVerifier(Verifier):
@@ -198,16 +179,44 @@ class SubprocessVerifier(Verifier):
         )
 
     def verify(self, *, code: str, task: Task) -> Evidence | Unavailable:
-        cases = [(case.args, case.expected) for case in task.cases]
-        total = len(cases)
+        total = len(task.cases)
+        if not total:
+            return self._evidence(
+                verdict=Verdict.ABSTAIN,
+                total=0,
+                passed_count=0,
+                failures=("no cases to verify",),
+                stdout="",
+                stderr="",
+                duration_s=0.0,
+                timed_out=False,
+            )
+        try:
+            args_wire = _value_codec.dumps([case.args for case in task.cases])
+            # Validate and snapshot trusted expectations using the same data-only
+            # contract. This wire is NEVER staged or sent into the sandbox.
+            expected_results = _value_codec.loads(
+                _value_codec.dumps([("ok", case.expected) for case in task.cases])
+            )
+            # Include response-envelope overhead in validation so a correct
+            # answer is representable under the same depth/node/byte limits.
+            expected = [result[1] for result in expected_results]
+        except (ValueError, TypeError, OverflowError, RecursionError) as exc:
+            return self._unavailable(
+                reason=Unavailability.POLICY_REFUSAL,
+                detail=f"unsupported verification cases: {exc}",
+            )
         with tempfile.TemporaryDirectory(prefix="prom-verify-") as tmp:
             tmp_path = Path(tmp)
             (tmp_path / "solution.py").write_text(code, encoding="utf-8")
-            result_path = tmp_path / "result.json"
             runner = _RUNNER_TEMPLATE.format(
-                cases=cases, entry=task.entry_point, result=str(result_path)
+                args_wire=args_wire, entry=task.entry_point
             )
             (tmp_path / "_runner.py").write_text(runner, encoding="utf-8")
+            (tmp_path / "_value_codec.py").write_text(
+                Path(_value_codec.__file__).read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
 
             started = time.monotonic()
             sb = self.sandbox.run(
@@ -259,70 +268,72 @@ class SubprocessVerifier(Verifier):
                     ),
                 )
 
-            result = _read_result(result_path)
-            if result is None:
-                # No verdict was written. Attribute the fault:
-                #   * the candidate definitely started (isolation confirmed) → it
-                #     crashed or was killed by a resource limit on its OWN code, a
-                #     real FAIL that feeds calibration; or
-                #   * the candidate was never confirmed to start → a harness/infra
-                #     fault we cannot pin on the candidate → ABSTAIN (no sample).
-                # Conservative on doubt: only a confirmed candidate start FAILs.
-                if sb.candidate_started:
-                    return self._evidence(
-                        verdict=Verdict.FAIL,
-                        total=total,
-                        passed_count=0,
-                        failures=(_crash_detail(sb),),
-                        stdout=sb.stdout,
-                        stderr=sb.stderr,
-                        duration_s=duration,
-                        timed_out=False,
-                    )
+            if not sb.candidate_started:
                 return self._unavailable(
                     reason=Unavailability.INFRA_FAULT,
                     detail=(
-                        f"no verdict produced (exit code {sb.exit_status}) and the "
-                        "candidate was not confirmed to start; a harness fault"
+                        f"candidate was not confirmed to start (exit code "
+                        f"{sb.exit_status}); response cannot be trusted"
                     ),
                 )
-
-            passed_count = int(result.get("passed", 0))
-            reported_total = int(result.get("total", total))
-            failures = tuple(str(f) for f in result.get("failures", ()))
-            if reported_total == 0:
-                # There were no cases to run, so the check has no opinion: this
-                # is ABSTAIN, not a confident failure. (An ABSTAIN is not a pass
-                # and never feeds calibration.) For any non-empty case set the
-                # verdict below is unchanged.
-                return self._evidence(
-                    verdict=Verdict.ABSTAIN,
-                    total=reported_total,
-                    passed_count=passed_count,
-                    failures=failures or ("no cases to verify",),
-                    stdout=sb.stdout,
-                    stderr=sb.stderr,
-                    duration_s=duration,
-                    timed_out=False,
-                )
-            all_passed = passed_count == reported_total
+            passed_count = 0
+            failures = []
+            if sb.exit_status != 0 or sb.memory_exceeded or sb.pids_exceeded:
+                failures.append(_crash_detail(sb))
+            elif sb.output_truncated:
+                failures.append("candidate response exceeded output limit")
+            else:
+                try:
+                    results = _value_codec.loads(sb.stdout)
+                    if type(results) is not list or len(results) != total:
+                        raise ValueError(
+                            "response must contain exactly one result per case"
+                        )
+                    for result in results:
+                        if (
+                            type(result) is not tuple
+                            or len(result) != 2
+                            or type(result[0]) is not str
+                            or result[0] not in ("ok", "error")
+                            or (result[0] == "error" and type(result[1]) is not str)
+                        ):
+                            raise ValueError("invalid case response")
+                    for i, ((status, got), answer) in enumerate(zip(results, expected)):
+                        if status == "error":
+                            failures.append(f"case {i} raised {_clip(got, 500)}")
+                        elif _equal(got, answer):
+                            passed_count += 1
+                        else:
+                            failures.append(
+                                f"case {i}: expected {_clip(repr(answer), 200)}, "
+                                f"got {_clip(repr(got), 200)}"
+                            )
+                except (ValueError, TypeError, OverflowError, RecursionError) as exc:
+                    passed_count = 0
+                    failures = [f"invalid candidate response: {_clip(str(exc), 500)}"]
+            all_passed = passed_count == total and not failures
             return self._evidence(
                 verdict=Verdict.PASS if all_passed else Verdict.FAIL,
-                total=reported_total,
+                total=total,
                 passed_count=passed_count,
-                failures=failures,
-                stdout=sb.stdout,
+                failures=tuple(failures),
+                stdout="",  # Wire data is not diagnostic output; prints go to stderr.
                 stderr=sb.stderr,
                 duration_s=duration,
                 timed_out=False,
             )
 
 
-def _read_result(path: Path) -> dict | None:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
+def _equal(a, b) -> bool:
+    """Trusted comparison of decoded builtins, never candidate-owned objects."""
+    if isinstance(a, bool) or isinstance(b, bool):
+        return a is b
+    if isinstance(a, float) or isinstance(b, float):
+        try:
+            return math.isclose(a, b, rel_tol=1e-9, abs_tol=1e-9)
+        except (TypeError, OverflowError):
+            return a == b
+    return a == b
 
 
 def _crash_detail(sb) -> str:

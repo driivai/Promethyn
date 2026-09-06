@@ -20,19 +20,42 @@ executor of untrusted code.
 - **POSIX resource limits** — CPU time (`RLIMIT_CPU`), address space
   (`RLIMIT_AS`, opt-in), and file size (`RLIMIT_FSIZE`),
 - **isolated interpreter mode** (`-I`), and
-- a result file kept off stdout so candidate output cannot forge a verdict.
+- a data-only response channel: the child supplies return values, while the
+  trusted parent retains expected answers and computes comparisons, counts and
+  the verdict. No candidate-written verdict file is read.
+
+The child harness is **not trusted**, even inside an isolating sandbox. A
+candidate can alter its harness or fabricate its entire response; it still has
+to supply values that match the parent's expectations. This checks observable
+outputs, not whether a particular function body or algorithm executed. Inputs
+are visible to the candidate; expected answers are not staged in its workspace
+or passed over the sandbox port.
+
+The wire format accepts only built-in `None`, booleans, integers, floats,
+strings, bytes, lists, tuples and dictionaries, with type-preserving tags.
+Custom objects (including subclasses), sets and other unsupported task values
+cause `Unavailable` before execution; unsupported candidate returns fail the
+case. There is no pickle, eval, or candidate-defined comparison in the parent.
+Messages are limited to 1,000,000 bytes of ASCII-encoded JSON,
+nesting depth 32 (root depth 0) and 20,000 value nodes; the parent rejects non-ASCII wire text,
+oversized responses, malformed envelopes, wrong case counts and duplicate
+mapping keys. Normal candidate prints go to evidence stderr; stdout is reserved
+for the value protocol. Truncation, abnormal exits and resource-limit flags
+cannot produce a pass. Missing start confirmation is `Unavailable`, and a
+confirmed-start timeout remains `ABSTAIN`, never `PASS`.
 
 ### What it does NOT do — and the hard requirement
 
-This is **not** a real sandbox. The limits above bound *accidental* runaway
-code; they do not contain *hostile* code. A determined payload can still read
-the filesystem, open network sockets, or exhaust shared resources.
+Process limits and `-I` alone are **not** a real sandbox. The default adapter
+requires namespace or container isolation and refuses execution if unavailable.
+The explicitly opted-in `UnsafeLocalSandbox` does not contain hostile code and
+is only for trusted development fixtures. It provides no protection for the
+parent's expected answers, credentials or memory against a hostile candidate.
 
-> Before running untrusted code, you MUST place the verifier inside a real
-> isolation boundary — a locked-down container, microVM, or
-> seccomp/namespace jail — with no network and a read-only, disposable
-> filesystem. Treat the in-process limits as defence in depth, never as the
-> only line of defence.
+> Before running untrusted code, you MUST use a real isolation boundary for the
+> candidate, separate from the trusted verdict process — a locked-down container,
+> microVM, or seccomp/namespace jail — with no network and a disposable writable
+> workspace. Treat process limits as defence in depth, not the only boundary.
 
 This requirement is repeated prominently in the verifier source and in
 `SECURITY.md`.

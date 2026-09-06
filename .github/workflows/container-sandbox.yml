@@ -17,6 +17,8 @@ on:
   pull_request:
     paths:
       - "src/prometheus_protocol/sandbox/**"
+      - "src/prometheus_protocol/verifier/**"
+      - "tests/conformance/test_sandbox_verifier_boundary.py"
       - "tests/conformance/test_sandbox_container_signal.py"
       - "tests/conformance/test_sandbox_privilege.py"
       - ".github/workflows/container-sandbox.yml"
@@ -53,4 +55,5 @@ jobs:
         run: |
           python -m pytest -rA -v \
             tests/conformance/test_sandbox_container_signal.py \
+            tests/conformance/test_sandbox_verifier_boundary.py \
             tests/conformance/test_sandbox_privilege.py -k real_container
