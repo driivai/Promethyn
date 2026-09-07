@@ -38,10 +38,21 @@ present, plausible, and void is the failure mode we exist to name.
 COMMIT responses no longer establish rollback. Unknown events leave an intent
 pending until receipt reconciliation proves its outcome. A cross-process guard
 also covers the interval before the executor connects, so recovery cannot
-declare a suspended live owner rolled back. This guard requires a shared store
-and ledger on one trusted host/local filesystem, not independent or multi-host
-runners. See `docs/chokepoint-threat-model.md`, “Recovery follow-up: F2/F3,” for
-the deployment/upgrade requirements and regression coverage.
+declare a suspended live owner rolled back. That guard is an OS file lock,
+which is mutual exclusion only on a local filesystem of one host — and since
+PROM-FIX-A that is **checked, not assumed**: the approval store probes its
+filesystem before it creates anything there (`chokepoint/substrate.py`); a
+network or host-shared filesystem is refused outright, and one the probe
+cannot identify is refused unless explicitly opted out of
+(`allow_unverified_substrate`, logged; withdrawn by
+`require_verified_substrate`). Every execution intent records its owner's
+host identity (`chokepoint/ownership.py`), and a recovering runner that cannot
+place the recorded owner on its own kernel or its own rebooted machine leaves
+the intent pending as `owner_unverifiable` instead of declaring it not
+committed. Multi-host execution is still unsupported; the unsupported case
+now fails closed. See `docs/chokepoint-threat-model.md`, "Recovery follow-up:
+F2/F3", for what is detected, what remains undetectable, and the regression
+coverage.
 
 1. **Couldn't-verify is never verified-clean.** A check that could not run
    returns `Unavailable` — no verdict at all — at every tier. It is never a
@@ -368,10 +379,38 @@ The A1-1 lesson applied exhaustively rather than to the one site that was found:
 | `sandbox/_container_bootstrap.py` — `execvp` | inherits the container's environment | clean |
 | `tools/stale_branch_demo.py` — `git` ×4 | inherited | **accepted**: a fixture builder that runs `git` against a throwaway local repository, never candidate code |
 | `demo/run_demo.py` — `psql` | inherited plus `PGPASSWORD` | **accepted, and named**: a demonstration script, not the runner. `PGPASSWORD` in a child environment is readable by same-uid processes; the runner itself never spawns `psql`, connecting over the wire protocol instead |
+| `core/_deadline.py` — `resolve`, the DNS worker `core/_dns_worker.py` (added by #77) | **`env={}`**, `close_fds=True`, interpreter in `-I` mode; stdin is exactly `[host, port]`, stdout the address list; killed and reaped on the deadline | clean: one process per HTTP request under a deadline, so on the chokepoint path one per request an `https://` ledger anchor makes |
 
-The chokepoint runner spawns **no** subprocesses at all — it talks to PostgreSQL
-through the driver — so no credential crosses a process boundary in the
-production path.
+The chokepoint runner spawns no subprocess to reach PostgreSQL: it talks to
+the database through the driver, so the database credential never crosses a
+process boundary. It does spawn one kind of subprocess, on one path. When its
+audit ledger is anchored to an `https://` log (§3.2), every anchored audit
+append — one per refusal, intent and outcome the runner records — makes two
+HTTP requests (the `POST` and the read-back `GET` that confirms it, §3.2), and
+each request resolves the log's hostname in a disposable interpreter
+(`core/_deadline.py:resolve`, running `core/_dns_worker.py`), because a
+resolver stalled inside the C library cannot otherwise be cancelled under the
+request deadline (§4.5, "The resolver adds a process boundary"). What that child
+receives is the A1-1 discipline applied again: an **empty environment**
+(`env={}`), no inherited descriptors (`close_fds=True`), isolated mode (`-I`),
+and a stdin of exactly `[host, port]` — never the URL, the bearer token or any
+credential. On the deadline it is killed and reaped, never abandoned. With a
+`file://` or `worm://` anchor, or no anchor, the runner spawns nothing.
+`tests/conformance/test_transport_deadline.py::test_resolver_has_no_ambient_credentials_or_inheritable_descriptor`
+proves the child's environment and descriptors, and
+`test_stalled_dns_is_killed_reaped_and_cannot_continue` the kill and reap.
+
+**Why this paragraph was false, and for how long.** Until #77 it read "the
+chokepoint runner spawns **no** subprocesses at all", and that was true. #77 —
+a hardening fix, the whole-request deadline — added the resolver child and
+described it in §4, and this sentence was not revisited: for four commits the
+document contradicted itself, with the false version as the headline claim in
+the section whose whole point is to enumerate every spawn. The standing
+lesson: **new security code can falsify an existing claim.** A spawn table
+that is not re-swept when a spawn site is added is the void guard this
+document keeps naming, and the independent shakedown that found it is the
+witness this repository would not otherwise have had. Corrected in
+PROM-FIX-A.
 
 ### 2.5 Residual — what is not covered
 
@@ -805,7 +844,9 @@ a review — it is called out at the top of the pull request.
   or undo a remote POST. This is not an exactly-once transport or F7's approval
   expiry enforcement.
 - **The resolver adds a process boundary and overhead.** Each lookup launches
-  an isolated interpreter. Missing worker code, denied process creation or
+  an isolated interpreter — the one subprocess on the chokepoint runner's
+  path; §2.4 enumerates exactly what it receives and when it is spawned.
+  Missing worker code, denied process creation or
   invalid resolver output fails closed, not over to an unbounded resolver.
   The child uses system DNS configuration but does not inherit environment
   overrides (e.g. `LOCALDOMAIN`, `RES_OPTIONS`) or credentials. Proxy environment
@@ -901,6 +942,8 @@ variable, and wired to nothing as a field. The audit that named it was right.
 | `ledger_anchor` | Config, env | `build_ledger` → the anchor target; written after every append, pinned on every verify | malformed or plaintext-to-remote refused at load; a target that cannot be read → `NOT_VERIFIABLE`; a target that cannot be written → `AnchorUnavailable` raised, the runner refuses | enforced when set (§3, PIH-1) |
 | `require_ledger_anchor` | Config, env (OR of sources) | `build_ledger` | no anchor, or a `file://` one → **refused at construction** ("cannot be honoured") | enforced (§3, PIH-1) |
 | `ledger_anchor_retention_days` | Config, env | object-lock targets (requested per record) | out of `[1, 36500]` refused at load; the medium's honouring of it is a deployment property | enforced at load (§3.4) |
+| `require_verified_substrate` | Config, env, runner config (OR of sources) | `resolve_substrate_policy` → `ConsumedApprovals` at construction | an approval store on a filesystem the probe cannot identify → **refused at construction** ("cannot be honoured"), the opt-out below withdrawn; a known network or host-shared filesystem is refused regardless of any setting | enforced (§2, PROM-FIX-A) |
+| `allow_unverified_substrate` | Config, env, runner config (honoured from any source) | `ConsumedApprovals` at construction | the opt-out for an *unidentified* substrate only, logged as a warning at every construction; no effect on a known network filesystem; refused at load, at runner-config construction and at resolution beside `require_verified_substrate` | enforced (§2, PROM-FIX-A) |
 
 ### 5.4 Default posture
 
@@ -908,8 +951,10 @@ A `Config()` with nothing set: mock provider (no network), `sandbox=auto`
 (isolating adapters only; with nothing isolating available and no opt-in it
 builds a `NullSandbox` that refuses to run code), plaintext loopback off, model
 judge off, human holds expire, escalation floor `0.75` with high-risk routing
-hardcoded on, every cap finite and positive. Asserted by
-`test_defaults_are_the_hardened_posture`.
+hardcoded on, every cap finite and positive, and an approval store accepted
+only on a filesystem identified as local (`allow_unverified_substrate` off).
+Asserted by `test_defaults_are_the_hardened_posture` and
+`test_an_unknown_substrate_is_refused_by_default`.
 
 **Three defaults are not the hardened posture, stated rather than hidden:**
 
@@ -953,7 +998,7 @@ hardcoded on, every cap finite and positive. Asserted by
   Every verify is a visible `Unavailable` rather than a silent abstention (§4),
   and the judge is advisory; refusing at load was judged more disruptive than
   the failure it would prevent.
-- **Coherence rules are a fixed list.** The five combinations checked are the
+- **Coherence rules are a fixed list.** The six combinations checked are the
   ones found; a new setting introduces new combinations that nothing enumerates
   automatically.
 

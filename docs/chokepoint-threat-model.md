@@ -194,23 +194,98 @@ the new migration without consuming its approval. Process suspension retains
 ownership; process death releases it. A surviving PostgreSQL transaction is
 separately protected by its session advisory lock. No age-based takeover is used.
 
-**Deployment boundary:** all runner processes must use the same approval store
-and audit ledger on the same trusted host and local filesystem. The guard
-serializes all targets sharing that store. Do not replace/unlink either the
-store or its lock file while runners exist, fork an active runner, or mix old
-unguarded runners with new runners during upgrade: stop the old processes first.
-Missing OS locking support and unsafe lock files refuse execution. Network
-filesystems, independent stores/ledgers, multi-host execution and asynchronously
-detached custom executors are not supported by this ownership model; they need
-distributed fencing. Custom executors must stop all execution activity before
-returning, and persist receipts atomically with approved SQL.
+**Deployment boundary — checked, not assumed (PROM-FIX-A).** The guard is an
+OS file lock, which is mutual exclusion only where one kernel grants every
+lock: a local filesystem on one host. Until PROM-FIX-A that requirement was
+the previous version of this paragraph — a sentence an operator had to
+remember, with nothing in the process to notice a deployment that broke it,
+and in such a deployment the F3 race was live. It is now enforced at two
+points:
+
+- **Substrate.** `ConsumedApprovals` probes the filesystem behind the store
+  before it creates anything there (`chokepoint/substrate.py`, from the
+  kernel's own mount table, `/proc/self/mountinfo`). A network or host-shared
+  filesystem — NFS, CIFS/SMB, 9p, virtiofs, vboxsf, Ceph, GFS2, OCFS2, Lustre,
+  AFS, sshfs/glusterfs/s3fs and the like — is **refused** with `ConfigError`,
+  and there is no opt-out. A filesystem the probe cannot identify — an overlay
+  (its lower layers are not visible from inside it, and copy-up gives one path
+  two inodes), a generic FUSE mount, a driver the probe does not know, or a
+  platform without a mount table — is refused by default: couldn't-verify is
+  not verified-safe. `allow_unverified_substrate`
+  (`PROM_ALLOW_UNVERIFIED_SUBSTRATE`) is the explicit opt-out for that case
+  only, logged as a warning at every construction; `require_verified_substrate`
+  (`PROM_REQUIRE_VERIFIED_SUBSTRATE`, the OR of its sources) withdraws it, and
+  the pair set together is refused as incoherent. A local filesystem — ext4,
+  xfs, btrfs, tmpfs, f2fs, zfs, and the other names in
+  `substrate.SAFE_FILESYSTEMS` — proceeds. The refusal happens before the
+  store's directory or file exists, so nothing of the runner's is left on a
+  filesystem it will not use.
+- **Owner identity.** Every `execute_intent` records the owner's hostname,
+  kernel boot id, machine id and pid (`chokepoint/ownership.py`). A recovering
+  runner compares that record with itself before it may read "no receipt" as
+  "not committed": the same boot id means the owner ran on this kernel and the
+  exclusive guard this runner holds proves it gone; the same machine id *and*
+  hostname under another boot id means this machine rebooted and the owner
+  did not survive it; anything else means the owner may be alive on another
+  host, so the intent is reported `owner_unverifiable` and left pending — its
+  receipt is not even consulted. It is never recorded as
+  `reconciled_not_committed` by a runner that could not place its owner, and
+  the runner's own execution path (`execute`) never asserts otherwise: new
+  approvals for that target are refused `reconciliation_required`, unspent.
+  An operator who has established by other means that the owner is dead
+  reconciles with `reconcile_unfinished(assume_owner_dead=True)`; the outcome
+  event then records `owner_override: true`, `owner_basis` and
+  `reconciled_by_host`, and the runner logs the assertion.
+
+Multi-host execution is still **not supported**. What changed is that the
+unsupported case fails closed — refused at construction, or left pending with
+its reason — instead of producing false recovery evidence.
+
+**Still undetectable, stated plainly:**
+
+- A filesystem that is local *here* and exported from here to other hosts.
+  This host sees ext4 and proceeds; the other hosts see NFS and refuse, so the
+  case is closed from their side, not this one.
+- Two hosts with the same hostname *and* the same machine id (cloned images
+  that kept `/etc/machine-id`) sharing a store on a substrate that passed the
+  probe or was opted out of: the second host's recovery reads the first as
+  "this machine, rebooted". Both conditions must hold at once, behind the
+  substrate check.
+- A kernel that reports no boot id and no machine id (some sandboxed
+  runtimes; non-Linux hosts): every recorded owner other than this exact
+  machine is unplaceable, so recovery stays pending until an operator asserts
+  otherwise. Fail closed and noisy — a wedge, not a race.
+- Intents written before ownership identity existed (`owner_basis: legacy`)
+  carry no owner and are reconciled under the same-host assumption their
+  runners were deployed under, with a warning. The window is the upgrade
+  itself.
+- The audit ledger's own substrate is not probed; deploy it beside the store.
+  Independent stores sharing one ledger pass the substrate check on each host;
+  it is the owner identity in the shared ledger's intents that catches the
+  second host's recovery, so the ledger must be the one they share.
+- As before: do not replace/unlink the store or its lock file while runners
+  exist, fork an active runner, or mix old unguarded runners with new ones
+  during upgrade (stop the old processes first). Missing OS locking support
+  and unsafe lock files refuse execution. Asynchronously detached custom
+  executors are outside this ownership model; custom executors must stop all
+  execution activity before returning, and persist receipts atomically with
+  approved SQL.
 
 `tests/chokepoint/test_execution_recovery.py` exercises unknown/legacy outcomes,
 commit-vs-rollback acknowledgment, threads, and suspended/killed processes.
-`test_migration_live.py` adds real PostgreSQL tests for a dropped COMMIT response,
-suspension immediately after intent append, and an active database transaction
-surviving client death. The existing `PROM_REQUIRE_PG=1` CI step includes them;
-a local skip is not evidence of database correctness.
+`test_substrate.py` drives the probe with synthetic mount tables (a refusal for
+each named network filesystem, the default refusal of an unidentified one, the
+opt-out and its logged warning, the requirement withdrawing it, the incoherent
+pair, and the local-filesystem positive control under every policy — plus the
+real probe against the CI checkout). `test_owner_identity.py` plays a second
+host against a shared ledger and store: the foreign owner's intent is left
+`owner_unverifiable` with no receipt lookup and no outcome recorded, a runner on
+the owner's kernel and the same machine after a reboot reconcile it, the
+operator override is recorded, and a legacy intent warns. `test_migration_live.py`
+adds real PostgreSQL tests for a dropped COMMIT response, suspension immediately
+after intent append, and an active database transaction surviving client death.
+The existing `PROM_REQUIRE_PG=1` CI step includes them; a local skip is not
+evidence of database correctness.
 
 ## 6. Attack scenarios → defense
 
@@ -227,6 +302,7 @@ a local skip is not evidence of database correctness.
 | A9 | Verifier can't run; agent hopes it slips through | Fail closed on `Unavailable` (P8) | fail-closed test |
 | A10 | Adversary rewrites the ledger to hide a run | Hash chain detects the edit (P9) | tamper-detection test |
 | A11 | Runner dies after DB commit but before outcome audit | Atomic DB receipt reconstructs commit/rollback and blocks on ambiguity (P10) | restart + mandatory live PostgreSQL tests |
+| A12 | A second runner on another host, or a store on a network filesystem, recovers a live owner's intent as "not committed" | Store substrate probed: network filesystem refused, unidentified one refused unless opted out (logged); owner identity in every intent; an unplaceable owner left `owner_unverifiable`, receipt not consulted | `test_substrate.py`, `test_owner_identity.py` |
 
 ## 7. In scope vs out of scope (this sprint)
 

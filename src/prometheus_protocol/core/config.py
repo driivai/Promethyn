@@ -61,6 +61,8 @@ SECURITY_FIELDS = (
     "ledger_anchor_retention_days",
     "require_ledger_anchor",
     "require_external_signer",
+    "require_verified_substrate",
+    "allow_unverified_substrate",
 )
 
 
@@ -192,6 +194,20 @@ class Config:
     # at; the production posture sets PROM_REQUIRE_EXTERNAL_SIGNER=1 (§5.4).
     require_external_signer: bool = False
 
+    # Approval-store substrate (threat model §2, F3; docs/chokepoint-threat-
+    # model.md "Recovery follow-up"). The chokepoint's cross-process execution
+    # guard is an flock beside the consumed-approval store, which is mutual
+    # exclusion only on a local filesystem of one host. The runner probes the
+    # filesystem before it builds: a network or host-shared filesystem is
+    # refused outright, and one it cannot identify is refused by default.
+    # ``allow_unverified_substrate`` is the explicit, logged opt-out for the
+    # latter (never the former), for an operator who has verified the
+    # filesystem by other means; ``require_verified_substrate`` withdraws the
+    # opt-out — the production posture, PROM_REQUIRE_VERIFIED_SUBSTRATE=1. Both
+    # are the OR of their sources (Config, environment, the runner config).
+    require_verified_substrate: bool = False
+    allow_unverified_substrate: bool = False
+
     def __post_init__(self) -> None:
         """Reject non-finite, out-of-range and wrong-signed numeric settings.
 
@@ -257,6 +273,13 @@ class Config:
                 "model's output with no isolation at all. The unsafe adapter "
                 "exists for offline development against the mock provider; "
                 "it is refused for remote output even with PROM_ALLOW_UNSAFE_EXEC."
+            )
+        if self.require_verified_substrate and self.allow_unverified_substrate:
+            raise ConfigError(
+                "require_verified_substrate=True cannot be honoured alongside "
+                "allow_unverified_substrate=True: the opt-out for an unverified "
+                "approval-store substrate would never take effect under the "
+                "requirement. Withdraw one."
             )
 
         # -- the ledger anchor: parsed at load, and a requirement it cannot
@@ -334,4 +357,10 @@ class Config:
             ),
             require_ledger_anchor=_as_bool(env.get("PROM_REQUIRE_LEDGER_ANCHOR"), False),
             require_external_signer=_as_bool(env.get("PROM_REQUIRE_EXTERNAL_SIGNER"), False),
+            require_verified_substrate=_as_bool(
+                env.get("PROM_REQUIRE_VERIFIED_SUBSTRATE"), False
+            ),
+            allow_unverified_substrate=_as_bool(
+                env.get("PROM_ALLOW_UNVERIFIED_SUBSTRATE"), False
+            ),
         )
