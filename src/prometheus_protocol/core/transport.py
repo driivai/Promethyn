@@ -217,11 +217,33 @@ class _HTTPSConnection(http.client.HTTPSConnection):
             address, deadline, source_address,
         )
 
-    def connect(self):
-        # TCP and an optional proxy CONNECT both use deadline-aware sockets.
-        http.client.HTTPConnection.connect(self)
-        raw = self.sock.socket
+    def _tunnel(self):
+        # Python 3.10's _tunnel does not close its temporary HTTPResponse.
+        # A retained timeout traceback then holds a makefile reference open,
+        # so socket.close() alone cannot release the connection. Keep the
+        # interpreter's CONNECT parser, but own its response lifecycle here.
+        response_factory = self.response_class
+        responses = []
+
+        def tracked_response(*args, **kwargs):
+            response = response_factory(*args, **kwargs)
+            responses.append(response)
+            return response
+
+        self.response_class = tracked_response
         try:
+            return super()._tunnel()
+        finally:
+            self.response_class = response_factory
+            for response in responses:
+                response.close()
+
+    def connect(self):
+        try:
+            # Own cleanup for TCP/CONNECT failures as well as TLS failures,
+            # including direct callers without urllib's outer error handler.
+            http.client.HTTPConnection.connect(self)
+            raw = self.sock.socket
             raw.settimeout(remaining(self._deadline))
             tls = self._context.wrap_socket(
                 raw, server_hostname=self._tunnel_host or self.host,

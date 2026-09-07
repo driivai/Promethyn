@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import os
 import socket
 import socketserver
@@ -14,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from prometheus_protocol.core import _deadline
+from prometheus_protocol.core.transport import _HTTPSConnection
 from prometheus_protocol.ledger.anchor_http import HttpAppendOnlyLog
 from prometheus_protocol.ledger.anchor_targets import LogTipAnchor
 from prometheus_protocol.ledger.audit_chain import NOT_VERIFIABLE
@@ -147,8 +149,29 @@ def test_every_network_phase_uses_the_same_deadline(endpoint, kind, mode):
         assert server.disconnected.wait(1), "timed-out connection was not closed"
 
 
+def _legacy_tunnel(self):
+    """Reproduce Python 3.10's missing response.close() on every interpreter.
+
+    Keep the response in the exception traceback, as urllib's error chaining
+    does. This is a cleanup regression shim, not a replacement protocol parser.
+    """
+    self.send(b"CONNECT %s:%d HTTP/1.0\r\n\r\n" % (
+        self._tunnel_host.encode("ascii"), self._tunnel_port,
+    ))
+    response = self.response_class(self.sock, method=self._method)
+    _, code, _ = response._read_status()
+    if code != 200:
+        self.close()
+        raise OSError("proxy refused CONNECT")
+    while response.fp.readline(65537) not in (b"\r\n", b"\n", b""):
+        pass
+
+
 @pytest.mark.parametrize("kind", ["anchor", "provider"])
-def test_proxy_connect_headers_are_also_deadlined(endpoint, monkeypatch, kind):
+@pytest.mark.parametrize("legacy_cleanup", [False, True], ids=["native", "python310_cleanup"])
+def test_proxy_connect_headers_are_also_deadlined(endpoint, monkeypatch, kind, legacy_cleanup):
+    if legacy_cleanup:
+        monkeypatch.setattr(http.client.HTTPConnection, "_tunnel", _legacy_tunnel)
     server = endpoint("proxy")
     for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
                  "http_proxy", "https_proxy", "all_proxy", "no_proxy"):
@@ -162,6 +185,58 @@ def test_proxy_connect_headers_are_also_deadlined(endpoint, monkeypatch, kind):
     assert time.monotonic() - started < CEILING
     assert server.requests[0].startswith(b"CONNECT deadline-origin.invalid:443 ")
     assert server.disconnected.wait(1)
+
+
+def test_direct_connection_closes_on_proxy_timeout_even_with_live_traceback(endpoint, monkeypatch):
+    monkeypatch.setattr(http.client.HTTPConnection, "_tunnel", _legacy_tunnel)
+    server = endpoint("proxy")
+    conn = _HTTPSConnection("127.0.0.1", port=server.server_address[1], timeout=BUDGET,
+                            deadline=time.monotonic() + BUDGET)
+    conn.set_tunnel("deadline-origin.invalid", 443)
+    try:
+        with pytest.raises(TimeoutError) as failure:
+            conn.connect()
+        assert failure.value.__traceback__ is not None
+        assert conn.sock is None
+        assert server.disconnected.wait(1)
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("reply", [b"HTTP/1.0 200 OK\r\n\r\n",
+                                  b"HTTP/1.0 407 Proxy Authentication Required\r\n\r\n",
+                                  b"invalid-status\r\n"])
+def test_tunnel_response_is_closed_and_factory_restored_on_every_exit(monkeypatch, reply):
+    monkeypatch.setattr(http.client.HTTPConnection, "_tunnel", _legacy_tunnel)
+    responses = []
+
+    class ObservedResponse(http.client.HTTPResponse):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            responses.append(self)
+
+    conn = _HTTPSConnection("proxy.invalid", timeout=2, deadline=time.monotonic() + 2)
+    conn.set_tunnel("origin.invalid", 443)
+    conn.response_class = ObservedResponse
+    sender, peer = socket.socketpair()
+    conn.sock = _deadline.DeadlineSocket(sender, time.monotonic() + 2)
+    peer.sendall(reply)
+    try:
+        if reply.startswith(b"HTTP/1.0 200"):
+            conn._tunnel()
+            # Releasing the temporary response must not close the successful
+            # tunnel's underlying socket before TLS can take ownership of it.
+            conn.sock.sendall(b"still-open")
+        else:
+            with pytest.raises((OSError, http.client.HTTPException)):
+                conn._tunnel()
+        assert responses and all(response.closed for response in responses)
+        assert conn.response_class is ObservedResponse
+    finally:
+        for response in responses:
+            response.close()
+        conn.close()
+        peer.close()
 
 
 def test_slow_anchor_is_not_a_valid_ledger(tmp_path, endpoint):

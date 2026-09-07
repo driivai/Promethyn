@@ -14,7 +14,9 @@ in `spec/invariants.md` is a major version bump.
   runs in a disposable isolated interpreter with an empty environment and no
   inherited descriptors; timeout kills and reaps it instead of abandoning a
   thread. Reads enforce the remaining budget below buffering, including error
-  responses. Adds real-socket timing, cleanup and concurrency regressions plus
+  responses. CONNECT responses are explicitly released even on Python 3.10,
+  including when exception tracebacks remain live. Adds real-socket timing,
+  cleanup and concurrency regressions plus
   resolver secret/descriptor isolation tests. Process startup/cleanup and OS
   scheduling remain overhead, not a hard real-time guarantee. F7 approval
   expiry is unchanged.
