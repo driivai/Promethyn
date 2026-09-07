@@ -8,6 +8,18 @@ in `spec/invariants.md` is a major version bump.
 ## [Unreleased]
 
 ### Fixed
+- **F6: whole-request HTTP deadlines.** Provider and anchor requests now share
+  one monotonic budget across DNS, all TCP address attempts, proxy CONNECT,
+  TLS handshake, request writes, headers, chunk metadata and body reads. DNS
+  runs in a disposable isolated interpreter with an empty environment and no
+  inherited descriptors; timeout kills and reaps it instead of abandoning a
+  thread. Reads enforce the remaining budget below buffering, including error
+  responses. CONNECT responses are explicitly released even on Python 3.10,
+  including when exception tracebacks remain live. Adds real-socket timing,
+  cleanup and concurrency regressions plus
+  resolver secret/descriptor isolation tests. Process startup/cleanup and OS
+  scheduling remain overhead, not a hard real-time guarantee. F7 approval
+  expiry is unchanged.
 - **F4/F5: anchor acknowledgement and HTTP response integrity.** Append success
   now requires an expected HTTP status, a non-negative integer index, and
   read-back of the exact canonical submitted record at that index. Custom log
