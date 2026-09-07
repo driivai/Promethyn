@@ -385,9 +385,12 @@ The chokepoint runner spawns no subprocess to reach PostgreSQL: it talks to
 the database through the driver, so the database credential never crosses a
 process boundary. It does spawn one kind of subprocess, on one path. When its
 audit ledger is anchored to an `https://` log (§3.2), every anchored audit
-append — one per refusal, intent and outcome the runner records — makes two
-HTTP requests (the `POST` and the read-back `GET` that confirms it, §3.2), and
-each request resolves the log's hostname in a disposable interpreter
+append — one per refusal, intent and outcome the runner records — makes four
+HTTP requests (`ledger/anchor_targets.py`, `LogTipAnchor.write`: a read of the
+log's history for the idempotence check, the `POST`, and the two read-backs in
+`anchor_http.py`'s `append` and in `write` itself that confirm the record at
+its returned index, §3.2), and each request opens its own connection and
+resolves the log's hostname in a disposable interpreter
 (`core/_deadline.py:resolve`, running `core/_dns_worker.py`), because a
 resolver stalled inside the C library cannot otherwise be cancelled under the
 request deadline (§4.5, "The resolver adds a process boundary"). What that child
@@ -403,9 +406,9 @@ proves the child's environment and descriptors, and
 **Why this paragraph was false, and for how long.** Until #77 it read "the
 chokepoint runner spawns **no** subprocesses at all", and that was true. #77 —
 a hardening fix, the whole-request deadline — added the resolver child and
-described it in §4, and this sentence was not revisited: for four commits the
-document contradicted itself, with the false version as the headline claim in
-the section whose whole point is to enumerate every spawn. The standing
+described it in §4, and this sentence was not revisited: from #77 until this
+change the document contradicted itself, with the false version as the
+headline claim in the section whose whole point is to enumerate every spawn. The standing
 lesson: **new security code can falsify an existing claim.** A spawn table
 that is not re-swept when a spawn site is added is the void guard this
 document keeps naming, and the independent shakedown that found it is the
