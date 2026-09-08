@@ -51,7 +51,10 @@ in `spec/invariants.md` is a major version bump.
   `docs/authorization-record.md` §7 names the implemented test behind each
   proposed proof label and states the digest-bound assumption of every
   "detected" row; the in-memory KMS model's docstring names the
-  metadata-only limitation.
+  metadata-only limitation. F11 is closed as an open finding on the green
+  exact-head Linux run recorded in `docs/reviews/PROM-F11-close-out.md`,
+  subject to the maintainer's read; deployed-adapter acceptance is not
+  implied.
 
 ### Fixed
 - **Two false documentation claims corrected (PROM-FIX-A).**

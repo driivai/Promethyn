@@ -1,8 +1,13 @@
 # Durable authorization records and KMS reconciliation — PROM-F11
 
-Status: **checkpoint 3 operational reconciler implemented; awaiting exact-head
-Linux CI and maintainer acceptance. F11's missing-control implementation is
-complete, not a claim of deployed cloud/HSM acceptance.**
+Status: **closed as an open finding by the PROM-F11 close-out (PR #82), on
+exact-head Linux CI: build 3.10/3.11/3.12, live PostgreSQL, isolation,
+privileged cross-user denial, the per-file no-skip F11 gate and both pinned
+mutation runners, all green at `c56e4911fea1cd06a2abb8f3107fe51ddc91ed23`
+(see [close-out record](reviews/PROM-F11-close-out.md)); subject to the
+maintainer's read of that PR. F11's missing-control implementation is
+complete. This is not a claim of deployed cloud/HSM acceptance, which remains
+per [audit-source-acceptance.md](audit-source-acceptance.md).**
 Baseline: `main` at `3c27cc1dd97f363e85c61555f65d70d533a6d3a2`.
 Checkpoint 2b is based on merged `main` at
 `2ba1d46807b91849d0e8d86ddfd68b2b68b29407`. Checkpoint 3 is based on merged 2b
