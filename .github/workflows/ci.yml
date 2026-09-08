@@ -72,8 +72,13 @@ jobs:
           python - <<'PY'
           import xml.etree.ElementTree as ET
           cases = list(ET.parse("f11-proofs.xml").iter("testcase"))
+          # Each of the three files must contribute cases, and the count is
+          # printed per file: an empty or partial collection that passed
+          # silently is the void-guard shape this gate exists to prevent.
           for module in ("test_authorization_record", "test_audit_source", "test_reconciliation"):
-              assert any(c.get("classname", "").endswith(module) for c in cases), f"{module} proofs did not execute"
+              collected = [c for c in cases if c.get("classname", "").endswith(module)]
+              assert collected, f"{module} proofs did not execute"
+              print(f"F11 {module}: {len(collected)} proofs collected and executed")
           assert all(case.find(tag) is None for case in cases for tag in ("skipped", "failure", "error")), "F11 proof skipped or failed"
           print(f"F11: {len(cases)} proofs executed; zero skips/failures/errors")
           PY

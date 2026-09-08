@@ -36,6 +36,23 @@ in `spec/invariants.md` is a major version bump.
   execution is still unsupported; it now fails closed. Regression coverage in
   `tests/chokepoint/test_substrate.py` and `test_owner_identity.py`.
 
+### Changed
+- **PROM-F11 close-out: the revert runners are pinned, and CI fails on a
+  shortfall.** `scripts/f11_reconcile_revert_proofs.py` (43 reversions / 72
+  call-phase failures) and `scripts/f11_source_revert_proofs.py` (15 / 21)
+  now carry those counts as assertions: the mutation list is checked against
+  its pin before anything runs, and the observed call-phase failures after.
+  A runner that executed fewer proofs than it claims exits non-zero instead
+  of printing a smaller number; `tests/chokepoint/test_f11_revert_pins.py`
+  proves the pins, that every revert target still exists, and that the
+  enforcement refuses a shortfall or an excess. The F11 CI gate prints the
+  collected count per proof file. The threat model records the reconciler's
+  no-wall-clock-deadline residual and the adapter requirement it implies;
+  `docs/authorization-record.md` §7 names the implemented test behind each
+  proposed proof label and states the digest-bound assumption of every
+  "detected" row; the in-memory KMS model's docstring names the
+  metadata-only limitation.
+
 ### Fixed
 - **Two false documentation claims corrected (PROM-FIX-A).**
   `docs/threat-model.md` §2.4 said the chokepoint runner spawns no
