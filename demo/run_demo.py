@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Promethyn enforcement demo — the credential-brokered migration chokepoint.
 
-Runs the whole enforcement story against the REAL chokepoint and a REAL
-PostgreSQL — nothing mocked:
+Exercises the real chokepoint and a real PostgreSQL. The policy PASS below is
+synthetic and signing uses a development-only local HMAC; this is not a proof
+of policy verification, external key custody or operational reconciliation:
 
   1. an agent tries to reach the DB to run the migration itself  -> no path
   2. a valid, approved migration                                -> runs once
@@ -22,23 +23,29 @@ points at the committed proof rather than pretending.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
 import time
 
 from prometheus_protocol.chokepoint import (
+    AuthorizationContext,
     DbTarget,
     MigrationArtifact,
     MigrationRunnerConfig,
     build_migration_runtime,
     postgres_executor,
 )
+from prometheus_protocol.chokepoint.signer import LocalHmacSigner
 from prometheus_protocol.core.config import Config
 from prometheus_protocol.core.models import Judgment, Verdict
+from prometheus_protocol.ledger.audit_chain import verify_rows
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
+from prometheus_protocol.runtime.factory import build_tip_anchor_for
 
 BAR = "=" * 72
 
@@ -210,10 +217,33 @@ def run_chokepoint(target: DbTarget, signing_key: bytes) -> None:
     # never holds its key. The demo signs with a LOCAL key (PROM_CHOKEPOINT_KEY),
     # which is non-protecting against root on this host and is warned about at
     # build; production passes signer=KmsSigner(...) instead and sets
-    # PROM_REQUIRE_EXTERNAL_SIGNER=1 (docs/key-custody.md). The receipt ledger is
-    # fresh for the demo; spent approvals are durable so a restart cannot revive
-    # a capability.
-    ledger = SqliteLedger(":memory:")
+    # PROM_REQUIRE_EXTERNAL_SIGNER=1 (docs/key-custody.md). Both authorization
+    # history and spent approvals survive restart. The ledger now requires a
+    # gate-owned private directory and file; this demo never chmods old data.
+    settings = Config.from_env()
+    ledger = SqliteLedger.private(
+        settings.ledger_path, tip_anchor=build_tip_anchor_for(settings)
+    )
+    signer = LocalHmacSigner(signing_key)
+    context = AuthorizationContext(
+        gate_identity="local-demo:" + socket.gethostname(),
+        policy_sha256=hashlib.sha256(
+            b"demo-only: synthetic authoritative PASS v1"
+        ).hexdigest(),
+        requester={
+            "identity_source": "local_os",
+            "issuer": socket.gethostname(),
+            "subject": str(os.geteuid()),
+        },
+        signer={
+            "backend": "local-hmac",
+            "scope": socket.gethostname(),
+            "key_resource": signer.key_id,
+            "public_key_sha256": None,
+            "caller_issuer": socket.gethostname(),
+            "caller_subject": str(os.geteuid()),
+        },
+    )
     runtime = build_migration_runtime(
         MigrationRunnerConfig(
             target=target,
@@ -224,9 +254,10 @@ def run_chokepoint(target: DbTarget, signing_key: bytes) -> None:
             ),
         ),
         audit=ledger,
+        authorization=context,
         executor=postgres_executor,
         clock=time.time,
-        settings=Config.from_env(),
+        settings=settings,
     )
     authority = runtime.authority
     runner = runtime.runner
@@ -236,24 +267,31 @@ def run_chokepoint(target: DbTarget, signing_key: bytes) -> None:
     try:
         # STEP 2 — a valid, approved migration runs exactly once.
         step(2, "an APPROVED migration runs (once)")
-        ledger.record_chained(event="authorize", subject=target.identity.canonical,
-                             payload={"artifact_sha256": artifact.sha256[:16]},
-                             created_at=repr(time.time()))
-        approval = authority.authorize(_passing_judgment(), artifact=artifact,
-                                       target=target.identity, now=time.time())
+        approval = authority.authorize(
+            _passing_judgment(),
+            artifact=artifact,
+            target=target.identity,
+            now=time.time(),
+        )
         before = _psql(target, f"SELECT to_regclass('{tbl}') IS NULL").stdout.strip()
         res = runner.execute(approval=approval, artifact=artifact)
         after = _psql(target, f"SELECT to_regclass('{tbl}') IS NOT NULL").stdout.strip()
-        line(f"    table absent before: {before == 't'}   executed: {res.executed}   "
-             f"table present after: {after == 't'}")
+        line(
+            f"    table absent before: {before == 't'}   executed: {res.executed}   "
+            f"table present after: {after == 't'}"
+        )
         line(f"  RESULT: {res.detail}")
 
         # STEP 3 — replay the same approval.
         step(3, "REPLAY the same approval")
         res = runner.execute(approval=approval, artifact=artifact)
-        count = _psql(target, f"SELECT count(*) FROM pg_tables WHERE tablename='{tbl}'").stdout.strip()
-        line(f"    refused: {res.refused}   reason: {res.reason}   "
-             f"table still exists exactly once: {count == '1'}")
+        count = _psql(
+            target, f"SELECT count(*) FROM pg_tables WHERE tablename='{tbl}'"
+        ).stdout.strip()
+        line(
+            f"    refused: {res.refused}   reason: {res.reason}   "
+            f"table still exists exactly once: {count == '1'}"
+        )
         line(f"  RESULT: {res.detail}")
 
         # STEP 4 — swap a hostile artifact under a (different) valid approval.
@@ -270,9 +308,7 @@ def run_chokepoint(target: DbTarget, signing_key: bytes) -> None:
 
         # STEP 5 — a forged approval (no signing key).
         step(5, "a FORGED approval (the agent has no signing key)")
-        forged = authority.mint(artifact_sha256=hostile.sha256,
-                                target=target.identity, now=time.time())
-        forged = dataclasses.replace(forged, mac="deadbeef" * 8)
+        forged = dataclasses.replace(approval_b, artifact_sha256=hostile.sha256, signature="deadbeef" * 8)
         res = runner.execute(approval=forged, artifact=hostile)
         line(f"    refused: {res.refused}   reason: {res.reason}")
         line(f"  RESULT: {res.detail}")
@@ -280,14 +316,15 @@ def run_chokepoint(target: DbTarget, signing_key: bytes) -> None:
         # STEP 6 — the tamper-evident ledger of every decision.
         step(6, "the tamper-evident ledger of every decision")
         for e in ledger.chained_events():
-            payload = e["payload"]
-            line(f"    #{e['seq']}  {e['event']:<10} {payload}")
+            # Signed-result payloads contain a live bearer capability. Show
+            # event identities, never dump envelopes into console logs.
+            line(f"    #{e['seq']}  {e['event']:<28} subject={e['subject']}")
         v = ledger.verify_chain()
         line(f"  verify_chain(): {v.render()}")
-        line("  now an adversary edits one entry to hide the replay attempt...")
-        ledger._conn.execute("UPDATE audit_chain SET event='authorize' WHERE seq=4")
-        ledger._conn.commit()
-        v2 = ledger.verify_chain()
+        line("  now simulate an adversary editing a COPY of one entry...")
+        copied_rows = ledger.chained_events()
+        copied_rows[-1]["event"] = "authorize"
+        v2 = verify_rows(copied_rows)
         line(f"  verify_chain(): {v2.render()}")
         line("  RESULT: the tamper is detected — the receipt cannot be quietly rewritten.")
     finally:

@@ -320,6 +320,11 @@ class KmsSigner(_EcdsaP256Verifier):
             raise _unavailable(exc, f"fetching the public key for {key_id!r}") from exc
         self._load_public(spki, where=f"KMS key {key_id!r}")
 
+    @property
+    def principal(self) -> str:
+        """Configured credential identity; real adapters must bind it honestly."""
+        return self._principal
+
     def sign(self, message: bytes) -> bytes:
         digest = digest_of(message)
         try:

@@ -52,19 +52,30 @@ jobs:
       - name: Compile
         run: python -m compileall -q src tests scripts
 
-      - name: Hearth type gate (mypy, strict on the frozen core)
+      - name: Trusted core and F11 persistence type gate
         # EX-1: "could not execute" is a distinct type (core.models.Unavailable)
         # that carries no `verdict`, so an authoritative verifier that could not
         # run can never be narrowed into a verdict. That guarantee is only real if
         # a checker enforces it — a type contract that never runs is the exact
         # class of bug EX-1 fixes — so it runs here and the build FAILS if the
-        # Hearth does not type-check. mypy.ini pins exactly the frozen files (and
+        # Hearth does not type-check. mypy.ini pins the core and F11 files (and
         # `mypy_path=src` so the real types resolve and the gate has teeth); the
         # rest of the repo is not checked here (no yak-shaving).
         run: python -m mypy --config-file mypy.ini
 
       - name: Repository hygiene
         run: python scripts/check_hygiene.py
+
+      - name: F11 persistence proofs (must execute, zero skips)
+        run: |
+          python -m pytest -q tests/chokepoint/test_authorization_record.py --junitxml=f11-persistence.xml
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          cases = list(ET.parse("f11-persistence.xml").iter("testcase"))
+          assert cases, "F11 persistence proofs did not execute"
+          assert all(case.find(tag) is None for case in cases for tag in ("skipped", "failure", "error")), "F11 proof skipped or failed"
+          print(f"F11: {len(cases)} proofs executed; zero skips/failures/errors")
+          PY
 
       - name: IP consistency (owner, license, no stray former license)
         # What a prime's counsel verifies by hand (docs/IP-READINESS.md §7),

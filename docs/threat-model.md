@@ -483,13 +483,19 @@ forged approval was indistinguishable from a real one and nobody was told.
   Artifact and target binding, expiry, single use and the fail-closed
   `authorize` are untouched; a test pins the canonical bytes to their pre-PIH-2
   digest.
-- **The witness.** Every Sign is a record in the KMS's audit trail —
-  CloudTrail, Cloud Audit Logs, the HSM's log — written by the service, not the
-  caller, so the runner host cannot erase it. `unwitnessed_digests` and
-  `unexplained_records` let an auditor reconcile approvals against that trail:
-  a Sign record no authorised approval accounts for is the forgery signal.
-  **Detection, not prevention:** the KMS signs for whoever holds the invoke
-  permission.
+- **The witness and open F11.** The model records each Sign; production logging,
+  retention and protection from the invoke holder must be established by the
+  deployment. CloudTrail's documented Sign event lacks the signed digest; GCP
+  documents one, while PKCS#11 audit access is vendor-specific. Checkpoint 2a
+  now persists decisions before Sign through `RecordedApprovalAuthority`,
+  with exact bindings reconstructable from disk, and separately records results.
+  **Automated reconciliation is still not operational.** The source port/model,
+  coverage/settling semantics and reconciler remain to be implemented; existing
+  set helpers are not a deployed detection control. See
+  [authorization record §8](authorization-record.md#8-implemented-checkpoint-2a-boundary).
+  Invoke permission still permits gate-bypassing Sign. An attacker who can
+  remove independent signing history, or append false gate decisions, remains
+  outside what comparison alone can establish.
 - **Fail-closed.** A KMS that is unreachable, denies the call, times out, or
   answers with something that is not a signature under its own public key
   raises a distinct `SignerUnavailable` subclass and mints nothing — proven end

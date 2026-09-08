@@ -12,17 +12,13 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import stat
 from dataclasses import asdict
 from pathlib import Path
 
 from prometheus_protocol.core.errors import StateError
 from prometheus_protocol.core.interfaces import Ledger
 from prometheus_protocol.core.models import Attempt
-from prometheus_protocol.ledger.tip_anchor import (
-    AnchorUnavailable,
-    TipAnchor,
-    anchor_history,
-)
 from prometheus_protocol.ledger.audit_chain import (
     GENESIS_ROOT,
     NOT_VERIFIABLE,
@@ -31,6 +27,11 @@ from prometheus_protocol.ledger.audit_chain import (
     canonical_json,
     entry_hash,
     verify_rows,
+)
+from prometheus_protocol.ledger.tip_anchor import (
+    AnchorUnavailable,
+    TipAnchor,
+    anchor_history,
 )
 
 _SCHEMA = """
@@ -203,6 +204,54 @@ def _judgment_from_evidence(evidence_json: str | None) -> dict | None:
 
 class SqliteLedger(Ledger):
     """SQLite-backed ledger. Pass ``":memory:"`` for an ephemeral instance."""
+
+    @classmethod
+    def private(cls, path: Path | str, *, tip_anchor: TipAnchor | None = None) -> SqliteLedger:
+        """Create trusted-zone storage; never chmod existing public user data."""
+        if not os.fspath(path) or os.fspath(path) == ":memory:":
+            raise ValueError("private ledger requires a filesystem path")
+        location = Path(path).absolute()
+        if location.is_symlink() or location.parent.is_symlink():
+            raise ValueError("private ledger cannot use a symlink")
+        location.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        cls.check_private_path(location, require_file=False)
+        fd = os.open(
+            location,
+            os.O_RDWR | os.O_CREAT | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+        try:
+            cls.check_private_path(location)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        return cls(location, tip_anchor=tip_anchor)
+
+    @staticmethod
+    def check_private_path(path: Path, *, require_file: bool = True) -> None:
+        if path.is_symlink() or path.parent.is_symlink():
+            raise ValueError("private ledger cannot use a symlink")
+        parent = path.parent.stat()
+        if (
+            not stat.S_ISDIR(parent.st_mode)
+            or parent.st_mode & 0o077
+            or parent.st_uid != os.geteuid()
+        ):
+            raise PermissionError(
+                "authorization ledger parent must be private and owned by the gate"
+            )
+        if not require_file and not path.exists():
+            return
+        info = path.stat()
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_mode & 0o077
+            or info.st_uid != os.geteuid()
+            or info.st_nlink != 1
+        ):
+            raise PermissionError(
+                "authorization ledger must be a private, singly linked gate-owned file"
+            )
 
     def __init__(
         self,
