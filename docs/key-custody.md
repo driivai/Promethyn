@@ -152,14 +152,16 @@ also carry unsigned binding evidence. A fresh-process test reconstructs the
 digest from disk alone. See [authorization record §8](authorization-record.md#8-implemented-checkpoint-2a-boundary)
 for code, proof names, storage requirements and limits.
 
-**F11 remains open.** The KMS audit-source port/model, coverage/settling-aware
-reconciler and operator CLI are not implemented at this checkpoint. The
-set-based helpers above are not that control. AWS CloudTrail's documented
-Sign event does **not** expose the signed digest; key/caller/time proximity
-cannot substitute for it. GCP documents a digest field; PKCS#11 audit access
-and fields are vendor-specific. The [source mapping](authorization-record.md)
-states what each source can and cannot support. No real cloud adapter has
-been validated by these local-model proofs.
+**F11 remains open.** Checkpoint 2b adds a read-only audit-source port, separate
+signer/reader/administrator model capabilities and offline provider normalizers.
+The coverage/settling-aware reconciler and operator CLI are still not implemented;
+neither the port nor the set-based helpers above supplies that control.
+AWS CloudTrail supplies metadata only, never a digest inferred from key/caller/time.
+GCP's observed base64 digest can be retained; a missing digest stays absent and
+the key algorithm requires separate pinned version evidence. PKCS#11 has no
+portable audit-read capability; vendor evidence is required. Pagination is not
+an asynchronous completeness attestation. See the [source mapping and limits](authorization-record.md#6-audit-source-port-and-real-source-feasibility).
+No deployed cloud/HSM adapter has been validated by these local-model proofs.
 
 The KMS log stands in for the real audit trail. What makes it a witness is
 that the runner host cannot write to it: CloudTrail and Cloud Audit Logs are

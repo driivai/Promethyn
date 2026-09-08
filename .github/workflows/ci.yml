@@ -52,7 +52,7 @@ jobs:
       - name: Compile
         run: python -m compileall -q src tests scripts
 
-      - name: Trusted core and F11 persistence type gate
+      - name: Trusted core and F11 type gate
         # EX-1: "could not execute" is a distinct type (core.models.Unavailable)
         # that carries no `verdict`, so an authoritative verifier that could not
         # run can never be narrowed into a verdict. That guarantee is only real if
@@ -66,16 +66,20 @@ jobs:
       - name: Repository hygiene
         run: python scripts/check_hygiene.py
 
-      - name: F11 persistence proofs (must execute, zero skips)
+      - name: F11 persistence and source proofs (must execute, zero skips)
         run: |
-          python -m pytest -q tests/chokepoint/test_authorization_record.py --junitxml=f11-persistence.xml
+          python -m pytest -q tests/chokepoint/test_authorization_record.py tests/chokepoint/test_audit_source.py --junitxml=f11-proofs.xml
           python - <<'PY'
           import xml.etree.ElementTree as ET
-          cases = list(ET.parse("f11-persistence.xml").iter("testcase"))
-          assert cases, "F11 persistence proofs did not execute"
+          cases = list(ET.parse("f11-proofs.xml").iter("testcase"))
+          for module in ("test_authorization_record", "test_audit_source"):
+              assert any(c.get("classname", "").endswith(module) for c in cases), f"{module} proofs did not execute"
           assert all(case.find(tag) is None for case in cases for tag in ("skipped", "failure", "error")), "F11 proof skipped or failed"
           print(f"F11: {len(cases)} proofs executed; zero skips/failures/errors")
           PY
+
+      - name: F11 source guard reverts (must be caught)
+        run: python scripts/f11_source_revert_proofs.py
 
       - name: IP consistency (owner, license, no stray former license)
         # What a prime's counsel verifies by hand (docs/IP-READINESS.md §7),
