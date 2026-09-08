@@ -1,11 +1,12 @@
 # Durable authorization records and KMS reconciliation — PROM-F11
 
-Status: **checkpoint 1 approved; checkpoint 2a persistence boundary implemented,
-awaiting maintainer review.**
+Status: **checkpoint 2a merged; checkpoint 2b source input implemented,
+awaiting maintainer review. F11 remains OPEN.**
 Baseline: `main` at `3c27cc1dd97f363e85c61555f65d70d533a6d3a2`.
-The audit-source port/model (2b) and reconciler (3) are not implemented. F11
-remains open. Below, “must” specifies the full sprint acceptance requirement;
-section 8 distinguishes the implemented boundary from the remaining design.
+Checkpoint 2b is based on merged `main` at
+`2ba1d46807b91849d0e8d86ddfd68b2b68b29407`. The reconciler (3) is not implemented.
+Below, “must” specifies the full sprint acceptance requirement; sections 6 and
+8 distinguish implemented boundaries from the remaining design.
 
 ## 1. Honest limits first
 
@@ -370,7 +371,7 @@ also for UNWITNESSED (not a forgery label), UNEXPLAINED and INDETERMINATE.
 
 ## 6. Audit-source port and real-source feasibility
 
-Checkpoint 2 will implement a small read-only `read_sign_records(scope, start,
+Checkpoint 2b implements the read-only `read_sign_records(scope, start,
 end)` port, returning normalized immutable events plus the coverage descriptor
 above. Minimum event fields: stable source/event ID, immutable key resource,
 authenticated caller, signing timestamp, outcome (`success`, `denied`, or
@@ -385,6 +386,88 @@ coverage gaps, duplicate deliveries and late/lost replies after successful
 signing. An administrator adversary can delete/replace source history and its
 coverage assertions. A signing-only adversary cannot. Include both digest-bearing
 and metadata-only profiles: do not call a digest-rich model “CloudTrail”.
+
+### Implemented 2b surface and limits
+
+`chokepoint/audit_source.py` defines `SignAuditSource`, `PagedSignAuditSource`,
+`SignEvent`, `DigestEvidence`, `Coverage` and `SignRead`. The page collector is
+shared by the offline adapter composition and model. No production signer,
+authority, execution runner, ledger format or approval format changes in 2b.
+There is no reconciliation decision, gate-history join, operator CLI or SDK.
+
+Time is **integer UTC epoch nanoseconds** with half-open `[start, end)` intervals;
+boolean, floating/non-finite, negative, reversed and oversized values refuse.
+RFC3339 UTC `Z` timestamps retain all nine fractional digits. Future checkpoint
+3 must convert gate timestamps conservatively and account for clock uncertainty;
+2b does not infer those comparison windows.
+
+`AuditScope` pins provider, independent source ID, account/project/device domain,
+region and immutable key resource/version. There is deliberately no caller
+filter: unfamiliar principals using the scoped key must remain in the input.
+Events include this scope, stable event ID, authenticated caller, signing time,
+outcome, algorithm and algorithm provenance. Digest evidence is either exactly
+32 observed bytes plus source-field provenance, or `None / absent` with
+`metadata_only` event capability. Inferred provenance is rejected. Request IDs
+and message type, where available, are diagnostic fields, not digest substitutes.
+
+Coverage includes scope, requested/covered interval (covered may be unknown),
+complete-through frontier (may be unknown), explicit gaps, observation time,
+capability, `completeness_evidence`, and `pages_exhausted`. Source capability is
+an ability, not a promise that every event contains every field: a redacted GCP
+digest remains metadata-only on that event. A metadata-only source may never
+return any digest-bearing event.
+
+`SignRead.state` is input completeness only: `complete`, `incomplete`, or
+`unusable` for conflicting payloads sharing a source event ID. Complete requires
+all pages, source-attested coverage of the entire interval, an adequate frontier,
+no gaps and no issues. It is **not** a clean reconciliation result. In particular,
+an empty complete model interval is not a fabricated matched event; a complete
+metadata-only read still supplies no cryptographic correlation.
+
+The collector validates page ordinal, snapshot, query scope and unchanged
+coverage; detects missing pages/token loops; deduplicates exact event IDs but
+not repeated digests; and records malformed rows as issues while preserving the
+valid prefix. Unknown schema fields/methods, conflicting identities, oversized
+responses and errors never become an empty successful read. Known non-binding
+provider containers (for example caller context and routing metadata) are not
+projected into digest/caller/algorithm evidence. Unsupported/redacted binding
+fields refuse except the explicit absent-digest and unknown-outcome cases.
+
+Defaults: 64 pages, 10,000 deliveries, 4 MiB total raw events, 64 KiB per event,
+3-second absolute monotonic deadline. Hard ceilings constrain configurable
+counts and sizes. Late page and normalization replies are rejected. The injected
+page adapter must itself bound I/O, parsing and allocations and honor the
+deadline: this synchronous collector cannot preempt a blocked adapter. There is
+no bundled transport or claim of a live cloud timeout proof. Adapter-maintained
+page ordinals are sequencing diagnostics, **not** an independent source witness.
+
+`audit_source_model.py::MemorySignAudit` is a trusted harness factory. Only its
+`ModelSigner` is given to a signing adversary; it cannot select a different
+authenticated principal. `ModelAuditReader` exposes only the read operation.
+`ModelAuditAdministrator` can replace/delete deliveries and independently replace
+retention/gaps/frontier assertions. Returned events, nested evidence, coverage
+and history snapshots are immutable. These Python capability surfaces model
+remote permissions, not protection against Python introspection in one process.
+
+The `gcp_shaped` profile is `model-gcp / digest_bound`; `cloudtrail_shaped` is
+`model-cloudtrail / metadata_only`. Both create real P-256 signatures and retain
+denied attempts. The metadata-only medium never puts a digest or signature in
+its history, including when a corresponding gate decision exists on disk.
+Fault controls cover delivery delay, late read/sign replies, successful Sign
+with a lost reply, unavailable readers and omitted pages. Administrator methods
+model retention, exclusions, duplicates, conflicts and arbitrary malformed raw
+deliveries. The model can know its pending deliveries exactly; native clouds
+are not credited with that model-only knowledge.
+
+The controls-both proof deletes Sign history and replaces its coverage assertions,
+then obtains a complete, empty, gap-free read. No tombstone is manufactured.
+The old `MemoryKms.sign_log` and set-based helpers remain legacy primitives;
+they are not this port and are not an operational reconciler.
+
+Provider normalizers live in `audit_normalization.py`. Fixtures are documented
+provider-shaped examples with synthetic identities, **not captured deployment
+evidence**. The [real-adapter acceptance checklist](audit-source-acceptance.md)
+separates runnable offline tests from mandatory future deployment validation.
 
 ### AWS KMS and CloudTrail
 
@@ -406,6 +489,16 @@ and metadata-only profiles: do not call a digest-rich model “CloudTrail”.
   account coverage from successful requests. Verify trail selection and both
   account scopes instead of assuming every denied attempt is visible.
   [KMS logging scope](https://docs.aws.amazon.com/kms/latest/developerguide/logging-using-cloudtrail.html)
+
+Implemented: `normalize_aws_event` accepts supported CloudTrailEvent JSON,
+validates account/region and the immutable `resources[].ARN`, retains caller ARN
+plus principal ID, and always supplies absent digest evidence. It supports the
+pinned 1.08/1.09 schema and IAMUser/AssumedRole identities; unfamiliar versions
+or identities produce explicit malformed input, not silently filtered rows.
+Unexpected digest-bearing request/response fields cannot upgrade the capability.
+`native_coverage` applies LookupEvents' 90-day retention boundary and never
+turns page exhaustion into a complete-through attestation. Archive readers are
+not implemented. Request aliases are never the authoritative key identity.
 
 Design consequence: an AWS adapter cannot advertise binding-complete
 reconciliation from native CloudTrail alone. A post-response request-ID link
@@ -439,6 +532,25 @@ that evidence is available, report INDETERMINATE, not approximate MATCHED.
   evolve; unknown formats fail closed. The documented caller-provided-context
   location is not a license to assume arbitrary context binds the signed bytes.
   [KMS audit logging](https://docs.cloud.google.com/kms/docs/audit-logging)
+
+Implemented: `normalize_gcp_event` accepts the documented `AsymmetricSign`
+method spelling, full immutable version and exact Data Access log scope. It
+represents source event identity as timestamp plus insertId within that scope,
+following the [LogEntry identity contract](https://docs.cloud.google.com/logging/docs/reference/v2/rest/v2/LogEntry), rather than assuming insertId alone suffices. It
+decodes `request.digest.sha256` as canonical padded standard base64 to 32 bytes,
+not hex. Unknown spellings, versions or encodings refuse. Absent digest remains
+explicit metadata-only evidence. Explicit status 0 means success, 7 denied,
+other recognized codes unknown; absent status remains unknown conservatively.
+
+Implementation detail exposed by normalization: the signing request's SHA-256
+field does not establish the asymmetric key algorithm. A separate trusted
+`GetPublicKey` export must pin `EC_SIGN_P256_SHA256` and the same immutable key
+version. `GcpKeyVersion` retains that export's hash, and the event marks the
+algorithm as pinned key-version evidence, not an observed request field. This
+is an explicit refinement, not a fabricated audit field. The export is not
+authenticated by this offline code; deployment must establish its provenance.
+GCP retention remains unknown until separately supplied; native page responses
+never assert complete-through. Caller context/aliases never contribute a digest.
 
 Signature bytes and an approval authorization ID are not required audit fields
 here; the digest plus independently established identity/coverage supplies the
