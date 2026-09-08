@@ -46,6 +46,7 @@ dev = ["pytest>=7.0", "build>=1.0", "mypy>=1.8"]
 
 [project.scripts]
 prometheus-protocol = "prometheus_protocol.cli.main:main"
+promethyn-reconcile = "prometheus_protocol.cli.reconcile:main"
 
 [project.urls]
 Homepage = "https://github.com/driivai/promethyn"

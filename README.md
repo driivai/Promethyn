@@ -43,6 +43,12 @@ The agent cannot bypass it, because the agent never holds the keys.
 - **IS** crash-reconcilable — the migration and its PostgreSQL execution receipt
   commit atomically. If the runner dies before writing the audit outcome, restart
   recovery proves commit versus rollback and blocks on any remaining ambiguity.
+- **HAS** read-only [signing reconciliation](docs/reconciliation.md) (`promethyn-reconcile`):
+  unexplained Sign calls are detected only with independently trusted digest-bound
+  evidence and complete coverage. GCP can supply a digest; native AWS CloudTrail
+  is metadata-only → INDETERMINATE, not detection; PKCS#11 is vendor-dependent.
+  No live cloud adapter ships here. Signing plus audit-administrator control can
+  erase the witness; matching never resolves an UNKNOWN database execution.
 - **IS NOT** a flag-and-warn interceptor watching an agent that still holds the
   keys. The whole point is that it doesn't watch — it *withholds*.
 - **IS NOT** (honestly) a finished product. It is an enforcement **core**, alpha,

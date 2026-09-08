@@ -27,8 +27,10 @@ present, plausible, and void is the failure mode we exist to name.
 > residual from "undetectable, silent" to "detectable, witnessed". PIH-1 (§3)
 > made the ledger anchor external, append-only and continuous. PIH-2 (§2.6,
 > `docs/key-custody.md`) moved approval signing to an external KMS / HSM whose
-> key never exists on the host, so a forgery must ask the KMS and the KMS
-> writes it down — detection, not prevention. Every "what it does not cover"
+> key is not returned through the port. F11 adds retrospective detection only
+> with independently trusted digest-bound history and complete coverage: GCP
+> can supply the digest, native AWS CloudTrail cannot (INDETERMINATE), and
+> PKCS#11 depends on vendor evidence. This is not prevention. Every "what it does not cover"
 > survives here as a passing test, because an overclaim is the exact defect
 > this program exists to catch.
 
@@ -417,16 +419,14 @@ PROM-FIX-A.
 
 ### 2.5 Residual — what is not covered
 
-- **Full host or root compromise still defeats the *confidentiality* items, and
-  is now witnessed rather than silent for the rest.** Root reads or replaces
-  the database credential and runs SQL with it directly — the chokepoint is
-  not what stands between root and the database. What root can no longer do
-  *silently*: read the signing key (it is in the KMS, §2.6; forging means a
-  logged Sign request) and rewrite the ledger from genesis (the anchor is on a
-  medium root cannot rewrite, §3). Every item in §2.2 reduces what a *partial*
-  compromise yields; the two PIH witnesses are what a *full* compromise now
-  leaves behind. An insider who holds the KMS Sign-invoke permission is the
-  §2.6 residual: valid signatures, every one recorded.
+- **Full host or root compromise still defeats the confidentiality items.**
+  Root can read/replace the database credential and run SQL directly. External
+  signing removes the private key from the port's host, not Sign-invoke access.
+  Independent immutable anchors can reveal ledger rewrites (§3); independently
+  trustworthy digest-bound Sign history can reveal unauthorized signing (§2.6).
+  These are conditional witnesses, not blanket visibility of root's actions.
+  Native AWS metadata-only evidence cannot provide F11 digest-bound detection;
+  control of signing plus audit administration can erase the witness entirely.
 - **Memory is not scrubbed.** A `password_provider` narrows the credential's
   window from process-lifetime to call-scope. It does not erase anything: Python
   strings are immutable and the interpreter may copy them, so the value can
@@ -483,19 +483,36 @@ forged approval was indistinguishable from a real one and nobody was told.
   Artifact and target binding, expiry, single use and the fail-closed
   `authorize` are untouched; a test pins the canonical bytes to their pre-PIH-2
   digest.
-- **The witness and open F11.** The model records each Sign; production logging,
-  retention and protection from the invoke holder must be established by the
-  deployment. CloudTrail's documented Sign event lacks the signed digest; GCP
-  documents one, while PKCS#11 audit access is vendor-specific. Checkpoint 2a
-  now persists decisions before Sign through `RecordedApprovalAuthority`,
-  with exact bindings reconstructable from disk, and separately records results.
-  **Automated reconciliation is still not operational.** The source port/model,
-  coverage/settling semantics and reconciler remain to be implemented; existing
-  set helpers are not a deployed detection control. See
-  [authorization record §8](authorization-record.md#8-implemented-checkpoint-2a-boundary).
-  Invoke permission still permits gate-bypassing Sign. An attacker who can
-  remove independent signing history, or append false gate decisions, remains
-  outside what comparison alone can establish.
+- **F11: operational reconciliation.** `chokepoint/reconciliation.py` and the
+  read-only `promethyn-reconcile` CLI consume the durable 2a journal and 2b
+  source. The gate's chain and full external anchor history are verified before
+  decoding/recomputing records. An independent pinned checkpoint attests gate
+  history coverage; the read includes pre-start decisions and extends source
+  coverage through each selected decision's possible Sign interval.
+  MATCHED requires a successful independently observed digest, exact key/scope,
+  caller, algorithm, admissible time and complete coverage. UNWITNESSED is a
+  mature decision without a witness, **not forgery**. UNEXPLAINED is a successful
+  digest-bound Sign without an eligible decision (including excess distinct
+  attempts): the forgery signal. Errors, unknown/metadata-only evidence and
+  incomplete/immature ranges are INDETERMINATE, never clean. Denied attempts
+  remain diagnostics. One decision explains one event; exact deliveries
+  deduplicate by event ID, conflicting IDs invalidate the source.
+  Absence uses issuance − skew through expiry + bounded Sign duration + skew,
+  then settling (default 900 seconds). TTL/skew/deadline are pinned and strictly
+  validated. A timer is not a completeness certificate; logging exclusions,
+  unavailable readers, retention gaps and unattested pages stay indeterminate.
+  **GCP digest-bound evidence can support real detection once the deployed
+  adapter and coverage are validated. AWS CloudTrail metadata-only evidence
+  cannot: INDETERMINATE, not detection. PKCS#11 is vendor-dependent; local HMAC
+  has no independent Sign source.** No live cloud/HSM adapter ships here.
+  `test_invoke_only_forgery_detected` proves the bypass signal;
+  `test_normal_concurrent_batch_across_restart_zero_false_positives` proves the
+  normal case. `test_matched_sign_never_resolves_unknown_or_releases_nonce`
+  preserves F2 UNKNOWN and spent nonces. The passing
+  `test_controls_both_residual_honestly_not_detected` deletes history and replaces
+  its coverage under audit administration, with **no** manufactured gap/alert.
+  Dishonest authorised gate appends and compromised auditor pins are also
+  outside this comparison's trust boundary. See [operator contract](reconciliation.md).
 - **Fail-closed.** A KMS that is unreachable, denies the call, times out, or
   answers with something that is not a signature under its own public key
   raises a distinct `SignerUnavailable` subclass and mints nothing — proven end

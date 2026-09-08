@@ -1,12 +1,12 @@
 # Key custody — approval signing through an external KMS / HSM (PIH-2)
 
-> **Detection, not prevention.** Nothing here stops a privileged insider from
-> obtaining a signed approval. It stops them doing so *silently*: the private
-> key no longer exists on the runner host, so a forgery must ask the KMS to
-> sign, and every Sign request is recorded by the KMS, outside the insider's
-> control. An insider who holds the Sign-invoke permission still gets a valid
-> signature — and a log entry with their name on it. Nothing is called
-> uncrackable.
+> **Conditional retrospective detection, not prevention.** Sign-invoke still
+> obtains valid signatures. F11's operational reconciler detects unexplained
+> signing only with independently trusted **digest-bound** history and adequate
+> coverage on both sides. GCP-shaped digest evidence can supply that binding;
+> native AWS CloudTrail is **metadata-only → INDETERMINATE, not detection**;
+> PKCS#11 depends on vendor evidence. Control of signing and audit administration
+> can erase an unauthorized event without detection. Nothing is uncrackable.
 
 ## The residual this answers
 
@@ -19,14 +19,16 @@ of bytes leaves no trace.
 
 The insider-hardening doctrine is to convert that from "undetectable, silent"
 to "detectable, witnessed" by introducing a witness the insider cannot
-control. Here the witness is the KMS's own audit trail.
+control. Here the proposed witness is the signing service's audit trail, subject
+to the per-provider capability and coverage checks below. Custody alone is not
+evidence that logging was enabled, delivered, retained or digest-bound.
 
 ## Options
 
 | Signer | Where the private key is | Who can mint silently | Status |
 |---|---|---|---|
 | `LocalHmacSigner` (`signing_key` / `PROM_CHOKEPOINT_KEY`) | bytes in the runner process | anyone who can read the process: root, a debugger, a core dump | **Non-protecting against a host-level insider.** Development only. The runtime warns; `PROM_REQUIRE_EXTERNAL_SIGNER=1` refuses it. |
-| `KmsSigner` over a `KmsPort` | inside the KMS / HSM; never returned by any operation | nobody: every signature is a logged request | the production posture |
+| `KmsSigner` over a `KmsPort` | inside the KMS / HSM; not returned through the port | invoke holders still sign; detection depends on independent digest-bound audit evidence | external-custody posture; deployment adapter must be validated |
 | `PublicKeyVerifier` | nowhere on this host — it holds the public key only | nobody: this host cannot mint at all | the runner side of a split deployment |
 
 `Config.require_external_signer` (`PROM_REQUIRE_EXTERNAL_SIGNER`) is on
@@ -78,7 +80,7 @@ could is not an adapter for this port.
 | `get_public_key(key_id)` → SubjectPublicKeyInfo DER | `GetPublicKey(KeyId)` → `PublicKey` (SPKI DER) | `getPublicKey(name)` → `pem`; decode to DER | `C_GetAttributeValue(CKA_EC_POINT, CKA_EC_PARAMS)`; assemble SPKI |
 | `KmsAccessDenied` | `AccessDeniedException` | `PERMISSION_DENIED` | `CKR_USER_NOT_LOGGED_IN` / `CKR_KEY_FUNCTION_NOT_PERMITTED` |
 | `KmsUnreachable` / `KmsTimeout` | endpoint / SDK timeout errors | `UNAVAILABLE` / `DEADLINE_EXCEEDED` | `CKR_DEVICE_ERROR` / `CKR_TOKEN_NOT_PRESENT` |
-| the sign log | CloudTrail `kms:Sign` events (principal, key, time) | Cloud Audit Logs `CryptoKeyVersions.AsymmetricSign` data-access log | the HSM's audit log |
+| the sign log | CloudTrail `kms:Sign` events (principal, key, time; no digest) | Cloud Audit Logs `AsymmetricSign` Data Access event (observed digest when present) | vendor-specific audit log; capability must be validated |
 
 The `principal` argument names the credential the call is made under. A real
 adapter ignores it — the credential is the client's — while the in-memory
@@ -120,54 +122,67 @@ Before trusting an adapter against a production key:
 4. **Verify with the public key only**, on a host that holds no KMS
    credential (`PublicKeyVerifier`), and confirm an approval signed by any
    other key is refused.
-5. **Reconcile.** Run the auditor's check below over a day's log and the
-   approval envelopes you hold; it must come back empty. The ledger does not
-   hold those envelopes or their digests today — see "The witness property"
-   for exactly what that means.
+5. **Reconcile.** Run `promethyn-reconcile` against the anchored gate snapshot
+   and independently obtained source export, following [the operator procedure](reconciliation.md).
+   A normal mature batch with complete digest-bound evidence must match without
+   false UNEXPLAINED events; a direct invoke must be UNEXPLAINED. A metadata-only
+   source must instead be INDETERMINATE. Do not print signed envelopes.
 
 ## The witness property — what is operational, and what is not
 
-Every approval minted through `KmsSigner` is exactly one Sign request, over
-the SHA-256 of the approval's canonical bytes (`approval_digest`, in
-`chokepoint/approval.py`: the hash over artifact hash, canonical target,
-nonce, issuance time and expiry). The KMS records that digest per request
-(`MemoryKms.sign_log` in the model; the audit trail of a real KMS). Two
-helpers compare a set of approval digests with such a log:
+**F11: operational reconciliation implemented in checkpoint 3.**
+`chokepoint/reconciliation.py::reconcile` consumes the actual 2a disk journal
+and the 2b read-only `SignAuditSource`. `promethyn-reconcile` exposes it over
+independent, pinned evidence exports. No cloud SDK or live adapter is bundled;
+the deployed source and both completeness assertions must be validated separately.
+The legacy set helpers in `kms_model.py` are not this control.
 
-- `unwitnessed_digests(approval_digests, sign_log)` — approvals with no Sign
-  record. A valid approval that the KMS never signed means the key exists
-  somewhere other than the KMS, or the log was tampered with. Both are alarms.
-- `unexplained_records(sign_log, approval_digests)` — Sign records (and every
-  denied attempt) that no authorised approval accounts for. **This is the
-  forgery signal**: someone holding the invoke permission asked for a
-  signature the gate never authorised.
+`reconcile_gate.read_gate` opens a read-only SQLite transaction, verifies the
+raw chain against the entire external anchor history and an auditor-pinned
+checkpoint, and only then reuses the 2a typed decoder. Preimage, approval digest
+and record hash are recomputed from disk. The checkpoint must attest complete
+gate history, including lookback; neither a recent tip nor a valid hash chain
+establishes temporal completeness by itself.
 
-**F11 checkpoint 2a: persistence exists; automated reconciliation does not.**
-The earlier claim that the ledger could reconstruct the digest was false at
-PROM-FIX-A. `build_migration_runtime` now requires a private durable ledger and
-explicit authorization context. Its `RecordedApprovalAuthority` writes a full
-decision **before Sign** and a separate result before delivering an approval.
-The decision persists exact issuance/expiry and binding fields; runner events
-also carry unsigned binding evidence. A fresh-process test reconstructs the
-digest from disk alone. See [authorization record §8](authorization-record.md#8-implemented-checkpoint-2a-boundary)
-for code, proof names, storage requirements and limits.
+| Outcome | Meaning |
+|---|---|
+| MATCHED | One authorised decision explains one successful independently observed digest-bound event with the pinned key/scope, caller, algorithm and admissible time. |
+| UNWITNESSED | A mature valid decision has no successful witness in complete evidence. A pre-Sign crash or a denied attempt can cause this; **not the forgery signal**. |
+| UNEXPLAINED | A successful digest-bound event has no eligible decision or exceeds the one-attempt allowance. **The forgery signal** under the stated trust assumptions. |
+| INDETERMINATE | Verification/read error, incomplete/immature evidence, missing digest, legacy history, or conflicting identity mapping. Never a clean result. |
 
-**F11 remains open.** Checkpoint 2b adds a read-only audit-source port, separate
-signer/reader/administrator model capabilities and offline provider normalizers.
-The coverage/settling-aware reconciler and operator CLI are still not implemented;
-neither the port nor the set-based helpers above supplies that control.
-AWS CloudTrail supplies metadata only, never a digest inferred from key/caller/time.
-GCP's observed base64 digest can be retained; a missing digest stays absent and
-the key algorithm requires separate pinned version evidence. PKCS#11 has no
-portable audit-read capability; vendor evidence is required. Pagination is not
-an asynchronous completeness attestation. See the [source mapping and limits](authorization-record.md#6-audit-source-port-and-real-source-feasibility).
-No deployed cloud/HSM adapter has been validated by these local-model proofs.
+Denied attempts remain diagnostics, not forged approvals. A missing post-Sign
+result does not invalidate a durable decision: lost replies and pre-result
+crashes may still match. Exact repeated event IDs deduplicate; conflicting
+payloads make the source indeterminate. Distinct excess Sign events do not
+deduplicate by digest. Stable allocation does not identify which indistinguishable
+attempt was malicious. Matching never resolves F2 UNKNOWN or releases a nonce.
 
-The KMS log stands in for the real audit trail. What makes it a witness is
-that the runner host cannot write to it: CloudTrail and Cloud Audit Logs are
-written by the service, not the caller, and an HSM's audit log is inside the
-device. That property is the medium's, and a deployment must keep it — route
-the trail to a store the runner's principals cannot delete from.
+The pinned policy defaults settling to **900 seconds**, and requires explicit
+finite clock-skew, bounded Sign-attempt duration and maximum record TTL. Absence
+checks cover issuance minus skew through expiry plus Sign duration plus skew;
+missing send/result timestamps never shorten it. Before its upper bound plus
+settling, return INDETERMINATE with retry time. Afterward, **attested complete
+coverage is still required**; elapsed time and page exhaustion are not certificates.
+
+- **GCP:** observed base64 SHA-256 plus pinned immutable version/algorithm can
+  support detection, only with independently established complete source and
+  gate coverage. Native pagination alone supplies no completeness frontier.
+- **AWS CloudTrail:** digest absent, metadata-only, **INDETERMINATE, not detection**.
+  Same key/caller/time or a copied request alias cannot upgrade it.
+- **PKCS#11:** vendor-dependent; no portable audit-read API. Without validated
+  independent digest and coverage evidence, INDETERMINATE.
+- **Local HMAC:** INDETERMINATE / `no_independent_sign_source`.
+
+`test_invoke_only_forgery_detected` and
+`test_normal_concurrent_batch_across_restart_zero_false_positives` prove both
+directions. `test_controls_both_residual_honestly_not_detected` deletes an
+unauthorized event and replaces coverage assertions: it returns clean with no
+synthetic gap. An attacker who can also append dishonest authorised gate
+decisions can likewise make the histories agree. The auditor, pins, gate
+checkpoint, anchor and source trust are deployment obligations, not facts
+established by a model test. See [operator schema and limits](reconciliation.md)
+and [real-source acceptance](audit-source-acceptance.md).
 
 ## Fail-closed
 
@@ -179,7 +194,7 @@ called.
 | KMS behaviour | Raised | Approval | KMS log |
 |---|---|---|---|
 | unreachable | `SignerUnreachable` | none | no record (the request never arrived) |
-| times out | `SignerTimeout` | none | no record |
+| times out | `SignerTimeout` | none | unknown: a successful Sign reply may have been lost |
 | denies the principal | `SignerDenied` | none | a `denied` record |
 | answers with something that is not a signature under its own public key (garbage, or a signature by another key) | `SignerMalformed` | none | a `signed` record — the KMS did sign; the answer is refused here |
 | unreachable or malformed at construction | the same classes | no signer is built | — |
@@ -198,10 +213,11 @@ holds the Sign-invoke permission.** The KMS signs for an authorised caller;
 that is what it is for. `test_an_insider_with_sign_invoke_gets_a_valid_signature_AND_is_logged`
 grants an insider principal the permission, has them mint an approval for
 hostile SQL, and shows the runner **executing it** — not prevented. It then
-shows the KMS log carrying a `signed` record with the insider's principal and
-the digest of exactly that approval, which `unexplained_records` flags against
-the ledger — witnessed. An insider *without* the permission is denied, and the
-attempt is a `denied` record.
+shows the legacy model log carrying the principal and digest. Checkpoint 3's
+`test_invoke_only_forgery_detected` exercises the operational disk/source
+reconciler and reports UNEXPLAINED. This detection requires the digest-bound
+profile; AWS-shaped metadata-only evidence remains INDETERMINATE. An insider
+without invoke permission is denied; that is a diagnostic, not a forgery signal.
 
 Stopping that insider outright takes a second party: two-party control, where
 no single principal can authorise alone (PIH-3, buyer-gated — the co-signer
@@ -249,7 +265,9 @@ double, not a place to keep a production key. Production sets
 ## What this does NOT cover — the residual, in one place
 
 - **An insider who holds the Sign-invoke permission** obtains valid signatures.
-  Witnessed by the log; stopped only by two-party control (PIH-3).
+  Detected only with trustworthy digest-bound evidence and adequate coverage;
+  native AWS metadata-only evidence is not that detection. Two-party prevention
+  (PIH-3) is a separate design, not implemented here.
 - **An insider who can administer the key** can grant themselves invoke, or
   rotate the key, which the log also records — if the deployment kept the
   roles separate. An administrator who is also the auditor, or who can delete
@@ -264,9 +282,9 @@ double, not a place to keep a production key. Production sets
   Fetch it once from the KMS under an auditor's credential, or pin it in
   configuration; a change to the pinned key is a config change (PIH-4a's
   subject).
-- **Minting stops when the KMS does.** That is the fail-closed choice, made on
-  purpose: an outage of the witness is an outage of the gate, not a reason to
-  sign without one. Verification does not stop, because it needs only the
-  public key.
-- **Detection, not prevention.** Everything here makes a forged approval
-  *visible* after the fact. The KMS signs what an authorised caller asks.
+- **Minting stops on a KMS signing failure.** A separate logging outage does
+  not necessarily prevent Sign. Reconciliation then reports insufficient
+  coverage, not a clean range. Verification needs only the public key.
+- **Detection is conditional, not prevention.** The KMS signs what an invoke
+  holder asks. An adversary who also controls audit administration can delete
+  unauthorized signing and its coverage evidence without a detectable gap.

@@ -3,7 +3,8 @@
 **Status: offline normalization/model checks implemented; no real adapter has
 passed deployment acceptance. No live cloud calls are made by this checkpoint.**
 This procedure is for a separately authorized test environment, not production
-keys. It does not implement the checkpoint-3 reconciler or infer its verdicts.
+keys. Checkpoint 3 now supplies the operational [reconciler](reconciliation.md);
+these deployment checks remain mandatory and are not fulfilled by offline CI.
 
 ## Run the offline checks
 
@@ -12,9 +13,11 @@ From an installed development checkout:
 ```sh
 python -m pytest -q tests/chokepoint/test_audit_source.py
 python scripts/f11_source_revert_proofs.py
+python -m pytest -q tests/chokepoint/test_reconciliation.py
+python scripts/f11_reconcile_revert_proofs.py
 ```
 
-The ordinary CI matrix also runs both 2a/2b files, rejects skips/failures/errors
+The ordinary CI matrix runs all three 2a/2b/3 files, rejects skips/failures/errors
 and requires each file to contribute test cases. The source tests include an
 empty page with a next token, metadata-only self-certification attempts, a
 copied correlation alias with a different digest, and the controls-both residual.
@@ -42,15 +45,16 @@ configuration or completeness. Unknown formats fail closed until reviewed.
   Independently verify each signature with the pinned public key. Record each
   unique service event ID, key version, authenticated principal and service time.
 - [ ] Invoke Sign outside the gate using invoke-only credentials; confirm an event
-  remains visible to the independent reader. Do not run comparison/verdict logic
-  here; this operation becomes a checkpoint-3 input.
+  remains visible to the independent reader. With independently complete,
+  digest-bound evidence, run the reconciler and require UNEXPLAINED. A
+  metadata-only source must instead return INDETERMINATE, never MATCHED.
 - [ ] Exercise denial, repeated digest with distinct Sign calls, and a successful
   Sign whose reply is lost. A lost caller reply must not erase a service event.
   Missing/redacted outcome or identity must remain unknown/malformed, not success.
 - [ ] Copy a legitimate correlation alias/context label while signing a different
   digest. The normalized observed digest must remain the actual different bytes;
   **the alias must never be accepted as a match or used to fill a missing digest**.
-  Checkpoint 3 must additionally prove that its matcher rejects this pair.
+  Run this through the checkpoint-3 matcher as well; it must reject this pair.
 - [ ] Archive redacted raw events and exact byte conversions, not gate-derived
   substitutes. AWS Sign supplies no digest/signature in the supported native
   event; its result stays metadata-only regardless of `messageType=DIGEST`.
