@@ -6,11 +6,12 @@ runner host reads the HMAC key out of the runner's memory and mints any
 approval it likes, silently. Attacker 1 and 2 never reach the key; root does.
 PIH-2 does not claim to stop root. It moves the key somewhere root cannot
 read it — a KMS or HSM that signs on request and never returns key material —
-so that forging an approval now requires *asking the KMS to sign*, and every
-such request is recorded by the KMS, outside the host insider's control. That
-is **detection, not prevention**: the KMS signs for whoever holds the
-invoke permission, and an insider who holds it still gets a valid signature.
-What they no longer get is silence. See ``docs/key-custody.md``.
+so that forging an approval requires *asking the KMS to sign*. Invoke holders
+still obtain valid signatures. F11 reconciliation detects unexplained signing
+only with independently trusted digest-bound audit history and complete
+coverage. Native AWS CloudTrail is metadata-only and cannot supply that
+detection; GCP can expose the digest; PKCS#11 needs vendor evidence. Controlling
+Sign and audit administration can erase the witness. See ``docs/key-custody.md``.
 
 The port is small on purpose:
 

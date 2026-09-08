@@ -1,10 +1,12 @@
 # Durable authorization records and KMS reconciliation — PROM-F11
 
-Status: **checkpoint 2a merged; checkpoint 2b source input implemented,
-awaiting maintainer review. F11 remains OPEN.**
+Status: **checkpoint 3 operational reconciler implemented; awaiting exact-head
+Linux CI and maintainer acceptance. F11's missing-control implementation is
+complete, not a claim of deployed cloud/HSM acceptance.**
 Baseline: `main` at `3c27cc1dd97f363e85c61555f65d70d533a6d3a2`.
 Checkpoint 2b is based on merged `main` at
-`2ba1d46807b91849d0e8d86ddfd68b2b68b29407`. The reconciler (3) is not implemented.
+`2ba1d46807b91849d0e8d86ddfd68b2b68b29407`. Checkpoint 3 is based on merged 2b
+`353a8081bb5d4fe00390db5305bd6ec8023ef106`.
 Below, “must” specifies the full sprint acceptance requirement; sections 6 and
 8 distinguish implemented boundaries from the remaining design.
 
@@ -361,13 +363,43 @@ MATCHED for a successful signature and are not called forged approvals. Unknown
 KMS outcomes stay INDETERMINATE. A gate refusal is reported as a decision, not
 forced into the four successful-sign comparison categories.
 
-The future CLI emits versioned JSON containing scope, intervals, coverage,
+The implemented `promethyn-reconcile` CLI emits versioned JSON containing scope, intervals, coverage,
 settling policy, gate/source verification evidence, per-record status/reason,
 counts, denied attempts and limitations. Never emit signed envelopes or secrets.
 Any incomplete coverage forces a non-clean top-level result even if other
 intervals produced useful findings; retain those findings. Exit zero only for
 a fully checked range with no discrepancies or indeterminate rows; nonzero
 also for UNWITNESSED (not a forgery label), UNEXPLAINED and INDETERMINATE.
+
+### 5.3 Implemented checkpoint 3 boundary
+
+`reconcile_gate.read_gate` performs one read-only SQLite transaction and reuses
+the 2a decoder only after raw chain/full anchor-history verification. The
+independent auditor supplies `GateCheckpoint`: lineage, exact tip, complete
+history interval, observation and evidence reference. This makes the design's
+gate-completeness requirement explicit: a valid chain or recent timestamp is
+not a coverage certificate. No authority journal writer/schema initializer is
+used for the read. Missing legacy execution bindings, an unanchored tail,
+conflicting mappings and corrupt records refuse. All history is loaded, including
+the pre-start lookback and sign-result references.
+
+`reconciliation.reconcile` consumes that snapshot and the 2b `SignAuditSource`.
+Exact rational conversion of gate floats rounds nanosecond intervals outward;
+selected decisions extend the source query. The gate checkpoint must cover the
+extended start minus `(max TTL + Sign duration + skew)` through extended end plus
+skew. Maturity checks cover the requested range and decision windows, followed
+by explicit source attestation/frontier/gap checks. Unaffected findings survive
+partial coverage, but the top level stays non-clean. Digest-indexed candidates
+still undergo exact binding checks and one-to-one accounting; stored digests,
+aliases and local asserted provenance never replace observed source evidence.
+
+The CLI consumes **independently authenticated offline exports** plus auditor
+pins. SHA-256 transfer hashes are not signatures or source-completeness proofs.
+The API can consume a deployed read adapter, but no live adapter or SDK is bundled
+or claimed validated. This is a faithful implementation of §5, not a change to
+its detection claim. [Operator configuration, JSON schema, exit codes and
+deployment procedure](reconciliation.md) specify the additional trust boundary.
+No execution/issuance protocol, approval encoding, or F2 recovery state is changed.
 
 ## 6. Audit-source port and real-source feasibility
 
@@ -393,13 +425,15 @@ and metadata-only profiles: do not call a digest-rich model “CloudTrail”.
 `SignEvent`, `DigestEvidence`, `Coverage` and `SignRead`. The page collector is
 shared by the offline adapter composition and model. No production signer,
 authority, execution runner, ledger format or approval format changes in 2b.
-There is no reconciliation decision, gate-history join, operator CLI or SDK.
+Checkpoint 2b alone has no reconciliation decision, gate-history join or CLI.
+Checkpoint 3 now supplies those in the separate consumer described in §5.3;
+there is still no SDK or validated live adapter.
 
 Time is **integer UTC epoch nanoseconds** with half-open `[start, end)` intervals;
 boolean, floating/non-finite, negative, reversed and oversized values refuse.
-RFC3339 UTC `Z` timestamps retain all nine fractional digits. Future checkpoint
-3 must convert gate timestamps conservatively and account for clock uncertainty;
-2b does not infer those comparison windows.
+RFC3339 UTC `Z` timestamps retain all nine fractional digits. Checkpoint 3
+converts gate timestamps conservatively and accounts for pinned clock uncertainty;
+the 2b source itself does not infer those comparison windows.
 
 `AuditScope` pins provider, independent source ID, account/project/device domain,
 region and immutable key resource/version. There is deliberately no caller
@@ -593,9 +627,13 @@ exercise faithful semantics. Revalidate after a service schema or policy change.
 
 ## 7. Remaining checkpoints and proof plan
 
-This is the whole-sprint proof plan. Section 8 names the implemented 2a tests;
-source/reconciler tests below remain proposed, **not passing tests today**.
-Every new security test must execute in CI with no skip/dependency escape.
+This table preserves the original design's proposed proof labels. The executed
+2a tests are named in §8; 2b uses `tests/chokepoint/test_audit_source.py`; actual
+checkpoint-3 proof names and deliberate guard reversions are in
+`tests/chokepoint/test_reconciliation.py` and `scripts/f11_reconcile_revert_proofs.py`.
+All three files are required by the per-file no-empty/no-skip CI gate. See the
+[checkpoint-3 report](reviews/PROM-F11-checkpoint-3.md) for observed results,
+not the historical proposed names below.
 
 | Required proof | Proposed test / what must go red when removed |
 |---|---|

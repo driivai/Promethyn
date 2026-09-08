@@ -21,6 +21,10 @@ on:
       - "src/prometheus_protocol/chokepoint/audit_*.py"
       - "tests/chokepoint/test_audit_source.py"
       - "scripts/f11_source_revert_proofs.py"
+      - "src/prometheus_protocol/chokepoint/reconcil*.py"
+      - "src/prometheus_protocol/cli/reconcile.py"
+      - "tests/chokepoint/test_reconciliation.py"
+      - "scripts/f11_reconcile_revert_proofs.py"
       - ".github/workflows/ci.yml"
 
 permissions:
