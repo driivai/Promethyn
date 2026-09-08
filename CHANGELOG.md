@@ -7,7 +7,47 @@ in `spec/invariants.md` is a major version bump.
 
 ## [Unreleased]
 
+### Added
+- **F3: the execution guard's substrate is checked, not assumed
+  (PROM-FIX-A).** The cross-process execution guard is an OS file lock beside
+  the consumed-approval store, which is mutual exclusion only on a local
+  filesystem of one host; that used to be a deployment requirement stated in
+  a document. `ConsumedApprovals` now probes the filesystem behind the store
+  from the kernel's mount table before it creates anything there
+  (`chokepoint/substrate.py`). A network or host-shared filesystem (NFS, CIFS,
+  9p, virtiofs, Ceph, GFS2, sshfs and the like) is refused with `ConfigError`
+  and has no opt-out; a filesystem the probe cannot identify (overlay, generic
+  FUSE, an unknown driver, a platform without a mount table) is refused by
+  default. Two settings on `SECURITY_FIELDS`, each the OR of the runner
+  config, `Config` and the environment: `allow_unverified_substrate`
+  (`PROM_ALLOW_UNVERIFIED_SUBSTRATE`) is the explicit opt-out for the
+  unidentified case, logged as a warning at every construction;
+  `require_verified_substrate` (`PROM_REQUIRE_VERIFIED_SUBSTRATE`) withdraws
+  it. The pair set together is refused as incoherent.
+- **F3: owner identity in every execution intent (PROM-FIX-A).** Each
+  `execute_intent` records the owner's hostname, kernel boot id, machine id
+  and pid (`chokepoint/ownership.py`). A recovering runner that cannot place
+  the recorded owner on its own kernel or its own rebooted machine leaves the
+  intent pending as `owner_unverifiable` — receipt not consulted, no outcome
+  recorded, new approvals for the target refused unspent — instead of
+  declaring it not committed. `reconcile_unfinished(assume_owner_dead=True)`
+  is the operator's explicit assertion for that case; the outcome event
+  records `owner_override`, `owner_basis` and `reconciled_by_host`. Multi-host
+  execution is still unsupported; it now fails closed. Regression coverage in
+  `tests/chokepoint/test_substrate.py` and `test_owner_identity.py`.
+
 ### Fixed
+- **Two false documentation claims corrected (PROM-FIX-A).**
+  `docs/threat-model.md` §2.4 said the chokepoint runner spawns no
+  subprocesses; since #77 an `https://` ledger anchor resolves the log's
+  hostname in a disposable interpreter for every request it makes. The
+  section now enumerates that child (empty environment, no inherited
+  descriptors, `-I`, `[host, port]` only, killed and reaped), cross-references
+  §4, and records why the claim went stale. `docs/key-custody.md` said the
+  ledger can recompute `approval_digest`; nothing persists the digest or the
+  issuance and expiry fields it needs, and no production code calls it, so
+  gate-versus-KMS reconciliation is now documented as not operational (open
+  finding F11), with what would make it so.
 - **F6: whole-request HTTP deadlines.** Provider and anchor requests now share
   one monotonic budget across DNS, all TCP address attempts, proxy CONNECT,
   TLS handshake, request writes, headers, chunk metadata and body reads. DNS

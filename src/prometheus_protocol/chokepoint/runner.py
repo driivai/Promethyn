@@ -12,7 +12,14 @@ Order of enforcement in :meth:`execute` (each step fail-closed):
 1. re-hash the artifact and verify the approval (signature, artifact, target,
    expiry) — a bound-field failure refuses *before* any DB contact;
 2. acquire cross-process execution/recovery ownership and reconcile older
-   unfinished intents; contention or ambiguity blocks without spending approval;
+   unfinished intents; contention or ambiguity blocks without spending approval.
+   Ownership is an OS file lock beside the approval store, which is mutual
+   exclusion only on a local filesystem of one host — so the store's filesystem
+   is probed at construction (``substrate.py``: a network filesystem is refused,
+   an unidentified one is refused unless explicitly opted out of) and every
+   intent records the owner's host identity (``ownership.py``), so a recovering
+   runner that cannot establish the recorded owner is dead leaves the intent
+   pending instead of declaring it not committed;
 3. atomically **spend** the approval's nonce — a second use of the same approval
    loses the race and is refused as a replay;
 4. durably record an execution intent — an unavailable audit sink refuses before
@@ -57,7 +64,20 @@ from prometheus_protocol.chokepoint.approval import (
     MigrationTarget,
     VerifyResult,
 )
+from prometheus_protocol.chokepoint.ownership import (
+    OWNER_LEGACY,
+    OwnerIdentity,
+    assess_owner,
+    local_identity,
+)
 from prometheus_protocol.chokepoint.signer import ApprovalSigner, LocalHmacSigner
+from prometheus_protocol.chokepoint.substrate import (
+    SubstratePolicy,
+    SubstrateReport,
+    enforce_substrate,
+    probe_substrate,
+    resolve_substrate_policy,
+)
 from prometheus_protocol.core.errors import ConfigError
 
 _LOG = logging.getLogger(__name__)
@@ -86,6 +106,9 @@ EXECUTION_UNKNOWN = "execution_unknown"
 EXECUTION_NOT_COMMITTED = "not_committed"
 EXECUTION_COMMITTED = "committed"
 EXECUTION_BUSY = "execution_busy"
+#: A pending intent whose recorded owner is another host (or an owner this
+#: runner cannot place): not reconciled, not declared not-committed.
+OWNER_UNVERIFIABLE = "owner_unverifiable"
 
 RECEIPT_COMMITTED = "committed"
 RECEIPT_NOT_FOUND = "not_found"
@@ -245,6 +268,13 @@ class MigrationRunnerConfig:
     same secret, a different exit route). ``bytes`` renders in full by default,
     so a single ``print(config)`` or a config object caught in a traceback
     published it.
+
+    ``require_verified_substrate`` and ``allow_unverified_substrate`` govern
+    the filesystem behind ``approval_store_path`` (``substrate.py``): the
+    execution guard is an flock there, so a network filesystem is refused
+    outright and an unidentified one is refused unless the opt-out is set —
+    which the requirement withdraws. Each is the OR of this field, ``Config``
+    and its environment variable at build time.
     """
 
     target: DbTarget
@@ -252,6 +282,8 @@ class MigrationRunnerConfig:
     signing_key: bytes | None = field(default=None, repr=False)
     signer: ApprovalSigner | None = field(default=None, repr=False)
     require_external_signer: bool = False
+    require_verified_substrate: bool = False
+    allow_unverified_substrate: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.target, DbTarget):
@@ -282,6 +314,13 @@ class MigrationRunnerConfig:
             self.approval_store_path, (str, os.PathLike)
         ) or not os.fspath(self.approval_store_path):
             raise ValueError("migration runner approval_store_path is required")
+        if self.require_verified_substrate and self.allow_unverified_substrate:
+            raise ConfigError(
+                "require_verified_substrate=True cannot be honoured alongside "
+                "allow_unverified_substrate=True: the opt-out for an unverified "
+                "approval-store substrate would never take effect under the "
+                "requirement. Withdraw one."
+            )
         # Force validation of every canonical target field at configuration time.
         _ = self.target.identity
 
@@ -718,9 +757,25 @@ class ConsumedApprovals:
     One instance is safe to share between threads.  Independent instances and
     processes coordinate through SQLite.  If an instance crosses ``fork()``, it
     detects the PID change and reconnects instead of reusing an inherited SQLite
-    connection."""
+    connection.
 
-    def __init__(self, path: str | Path) -> None:
+    The filesystem behind ``path`` is probed before anything is created there
+    (``substrate.py``): the execution guard is an flock beside this file, which
+    is mutual exclusion only on a local filesystem of one host. A network or
+    host-shared filesystem is refused with ``ConfigError``; a filesystem the
+    probe cannot identify is refused unless ``substrate_policy`` (or, when it
+    is not given, the environment) carries the explicit opt-out, and is then
+    warned about. ``probe`` is injectable so a test can stand in an NFS mount
+    without mounting one."""
+
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        substrate_policy: SubstratePolicy | None = None,
+        env: Mapping[str, str] | None = None,
+        probe: Callable[[str | os.PathLike[str]], SubstrateReport] | None = None,
+    ) -> None:
         raw_path = os.fspath(path)
         if not raw_path or raw_path == ":memory:":
             raise ValueError(
@@ -730,6 +785,17 @@ class ConsumedApprovals:
         if configured_path.is_symlink():
             raise ValueError("consumed-approval store cannot be a symlink")
         durable_path = configured_path.absolute()
+        # Refuse an unsafe or unverified substrate BEFORE creating the directory
+        # or the store there: nothing of the runner's is left on a filesystem
+        # it will not use.
+        if substrate_policy is None:
+            substrate_policy = resolve_substrate_policy(env=env)
+        # Looked up at call time (not bound as a default) so the module-level
+        # probe stays the single seam a test replaces to simulate a mount.
+        self.substrate = (probe if probe is not None else probe_substrate)(
+            durable_path.parent
+        )
+        enforce_substrate(self.substrate, substrate_policy)
         parent_existed = durable_path.parent.exists()
         durable_path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
         if not parent_existed:
@@ -909,6 +975,7 @@ class BrokeredMigrationRunner:
         receipt_lookup: ReceiptLookup | None = None,
         audit: AuditSink,
         clock: Callable[[], float],
+        identity: OwnerIdentity | None = None,
     ) -> None:
         if audit is None:
             raise ValueError("migration runner audit sink is required")
@@ -925,8 +992,16 @@ class BrokeredMigrationRunner:
         self._receipt_lookup = receipt_lookup
         self._audit = audit
         self._clock = clock
+        # Recorded in every execution intent; compared by any runner that later
+        # recovers it (``ownership.py``). Injectable so a test can be "another
+        # host" without one.
+        self._identity = identity if identity is not None else local_identity()
         self._execution_lock = threading.RLock()
         self._reconcile_lock = threading.RLock()
+
+    @property
+    def identity(self) -> OwnerIdentity:
+        return self._identity
 
     def _record(
         self, event: str, subject: str, payload: dict[str, object]
@@ -968,8 +1043,17 @@ class BrokeredMigrationRunner:
             return None
         return payload if isinstance(payload, dict) else None
 
-    def reconcile_unfinished(self) -> tuple[ReconciliationResult, ...]:
-        """Resolve pending intents only under cross-process execution ownership."""
+    def reconcile_unfinished(
+        self, *, assume_owner_dead: bool = False
+    ) -> tuple[ReconciliationResult, ...]:
+        """Resolve pending intents only under cross-process execution ownership.
+
+        An intent whose recorded owner is another host — one whose liveness the
+        execution guard cannot establish — is reported ``owner_unverifiable``
+        and left pending. ``assume_owner_dead=True`` is the operator's assertion
+        that they have established it by other means; it is never implied by
+        the runner's own execution path, and the outcome event records it.
+        """
 
         try:
             with self._consumed.execution_guard() as owned:
@@ -983,7 +1067,7 @@ class BrokeredMigrationRunner:
                             detail="another runner owns execution/recovery",
                         ),
                     )
-                return self._reconcile_owned()
+                return self._reconcile_owned(assume_owner_dead=assume_owner_dead)
         except _OwnershipUnavailable as exc:
             return (
                 ReconciliationResult(
@@ -995,8 +1079,13 @@ class BrokeredMigrationRunner:
                 ),
             )
 
-    def _reconcile_owned(self) -> tuple[ReconciliationResult, ...]:
-        """Caller owns the durable store lock; no earlier live owner can resume.
+    def _reconcile_owned(
+        self, *, assume_owner_dead: bool = False
+    ) -> tuple[ReconciliationResult, ...]:
+        """Caller owns the durable store lock; no earlier live owner ON THIS
+        KERNEL can resume. Whether the recorded owner was on this kernel is
+        what ``assess_owner`` decides per intent; an owner it cannot place is
+        left pending unless the operator asserted ``assume_owner_dead``.
 
         The DB receipt lock separately protects a transaction that outlives a
         dead client. Only after both locks may absence prove non-commit.
@@ -1132,6 +1221,37 @@ class BrokeredMigrationRunner:
                     )
                     continue
 
+                # The F3 race in its multi-host form: this runner's guard proves
+                # nothing about an owner on another kernel. Absence of a receipt
+                # may not be read as non-commit until the owner is placed.
+                owner = assess_owner(payload, self._identity)
+                owner_override = False
+                if not owner.established:
+                    if not assume_owner_dead:
+                        results.append(
+                            ReconciliationResult(
+                                execution_id=execution_id,
+                                intent_seq=intent_seq,
+                                state=OWNER_UNVERIFIABLE,
+                                resolved=False,
+                                detail=owner.detail,
+                            )
+                        )
+                        continue
+                    owner_override = True
+                    _LOG.warning(
+                        "reconciling intent %s on the operator's assertion that "
+                        "its owner is dead (assume_owner_dead=True): %s",
+                        execution_id,
+                        owner.detail,
+                    )
+                elif owner.basis == OWNER_LEGACY:
+                    _LOG.warning(
+                        "reconciling intent %s that carries no owner identity: %s",
+                        execution_id,
+                        owner.detail,
+                    )
+
                 try:
                     receipt = self._receipt_lookup(
                         execution_id, artifact_sha256, self._target
@@ -1177,6 +1297,9 @@ class BrokeredMigrationRunner:
                         "reason": reason,
                         "reconciled": True,
                         "receipt_committed_at": receipt.committed_at,
+                        "owner_basis": owner.basis,
+                        "owner_override": owner_override,
+                        "reconciled_by_host": self._identity.host,
                     },
                 )
                 results.append(
@@ -1337,7 +1460,9 @@ class BrokeredMigrationRunner:
         # STEP 4 — persist a durable execution intent BEFORE touching the DB.
         # If the required audit sink cannot commit the intent, fail closed. The
         # nonce remains spent: an ambiguous audit write must never be made
-        # retryable as a fresh approval.
+        # retryable as a fresh approval. The intent names its owner (host, boot
+        # id, machine id, pid) so a runner that later recovers it can tell
+        # whether its own execution guard says anything about that owner.
         intent = self._record(
             "execute_intent",
             self._target.identity.canonical,
@@ -1346,6 +1471,7 @@ class BrokeredMigrationRunner:
                 "execution_id": execution_id,
                 "artifact_sha256": artifact.sha256,
                 "target": self._target.identity.canonical,
+                **self._identity.as_payload(),
             },
         )
         if not intent.recorded:
@@ -1544,10 +1670,13 @@ def build_migration_runtime(
     authority = ApprovalAuthority(
         signer=resolve_signer(config, settings=settings, env=env)
     )
+    substrate_policy = resolve_substrate_policy(config, settings=settings, env=env)
     runner = BrokeredMigrationRunner(
         authority=authority,
         target=config.target,
-        consumed=ConsumedApprovals(config.approval_store_path),
+        consumed=ConsumedApprovals(
+            config.approval_store_path, substrate_policy=substrate_policy
+        ),
         executor=executor,
         receipt_lookup=receipt_lookup,
         audit=audit,
