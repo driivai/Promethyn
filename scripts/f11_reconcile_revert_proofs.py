@@ -24,6 +24,28 @@ from prometheus_protocol.cli import reconcile as cli
 
 TEST = "tests/chokepoint/test_reconciliation.py"
 
+#: Pinned to the checkpoint-3 report. A runner that executes fewer reversions
+#: than it is pinned to — an entry deleted from ``mutations``, a target that
+#: vanished — would otherwise print a smaller number and exit 0: a mutation
+#: proof that silently ran less than it claims is the void guard this
+#: repository exists to catch. The count is therefore itself an assertion,
+#: checked before the run (list size) and after it (call-phase failures), and
+#: CI fails on either. Change both pins only together with the mutation list.
+EXPECTED_REVERTS = 43
+EXPECTED_CALL_FAILURES = 72
+
+
+def enforce_expected(caught: int, failures: int) -> None:
+    """Refuse a shortfall or an excess against the pinned counts."""
+
+    if caught != EXPECTED_REVERTS or failures != EXPECTED_CALL_FAILURES:
+        raise AssertionError(
+            f"revert proof count drifted: {caught} reverts / {failures} call-phase "
+            f"failures observed, {EXPECTED_REVERTS} / {EXPECTED_CALL_FAILURES} "
+            "pinned. A proof was added, removed or stopped executing; update the "
+            "pin in the same change that changes the mutation list, never alone."
+        )
+
 
 def mutations():
     return [
@@ -491,9 +513,15 @@ def mutations():
 
 
 def main() -> int:
+    plan = mutations()
+    if len(plan) != EXPECTED_REVERTS:
+        raise AssertionError(
+            f"{len(plan)} reversions listed, {EXPECTED_REVERTS} pinned: the mutation "
+            "list changed without its pin (or a proof was dropped); nothing was run"
+        )
     total = 0
     with tempfile.TemporaryDirectory(prefix="prom-f11-3-reverts-") as directory:
-        for name, changes, selection in mutations():
+        for name, changes, selection in plan:
             originals = []
             captured = io.StringIO()
             report = Path(directory) / (name + ".xml")
@@ -541,8 +569,10 @@ def main() -> int:
                 raise AssertionError(f"{name}: no executed call-phase proof")
             total += len(failures)
             print(f"CAUGHT {name}: {len(failures)} call-phase failure(s); {selection}")
+        enforce_expected(len(plan), total)
         print(
-            f"{len(mutations())} reverts caught; {total} call-phase failures; zero errors/skips"
+            f"{len(plan)} reverts caught; {total} call-phase failures; zero errors/skips; "
+            f"pinned {EXPECTED_REVERTS} / {EXPECTED_CALL_FAILURES}"
         )
     return 0
 

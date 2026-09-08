@@ -24,9 +24,29 @@ from prometheus_protocol.chokepoint import audit_source_model as model
 
 TEST = "tests/chokepoint/test_audit_source.py"
 
+#: Pinned to the checkpoint-2b report. A runner that executes fewer reversions
+#: than it is pinned to would print a smaller number and exit 0 — a mutation
+#: proof that silently ran less than it claims. The count is itself an
+#: assertion, checked before the run (list size) and after it (call-phase
+#: failures); CI fails on either. Change both pins only with the mutation list.
+EXPECTED_REVERTS = 15
+EXPECTED_CALL_FAILURES = 21
 
-def main() -> int:
-    mutations = [
+
+def enforce_expected(caught: int, failures: int) -> None:
+    """Refuse a shortfall or an excess against the pinned counts."""
+
+    if caught != EXPECTED_REVERTS or failures != EXPECTED_CALL_FAILURES:
+        raise AssertionError(
+            f"revert proof count drifted: {caught} reverts / {failures} call-phase "
+            f"failures observed, {EXPECTED_REVERTS} / {EXPECTED_CALL_FAILURES} "
+            "pinned. A proof was added, removed or stopped executing; update the "
+            "pin in the same change that changes the mutation list, never alone."
+        )
+
+
+def mutations():
+    return [
         (
             "observed-provenance",
             port.DigestEvidence.__post_init__,
@@ -140,9 +160,18 @@ def main() -> int:
             "administrator_controls_both_residual",
         ),
     ]
+
+
+def main() -> int:
+    plan = mutations()
+    if len(plan) != EXPECTED_REVERTS:
+        raise AssertionError(
+            f"{len(plan)} reversions listed, {EXPECTED_REVERTS} pinned: the mutation "
+            "list changed without its pin (or a proof was dropped); nothing was run"
+        )
     with tempfile.TemporaryDirectory(prefix="prom-f11-2b-reverts-") as directory:
         total_failures = 0
-        for name, function, edits, selection in mutations:
+        for name, function, edits, selection in plan:
             original_code = function.__code__
             source = textwrap.dedent(inspect.getsource(function))
             for old, new in edits:
@@ -186,8 +215,10 @@ def main() -> int:
                 raise AssertionError(f"{name}: no valid executed revert proof")
             total_failures += len(failed)
             print(f"CAUGHT {name}: {len(failed)} call-phase failure(s); {selection}")
+        enforce_expected(len(plan), total_failures)
         print(
-            f"{len(mutations)} reverts caught; {total_failures} call-phase failures; zero errors/skips"
+            f"{len(plan)} reverts caught; {total_failures} call-phase failures; zero "
+            f"errors/skips; pinned {EXPECTED_REVERTS} / {EXPECTED_CALL_FAILURES}"
         )
     return 0
 

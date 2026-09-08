@@ -513,6 +513,22 @@ forged approval was indistinguishable from a real one and nobody was told.
   its coverage under audit administration, with **no** manufactured gap/alert.
   Dishonest authorised gate appends and compromised auditor pins are also
   outside this comparison's trust boundary. See [operator contract](reconciliation.md).
+- **No whole-reconciler wall-clock deadline — an open residual, and a
+  requirement on any adapter.** The reconciler's API is synchronous: it cannot
+  preempt an injected anchor or source reader that blocks, stalls or answers
+  slowly, so no hard wall-clock bound on a whole reconciliation is claimed,
+  and none is proven against a live cloud or HSM. What is bounded refuses
+  rather than truncates: the gate snapshot size
+  (`test_gate_size_bound_refuses_without_truncation`), export and page limits
+  (`test_response_limits_preserve_incompleteness`), and a normalizer that
+  finishes after its deadline does not pass
+  (`test_normalizer_finishing_after_deadline_does_not_pass`). A real adapter
+  must enforce its own I/O and size deadlines before it is accepted
+  (`docs/audit-source-acceptance.md`, "Pin the adapter's response byte/page
+  limits and absolute deadline"); `docs/reconciliation.md` states the same
+  limit to the operator. Recorded here from the checkpoint-3 report
+  (`docs/reviews/PROM-F11-checkpoint-3.md` §2) so that it lives in the threat
+  model, not only in a report.
 - **Fail-closed.** A KMS that is unreachable, denies the call, times out, or
   answers with something that is not a signature under its own public key
   raises a distinct `SignerUnavailable` subclass and mints nothing — proven end

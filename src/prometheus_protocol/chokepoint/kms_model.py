@@ -202,9 +202,14 @@ def unwitnessed_digests(digests: Iterable[str], log: Iterable[SignRequest]) -> l
 def unexplained_records(log: Iterable[SignRequest], digests: Iterable[str]) -> list[SignRequest]:
     """``signed`` records whose digest matches no approval the ledger knows.
 
-    This is the forgery signal: a Sign request that no authorised approval
-    accounts for was made by someone holding the invoke permission for their
-    own purposes. Denied attempts are listed too — an attempt is an event.
+    For a digest-bound log — this model's, or a GCP Data Access log carrying
+    the observed digest — this is the forgery signal: a Sign request that no
+    authorised approval accounts for was made by someone holding the invoke
+    permission for their own purposes. A metadata-only trail cannot feed this
+    comparison at all: native AWS CloudTrail records no digest, so there the
+    operational reconciler answers INDETERMINATE, not detection
+    (``docs/key-custody.md``). Denied attempts are listed too — an attempt is
+    an event.
     """
 
     known = set(digests)

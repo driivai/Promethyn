@@ -1,8 +1,13 @@
 # Durable authorization records and KMS reconciliation — PROM-F11
 
-Status: **checkpoint 3 operational reconciler implemented; awaiting exact-head
-Linux CI and maintainer acceptance. F11's missing-control implementation is
-complete, not a claim of deployed cloud/HSM acceptance.**
+Status: **closed as an open finding by the PROM-F11 close-out (PR #82), on
+exact-head Linux CI: build 3.10/3.11/3.12, live PostgreSQL, isolation,
+privileged cross-user denial, the per-file no-skip F11 gate and both pinned
+mutation runners, all green at `c56e4911fea1cd06a2abb8f3107fe51ddc91ed23`
+(see [close-out record](reviews/PROM-F11-close-out.md)); subject to the
+maintainer's read of that PR. F11's missing-control implementation is
+complete. This is not a claim of deployed cloud/HSM acceptance, which remains
+per [audit-source-acceptance.md](audit-source-acceptance.md).**
 Baseline: `main` at `3c27cc1dd97f363e85c61555f65d70d533a6d3a2`.
 Checkpoint 2b is based on merged `main` at
 `2ba1d46807b91849d0e8d86ddfd68b2b68b29407`. Checkpoint 3 is based on merged 2b
@@ -633,7 +638,10 @@ checkpoint-3 proof names and deliberate guard reversions are in
 `tests/chokepoint/test_reconciliation.py` and `scripts/f11_reconcile_revert_proofs.py`.
 All three files are required by the per-file no-empty/no-skip CI gate. See the
 [checkpoint-3 report](reviews/PROM-F11-checkpoint-3.md) for observed results,
-not the historical proposed names below.
+not the historical proposed names below. Every "detected" row assumes the
+digest-bound profile; with metadata-only evidence (native AWS CloudTrail) the
+outcome is INDETERMINATE, not detection (§5.3, §6). Where the implemented test
+name differs from the proposal, the implemented name is given in the row.
 
 | Required proof | Proposed test / what must go red when removed |
 |---|---|
@@ -641,18 +649,18 @@ not the historical proposed names below.
 | Disk-only digest reconstruction after restart | `test_digest_recomputed_from_disk`: drop issuance/expiry, change float encoding or trust the stored digest. |
 | Refusals have durable reasons | `test_runtime_persists_refusals`: remove refusal append; include FAIL, unavailable and non-authoritative cases. |
 | Write/anchor failure: zero Sign calls, no approval, no executor/DB mutation | `test_record_failure_stops_real_runtime`: bypass append failure through runtime authority and runner composition. |
-| Normal batch, zero false unexplained events | `test_normal_batch_matches`: break any binding join or one-to-one accounting; include restart and concurrent issuance. |
-| Invoke-only forgery is detected | `test_invoke_only_sign_is_unexplained`: omit the source-to-gate direction or accept refused decisions as explanations. |
-| Crash after record before Sign is not forgery | `test_record_then_crash_is_unwitnessed`: reverse ordering or require a signed-result row as the only explanation. |
+| Normal batch, zero false unexplained events | `test_normal_batch_matches` (implemented as `test_normal_concurrent_batch_across_restart_zero_false_positives`): break any binding join or one-to-one accounting; include restart and concurrent issuance. |
+| Invoke-only forgery is detected (digest-bound profile only) | `test_invoke_only_sign_is_unexplained` (implemented as `test_invoke_only_forgery_detected`): omit the source-to-gate direction or accept refused decisions as explanations. |
+| Crash after record before Sign is not forgery | `test_record_then_crash_is_unwitnessed` (implemented as `test_pre_sign_crash_unwitnessed_not_forgery`): reverse ordering or require a signed-result row as the only explanation. |
 | Lost Sign response still has an explanation | `test_lost_sign_reply_has_durable_decision`: erase the pre-Sign evidence or assume timeout means no Sign. |
-| Coverage/read/verification failure is distinct | `test_source_gap_is_indeterminate`: treat failed reads, pages, retention or malformed history as an empty log. |
-| Settling before and after boundary | `test_settling_defers_unwitnessed`: remove maturity checks; after maturity require complete coverage as well. |
-| Binding mismatch is never a proximity match | `test_digest_or_principal_mismatch_is_unexplained`: join by key/time/alias alone. |
+| Coverage/read/verification failure is distinct | `test_source_gap_is_indeterminate` (implemented as `test_source_contract_refusals`, `test_useful_findings_retained_with_gap_elsewhere` and 2b's `test_retention_boundary_and_reported_gap`): treat failed reads, pages, retention or malformed history as an empty log. |
+| Settling before and after boundary | `test_settling_defers_unwitnessed` (implemented as `test_settling_boundary_requires_completeness`): remove maturity checks; after maturity require complete coverage as well. |
+| Binding mismatch is never a proximity match | `test_digest_or_principal_mismatch_is_unexplained` (implemented as `test_binding_mismatch_never_proximity_matches`): join by key/time/alias alone. |
 | Canonical bytes are unambiguous | `test_authorization_record_encoding_vectors`: remove length prefixes, field validation or stable order; test delimiter/Unicode/null/float edge cases. |
-| Retries/duplicates do not launder extra signatures | `test_distinct_sign_events_are_not_deduplicated_by_digest`: use digest sets or enable automatic Sign retry. |
-| Native metadata-only source cannot claim MATCHED | `test_missing_digest_is_indeterminate`: populate missing digest from gate data or accept a request-ID assertion. |
-| F2 UNKNOWN remains pending even when signing matches | `test_matched_sign_does_not_resolve_execution`: derive a database outcome from KMS evidence. |
-| Controls-both residual is demonstrably NOT detected | `test_invoke_and_audit_control_is_not_detected`: remove unauthorized Sign history under administrator capability without leaving a synthetic gap; assert no forgery signal and document why. |
+| Retries/duplicates do not launder extra signatures | `test_distinct_sign_events_are_not_deduplicated_by_digest` (implemented as `test_distinct_ids_not_digest_deduplicated_at_consumer`, `test_excess_distinct_real_signs_unexplained` and 2b's `test_duplicates_collapse_by_source_id_not_digest`): use digest sets or enable automatic Sign retry. |
+| Native metadata-only source cannot claim MATCHED | `test_missing_digest_is_indeterminate` (implemented as `test_metadata_only_end_to_end_never_self_certifies`, `test_absent_or_locally_asserted_digest_not_matched` and `test_empty_metadata_only_range_not_clean`): populate missing digest from gate data or accept a request-ID assertion. |
+| F2 UNKNOWN remains pending even when signing matches | `test_matched_sign_does_not_resolve_execution` (implemented as `test_matched_sign_never_resolves_unknown_or_releases_nonce`): derive a database outcome from KMS evidence. |
+| Controls-both residual is demonstrably NOT detected | `test_invoke_and_audit_control_is_not_detected` (implemented as `test_controls_both_residual_honestly_not_detected` and 2b's `test_administrator_controls_both_residual_is_clean_looking`): remove unauthorized Sign history under administrator capability without leaving a synthetic gap; assert no forgery signal and document why. |
 
 Checkpoint 2 delivers persistence, production wiring, disk/fail-closed proofs,
 the source port/model and mapping validation; then stops for review.
