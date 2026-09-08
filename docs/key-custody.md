@@ -142,30 +142,24 @@ helpers compare a set of approval digests with such a log:
   forgery signal**: someone holding the invoke permission asked for a
   signature the gate never authorised.
 
-**What is not true today: the ledger cannot supply `approval_digests`.** An
-earlier version of this section called the digest "a value the ledger can
-recompute". It cannot. Nothing in the shipped code persists an approval's
-digest, its issuance time or its expiry: the runner's audit events carry
-`execution_id`, `artifact_sha256`, the canonical target and (since
-PROM-FIX-A) the owner's host identity; the consumed-approval store holds the
-nonce and the time it was spent; and no production call site invokes
-`approval_digest` at all — its only callers are the tests of the in-memory
-KMS model (`tests/chokepoint/test_key_custody.py`), which is also where the
-digests in those tests come from. So an auditor holding a KMS trail and this
-ledger cannot run the reconciliation above from the ledger. **Automated
-gate-versus-KMS reconciliation is not operational in the shipped code.** The
-helpers exist and are proven against the model; the record they would run
-against in production does not. This is open finding **F11** of the
-independent review, and this document stops claiming otherwise.
+**F11 checkpoint 2a: persistence exists; automated reconciliation does not.**
+The earlier claim that the ledger could reconstruct the digest was false at
+PROM-FIX-A. `build_migration_runtime` now requires a private durable ledger and
+explicit authorization context. Its `RecordedApprovalAuthority` writes a full
+decision **before Sign** and a separate result before delivering an approval.
+The decision persists exact issuance/expiry and binding fields; runner events
+also carry unsigned binding evidence. A fresh-process test reconstructs the
+digest from disk alone. See [authorization record §8](authorization-record.md#8-implemented-checkpoint-2a-boundary)
+for code, proof names, storage requirements and limits.
 
-**What would make it operational** — tracked as F11, not built in
-PROM-FIX-A: a durable authorization record, appended to the audit chain when
-the gate mints an approval, binding the artifact hash, the canonical target,
-the approval's digest (or its whole envelope), the signer's scheme and key id,
-and the issuance and expiry times. With that record in the anchored ledger
-(§3 of the threat model: the runner host cannot rewrite it unnoticed),
-`approval_digests` can be read from the ledger, and the two helpers above run
-against it and the KMS trail with no input an auditor has to collect by hand.
+**F11 remains open.** The KMS audit-source port/model, coverage/settling-aware
+reconciler and operator CLI are not implemented at this checkpoint. The
+set-based helpers above are not that control. AWS CloudTrail's documented
+Sign event does **not** expose the signed digest; key/caller/time proximity
+cannot substitute for it. GCP documents a digest field; PKCS#11 audit access
+and fields are vendor-specific. The [source mapping](authorization-record.md)
+states what each source can and cannot support. No real cloud adapter has
+been validated by these local-model proofs.
 
 The KMS log stands in for the real audit trail. What makes it a witness is
 that the runner host cannot write to it: CloudTrail and Cloud Audit Logs are

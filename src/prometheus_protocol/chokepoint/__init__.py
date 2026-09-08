@@ -21,6 +21,15 @@ from prometheus_protocol.chokepoint.approval import (
     approval_digest,
     artifact_hash,
 )
+from prometheus_protocol.chokepoint.authorization_journal import (
+    AuthorizationJournal,
+    AuthorizationReceipt,
+    AuthorizationUnavailable,
+)
+from prometheus_protocol.chokepoint.authorization_record import (
+    AuthorizationContext,
+    AuthorizationRecord,
+)
 from prometheus_protocol.chokepoint.kms_model import (
     MemoryKms,
     SignRequest,
@@ -147,6 +156,11 @@ __all__ = [
     "VERIFIED_SUBSTRATE_REQUIRED_ENV",
     "Approval",
     "ApprovalAuthority",
+    "AuthorizationContext",
+    "AuthorizationRecord",
+    "AuthorizationJournal",
+    "AuthorizationReceipt",
+    "AuthorizationUnavailable",
     "ApprovalSigner",
     "BrokeredMigrationRunner",
     "ConsumedApprovals",

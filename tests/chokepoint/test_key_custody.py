@@ -29,12 +29,14 @@ import hashlib
 import logging
 import pickle
 import re
+import sys
 from pathlib import Path
 
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+from f11_support import authorization_context
 
 from prometheus_protocol.chokepoint import (
     ARTIFACT_MISMATCH,
@@ -69,9 +71,13 @@ from prometheus_protocol.chokepoint import (
     unwitnessed_digests,
 )
 from prometheus_protocol.chokepoint.approval import _canonical
+from prometheus_protocol.chokepoint.authorization_journal import (
+    AuthorizationUnavailable,
+)
 from prometheus_protocol.core.config import SECURITY_FIELDS, Config
 from prometheus_protocol.core.errors import ConfigError
 from prometheus_protocol.core.models import Judgment, Verdict
+from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
 
 REPO = Path(__file__).resolve().parents[2]
 KEY_ID = "prod/approvals"
@@ -147,8 +153,10 @@ def _runtime(tmp_path, signer, *, executor=None, require=False, env=None, settin
             approval_store_path=tmp_path / "consumed.db",
             signer=signer,
             require_external_signer=require,
+            allow_unverified_substrate=sys.platform != "linux",
         ),
-        audit=_Audit(),
+        audit=SqliteLedger.private(tmp_path / "authorization.db"),
+        authorization=authorization_context(signer),
         executor=executor if executor is not None else _SpyExecutor(),
         receipt_lookup=lambda execution_id, artifact_sha256, bound: ReceiptStatus(RECEIPT_NOT_FOUND),
         clock=lambda: NOW + 1,
@@ -222,7 +230,7 @@ def test_sign_and_verify_round_trip_through_the_kms(tmp_path):
     runtime.close()
 
 
-def test_every_binding_still_blocks_with_the_external_signer(tmp_path):
+def test_every_binding_still_blocks_with_the_external_signer(tmp_path, monkeypatch):
     """Only the primitive moved: artifact, target, expiry and single use are
     the same checks, proven by the same refusals, DB untouched each time."""
 
@@ -233,25 +241,27 @@ def test_every_binding_still_blocks_with_the_external_signer(tmp_path):
     artifact = _artifact()
 
     swapped = runner.execute(
-        approval=authority.mint(artifact_sha256=artifact.sha256, target=_target(), now=NOW),
+        approval=authority.authorize(_pass(), artifact=artifact, target=_target(), now=NOW),
         artifact=_artifact("DROP TABLE users;"),
     )
     assert swapped.refused and swapped.reason == ARTIFACT_MISMATCH
 
     other = dataclasses.replace(_target(), dbname="otherdb")
     wrong_target = runner.execute(
-        approval=authority.mint(artifact_sha256=artifact.sha256, target=other, now=NOW),
+        approval=authority.authorize(_pass(), artifact=artifact, target=other, now=NOW),
         artifact=artifact,
     )
     assert wrong_target.refused and wrong_target.reason == TARGET_MISMATCH
 
-    stale = authority.mint(artifact_sha256=artifact.sha256, target=_target(), now=NOW - 1000)
-    expired = runner.execute(approval=stale, artifact=artifact)
+    stale = authority.authorize(_pass(), artifact=artifact, target=_target(), now=NOW)
+    with monkeypatch.context() as m:
+        m.setattr(runner, "_clock", lambda: NOW + 1000)
+        expired = runner.execute(approval=stale, artifact=artifact)
     assert expired.refused and expired.reason == EXPIRED
 
     assert executor.calls == [], "a refusal reached the database"
 
-    approval = authority.mint(artifact_sha256=artifact.sha256, target=_target(), now=NOW)
+    approval = authority.authorize(_pass(), artifact=artifact, target=_target(), now=NOW)
     assert runner.execute(approval=approval, artifact=artifact).executed
     replay = runner.execute(approval=approval, artifact=artifact)
     assert replay.refused and replay.reason == REPLAY
@@ -554,7 +564,7 @@ def test_a_kms_failure_mints_nothing_and_the_db_is_untouched(tmp_path, fault, ex
     with pytest.raises(expected) as raised:
         runtime.authority.authorize(_pass(), artifact=artifact, target=_target(), now=NOW)
     assert isinstance(raised.value, SignerUnavailable) and raised.value.kind == expected.kind
-    with pytest.raises(expected):
+    with pytest.raises(AuthorizationUnavailable, match="authorize"):
         runtime.authority.mint(artifact_sha256=artifact.sha256, target=_target(), now=NOW)
     assert executor.calls == [], "the migration ran with no approval"
 
@@ -640,10 +650,10 @@ def test_no_silent_fallback_to_a_local_key(tmp_path, monkeypatch):
 
     kms = _kms()
     runtime = _runtime(tmp_path, KmsSigner(kms, key_id=KEY_ID))
-    runtime.authority.mint(artifact_sha256="ab" * 32, target=_target(), now=NOW)
+    runtime.authority.authorize(_pass(), artifact=_artifact(), target=_target(), now=NOW)
     kms.fault = "unreachable"
     with pytest.raises(SignerUnreachable):
-        runtime.authority.mint(artifact_sha256="ab" * 32, target=_target(), now=NOW)
+        runtime.authority.authorize(_pass(), artifact=_artifact(), target=_target(), now=NOW)
     assert calls == [], "a local HMAC signer was used under a KMS configuration"
     assert not [v for v in _walk(runtime.authority) if isinstance(v, LocalHmacSigner)]
     assert isinstance(runtime.authority.signer, KmsSigner)
@@ -742,9 +752,10 @@ def test_the_requirement_refuses_a_local_key_as_cannot_be_honoured(tmp_path):
             signing_key=b"k" * 32, require_external_signer=True,
         )
     local = MigrationRunnerConfig(
-        target=_db_target(), approval_store_path=tmp_path / "c.db", signing_key=b"k" * 32
+        target=_db_target(), approval_store_path=tmp_path / "c.db", signing_key=b"k" * 32,
+        allow_unverified_substrate=sys.platform != "linux",
     )
-    common = dict(audit=_Audit(), executor=_SpyExecutor(), clock=lambda: NOW,
+    common = dict(audit=SqliteLedger.private(tmp_path / "authorization.db"), executor=_SpyExecutor(), clock=lambda: NOW,
                   receipt_lookup=lambda *a: ReceiptStatus(RECEIPT_NOT_FOUND))
     # The environment alone raises the requirement …
     with pytest.raises(ConfigError, match="required"):
@@ -754,11 +765,14 @@ def test_the_requirement_refuses_a_local_key_as_cannot_be_honoured(tmp_path):
         build_migration_runtime(local, env={}, settings=Config(require_external_signer=True), **common)
     # With an external signer the requirement is met.
     kms = _kms()
+    signer = KmsSigner(kms, key_id=KEY_ID)
     runtime = build_migration_runtime(
         MigrationRunnerConfig(
             target=_db_target(), approval_store_path=tmp_path / "d.db",
-            signer=KmsSigner(kms, key_id=KEY_ID), require_external_signer=True,
+            signer=signer, require_external_signer=True,
+            allow_unverified_substrate=sys.platform != "linux",
         ),
+        authorization=authorization_context(signer),
         env={EXTERNAL_SIGNER_REQUIRED_ENV: "1"}, settings=Config(require_external_signer=True), **common,
     )
     assert runtime.authority.external
@@ -773,11 +787,13 @@ def test_the_requirement_is_a_declared_security_field():
 
 def test_a_local_signer_is_warned_about_as_non_protecting(tmp_path, caplog):
     local = MigrationRunnerConfig(
-        target=_db_target(), approval_store_path=tmp_path / "c.db", signing_key=b"k" * 32
+        target=_db_target(), approval_store_path=tmp_path / "c.db", signing_key=b"k" * 32,
+        allow_unverified_substrate=sys.platform != "linux",
     )
     with caplog.at_level(logging.WARNING, logger="prometheus_protocol.chokepoint.runner"):
         runtime = build_migration_runtime(
-            local, audit=_Audit(), executor=_SpyExecutor(), clock=lambda: NOW,
+            local, audit=SqliteLedger.private(tmp_path / "authorization.db"), executor=_SpyExecutor(), clock=lambda: NOW,
+            authorization=authorization_context(LocalHmacSigner(b"k" * 32)),
             receipt_lookup=lambda *a: ReceiptStatus(RECEIPT_NOT_FOUND), env={},
         )
     runtime.close()

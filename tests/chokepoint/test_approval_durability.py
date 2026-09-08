@@ -5,10 +5,12 @@ from __future__ import annotations
 import multiprocessing
 import os
 import sqlite3
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
+from f11_support import authorization_context
 
 from prometheus_protocol.chokepoint import (
     AUDIT_OUTCOME_UNAVAILABLE,
@@ -36,6 +38,9 @@ from prometheus_protocol.chokepoint import (
     postgres_executor,
     postgres_receipt_lookup,
 )
+from prometheus_protocol.chokepoint.signer import LocalHmacSigner
+from prometheus_protocol.core.models import Judgment, Verdict
+from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
 
 _KEY = b"durability-test-key-is-32-bytes!!"
 
@@ -340,17 +345,21 @@ def test_production_runtime_uses_stable_key_store_and_required_audit(tmp_path):
         target=target,
         signing_key=_KEY,
         approval_store_path=tmp_path / "production.db",
+        allow_unverified_substrate=sys.platform != "linux",
     )
-    audit = _Audit()
+    audit = SqliteLedger.private(tmp_path / "authorization.db")
+    context = authorization_context(LocalHmacSigner(_KEY))
     first = build_migration_runtime(
         config,
         audit=audit,
+        authorization=context,
         executor=lambda sql, bound, execution_id, artifact_sha256: (True, "ok"),
         receipt_lookup=_no_receipt,
         clock=lambda: 1_001.0,
     )
-    approval = first.authority.mint(
-        artifact_sha256=artifact.sha256, target=target.identity, now=1_000.0
+    approval = first.authority.authorize(
+        Judgment(verdict=Verdict.PASS, confidence=1, authoritative=True),
+        artifact=artifact, target=target.identity, now=1_000.0
     )
     assert first.runner.execute(approval=approval, artifact=artifact).executed
     first.close()
@@ -358,6 +367,7 @@ def test_production_runtime_uses_stable_key_store_and_required_audit(tmp_path):
     second = build_migration_runtime(
         config,
         audit=audit,
+        authorization=context,
         executor=lambda sql, bound, execution_id, artifact_sha256: (True, "ok"),
         receipt_lookup=_no_receipt,
         clock=lambda: 1_002.0,
@@ -365,13 +375,16 @@ def test_production_runtime_uses_stable_key_store_and_required_audit(tmp_path):
     try:
         replay = second.runner.execute(approval=approval, artifact=artifact)
         assert replay.refused and replay.reason == REPLAY
-        assert [event["event"] for event in audit.events] == [
+        assert [event["event"] for event in audit.chained_events()] == [
+            "authorization_decision",
+            "authorization_sign_result",
             "execute_intent",
             "execute_outcome",
             "refuse",
         ]
     finally:
         second.close()
+        audit.close()
 
     with pytest.raises(ValueError, match="audit sink is required"):
         build_migration_runtime(config, audit=None)  # type: ignore[arg-type]

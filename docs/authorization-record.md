@@ -1,10 +1,11 @@
 # Durable authorization records and KMS reconciliation — PROM-F11
 
-Status: **checkpoint 1, proposed design only; stop for maintainer review.**
+Status: **checkpoint 1 approved; checkpoint 2a persistence boundary implemented,
+awaiting maintainer review.**
 Baseline: `main` at `3c27cc1dd97f363e85c61555f65d70d533a6d3a2`.
-No persistence, signer wiring, audit adapter, reconciler or new tests are
-implemented by this document. F11 remains open. Below, “must” specifies an
-acceptance requirement for checkpoints 2 and 3, not an existing guarantee.
+The audit-source port/model (2b) and reconciler (3) are not implemented. F11
+remains open. Below, “must” specifies the full sprint acceptance requirement;
+section 8 distinguishes the implemented boundary from the remaining design.
 
 ## 1. Honest limits first
 
@@ -480,7 +481,8 @@ exercise faithful semantics. Revalidate after a service schema or policy change.
 
 ## 7. Remaining checkpoints and proof plan
 
-These are proposed test names and revert targets, **not passing tests today**.
+This is the whole-sprint proof plan. Section 8 names the implemented 2a tests;
+source/reconciler tests below remain proposed, **not passing tests today**.
 Every new security test must execute in CI with no skip/dependency escape.
 
 | Required proof | Proposed test / what must go red when removed |
@@ -510,4 +512,99 @@ traceable to implementation. Only then remove F11 from the open list, retaining
 the native-source limitations and controls-both residual. Full-suite and
 voidguard results must distinguish passing, skipped, unavailable and existing
 findings; neither report-only scanning nor unavailable infrastructure means
-“green.” No implementation proceeds past this checkpoint without review.
+“green.” Checkpoint 2 is split at the persistence boundary: stop at 2a before
+implementing 2b, then stop at 2b before implementing 3.
+
+## 8. Implemented checkpoint 2a boundary
+
+`runner.build_migration_runtime` now requires an explicit `AuthorizationContext`
+and a private file-backed `SqliteLedger`. It returns `RecordedApprovalAuthority`;
+its public `mint` refuses. `authorize` snapshots trusted metadata, validates the
+request, writes the decision through `AuthorizationJournal`, confirms a bound
+append receipt, checks time and signer identity again, and only then calls Sign.
+It writes a separate sign-result before returning the approval. Refusals return
+normally only after their record is durable. A sink/anchor error stops issuance;
+it does not authorize fallback to an unrecorded signer or alternate store.
+
+Decisions and results live in `audit_chain`, not the consumed-nonce table.
+Each journal operation opens a fresh connection, uses `BEGIN IMMEDIATE` for
+uniqueness/append, requires SQLite `synchronous=FULL`, confirms the committed
+row and chain, fsyncs the parent directory, and requires acknowledgment from
+any configured anchor. An append receipt's `ledger_id` is the first chain
+entry's hash (lineage identity, not a deployment name). The existing anchor
+requirement is the OR of `settings.require_ledger_anchor` and
+`PROM_REQUIRE_LEDGER_ANCHOR`; an ordinary file anchor cannot satisfy it.
+
+Create new storage with `SqliteLedger.private(path, tip_anchor=...)`. Its parent
+must be gate-owned and private (no group/other permissions); the file must be
+gate-owned, regular, singly linked and private. The factory uses 0700/0600 for
+new storage and refuses existing insecure paths without chmoding them. Journal
+operations recheck permissions and inode identity. Signed results contain a
+bearer signature until expiry: do not expose this database, backups or raw
+payloads to the agent. The demo prints only event headers and tampers with a
+copy for illustration, not its durable journal.
+
+`AuthorizationContext` is trusted entry-point configuration, **not** proof that
+authentication or policy evaluation occurred. Callers supply pinned policy,
+gate, requester and resolved signer identities. The authority checks the
+signer's scheme, key ID, public-key fingerprint and (for `KmsSigner`) configured
+caller against that snapshot. Provider scope/resource mapping remains the real
+adapter/deployment's responsibility; no cloud adapter or live identity probe is
+claimed here. The aggregate context is limited to 16 KiB in JSON to leave room
+for a bounded refusal. An oversized request is refused without truncating its
+target into a different identity; unavailable binding fields become null.
+An authority is scoped to that requester: do not share one requester context
+between differently authenticated callers. Creating or changing a context is
+the trusted application's responsibility, not an option given to the agent.
+
+Runner intent, refusal and outcome events now include the unsigned full
+`approval_binding`, including exact float-hex issuance/expiry. They can also
+describe externally presented approvals: the runner does not fabricate a gate
+authorization record for them. Recovery carries the binding forward; malformed
+binding stops recovery, and legacy missing binding remains null, not invented
+evidence. Signing success still does not turn F2 `execution_unknown` into a
+database commit.
+
+`AuthorizationJournal.records()` checks chain/anchor integrity and reconstructs
+immutable decisions from disk. It rejects duplicate IDs/nonces, orphan or
+duplicate results, invalid result ordering, timestamps or envelope bindings.
+The stored digest and preimage must agree with recomputation from structured
+fields. This is a writer-side checked loader (opens SQLite with schema support),
+**not** the future read-only reconciliation CLI. Result-envelope parsing is not
+independent signature verification or an audit-source MATCHED verdict.
+
+Load-bearing proofs in `tests/chokepoint/test_authorization_record.py`:
+
+- `test_runtime_records_before_sign` opens the actual SQLite file inside the
+  model KMS Sign call and checks that the durable decision explains its digest;
+  runner intent/outcome bindings independently reproduce that digest.
+- `test_digest_recomputed_from_disk` closes the runtime and ledger, spawns a
+  fresh interpreter with only the database path, and compares its reconstructed
+  digest against `approval_digest(live_approval)` calculated before shutdown.
+- `test_record_failure_stops_real_runtime` covers failed writes, false/wrong
+  receipts and failure after local commit: zero KMS invocations, no approval,
+  no executor call. The separate database positive-control test proves zero
+  rows changed on failure and an actual row insertion on successful execution.
+- Refusal, unavailable-verifier, invalid-expiry, oversized-request, anchor
+  failure, lost-Sign-reply and failed-result tests distinguish every partial
+  boundary without treating inability to record as a recorded refusal.
+- Real process termination after the decision, four-process issuance and
+  threaded issuance check persistent history. Permission and signer-principal
+  changes are refused. Encoding vectors pin the record's domain, order,
+  prefixes, Unicode distinction and exact times; malformed records fail closed.
+
+The CI matrix has a dedicated persistence step that requires at least one test
+and zero skipped/failed/error cases; all new proofs are also in the full suite.
+These tests use an explicit unverified-substrate opt-out on macOS only; Linux
+uses the real probe. This proves persistence behavior, not macOS isolation or
+multi-host correctness. Each operation currently verifies the full history:
+cost grows with ledger size and may exhaust a short approval interval. Refuse
+on expiry; do not bypass verification. Indexing/streaming, real-source coverage,
+retention proof and reconciliation remain separate work. There is no atomic
+transaction spanning SQLite, its anchor, KMS and PostgreSQL.
+
+The fresh-connection guarantee covers issuance journal operations. The generic
+caller-owned `SqliteLedger` passed to the execution runner retains SQLite's
+thread affinity; construct execution runner/ledger pairs in their owning worker.
+See [checkpoint 2a report](reviews/PROM-F11-checkpoint-2a.md) for observed tests,
+mutation/revert evidence, remaining failures and publication status.

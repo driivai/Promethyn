@@ -19,6 +19,7 @@ import logging
 import sys
 
 import pytest
+from f11_support import authorization_context
 
 from prometheus_protocol.chokepoint import (
     SUBSTRATE_SAFE,
@@ -37,6 +38,7 @@ from prometheus_protocol.chokepoint import (
     resolve_substrate_policy,
 )
 from prometheus_protocol.chokepoint import substrate as substrate_module
+from prometheus_protocol.chokepoint.signer import LocalHmacSigner
 from prometheus_protocol.core.config import SECURITY_FIELDS, Config
 from prometheus_protocol.core.errors import ConfigError
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
@@ -316,14 +318,16 @@ def test_both_settings_are_declared_security_fields_read_from_the_environment():
 
 def _build(tmp_path, monkeypatch, verdict: str, fs_type: str, **config_flags):
     monkeypatch.setattr("prometheus_protocol.chokepoint.runner.probe_substrate", probe_returning(report(verdict, fs_type)))
+    monkeypatch.setattr("prometheus_protocol.chokepoint.authorization_journal.probe_substrate", probe_returning(report(verdict, fs_type)))
     calls: list[object] = []
-    ledger = SqliteLedger(tmp_path / "audit.db")
+    ledger = SqliteLedger.private(tmp_path / "audit.db")
     config = MigrationRunnerConfig(
         target=target(), signing_key=KEY, approval_store_path=tmp_path / "chokepoint" / "store.db",
     )
     settings = Config(**config_flags) if config_flags else None
     return ledger, calls, lambda: build_migration_runtime(
-        config, audit=ledger, executor=lambda *a: calls.append(a), receipt_lookup=lambda *a: calls.append(a),
+        config, audit=ledger, authorization=authorization_context(LocalHmacSigner(KEY)),
+        executor=lambda *a: calls.append(a), receipt_lookup=lambda *a: calls.append(a),
         settings=settings, env={},
     )
 

@@ -64,12 +64,19 @@ from prometheus_protocol.chokepoint.approval import (
     MigrationTarget,
     VerifyResult,
 )
+from prometheus_protocol.chokepoint.authorization_journal import AuthorizationJournal
+from prometheus_protocol.chokepoint.authorization_record import (
+    AuthorizationContext,
+    execution_evidence,
+    recovered_evidence,
+)
 from prometheus_protocol.chokepoint.ownership import (
     OWNER_LEGACY,
     OwnerIdentity,
     assess_owner,
     local_identity,
 )
+from prometheus_protocol.chokepoint.recorded_authority import RecordedApprovalAuthority
 from prometheus_protocol.chokepoint.signer import ApprovalSigner, LocalHmacSigner
 from prometheus_protocol.chokepoint.substrate import (
     SubstratePolicy,
@@ -1280,6 +1287,14 @@ class BrokeredMigrationRunner:
                     continue
 
                 committed = receipt.state == RECEIPT_COMMITTED
+                try:
+                    evidence = recovered_evidence(payload)
+                except (TypeError, ValueError, OverflowError):
+                    results.append(ReconciliationResult(
+                        execution_id=execution_id, intent_seq=intent_seq, state="invalid_intent",
+                        resolved=False, audit_recorded=False, detail="invalid persisted approval binding",
+                    ))
+                    continue
                 reason = RECONCILED_COMMITTED if committed else RECONCILED_NOT_COMMITTED
                 outcome = self._record(
                     "execute_outcome",
@@ -1296,6 +1311,7 @@ class BrokeredMigrationRunner:
                         else EXECUTION_NOT_COMMITTED,
                         "reason": reason,
                         "reconciled": True,
+                        **evidence,
                         "receipt_committed_at": receipt.committed_at,
                         "owner_basis": owner.basis,
                         "owner_override": owner_override,
@@ -1341,6 +1357,7 @@ class BrokeredMigrationRunner:
                 self._target.identity.canonical,
                 {
                     "phase": "verify",
+                    **execution_evidence(approval),
                     "reason": verdict.reason,
                     "artifact_sha256": approval.artifact_sha256,
                 },
@@ -1356,11 +1373,16 @@ class BrokeredMigrationRunner:
         try:
             with self._consumed.execution_guard() as owned:
                 if not owned:
+                    audit = self._record("refuse", self._target.identity.canonical, {
+                        "phase": "ownership", "reason": RECONCILIATION_REQUIRED,
+                        **execution_evidence(approval),
+                    })
                     return MigrationResult(
                         False,
                         True,
                         RECONCILIATION_REQUIRED,
                         "another runner owns execution/recovery; approval remains unspent",
+                        audit_recorded=audit.recorded,
                     )
                 return self._execute_owned(approval=approval, artifact=artifact)
         except _OwnershipUnavailable as exc:
@@ -1369,6 +1391,7 @@ class BrokeredMigrationRunner:
                 self._target.identity.canonical,
                 {
                     "phase": "ownership",
+                    **execution_evidence(approval),
                     "reason": STORE_UNAVAILABLE,
                     "error_type": type(exc).__name__,
                 },
@@ -1395,6 +1418,7 @@ class BrokeredMigrationRunner:
                 self._target.identity.canonical,
                 {
                     "phase": "reconcile",
+                    **execution_evidence(approval),
                     "reason": RECONCILIATION_REQUIRED,
                     "execution_id": unresolved.execution_id,
                     "reconciliation_state": unresolved.state,
@@ -1421,6 +1445,7 @@ class BrokeredMigrationRunner:
                 self._target.identity.canonical,
                 {
                     "phase": "spend",
+                    **execution_evidence(approval),
                     "reason": STORE_UNAVAILABLE,
                     "artifact_sha256": approval.artifact_sha256,
                     "error_type": type(exc).__name__,
@@ -1439,6 +1464,7 @@ class BrokeredMigrationRunner:
                 self._target.identity.canonical,
                 {
                     "phase": "spend",
+                    **execution_evidence(approval),
                     "reason": REPLAY,
                     "artifact_sha256": approval.artifact_sha256,
                 },
@@ -1468,6 +1494,7 @@ class BrokeredMigrationRunner:
             self._target.identity.canonical,
             {
                 "phase": "execute_intent",
+                **execution_evidence(approval),
                 "execution_id": execution_id,
                 "artifact_sha256": artifact.sha256,
                 "target": self._target.identity.canonical,
@@ -1537,6 +1564,7 @@ class BrokeredMigrationRunner:
                 if execution.state == EXECUTION_UNKNOWN
                 else "execute_outcome",
                 "intent_seq": intent.seq,
+                **execution_evidence(approval),
                 "execution_id": execution_id,
                 "artifact_sha256": artifact.sha256,
                 "target": self._target.identity.canonical,
@@ -1592,7 +1620,7 @@ class BrokeredMigrationRunner:
 class MigrationRuntime:
     """Production gate/runner composition sharing one stable authority."""
 
-    authority: ApprovalAuthority
+    authority: RecordedApprovalAuthority
     runner: BrokeredMigrationRunner
 
     def close(self) -> None:
@@ -1652,6 +1680,7 @@ def build_migration_runtime(
     config: MigrationRunnerConfig,
     *,
     audit: AuditSink,
+    authorization: AuthorizationContext | None = None,
     executor: MigrationExecutor = postgres_executor,
     receipt_lookup: ReceiptLookup | None = None,
     clock: Callable[[], float] = time.time,
@@ -1667,21 +1696,39 @@ def build_migration_runtime(
 
     if audit is None:
         raise ValueError("migration runner audit sink is required")
-    authority = ApprovalAuthority(
-        signer=resolve_signer(config, settings=settings, env=env)
-    )
+    signer = resolve_signer(config, settings=settings, env=env)
     substrate_policy = resolve_substrate_policy(config, settings=settings, env=env)
-    runner = BrokeredMigrationRunner(
-        authority=authority,
-        target=config.target,
-        consumed=ConsumedApprovals(
-            config.approval_store_path, substrate_policy=substrate_policy
-        ),
-        executor=executor,
-        receipt_lookup=receipt_lookup,
-        audit=audit,
-        clock=clock,
+    consumed = ConsumedApprovals(
+        config.approval_store_path, substrate_policy=substrate_policy
     )
+    try:
+        if not isinstance(authorization, AuthorizationContext):
+            raise ConfigError(
+                "production issuance requires an explicit AuthorizationContext"
+            )
+        from prometheus_protocol.runtime.factory import ledger_anchor_required
+
+        journal = AuthorizationJournal(
+            audit,
+            substrate_policy=substrate_policy,
+            require_anchor=bool(getattr(settings, "require_ledger_anchor", False))
+            or ledger_anchor_required(env),
+        )
+        authority = RecordedApprovalAuthority(
+            signer=signer, journal=journal, context=authorization, clock=clock
+        )
+        runner = BrokeredMigrationRunner(
+            authority=authority,
+            target=config.target,
+            consumed=consumed,
+            executor=executor,
+            receipt_lookup=receipt_lookup,
+            audit=audit,
+            clock=clock,
+        )
+    except Exception:
+        consumed.close()
+        raise
     return MigrationRuntime(authority=authority, runner=runner)
 
 
@@ -1702,12 +1749,23 @@ def build_migration_runner(
     key configuration.
     """
 
-    return build_migration_runtime(
-        config,
-        audit=audit,
-        executor=executor,
-        receipt_lookup=receipt_lookup,
-        clock=clock,
-        settings=settings,
-        env=env,
-    ).runner
+    authority = ApprovalAuthority(
+        signer=resolve_signer(config, settings=settings, env=env)
+    )
+    consumed = ConsumedApprovals(
+        config.approval_store_path,
+        substrate_policy=resolve_substrate_policy(config, settings=settings, env=env),
+    )
+    try:
+        return BrokeredMigrationRunner(
+            authority=authority,
+            target=config.target,
+            consumed=consumed,
+            audit=audit,
+            executor=executor,
+            receipt_lookup=receipt_lookup,
+            clock=clock,
+        )
+    except Exception:
+        consumed.close()
+        raise
