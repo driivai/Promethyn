@@ -17,6 +17,7 @@ from f11_support import authorization_context
 
 from prometheus_protocol.chokepoint import (
     RECEIPT_NOT_FOUND,
+    RECEIPT_UNAVAILABLE,
     Approval,
     DbTarget,
     KmsSigner,
@@ -59,7 +60,15 @@ PASS = Judgment(
 )
 
 
-def runtime_at(path, *, kms=None, anchor=None, clock=lambda: NOW, executor=None):
+def runtime_at(
+    path,
+    *,
+    kms=None,
+    anchor=None,
+    clock=lambda: NOW,
+    executor=None,
+    receipt_lookup=None,
+):
     if kms is None:
         kms = MemoryKms(clock=clock)
         kms.create_key("approval-key")
@@ -77,7 +86,11 @@ def runtime_at(path, *, kms=None, anchor=None, clock=lambda: NOW, executor=None)
         audit=ledger,
         authorization=authorization_context(signer),
         executor=executor or (lambda *args: calls.append(args) or (True, "committed")),
-        receipt_lookup=lambda *args: ReceiptStatus(RECEIPT_NOT_FOUND),
+        receipt_lookup=(
+            receipt_lookup
+            if receipt_lookup is not None
+            else lambda *args: ReceiptStatus(RECEIPT_NOT_FOUND)
+        ),
         clock=clock,
         env={},
     )
@@ -818,11 +831,44 @@ def test_record_failure_leaves_database_untouched_with_positive_control(
         ledger.close()
 
 
-def test_signed_decision_does_not_turn_unknown_execution_into_success(tmp_path):
-    from prometheus_protocol.chokepoint.runner import EXECUTION_UNKNOWN, ExecutorResult
+@pytest.mark.parametrize(
+    "receipt_state",
+    [
+        pytest.param(RECEIPT_UNAVAILABLE, id="unavailable-remains-unresolved"),
+        pytest.param(RECEIPT_NOT_FOUND, id="not-found-resolves-not-committed"),
+    ],
+)
+def test_signed_decision_does_not_turn_unknown_execution_into_success(
+    tmp_path, monkeypatch, receipt_state
+):
+    from prometheus_protocol.chokepoint import OwnerIdentity
+    from prometheus_protocol.chokepoint.runner import (
+        EXECUTION_NOT_COMMITTED,
+        EXECUTION_UNKNOWN,
+        RECONCILED_NOT_COMMITTED,
+        ExecutorResult,
+    )
+
+    # Exercise receipt recovery on every OS, rather than accidentally passing
+    # because a host without a boot ID stops early at owner_unverifiable.
+    # Only ownership/receipt inputs are synthetic; persistence and recovery run.
+    monkeypatch.setattr(
+        "prometheus_protocol.chokepoint.runner.local_identity",
+        lambda: OwnerIdentity("host", "test-boot", "test-machine", os.getpid()),
+    )
+    executions = []
+    lookups = []
+
+    def executor(*args):
+        executions.append(args)
+        return ExecutorResult(EXECUTION_UNKNOWN, "reply lost")
+
+    def receipt_lookup(*args):
+        lookups.append(args)
+        return ReceiptStatus(receipt_state)
 
     runtime, ledger, kms, _calls = runtime_at(
-        tmp_path, executor=lambda *args: ExecutorResult(EXECUTION_UNKNOWN, "reply lost")
+        tmp_path, executor=executor, receipt_lookup=receipt_lookup
     )
     try:
         approval = authorize(runtime)
@@ -836,8 +882,28 @@ def test_signed_decision_does_not_turn_unknown_execution_into_success(tmp_path):
         assert hashlib.sha256(binding_preimage(binding)).hexdigest() == approval_digest(
             approval
         )
-        pending = runtime.runner.reconcile_unfinished()
-        assert len(pending) == 1 and not pending[0].resolved
+        rows_before_recovery = ledger.chained_events()
+        recovered = runtime.runner.reconcile_unfinished()
+        assert len(recovered) == 1
+        assert lookups == [(result.execution_id, ARTIFACT.sha256, TARGET)]
+        assert recovered[0].state == receipt_state
+        if receipt_state == RECEIPT_UNAVAILABLE:
+            assert not recovered[0].resolved and not recovered[0].audit_recorded
+            assert ledger.chained_events() == rows_before_recovery
+        else:
+            assert recovered[0].resolved and recovered[0].audit_recorded
+            rows_after_recovery = ledger.chained_events()
+            assert len(rows_after_recovery) == len(rows_before_recovery) + 1
+            assert rows_after_recovery[-1]["event"] == "execute_outcome"
+            outcome = strict_json(rows_after_recovery[-1]["payload"])
+            assert outcome["ok"] is False
+            assert outcome["execution_state"] == EXECUTION_NOT_COMMITTED
+            assert outcome["reason"] == RECONCILED_NOT_COMMITTED
+            assert outcome["approval_binding"] == binding
+            assert runtime.runner.reconcile_unfinished() == ()
+            assert len(lookups) == 1
+        assert len(executions) == 1 and len(kms.sign_log()) == 1
+        assert ledger.verify_chain().ok
     finally:
         runtime.close()
         ledger.close()
