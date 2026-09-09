@@ -44,6 +44,7 @@ def runner():
 
 def test_the_runner_is_pinned_and_every_target_still_exists(runner):
     assert (runner.EXPECTED_REVERTS, runner.EXPECTED_CALL_FAILURES) == (12, 17)
+    assert (runner.EXPECTED_CONFIG_MUTATIONS, runner.EXPECTED_GUARD_FAILURES) == (5, 6)
     plan = runner.mutations()
     assert len(plan) == runner.EXPECTED_REVERTS
     assert len({name for name, *_ in plan}) == len(plan), "duplicate mutation names"
@@ -90,6 +91,37 @@ def test_a_shortfall_or_an_excess_fails_the_runner(runner):
             runner.enforce_expected(caught, observed)
 
 
+def test_the_guard_bypass_phase_targets_still_exist(runner):
+    """Phase 2 mutates FILES, not functions: mypy.ini and ci.yml. A target that
+    drifted would make the runner raise rather than silently skip — but that
+    surfaces only when the runner is run, so it is asserted here too."""
+
+    plan = runner.config_mutations()
+    assert len(plan) == runner.EXPECTED_CONFIG_MUTATIONS
+    assert len({name for name, *_ in plan}) == len(plan), "duplicate mutation names"
+    for name, rel, old, _new, test_file, selection in plan:
+        path = REPO / rel
+        assert path.exists(), f"{name}: {rel} does not exist"
+        assert old in path.read_text(encoding="utf-8"), (
+            f"{name}: mutation target vanished from {rel}: {old!r}"
+        )
+        assert (REPO / test_file).exists() and selection.strip()
+
+
+def test_the_runner_states_its_own_limit(runner):
+    """A count says nothing about semantic coverage, and the runner is editable
+    by whoever edits the code it guards. Both must be said where the assurance
+    is described, not left for the next reviewer to discover."""
+
+    doc = runner.__doc__ or ""
+    for claim in (
+        "does NOT prove the mutation set is complete",
+        "semantic coverage",
+        "Nor is it externally anchored",
+    ):
+        assert claim in doc, f"the runner no longer states: {claim!r}"
+
+
 def test_the_runner_drives_the_behavioural_crash_tests(runner):
     """The proofs must run against the tests that drive a REAL Unavailable
     through the real consumer — not against a unit test of the narrowing
@@ -97,6 +129,7 @@ def test_the_runner_drives_the_behavioural_crash_tests(runner):
 
     crash_tests = REPO / "tests/conformance/test_unavailable_consumers_do_not_crash.py"
     assert crash_tests.exists()
+    # Phase 1 only; phase 2 drives the GUARD tests by design.
     for name, _function, _edits, test_file, _selection in runner.mutations():
         assert (REPO / test_file) == crash_tests, (
             f"{name} is proved against {test_file}, not the behavioural suite"

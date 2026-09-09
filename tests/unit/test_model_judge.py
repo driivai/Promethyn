@@ -51,7 +51,12 @@ class ExplodingProvider(Provider):
 
 
 def _verify(reply: str) -> Evidence:
-    return ModelJudgeVerifier(ScriptedProvider([reply])).verify(code="x", task=TASK)
+    outcome = ModelJudgeVerifier(ScriptedProvider([reply])).verify(code="x", task=TASK)
+    # The scripted provider always replies, so the judge always RAN. Asserting
+    # that keeps the union out of every caller and turns a broken fixture into a
+    # named failure instead of an attribute error on an object with no verdict.
+    assert isinstance(outcome, Evidence), f"the scripted judge could not run: {outcome}"
+    return outcome
 
 
 def test_emits_soft_tier_evidence_with_id():

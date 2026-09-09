@@ -17,6 +17,8 @@ perform would be exactly the void guard this project is named for.
 
 from __future__ import annotations
 
+from typing import Any
+
 import json
 import traceback
 
@@ -32,8 +34,12 @@ PASSWORD = "prom-attacker2-db-password-9c4d17ba"
 SIGNING_KEY = b"prom-attacker2-signing-key-000000"
 
 
-def _target(**overrides) -> DbTarget:
-    fields = dict(
+def _target(**overrides: Any) -> DbTarget:
+    # ``**overrides`` is heterogeneous by construction — each key is a
+    # different field type — so ``dict[str, Any]`` states what this holds
+    # rather than letting the join collapse to a type no field accepts.
+    # Every field is still checked against its own annotation at the call.
+    fields: dict[str, Any] = dict(
         host="127.0.0.1", port=5432, dbname="appdb", user="migrator",
         password=PASSWORD, schema="public",
     )

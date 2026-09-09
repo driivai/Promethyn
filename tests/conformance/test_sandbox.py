@@ -230,7 +230,7 @@ def test_inv_sandbox_5_default_verifier_is_isolating():
 
 # -- PARITY: legitimate verdicts are unchanged under the sandbox -----------
 
-from prometheus_protocol.core.models import Case, Task, Verdict  # noqa: E402
+from prometheus_protocol.core.models import Case, Evidence, Task, Verdict  # noqa: E402
 from prometheus_protocol.verifier.runner import SubprocessVerifier  # noqa: E402
 
 _CASES = (Case((2, 3), 5), Case((0, 0), 0), Case((-1, 1), 0))
@@ -250,6 +250,17 @@ def test_parity_sandboxed_verdicts_equal_unsafe_verdicts():
     isolating = SubprocessVerifier(memory_mb=0, sandbox=NamespaceSandbox())
     unsafe = SubprocessVerifier(memory_mb=0, sandbox=UnsafeLocalSandbox())
     for code, expected in _CANDIDATES.items():
-        sandboxed = isolating.verify(code=code, task=_TASK).verdict
-        direct = unsafe.verify(code=code, task=_TASK).verdict
-        assert sandboxed == direct == expected
+        # The availability probe above says the runtime WORKS; a launch failure
+        # after it still returns Unavailable, and reading .verdict off that is
+        # an AttributeError that masks the parity assertion this test exists to
+        # make. Narrow, and name what happened if it did.
+        sandboxed_outcome = isolating.verify(code=code, task=_TASK)
+        direct_outcome = unsafe.verify(code=code, task=_TASK)
+        assert isinstance(sandboxed_outcome, Evidence), (
+            f"the isolating verifier could not run after passing the "
+            f"availability probe: {sandboxed_outcome}"
+        )
+        assert isinstance(direct_outcome, Evidence), (
+            f"the unsafe verifier could not run: {direct_outcome}"
+        )
+        assert sandboxed_outcome.decided == direct_outcome.decided == expected

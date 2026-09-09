@@ -27,6 +27,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Mapping
 
+from prometheus_protocol.core.interfaces import Verifier
 from prometheus_protocol.core.models import (
     SPLIT_HELDOUT,
     SPLIT_TRAIN,
@@ -47,8 +48,13 @@ RIDER_SKILL = "skill-zz-rider"
 
 
 @dataclass(frozen=True)
-class BookVerifier:
-    """Deterministic stand-in for a HARD verifier: pass iff code is correct."""
+class BookVerifier(Verifier[Task]):
+    """Deterministic stand-in for a HARD verifier: pass iff code is correct.
+
+    Declares the real ``Verifier`` base rather than duck-typing it: a stub that
+    merely happens to have the right method names can drift out of the contract
+    silently, which is what the Orchestrator boundary then reports.
+    """
 
     correct: Mapping[str, str]
     verifier_id: str = "stub-book"

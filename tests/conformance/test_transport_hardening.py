@@ -26,6 +26,8 @@ have received the request it refused to follow.
 
 from __future__ import annotations
 
+from typing import Any
+
 import json
 import logging
 import os
@@ -107,6 +109,9 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Transfer-Encoding", "chunked")
         self.end_headers()
 
+    #: Only ever constructed by _ScriptedServer, which declares these fields.
+    server: "_ScriptedServer"
+
     def _chunk(self, data: bytes):
         self.wfile.write(b"%x\r\n%s\r\n" % (len(data), data))
         self.wfile.flush()
@@ -184,10 +189,25 @@ class _Handler(BaseHTTPRequestHandler):
     do_GET = do_POST  # urllib turns a redirected POST into a GET
 
 
+class _ScriptedServer(ThreadingHTTPServer):
+    """The scripted endpoint, with the fields the handler reads DECLARED.
+
+    They were stashed on a bare ``ThreadingHTTPServer``, so every read in the
+    handler was an attribute the checker could not see. Naming them here is what
+    makes a typo in one of them a build failure rather than a runtime
+    AttributeError inside a server thread, where it surfaces as a hung client.
+    """
+
+    daemon_threads = True
+
+    mode: str
+    target: int | None
+    seen: list[dict[str, str]]
+
+
 class _Endpoint:
     def __init__(self, mode: str, *, target: int | None = None, tls_context=None):
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
-        self.server.daemon_threads = True
+        self.server = _ScriptedServer(("127.0.0.1", 0), _Handler)
         self.server.mode = mode
         self.server.target = target
         self.server.seen = []
@@ -235,9 +255,13 @@ def endpoint():
         item.close()
 
 
-def _provider(base: str, **overrides) -> RemoteModelProvider:
-    kwargs = dict(api_base=base, model="m", api_key=KEY, timeout_s=5.0,
-                  allow_insecure_loopback=True)
+def _provider(base: str, **overrides: Any) -> RemoteModelProvider:
+    # ``**overrides`` is heterogeneous by construction — each key is a
+    # different field type — so ``dict[str, Any]`` states what this holds
+    # rather than letting the join collapse to a type no field accepts.
+    # Every field is still checked against its own annotation at the call.
+    kwargs: dict[str, Any] = dict(api_base=base, model="m", api_key=KEY,
+                                  timeout_s=5.0, allow_insecure_loopback=True)
     kwargs.update(overrides)
     return RemoteModelProvider(**kwargs)
 

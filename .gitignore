@@ -35,3 +35,8 @@ env/
 **/settings.local.json
 .env
 .env.*
+
+# Evidence that the type gate EXECUTED in this job (scripts/type_gate.py).
+# Never committed: a checked-in receipt would satisfy the receipt check
+# without the gate running.
+type-gate-receipt.json

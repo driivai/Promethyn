@@ -8,6 +8,8 @@ knowingly, never silently.
 
 from __future__ import annotations
 
+from typing import Any
+
 import logging
 
 import pytest
@@ -29,9 +31,13 @@ def _fresh_notice_flag(monkeypatch):
     monkeypatch.setattr(factory, "_SHARED_JUDGE_MODEL_WARNED", False)
 
 
-def _remote_config(**overrides) -> Config:
-    base = dict(provider="remote", api_base="https://gw.example/v1",
-                model="actor-1", api_key="k")
+def _remote_config(**overrides: Any) -> Config:
+    # ``**overrides`` is heterogeneous by construction — each key is a
+    # different field type — so ``dict[str, Any]`` states what this holds
+    # rather than letting the join collapse to a type no field accepts.
+    # Every field is still checked against its own annotation at the call.
+    base: dict[str, Any] = dict(provider="remote", api_base="https://gw.example/v1",
+                                model="actor-1", api_key="k")
     base.update(overrides)
     return Config(**base)
 

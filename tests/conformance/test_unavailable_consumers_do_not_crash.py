@@ -46,6 +46,7 @@ from prometheus_protocol.core.models import (
     Verdict,
 )
 from prometheus_protocol.sandbox import NullSandbox
+from prometheus_protocol.sandbox.unsafe import UnsafeLocalSandbox
 from prometheus_protocol.verifier.bank import VerifierBank
 from prometheus_protocol.verifier.grounding import GroundingTask, GroundingVerifier
 from prometheus_protocol.verifier.model_judge import ModelJudgeVerifier
@@ -440,15 +441,47 @@ def test_swarm_records_an_unavailable_chain_and_executes_nothing():
     )
 
 
+def working_code_verifier() -> SubprocessVerifier:
+    """A code verifier that CAN run, on any host, with no capability probe.
+
+    This exists for the positive control below, and the choice of sandbox is the
+    whole point. ``SubprocessVerifier(memory_mb=0)`` with auto-detected isolation
+    was environment-dependent: on a host without unprivileged user namespaces it
+    does not skip, it FAILS with "no isolating sandbox runtime available;
+    candidate code will ABSTAIN" — which an independent review hit. A control
+    that only runs on some hosts is not a control.
+
+    ``UnsafeLocalSandbox`` runs the candidate as an ordinary subprocess with
+    rlimits, deterministically, everywhere. That is appropriate HERE and nowhere
+    near production, and the distinction is the trust assumption, not
+    convenience: the "candidate" is four characters of arithmetic written by the
+    line above (``def add(a, b): return a + b``), a fixture this test authored,
+    not an untrusted proposal from a model. Isolation exists to contain code
+    whose behaviour is not known in advance; this code's behaviour is the
+    fixture. The tests that verify isolation ITSELF live in the sandbox suite and
+    correctly demand a real runtime.
+
+    What is NOT weakened: the negative test still injects a real ``NullSandbox``
+    refusal and still asserts fail-closed. Deleting this control instead would
+    make the suite portable and weaker — the fail-closed assertion could then
+    pass merely because the swarm is incapable of executing anything at all.
+    """
+
+    return SubprocessVerifier(memory_mb=0, sandbox=UnsafeLocalSandbox())
+
+
 def test_swarm_that_can_verify_still_executes():
     """The control. If the fault injection above simply broke the swarm, the
     fail-closed assertion would pass for the wrong reason — so the same swarm,
-    with a code verifier that CAN run, must still reach the executor."""
+    with a code verifier that CAN run, must still reach the executor.
+
+    Runs on every host: see ``working_code_verifier``.
+    """
 
     from prometheus_protocol.swarm.models import TaskPacket
 
     runtime = _swarm_runtime(
-        _executable_swarm(), code_verifier=SubprocessVerifier(memory_mb=0)
+        _executable_swarm(), code_verifier=working_code_verifier()
     )
     run = runtime.run(TaskPacket(goal="add two integers", budget=5, entry_point="add"))
 

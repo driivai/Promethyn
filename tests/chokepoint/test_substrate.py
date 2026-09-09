@@ -29,9 +29,11 @@ from prometheus_protocol.chokepoint import (
     SUBSTRATE_UNSAFE,
     UNVERIFIED_SUBSTRATE_ALLOWED_ENV,
     VERIFIED_SUBSTRATE_REQUIRED_ENV,
+    RECEIPT_NOT_FOUND,
     ConsumedApprovals,
     DbTarget,
     MigrationRunnerConfig,
+    ReceiptStatus,
     SubstratePolicy,
     SubstrateReport,
     build_migration_runtime,
@@ -56,8 +58,8 @@ def table(*mounts: tuple[str, str]) -> str:
     view used to parent subsequent mounts. No production resolver is used.
     """
 
-    lines = []
-    visible = {}
+    lines: list[str] = []
+    visible: dict[str, object] = {}
     if not mounts or mounts[0][0] != "/":
         mounts = (("/", "ext4"), *mounts)
     for index, (mount_point, fs_type) in enumerate(mounts, start=20):
@@ -351,6 +353,40 @@ def test_both_settings_are_declared_security_fields_read_from_the_environment():
 # ---------------------------------------------------------------------------
 
 
+class _SpyExecutor:
+    """A ``MigrationExecutor`` that records the call and touches no database.
+
+    A real class with the protocol's signature, not a ``lambda *a``: the point
+    of these spies is to prove a refusal never reaches the DB, and a spy whose
+    shape does not match the port could stop being called for a reason the test
+    would read as success. Structural typing does the rest — no cast.
+    """
+
+    def __init__(self, calls: list) -> None:
+        self._calls = calls
+
+    def __call__(
+        self, sql: str, target: DbTarget, execution_id: str, artifact_sha256: str
+    ) -> tuple[bool, str]:
+        self._calls.append((sql, target, execution_id, artifact_sha256))
+        # Legacy (False, detail) is UNKNOWN, never proof of rollback — which is
+        # the honest answer for a spy that ran no SQL at all.
+        return False, "spy executor: no SQL was run"
+
+
+class _SpyReceiptLookup:
+    """A ``ReceiptLookup`` that records the call and reports nothing found."""
+
+    def __init__(self, calls: list) -> None:
+        self._calls = calls
+
+    def __call__(
+        self, execution_id: str, artifact_sha256: str, target: DbTarget
+    ) -> ReceiptStatus:
+        self._calls.append((execution_id, artifact_sha256, target))
+        return ReceiptStatus(state=RECEIPT_NOT_FOUND, detail="spy: no receipt")
+
+
 def _build(tmp_path, monkeypatch, verdict: str, fs_type: str, **config_flags):
     monkeypatch.setattr("prometheus_protocol.chokepoint.runner.probe_substrate",
                         probe_returning(report(SUBSTRATE_SAFE, "ext4"), tmp_path / "chokepoint"))
@@ -366,7 +402,7 @@ def _build(tmp_path, monkeypatch, verdict: str, fs_type: str, **config_flags):
     settings = Config(**config_flags) if config_flags else None
     return ledger, calls, lambda: build_migration_runtime(
         config, audit=ledger, authorization=authorization_context(LocalHmacSigner(KEY)),
-        executor=lambda *a: calls.append(a), receipt_lookup=lambda *a: calls.append(a),
+        executor=_SpyExecutor(calls), receipt_lookup=_SpyReceiptLookup(calls),
         settings=settings, env={},
     )
 

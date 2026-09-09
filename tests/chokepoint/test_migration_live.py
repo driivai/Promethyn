@@ -70,6 +70,11 @@ def _require_db() -> DbTarget:
         if _REQUIRE:
             pytest.fail("PROM_REQUIRE_PG=1 but PROM_CHOKEPOINT_PG_HOST is unset")
         pytest.skip("no configured PostgreSQL (set PROM_CHOKEPOINT_PG_HOST)")
+    # pytest.fail/skip are NoReturn, so this is unreachable — but only a checker
+    # that follows that through both branches knows it, and mypy 1.11 (the
+    # declared floor) does not. Stating it costs nothing and makes the promise in
+    # the signature true for every checker in the supported range.
+    assert target is not None
     return target
 
 

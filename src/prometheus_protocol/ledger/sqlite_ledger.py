@@ -18,7 +18,12 @@ from pathlib import Path
 
 from prometheus_protocol.core.errors import StateError
 from prometheus_protocol.core.interfaces import Ledger
-from prometheus_protocol.core.models import Attempt, Evidence
+from prometheus_protocol.core.models import (
+    Attempt,
+    Evidence,
+    Unavailable,
+    assert_never,
+)
 from prometheus_protocol.ledger.audit_chain import (
     GENESIS_ROOT,
     NOT_VERIFIABLE,
@@ -343,7 +348,13 @@ class SqliteLedger(Ledger):
         # says which it is, exactly as the executions table already does for
         # EX-1. The evidence JSON carries the Unavailable's verifier_id, tier and
         # reason; the discriminator is what makes the two permanently separable.
-        ran = attempt.evidence if isinstance(attempt.evidence, Evidence) else None
+        outcome = attempt.evidence
+        if isinstance(outcome, Unavailable):
+            ran: Evidence | None = None
+        elif isinstance(outcome, Evidence):
+            ran = outcome
+        else:
+            assert_never(outcome)
         passed = int(ran.passed) if ran is not None else 0
         total = ran.total if ran is not None else 0
         passed_count = ran.passed_count if ran is not None else 0

@@ -341,8 +341,13 @@ def _real_container() -> ContainerSandbox:
             "(docker/podman daemon) is available"
         )
     sandbox = ContainerSandbox()
+    runtime = sandbox.runtime
+    # `runtime` is `str | None` until a runtime is actually found; the guard
+    # above already refused the None case, so name that here rather than handing
+    # subprocess a list that may contain None.
+    assert runtime is not None, "container runtime vanished after the availability check"
     pull = subprocess.run(
-        [sandbox.runtime, "pull", sandbox.image], capture_output=True, timeout=600
+        [runtime, "pull", sandbox.image], capture_output=True, timeout=600
     )
     if pull.returncode != 0:
         pytest.fail(

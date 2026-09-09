@@ -25,15 +25,30 @@ import argparse
 import re
 import subprocess
 import sys
+from importlib import import_module
 from pathlib import Path
+from types import ModuleType
 
-try:  # Python 3.11+
-    import tomllib
-except ModuleNotFoundError:  # Python 3.10: the dev closure ships tomli
-    try:
-        import tomli as tomllib  # type: ignore[no-redef]
-    except ModuleNotFoundError:
-        tomllib = None  # type: ignore[assignment]  # regex fallback below
+def _toml_reader() -> ModuleType | None:
+    """The stdlib TOML reader, or the 3.10 backport, or nothing.
+
+    ``tomllib`` is 3.11+; on 3.10 the dev closure ships ``tomli`` under the same
+    API, and neither may be present (the regex fallback below covers that).
+    Resolved through ``import_module`` rather than a try/except import ladder
+    because rebinding an imported module name to ``None`` is a redefinition the
+    checker can only be talked out of with an ignore directive — and this tree
+    carries none.
+    """
+
+    for name in ("tomllib", "tomli"):
+        try:
+            return import_module(name)
+        except ModuleNotFoundError:
+            continue
+    return None
+
+
+tomllib = _toml_reader()
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 

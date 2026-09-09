@@ -8,6 +8,7 @@ skips. This is a developer proof runner, not a reconciliation/operator CLI.
 from __future__ import annotations
 
 import ast
+from typing import Any
 import contextlib
 import inspect
 import io
@@ -179,8 +180,19 @@ def main() -> int:
                     raise AssertionError(f"{name}: revert target disappeared: {old}")
                 source = source.replace(old, new)
             tree = ast.parse(source)
-            tree.body[0].decorator_list = []
-            namespace = {}
+            # ast.Module.body is Sequence[stmt]; only a function/class def carries a
+            # decorator_list. Narrowed rather than asserted-away: the mutation source is
+            # always one def, and if that ever stops being true the runner must say so
+            # rather than silently strip nothing and mutate the wrong object.
+            definition = tree.body[0]
+            if not isinstance(definition, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                raise AssertionError(
+                    f"{name}: mutation source is {type(definition).__name__}, not a def"
+                )
+            definition.decorator_list = []
+            # What exec() puts here is the mutated function object; typing the
+            # values as `object` would lose the __code__ the swap below reads.
+            namespace: dict[str, Any] = {}
             exec(  # noqa: S102 - execute only this checkout's reviewed guard mutations
                 compile(tree, f"<F11-revert:{name}>", "exec"),
                 function.__globals__,

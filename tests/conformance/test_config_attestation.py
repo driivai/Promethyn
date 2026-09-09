@@ -15,6 +15,8 @@ published target is not detected. Nothing here is uncrackable.
 
 from __future__ import annotations
 
+from typing import Any
+
 import ast
 import dataclasses
 import json
@@ -75,11 +77,17 @@ def signer():
     return LocalHmacSigner(KEY)
 
 
-def a_posture(**overrides) -> ResolvedPosture:
+def a_posture(**overrides: Any) -> ResolvedPosture:
     """A fixed, fully specified posture. Never resolved from this host, so the
-    digest assertions below are about the encoding, not about the runner."""
+    digest assertions below are about the encoding, not about the runner.
 
-    base = dict(
+    ``**overrides`` is heterogeneous by construction — each key is a different
+    field type — so ``dict[str, Any]`` states what the base holds rather than
+    letting the join collapse to a type no field accepts. Every field is still
+    checked against its own annotation at the ResolvedPosture call.
+    """
+
+    base: dict[str, Any] = dict(
         sandbox_adapter="namespace",
         sandbox_isolating=True,
         digest_pin_active=False,
@@ -111,7 +119,7 @@ def a_posture(**overrides) -> ResolvedPosture:
         ledger_anchor_retention_days=3650,
     )
     base.update(overrides)
-    return ResolvedPosture(**base)  # type: ignore[arg-type]
+    return ResolvedPosture(**base)
 
 
 def availability(monkeypatch, *, namespace: bool, container: bool) -> None:

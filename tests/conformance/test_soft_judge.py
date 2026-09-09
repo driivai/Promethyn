@@ -9,6 +9,8 @@ emits (tier SOFT, verifier_id "model-judge").
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from prometheus_protocol.core.models import Evidence, Tier, Verdict
@@ -37,7 +39,11 @@ def _calibrated_soft_stats(rounds: int = 30) -> trust.TrustStats:
     for i in range(rounds):
         verdict = Verdict.PASS if i % 2 == 0 else Verdict.FAIL
         bank.judge([ev(HARD, verdict, Tier.HARD), ev(SOFT, verdict, Tier.SOFT)])
-    return bank._store.get(SOFT)
+    stats = bank._store.get(SOFT)
+    # The loop above registered SOFT and judged `rounds` times, so stats exist.
+    # Asserting it here keeps `TrustStats | None` out of every caller.
+    assert stats is not None, "the soft verifier accrued no trust stats"
+    return stats
 
 
 def _bank_with_soft(stats: trust.TrustStats | None) -> VerifierBank:
@@ -138,7 +144,7 @@ def test_parity_enabling_judge_preserves_verdicts(tmp_path):
     def outcomes(enable: bool, sub: str):
         config = Config(
             registry_dir=tmp_path / sub,
-            ledger_path=":memory:",
+            ledger_path=Path(":memory:"),
             verifier_memory_mb=0,
             enable_model_judge=enable,
         )

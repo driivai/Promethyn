@@ -524,7 +524,7 @@ def test_the_log_is_append_only_and_a_copy():
     assert isinstance(log, tuple)
     assert kms.sign_log() == log
     with pytest.raises(AttributeError):
-        log.append(None)  # type: ignore[attr-defined]
+        log.append(None)
 
 
 def test_an_approval_the_kms_never_signed_is_unwitnessed():

@@ -38,6 +38,7 @@ from prometheus_protocol.core.models import (
     Unavailable,
     Verdict,
     assert_never,
+    partition_outcomes,
 )
 
 #: A parser that reads a stated confidence out of a judge reply / Evidence
@@ -231,7 +232,11 @@ class EnsembleJudge(Verifier):
         started = time.monotonic()
         results = [j.verify(code=code, task=task) for j in self._judges]
         cost = time.monotonic() - started
-        missing = [r for r in results if isinstance(r, Unavailable)]
+        # Partitioned exhaustively, not filtered. A comprehension that selects
+        # one member drops anything that is neither, with no diagnostic — and an
+        # ensemble that silently polls fewer judges than it promised is the one
+        # failure this class exists to prevent.
+        ran, missing = partition_outcomes(results)
         if missing:
             # An ensemble's claim is "N independent judges agreed". If any judge
             # could not run, that check did not happen, so there is nothing to
@@ -241,7 +246,7 @@ class EnsembleJudge(Verifier):
             # Unavailable is the only truthful answer, and it is the closed one:
             # it can never be read as a PASS.
             return _unavailable_ensemble(self.verifier_id, missing, len(results))
-        verdicts = [r.decided for r in results if isinstance(r, Evidence)]
+        verdicts = [r.decided for r in ran]
         n = len(verdicts)
         passes = verdicts.count(Verdict.PASS)
         fails = verdicts.count(Verdict.FAIL)
@@ -319,14 +324,16 @@ class RepeatedSamplingJudge(Verifier):
         started = time.monotonic()
         results = [self._base.verify(code=code, task=task) for _ in range(self._k)]
         cost = time.monotonic() - started
-        missing = [r for r in results if isinstance(r, Unavailable)]
+        # Exhaustive partition, same reason as the ensemble: a silently smaller
+        # k is a different experiment than the one this lever advertises.
+        ran, missing = partition_outcomes(results)
         if missing:
             # Same reasoning as the ensemble: k samples were promised and fewer
             # were taken, so the majority/unanimity test this lever advertises
             # was not performed. Answering from the survivors would silently
             # change k; answering ABSTAIN would claim samples that never ran.
             return _unavailable_ensemble(self.verifier_id, missing, len(results))
-        verdicts = [r.decided for r in results if isinstance(r, Evidence)]
+        verdicts = [r.decided for r in ran]
         passes = verdicts.count(Verdict.PASS)
         fails = verdicts.count(Verdict.FAIL)
 
