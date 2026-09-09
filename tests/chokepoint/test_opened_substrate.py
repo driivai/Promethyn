@@ -77,20 +77,38 @@ def test_namespace_root_label_preserves_local_and_namespace_identity(kind):
             s.enforce_substrate(report, s.SubstratePolicy(require_verified=True))
 
 
-@pytest.mark.parametrize("root,point,driver", [
-    ("net:[oops]", "/run/ns", "nsfs"),
-    ("net:[123]junk", "/run/ns", "nsfs"),
-    ("net:[１２３]", "/run/ns", "nsfs"),
-    ("net:[123]", "/run/ns", "ext4"),
-    ("net:[123]", "run/ns", "nsfs"),
-    ("relative", "/run/ns", "nsfs"),
+@pytest.mark.parametrize("root,point,driver,located", [
+    ("net:[oops]", "/run/ns", "nsfs", True),
+    ("net:[123]junk", "/run/ns", "nsfs", True),
+    ("net:[１２３]", "/run/ns", "nsfs", True),
+    ("net:[123]", "/run/ns", "ext4", True),
+    ("net:[123]", "run/ns", "nsfs", False),
+    ("relative", "/run/ns", "nsfs", True),
 ])
-def test_namespace_metadata_does_not_weaken_validation(root, point, driver):
+def test_namespace_metadata_does_not_weaken_validation(root, point, driver, located):
+    """Recognition stays exact: none of these is read as a mount identity.
+
+    Relevance scoping (SUBSTRATE-ROBUST) changed only *where* an unread row
+    matters, never whether a malformed root is accepted as a valid one. The
+    row is recorded unread; it refuses on its own mount point, and where its
+    location is not readable at all it refuses everywhere.
+    """
     table = ("10 1 8:1 / / rw - ext4 /dev/root rw\n"
              f"50 10 0:4 {root} {point} rw - {driver} source rw\n")
-    assert s.classify_path("/tmp/store.db", table).verdict == "unknown"
+    parsed = s.parse_mount_table(table)
+    assert [e.mount_id for e in parsed.entries] == [10], "malformed row was accepted"
+    assert len(parsed.unparsed) == 1
+    with pytest.raises(ValueError, match="unreadable mount table row"):
+        s.parse_mountinfo(table)
+    assert s.classify_path("/run/ns/store.db", table).verdict == "unknown"
+    elsewhere = s.classify_path("/tmp/store.db", table)
+    assert elsewhere.verdict == ("safe" if located else "unknown")
+    assert [e.mount_point for e in elsewhere.set_aside] == ([point] if located else [])
+    # The descriptor join is keyed to identity: this row named mount 50, so it
+    # is not mount 10 — and it is exactly the row that mount 50 would need.
     info = SimpleNamespace(st_dev=os.makedev(8, 1), st_ino=42)
-    assert s.classify_opened(info, "mnt_id: 10", table).verdict == "unknown"
+    assert s.classify_opened(info, "mnt_id: 10", table).verdict == "safe"
+    assert s.classify_opened(info, "mnt_id: 50", table).verdict == "unknown"
 
 
 @pytest.mark.parametrize("table", [

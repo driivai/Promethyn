@@ -18,7 +18,7 @@ import json, os, sqlite3, subprocess, sys
 from pathlib import Path
 from prometheus_protocol.chokepoint.substrate import (
     probe_substrate, probe_opened_substrate, probe_file_substrate, classify_path,
-    parse_mountinfo, enforce_substrate, SubstratePolicy)
+    parse_mount_table, enforce_substrate, SubstratePolicy)
 from prometheus_protocol.chokepoint.runner import ConsumedApprovals
 from prometheus_protocol.chokepoint.authorization_journal import AuthorizationJournal
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
@@ -149,8 +149,8 @@ finally:
 elif case == "namespace_file":
     target = root / "namespace"
     bind(Path("/proc/self/ns/net"), target)
-    entries = parse_mountinfo(Path("/proc/self/mountinfo").read_text())
-    matching = [e for e in entries if e.mount_point == str(target)]
+    table = parse_mount_table(Path("/proc/self/mountinfo").read_text())
+    matching = [e for e in table.entries if e.mount_point == str(target)]
     assert len(matching) == 1
     assert matching[0].fs_type == "nsfs" and matching[0].root.startswith("net:[")
     fd = os.open(target, os.O_RDONLY | os.O_CLOEXEC)

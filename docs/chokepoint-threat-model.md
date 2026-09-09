@@ -228,6 +228,47 @@ adds opened-object substrate inspection and topology-aware parent preflight.
   `nsfs`, retained in the topology, and remain unverified if selected as the
   target. They do not invalidate unrelated local mounts or make namespace
   objects safe storage. Mount points still require absolute normalized paths.
+- **Relevance scoping (SUBSTRATE-ROBUST).** A row this parser cannot read no
+  longer fails the whole table. Each row is read on its own terms; a row that
+  is not readable is retained as an `UnparsedEntry` carrying whatever *was*
+  readable — its mount id, parent id and above all its mount point — plus the
+  raw line and the reason. A row is **never dropped**: a dropped row is a
+  mount that is not there to be reasoned about, which is the hiding case.
+  Each resolution then decides whether an unread row could affect *it*. The
+  rule, deliberately conservative — a row is set aside only where it is
+  established that it cannot matter:
+  - its mount point is an ancestor of the target, or the target itself (an
+    overmount can hide the mount that would otherwise answer, and a row at the
+    same pathname is a member of that pathname's mount stack) → **relevant**;
+  - its mount point is at or below the target (any row inside the subtree the
+    store lives in could shadow a component that resolution or the store's own
+    creation traverses; no attempt is made to prove a particular descendant
+    harmless) → **relevant**;
+  - its mount point is not readable at all, so none of the above can be ruled
+    out → **relevant**. An entry whose location is unknown is never set aside.
+  - anything else — a row on a wholly unrelated subtree — is **recorded and
+    set aside**, and does not affect the verdict.
+
+  For the opened-object join the same rule is keyed to identity rather than
+  location: the descriptor's mount is the one `fdinfo` named, so a row that was
+  readable enough to name a *different* mount id cannot be it, while a row
+  whose mount id is unreadable might be. Topology anomalies — a parent that
+  does not contain its child, a parent cycle, a self-parent away from `/`, a
+  duplicated mount id — are the same kind of finding as an unreadable row: the
+  row is demoted to an unread row (keeping its location, so relevance can still
+  rule it out) instead of poisoning rows that are coherent. What was set aside
+  is carried on `SubstrateReport.set_aside`, named in every refusal and warning
+  `enforce_substrate` emits, logged at debug on every classification, and
+  printed by `scripts/mountinfo_diagnostic.py`. Setting a row aside silently
+  would be the void-guard version of this fix.
+
+  The verdicts are unchanged in kind: a clean resolution answers safe/unsafe;
+  a relevant unread row, or a topology the resolver cannot settle, is
+  `unknown` and refuses. This sprint reduces false refusals; it relaxes
+  nothing. **The set of recognized mount-root formats is empirical, not
+  exhaustive**, and an unrecognized format on the resolution path refuses
+  startup — an availability property an operator will meet, and the deliberate
+  trade for not guessing: refuse on surprise, never bypass on surprise.
   Where the inspected object or preflight identifies a known
   network or host-shared filesystem — NFS, CIFS/SMB, 9p, virtiofs, vboxsf,
   Ceph, GFS2, OCFS2, Lustre, AFS, sshfs/glusterfs/s3fs and the like — the
@@ -324,6 +365,17 @@ its reason — instead of producing false recovery evidence.
   pending until an operator who has established it by other means reconciles
   with `assume_owner_dead=True`. The window is the upgrade itself, and it
   fails closed: a wedge an operator resolves on the record, not a race.
+- **The recognized mount-root formats are empirical, not exhaustive.** They
+  were added from formats actually observed on the hosts this runs on, not
+  from a reading of the kernel's `show_path` implementations, and the next
+  kernel or driver may write a shape this parser has not seen. On the
+  resolution path that shape refuses startup; off it, it is recorded and set
+  aside. So the residual an operator meets is availability, not a silent
+  bypass — and `scripts/mountinfo_diagnostic.py`, which runs on every Linux CI
+  job, is how the distribution keeps being measured rather than guessed.
+- Relevance is decided from mount points as canonical pathnames. A row whose
+  location the kernel wrote in a form this parser cannot compare is treated as
+  relevant everywhere (it refuses), never as unrelated.
 - The kernel, proc metadata, parent directories and mount namespace remain
   trusted. Linux metadata absent from this namespace, malformed topology or
   disagreement between descriptor and mount device is unverified, not guessed.
@@ -365,7 +417,16 @@ store/lock alias with subprocess contention, a hidden descendant and preservatio
 of a live SQLite POSIX lock during journal inspection. A sixth case adds a
 real namespace-file bind mount, checks that it stays unverified and confirms
 that an ordinary local store still works beside it. Missing Linux or mount
-support fails these tests rather than skipping them. The guard mutations in
+support fails these tests rather than skipping them.
+`test_mount_relevance.py` pins the relevance rule from both directions: the
+regression (an unrelated `nsfs` row leaves the store safe) and, with
+recognition switched off so the row is genuinely unreadable, that relevance —
+not recognition — is what carries it; every ancestor, same-path stack member,
+descendant and unreadable-location case still refusing; every row accounted
+for as read or recorded-unread; the set-aside listing appearing in the report,
+the refusal and the warning; the hidden-descendant topology unchanged; and a
+real `ConsumedApprovals` building and locking beside an unread row while still
+refusing one on its path. The guard mutations in
 `scripts/substrate_revert_proofs.py` pin both the number of reverts and the
 resulting call-phase failures; shortfall and excess both fail.
 `test_owner_identity.py` plays a second

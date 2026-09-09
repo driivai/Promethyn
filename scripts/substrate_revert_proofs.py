@@ -10,8 +10,12 @@ import fix_b_revert_proofs as harness
 UNIT = "tests/chokepoint/test_opened_substrate.py"
 BUILD = "tests/chokepoint/test_substrate.py"
 JOURNAL = "tests/chokepoint/test_authorization_record.py"
-EXPECTED_REVERTS = 20
-EXPECTED_CALL_FAILURES = 53
+SCOPE = "tests/chokepoint/test_mount_relevance.py"
+#: Observed, then pinned — never the other way round. SUBSTRATE-ROBUST raised
+#: these from 20 / 53 by adding the eight relevance-rule reversions below and
+#: retargeting ``namespace-entry-discarded`` onto the per-row parser.
+EXPECTED_REVERTS = 28
+EXPECTED_CALL_FAILURES = 90
 
 
 def enforce_expected(caught: int, failures: int) -> None:
@@ -83,9 +87,38 @@ def mutations():
         ("namespace-label-shape-unchecked", substrate._valid_mount_root,
          [(' and _NAMESPACE_ROOT.fullmatch(root) is not None', '')],
          UNIT, "namespace_metadata_does_not_weaken_validation"),
-        ("namespace-entry-discarded", substrate.parse_mountinfo,
-         [('        ids.add(mount_id)', '        if fs_type == "nsfs":\n            continue\n        ids.add(mount_id)')],
+        ("namespace-entry-discarded", substrate.parse_mount_table,
+         [("        if isinstance(row, UnparsedEntry):",
+           '        if isinstance(row, MountEntry) and row.fs_type == "nsfs":\n            continue\n        if isinstance(row, UnparsedEntry):')],
          UNIT, "namespace_root_label_preserves"),
+        # SUBSTRATE-ROBUST: relevance scoping. Each clause of the rule is
+        # reverted on its own, so a proof that stops exercising one clause
+        # cannot be masked by another still failing.
+        ("unreadable-location-set-aside", substrate.could_affect_path,
+         [("    if point is None:\n        return True", "    if point is None:\n        return False")],
+         SCOPE, "location_is_unreadable_can_never_be_set_aside"),
+        ("row-on-the-path-ignored", substrate.could_affect_path,
+         [("    return _covers(point, path) or _covers(path, point)", "    return False")],
+         SCOPE, "on_the_resolution_path_refuses or same_path_stack_member or refuses_when_the_unread_row_is_on_its_path"),
+        ("descendant-assumed-harmless", substrate.could_affect_path,
+         [(" or _covers(path, point)", "")],
+         SCOPE, "on_the_resolution_path_refuses"),
+        ("unread-rows-dropped", substrate.parse_mount_table,
+         [("        if isinstance(row, UnparsedEntry):\n            unparsed.append(row)\n            continue",
+           "        if isinstance(row, UnparsedEntry):\n            continue")],
+         SCOPE, "recorded_as_unread or on_the_resolution_path_refuses or never_be_set_aside"),
+        ("set-aside-not-recorded", substrate._partition,
+         [("    return tuple(blocking), tuple(set_aside)", "    return tuple(blocking), ()")],
+         SCOPE, "names_what_it_set_aside or still_sees_what_was_set_aside or carried_by_relevance"),
+        ("descriptor-join-ignores-unread-rows", substrate.could_affect_mount_id,
+         [("    return entry.mount_id is None or entry.mount_id == mount_id", "    return False")],
+         SCOPE, "could_be_its_mount or far_away_does_not_excuse"),
+        ("topology-anomaly-treated-as-coherent", substrate._incoherent_parentage,
+         [("    seen: set[int] = set()", "    return None\n    seen: set[int] = set()")],
+         SCOPE, "topology_anomaly_demotes_its_own_row"),
+        ("duplicate-mount-id-tolerated", substrate.parse_mount_table,
+         [("        if counts[row.mount_id] > 1:", "        if False:")],
+         SCOPE, "topology_anomaly_demotes_its_own_row"),
     ]
 
 
