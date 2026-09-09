@@ -962,6 +962,27 @@ variable, and wired to nothing as a field. The audit that named it was right.
 - **The requirement is the OR of its sources.** `Config.require_digest_pin` and
   `PROM_REQUIRE_DIGEST_PIN` can each raise it; a programmatic `Config(False)`
   beside the environment variable does not switch pinning off.
+- **Boolean settings are parsed strictly, by one parser (F9, PROM-FIX-B).**
+  Every boolean security setting used to be read by a truth-set test copied
+  into seven modules and twenty-one test files, with two fail-open shapes the
+  independent review reproduced: a present but misspelled value
+  (`PROM_REQUIRE_VERIFIED_SUBSTRATE=tru`) was silently `False`, and a
+  programmatic string (`allow_unverified_substrate="false"`) was coerced with
+  `bool()` and *enabled* the opt-out. `core/booleans.py` is now the single
+  parser at every entry point — `Config` and `Config.from_env`,
+  `MigrationRunnerConfig`, `resolve_substrate_policy` and the substrate
+  variables, `PROM_REQUIRE_EXTERNAL_SIGNER`, `PROM_REQUIRE_LEDGER_ANCHOR`,
+  `PROM_ALLOW_UNSAFE_EXEC`, `PROM_REQUIRE_DIGEST_PIN` (factory and container
+  adapter), and the CI gate flags `PROM_REQUIRE_SANDBOX`, `PROM_REQUIRE_PG`,
+  `PROM_REQUIRE_PRIVILEGED` and `PROM_REQUIRE_CONTAINER` in the test tree.
+  Unset takes the default; a set value must be one of `1/true/yes/on` or
+  `0/false/no/off` (surrounding whitespace ignored, case-insensitive) and
+  anything else — `tru`, `y`, `t`, `enabled`, an empty string — is refused
+  with `ConfigError`, never read as `False`. A programmatic value must be an
+  actual `bool`; a string, number or `None` is refused, not coerced.
+  `tests/conformance/test_strict_booleans.py` runs the same value matrix
+  against every entry point and sweeps the source and test trees so the old
+  pattern cannot reappear at another site.
 - **Incoherent combinations are refused at load**, with the reason:
   `require_digest_pin=True` with `sandbox=namespace|unsafe`; `provider=remote`
   with `sandbox=unsafe`; an unknown sandbox name. The runtime half of the
@@ -1002,6 +1023,7 @@ variable, and wired to nothing as a field. The audit that named it was right.
 | `ledger_anchor_retention_days` | Config, env | object-lock targets (requested per record) | out of `[1, 36500]` refused at load; the medium's honouring of it is a deployment property | enforced at load (§3.4) |
 | `require_verified_substrate` | Config, env, runner config (OR of sources) | `resolve_substrate_policy` → `ConsumedApprovals` at construction | an approval store on a filesystem the probe cannot identify → **refused at construction** ("cannot be honoured"), the opt-out below withdrawn; a known network or host-shared filesystem is refused regardless of any setting | enforced (§2, PROM-FIX-A) |
 | `allow_unverified_substrate` | Config, env, runner config (honoured from any source) | `ConsumedApprovals` at construction | the opt-out for an *unidentified* substrate only, logged as a warning at every construction; no effect on a known network filesystem; refused at load, at runner-config construction and at resolution beside `require_verified_substrate` | enforced (§2, PROM-FIX-A) |
+| every boolean setting above, and the CI gate flags | Config, env, runner config, test tree | `core/booleans.py` at every read | a set value outside `1/true/yes/on` and `0/false/no/off` → **refused at load** (`ConfigError`), never read as false; a programmatic non-`bool` → refused, never coerced; unset → the default | enforced (F9, PROM-FIX-B) |
 
 ### 5.4 Default posture
 

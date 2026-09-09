@@ -14,6 +14,7 @@ import logging
 import os
 from typing import Mapping
 
+from prometheus_protocol.core.booleans import parse_env_bool, require_bool
 from prometheus_protocol.core.errors import ConfigError
 from prometheus_protocol.sandbox.base import Sandbox
 from prometheus_protocol.sandbox.container import ContainerSandbox
@@ -29,17 +30,18 @@ _ISOLATING = {
 }
 
 
-_TRUE = {"1", "true", "yes", "on"}
-
-
 def unsafe_exec_allowed(env: Mapping[str, str] | None = None) -> bool:
     env = os.environ if env is None else env
-    return (env.get("PROM_ALLOW_UNSAFE_EXEC", "") or "").strip().lower() in _TRUE
+    return parse_env_bool(
+        "PROM_ALLOW_UNSAFE_EXEC", env.get("PROM_ALLOW_UNSAFE_EXEC"), default=False
+    )
 
 
 def digest_pin_required(env: Mapping[str, str] | None = None) -> bool:
     env = os.environ if env is None else env
-    return (env.get("PROM_REQUIRE_DIGEST_PIN", "") or "").strip().lower() in _TRUE
+    return parse_env_bool(
+        "PROM_REQUIRE_DIGEST_PIN", env.get("PROM_REQUIRE_DIGEST_PIN"), default=False
+    )
 
 
 def build_sandbox(
@@ -69,7 +71,10 @@ def build_sandbox(
     env = os.environ if env is None else env
     name = (name or env.get("PROM_SANDBOX", SANDBOX_AUTO) or SANDBOX_AUTO).strip().lower()
     allow_unsafe = unsafe_exec_allowed(env)
-    pin_required = bool(require_digest_pin) or digest_pin_required(env)
+    pin_required = (
+        require_digest_pin is not None
+        and require_bool(require_digest_pin, name="require_digest_pin")
+    ) or digest_pin_required(env)
 
     if name == UnsafeLocalSandbox.name:
         if pin_required:

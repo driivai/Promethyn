@@ -38,6 +38,7 @@ from pathlib import Path
 
 import pytest
 
+from prometheus_protocol.core.booleans import parse_env_bool
 from prometheus_protocol.core.models import Case, Task, Verdict
 from prometheus_protocol.sandbox import Limits
 from prometheus_protocol.sandbox import _container_bootstrap
@@ -53,9 +54,7 @@ from prometheus_protocol.sandbox._start_signal import (
 from prometheus_protocol.sandbox.container import ContainerSandbox
 from prometheus_protocol.verifier.runner import SubprocessVerifier
 
-_REQUIRE_CONTAINER = (
-    os.environ.get("PROM_REQUIRE_CONTAINER", "") or ""
-).strip().lower() in {"1", "true", "yes", "on"}
+_REQUIRE_CONTAINER = parse_env_bool("PROM_REQUIRE_CONTAINER", os.environ.get("PROM_REQUIRE_CONTAINER"), default=False)
 _BOOTSTRAP = Path(_container_bootstrap.__file__)
 _PINNED_FAKE_IMAGE = "prom-fake@sha256:" + "0" * 64
 _TASK = Task(id="t/f", entry_point="f", prompt="", split="train", cases=(Case((1,), 1),))

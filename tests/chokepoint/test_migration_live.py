@@ -21,6 +21,7 @@ import psycopg
 import pytest
 from _pg_fault_proxy import DropCommitResponse
 
+from prometheus_protocol.core.booleans import parse_env_bool
 from prometheus_protocol.chokepoint import (
     AUDIT_OUTCOME_UNAVAILABLE,
     EXECUTION_BUSY,
@@ -46,9 +47,7 @@ from prometheus_protocol.chokepoint.runner import _receipt_text
 from prometheus_protocol.core.models import Judgment, Verdict
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
 
-_REQUIRE = (os.environ.get("PROM_REQUIRE_PG", "") or "").strip().lower() in {
-    "1", "true", "yes", "on",
-}
+_REQUIRE = parse_env_bool("PROM_REQUIRE_PG", os.environ.get("PROM_REQUIRE_PG"), default=False)
 
 
 def _target_from_env() -> DbTarget | None:

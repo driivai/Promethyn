@@ -16,6 +16,7 @@ import os
 
 import pytest
 
+from prometheus_protocol.core.booleans import parse_env_bool
 from prometheus_protocol.core.models import (
     ACTION_PYTHON_CODE,
     ExecutableAction,
@@ -38,9 +39,7 @@ from prometheus_protocol.swarm.models import (
     content_hash,
 )
 
-_REQUIRE = (os.environ.get("PROM_REQUIRE_SANDBOX", "") or "").strip().lower() in {
-    "1", "true", "yes", "on",
-}
+_REQUIRE = parse_env_bool("PROM_REQUIRE_SANDBOX", os.environ.get("PROM_REQUIRE_SANDBOX"), default=False)
 _CLOCK = "2026-07-01T00:00:00Z"
 _PASS_HIGH = Judgment(verdict=Verdict.PASS, confidence=0.99, authoritative=True)
 _PASS_LOW = Judgment(verdict=Verdict.PASS, confidence=0.60, authoritative=True)

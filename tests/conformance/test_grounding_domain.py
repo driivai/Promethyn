@@ -21,6 +21,7 @@ import os
 
 import pytest
 
+from prometheus_protocol.core.booleans import parse_env_bool
 from prometheus_protocol.benchmarks.grounding_eval import (
     SCRIPTED_REPLIES,
     ScriptedGroundingJudgeProvider,
@@ -55,9 +56,7 @@ from prometheus_protocol.sandbox import NamespaceSandbox
 from prometheus_protocol.verifier.bank import VerifierBank
 from prometheus_protocol.verifier.grounding import GroundingTask, GroundingVerifier
 
-_REQUIRE = (os.environ.get("PROM_REQUIRE_SANDBOX", "") or "").strip().lower() in {
-    "1", "true", "yes", "on",
-}
+_REQUIRE = parse_env_bool("PROM_REQUIRE_SANDBOX", os.environ.get("PROM_REQUIRE_SANDBOX"), default=False)
 
 
 class _OneReplyProvider:

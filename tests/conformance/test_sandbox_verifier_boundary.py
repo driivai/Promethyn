@@ -8,6 +8,7 @@ import subprocess
 
 import pytest
 
+from prometheus_protocol.core.booleans import parse_env_bool
 from prometheus_protocol.core.models import Case, Evidence, Task, Verdict
 from prometheus_protocol.sandbox import NamespaceSandbox
 from prometheus_protocol.sandbox.container import ContainerSandbox
@@ -15,7 +16,7 @@ from prometheus_protocol.verifier.runner import SubprocessVerifier
 
 
 def required(name):
-    return os.environ.get(name, "").lower() in {"1", "true", "yes", "on"}
+    return parse_env_bool(name, os.environ.get(name), default=False)
 
 
 @pytest.fixture(scope="module")

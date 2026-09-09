@@ -85,6 +85,7 @@ from prometheus_protocol.chokepoint.substrate import (
     probe_substrate,
     resolve_substrate_policy,
 )
+from prometheus_protocol.core.booleans import parse_env_bool, require_bool
 from prometheus_protocol.core.errors import ConfigError
 
 _LOG = logging.getLogger(__name__)
@@ -94,12 +95,13 @@ _LOG = logging.getLogger(__name__)
 #: programmatic ``require_external_signer=False`` beside the variable does not
 #: lower it (threat model §2.6; ``docs/key-custody.md``).
 EXTERNAL_SIGNER_REQUIRED_ENV = "PROM_REQUIRE_EXTERNAL_SIGNER"
-_TRUE = {"1", "true", "yes", "on"}
 
 
 def external_signer_required(env: Mapping[str, str] | None = None) -> bool:
     env = os.environ if env is None else env
-    return (env.get(EXTERNAL_SIGNER_REQUIRED_ENV) or "").strip().lower() in _TRUE
+    return parse_env_bool(
+        EXTERNAL_SIGNER_REQUIRED_ENV, env.get(EXTERNAL_SIGNER_REQUIRED_ENV), default=False
+    )
 
 
 REPLAY = "replay"
@@ -295,6 +297,12 @@ class MigrationRunnerConfig:
     def __post_init__(self) -> None:
         if not isinstance(self.target, DbTarget):
             raise TypeError("migration runner target must be a DbTarget")
+        for flag in (
+            "require_external_signer",
+            "require_verified_substrate",
+            "allow_unverified_substrate",
+        ):
+            require_bool(getattr(self, flag), name=f"MigrationRunnerConfig.{flag}")
         if (self.signing_key is None) == (self.signer is None):
             raise ValueError(
                 "migration runner needs exactly one of signing_key (local, "

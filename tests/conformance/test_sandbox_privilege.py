@@ -29,6 +29,7 @@ import tempfile
 
 import pytest
 
+from prometheus_protocol.core.booleans import parse_env_bool
 from prometheus_protocol.sandbox.base import CANDIDATE_ENV_KEYS, Limits, candidate_env
 from prometheus_protocol.sandbox.container import (
     CONTAINER_UID,
@@ -39,12 +40,8 @@ from prometheus_protocol.sandbox.container import (
 from prometheus_protocol.sandbox.namespace import NamespaceSandbox
 from prometheus_protocol.sandbox.unsafe import UnsafeLocalSandbox
 
-_REQUIRE_CONTAINER = (os.environ.get("PROM_REQUIRE_CONTAINER", "") or "").strip().lower() in {
-    "1", "true", "yes", "on",
-}
-_REQUIRE_PRIVILEGED = (os.environ.get("PROM_REQUIRE_PRIVILEGED", "") or "").strip().lower() in {
-    "1", "true", "yes", "on",
-}
+_REQUIRE_CONTAINER = parse_env_bool("PROM_REQUIRE_CONTAINER", os.environ.get("PROM_REQUIRE_CONTAINER"), default=False)
+_REQUIRE_PRIVILEGED = parse_env_bool("PROM_REQUIRE_PRIVILEGED", os.environ.get("PROM_REQUIRE_PRIVILEGED"), default=False)
 
 #: A uid that is neither root nor the container user, standing in for "some other
 #: local account". 1 is ``daemon`` on every mainstream distribution.

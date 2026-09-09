@@ -22,6 +22,7 @@ import os
 import pytest
 
 from harness.benchmarks.python_functions import build_benchmark, build_solution_book
+from prometheus_protocol.core.booleans import parse_env_bool
 from prometheus_protocol import Config, FirewallError, build_orchestrator
 from prometheus_protocol.benchmarks.sql_items import (
     CLUSTER_DISTINCT,
@@ -45,9 +46,7 @@ from prometheus_protocol.gate.promotion import PromotionGate
 from prometheus_protocol.sandbox import NamespaceSandbox
 from prometheus_protocol.verifier.sql import SqlTask
 
-_REQUIRE = (os.environ.get("PROM_REQUIRE_SANDBOX", "") or "").strip().lower() in {
-    "1", "true", "yes", "on",
-}
+_REQUIRE = parse_env_bool("PROM_REQUIRE_SANDBOX", os.environ.get("PROM_REQUIRE_SANDBOX"), default=False)
 
 # The genuine lesson's cluster sorts FIRST, so its promotion lands before the
 # overfit candidate is scored — the overfit refusal therefore also proves the

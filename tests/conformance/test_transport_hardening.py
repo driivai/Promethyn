@@ -42,6 +42,7 @@ from pathlib import Path
 
 import pytest
 
+from prometheus_protocol.core.booleans import parse_env_bool
 from prometheus_protocol.core.config import Config
 from prometheus_protocol.core.endpoint import INSECURE_LOOPBACK_ENV, validate_endpoint
 from prometheus_protocol.core.errors import ConfigError
@@ -70,9 +71,7 @@ from prometheus_protocol.verifier import trust
 from prometheus_protocol.verifier.bank import VerifierBank
 from prometheus_protocol.verifier.model_judge import ModelJudgeVerifier
 
-_REQUIRE = (os.environ.get("PROM_REQUIRE_SANDBOX", "") or "").strip().lower() in {
-    "1", "true", "yes", "on",
-}
+_REQUIRE = parse_env_bool("PROM_REQUIRE_SANDBOX", os.environ.get("PROM_REQUIRE_SANDBOX"), default=False)
 
 KEY = "prom-attacker4-bearer-canary-77e1c0d3"
 PASS_BODY = json.dumps({"choices": [{"message": {"content": "PASS"}}]}).encode()

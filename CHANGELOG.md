@@ -57,6 +57,31 @@ in `spec/invariants.md` is a major version bump.
   implied.
 
 ### Fixed
+- **F9: one strict boolean parser at every entry point (PROM-FIX-B part 1).**
+  The truth-set parser copied into seven modules and twenty-one test files
+  had two fail-open shapes the independent review reproduced: a present but
+  misspelled value (`PROM_REQUIRE_VERIFIED_SUBSTRATE=tru`) was silently
+  `False`, and a programmatic string (`allow_unverified_substrate="false"`)
+  was coerced with `bool()` and enabled the opt-out. `core/booleans.py` is now
+  the single parser: unset takes the default; a set value must be one of
+  `1/true/yes/on` or `0/false/no/off` and anything else is refused with
+  `ConfigError`, never read as false; a programmatic boolean must be an
+  actual `bool`. Applied to `Config` and `Config.from_env`,
+  `MigrationRunnerConfig`, `resolve_substrate_policy`, the substrate, signer,
+  ledger-anchor, unsafe-exec and digest-pin variables, and the CI gate flags
+  (`PROM_REQUIRE_SANDBOX`, `PROM_REQUIRE_PG`, `PROM_REQUIRE_PRIVILEGED`,
+  `PROM_REQUIRE_CONTAINER`), where a typo used to turn "fail, do not skip"
+  into a silent skip. `tests/conformance/test_strict_booleans.py` covers
+  every entry point and sweeps both trees for the old pattern.
+- **Five claims corrected to what the code establishes today (PROM-FIX-B
+  part 0).** The execution guard is keyed to the store's pathname, so
+  recovery through an alias can declare a live owner not committed
+  (finding 2); the substrate check classifies the filesystem type at the
+  parent directory's pathname, not the opened store or lock objects, and
+  uses no mount identity (findings 1A/1B); raw header syntax is not
+  validated, so a colonless header line lets a truncated body read clean and
+  an empty anchor history verify VALID (finding 3); "every Sign logged by the
+  KMS" is a deployment obligation, not enforced by construction.
 - **Two false documentation claims corrected (PROM-FIX-A).**
   `docs/threat-model.md` §2.4 said the chokepoint runner spawns no
   subprocesses; since #77 an `https://` ledger anchor resolves the log's

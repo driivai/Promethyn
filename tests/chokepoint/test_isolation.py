@@ -28,12 +28,11 @@ import tempfile
 
 import pytest
 
+from prometheus_protocol.core.booleans import parse_env_bool
 from prometheus_protocol.sandbox.base import Limits
 from prometheus_protocol.sandbox.namespace import NamespaceSandbox
 
-_REQUIRE = (os.environ.get("PROM_REQUIRE_PG", "") or "").strip().lower() in {
-    "1", "true", "yes", "on",
-}
+_REQUIRE = parse_env_bool("PROM_REQUIRE_PG", os.environ.get("PROM_REQUIRE_PG"), default=False)
 
 _TCP_PATHS = ("psql-tcp", "raw-tcp", "psycopg-tcp")
 _SOCKET_PATHS = ("psql-sock", "raw-sock", "psycopg-sock")

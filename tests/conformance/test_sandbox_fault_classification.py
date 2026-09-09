@@ -23,6 +23,7 @@ from pathlib import Path
 
 import pytest
 
+from prometheus_protocol.core.booleans import parse_env_bool
 from prometheus_protocol.core.models import (
     Case,
     Evidence,
@@ -40,9 +41,7 @@ from prometheus_protocol.verifier.runner import SubprocessVerifier
 from prometheus_protocol.verifier.store import InMemoryTrustStore
 from prometheus_protocol.verifier.trust import sample_count
 
-_REQUIRE = (os.environ.get("PROM_REQUIRE_SANDBOX", "") or "").strip().lower() in {
-    "1", "true", "yes", "on",
-}
+_REQUIRE = parse_env_bool("PROM_REQUIRE_SANDBOX", os.environ.get("PROM_REQUIRE_SANDBOX"), default=False)
 _TASK = Task(id="t/f", entry_point="f", prompt="", split="train", cases=(Case((1,), 1),))
 _OK = "def f(n):\n    return n\n"
 _ABORT = "def f(n):\n    import os\n    os.abort()\n"

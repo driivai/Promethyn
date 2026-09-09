@@ -13,6 +13,7 @@ import os
 
 import pytest
 
+from prometheus_protocol.core.booleans import parse_env_bool
 from prometheus_protocol.core.models import Tier, Unavailable, Verdict
 from prometheus_protocol.gate.promotion import (
     OUTCOME_APPROVE,
@@ -26,9 +27,7 @@ from prometheus_protocol.verifier.sql import SqlTask, SqlVerifier
 from prometheus_protocol.benchmarks.sql_items import run_reliability
 from prometheus_protocol.benchmarks.sql_loop_demo import run_loop
 
-_REQUIRE = (os.environ.get("PROM_REQUIRE_SANDBOX", "") or "").strip().lower() in {
-    "1", "true", "yes", "on",
-}
+_REQUIRE = parse_env_bool("PROM_REQUIRE_SANDBOX", os.environ.get("PROM_REQUIRE_SANDBOX"), default=False)
 
 _TASK = SqlTask(
     id="sql/conf",

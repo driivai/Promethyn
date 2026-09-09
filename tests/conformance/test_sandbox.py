@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from prometheus_protocol.core.booleans import parse_env_bool
 from prometheus_protocol.core.errors import ConfigError
 from prometheus_protocol.sandbox import (
     ContainerSandbox,
@@ -27,9 +28,7 @@ from prometheus_protocol.sandbox import (
 )
 from prometheus_protocol.sandbox.unsafe import NullSandbox
 
-_REQUIRE = (os.environ.get("PROM_REQUIRE_SANDBOX", "") or "").strip().lower() in {
-    "1", "true", "yes", "on",
-}
+_REQUIRE = parse_env_bool("PROM_REQUIRE_SANDBOX", os.environ.get("PROM_REQUIRE_SANDBOX"), default=False)
 
 
 def _sandbox() -> NamespaceSandbox:

@@ -17,6 +17,7 @@ import subprocess
 
 import pytest
 
+from prometheus_protocol.core.booleans import parse_env_bool
 from prometheus_protocol.core.models import ACTION_PYTHON_CODE, ExecutableAction
 from prometheus_protocol.execution.controller import ExecutionController
 from prometheus_protocol.execution.executor import SandboxExecutor
@@ -31,9 +32,7 @@ from prometheus_protocol.tools.git import (
     judgment_for,
 )
 
-_REQUIRE = (os.environ.get("PROM_REQUIRE_SANDBOX", "") or "").strip().lower() in {
-    "1", "true", "yes", "on",
-}
+_REQUIRE = parse_env_bool("PROM_REQUIRE_SANDBOX", os.environ.get("PROM_REQUIRE_SANDBOX"), default=False)
 
 _FIXED_ENV = {
     **os.environ,
