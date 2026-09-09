@@ -52,16 +52,24 @@ store is refused at construction and before every use; and every intent
 records the identity of the lock its owner held, so "same kernel" establishes
 a dead owner only when it is provably the same lock (`chokepoint/runner.py`,
 `chokepoint/ownership.py`; `tests/chokepoint/test_lock_identity.py`
-reproduces the review's scenario and shows it failing closed). The substrate
-check from PROM-FIX-A is narrower than its earlier wording here claimed: it
-classifies, from the mount table, the filesystem *type* at the pathname of
-the store's parent directory (`chokepoint/substrate.py`) and refuses the known
-network types; it does not examine the opened store or lock objects and uses
-no mount identity, so "local filesystem recognised" is not "every runner holds
-the same exclusive guard" (findings 1A/1B, open). A filesystem the probe
-cannot identify is refused unless explicitly opted out of
+reproduces the review's scenario and shows it failing closed). The 1A/1B
+follow-up replaces parent-only classification with inspection of the opened
+store descriptor, which is also the execution-lock object: `fstat` device
+identity must agree with the exact Linux `fdinfo` mount ID's `mountinfo`
+entry. The held object is reinspected before each guard acquisition. The
+separate parent preflight walks mount IDs and parent IDs, including overmounts
+that hide a lower mount's descendants; it does not choose the longest global
+pathname prefix. `AuthorizationJournal` inspects its own existing file through
+an `O_PATH` descriptor, not its parent. Known network types are refused.
+Missing, inconsistent or ambiguous metadata is unverified; a filesystem the
+probe cannot identify is refused unless explicitly opted out of
 (`allow_unverified_substrate`, logged; withdrawn by
-`require_verified_substrate`). Every execution intent records its owner's
+`require_verified_substrate`; all sources use strict boolean parsing).
+These checks assume trusted kernel/proc metadata and stable trusted paths and
+mounts. They do not atomically bind SQLite's pathname opens to the inspected
+descriptors, establish power-loss durability, or enable multi-host execution.
+Non-Linux inspection is unverified and the execution guard remains Linux-only.
+Every execution intent records its owner's
 host identity and lock identity (`chokepoint/ownership.py`), and a recovering
 runner that cannot place the recorded owner — on its own kernel holding the
 same lock object, or on its own rebooted machine — leaves the intent pending

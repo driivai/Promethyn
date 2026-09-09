@@ -206,17 +206,24 @@ that broke it, and in such a deployment the F3 race was live. PROM-FIX-A added
 two checks; the independent review found each narrower than this paragraph
 then claimed ("checked, not assumed"), and its meta-finding — "local
 filesystem recognised" is not "every runner holds the same exclusive execution
-guard" — is what PROM-FIX-B answers for the lock itself. The substrate
-classification is still the narrower thing it is (findings 1A/1B, open).
+guard" — is what PROM-FIX-B answers for the lock itself. The 1A/1B follow-up
+adds opened-object substrate inspection and topology-aware parent preflight.
 
-- **Substrate.** `ConsumedApprovals` classifies, from the kernel's mount
-  table (`/proc/self/mountinfo`), the filesystem *type* at the pathname of the
-  store's parent directory before it creates anything there
-  (`chokepoint/substrate.py`). That is a classification of a pathname, not an
-  inspection of the opened store or lock objects, and it uses no mount
-  identity: a store that is itself a separate mount, or an alias of the store
-  reached through another mount, is outside what it examines (independent
-  review, findings 1A/1B, open). Where the parent's path classifies as a
+- **Substrate (1A/1B).** `ConsumedApprovals` retains a conservative parent
+  preflight before creation, including SQLite sidecar placement, then inspects
+  the actual opened store descriptor before SQLite initialization. That same
+  descriptor is PROM-FIX-B's lock object; its device/inode identifies the lock,
+  while its Linux `fdinfo` mount ID selects exactly one `mountinfo` entry whose
+  device must agree with `fstat`. An alias's mount ID may differ without
+  changing the lock's device/inode identity. The held descriptor is reinspected
+  before every guard acquisition, including after a fork reopens it.
+  The preflight retains mount IDs and parent IDs and follows visible children:
+  overmounting `/srv` hides the lower mount's `/srv/private` descendant, even
+  though the latter has a longer pathname. Duplicate identities, cycles,
+  disconnected covering mounts and competing visible children are refused as
+  unverified, not resolved by line order. Neither device-only matching nor a
+  pathname fallback can establish an opened object's identity.
+  Where the inspected object or preflight identifies a known
   network or host-shared filesystem — NFS, CIFS/SMB, 9p, virtiofs, vboxsf,
   Ceph, GFS2, OCFS2, Lustre, AFS, sshfs/glusterfs/s3fs and the like — the
   store is **refused** with `ConfigError`, and there is no opt-out. A filesystem the probe cannot identify — an overlay
@@ -225,13 +232,18 @@ classification is still the narrower thing it is (findings 1A/1B, open).
   platform without a mount table — is refused by default: couldn't-verify is
   not verified-safe. `allow_unverified_substrate`
   (`PROM_ALLOW_UNVERIFIED_SUBSTRATE`) is the explicit opt-out for that case
-  only, logged as a warning at every construction; `require_verified_substrate`
+  only, logged as a warning at every accepted inspection; `require_verified_substrate`
   (`PROM_REQUIRE_VERIFIED_SUBSTRATE`, the OR of its sources) withdraws it, and
-  the pair set together is refused as incoherent. A local filesystem — ext4,
+  the pair set together is refused as incoherent. Environment sources use the
+  strict parser from PROM-FIX-B; programmatic values and direct policy fields
+  must be actual booleans, and a true earlier source does not suppress
+  validation of later sources. A recognized local filesystem — ext4,
   xfs, btrfs, tmpfs, f2fs, zfs, and the other names in
-  `substrate.SAFE_FILESYSTEMS` — proceeds. The refusal happens before the
-  store's directory or file exists, so nothing of the runner's is left on a
-  filesystem it will not use.
+  `substrate.SAFE_FILESYSTEMS` — proceeds. Parent-preflight refusal creates
+  nothing. An opened-object refusal can leave an empty newly created file,
+  but happens before the store's SQLite initialization. `AuthorizationJournal`
+  inspects its separately existing file through `O_PATH` before issuance and
+  around operation opens, enforcing the same policy and checked inode identity.
 - **Lock identity (PROM-FIX-B, finding 2).** The guard used to be an `flock`
   on a companion file named after the store's path. The independent review
   reproduced, with real subprocesses, hard links, SQLite and OS locks, what
@@ -307,16 +319,23 @@ its reason — instead of producing false recovery evidence.
   pending until an operator who has established it by other means reconciles
   with `assume_owner_dead=True`. The window is the upgrade itself, and it
   fails closed: a wedge an operator resolves on the record, not a race.
-- The substrate classification is of the store's parent directory's pathname
-  (findings 1A/1B, open): the opened store and lock objects are not probed
-  and mount identity is not used. The lock is inode-keyed regardless, so an
-  alias reached through another mount contends for the same lock; what the
-  classification can still miss is a store that is itself a network mount
-  beneath a local-looking parent.
-- The audit ledger's own substrate is not probed; deploy it beside the store.
-  Independent stores sharing one ledger pass the substrate check on each host;
-  it is the owner identity in the shared ledger's intents that catches the
-  second host's recovery, so the ledger must be the one they share.
+- The kernel, proc metadata, parent directories and mount namespace remain
+  trusted. Linux metadata absent from this namespace, malformed topology or
+  disagreement between descriptor and mount device is unverified, not guessed.
+  Concurrent privileged mount replacement and path replacement are outside
+  this guarantee: Python SQLite opens by pathname, not by our inspected
+  descriptor, so the inspection and SQLite open are not one atomic VFS action.
+  Do not remount or replace storage while runners exist.
+- A recognized filesystem driver establishes the supported single-kernel
+  locking assumption, not storage-controller behavior, truthful fsync, shared
+  block-device exclusivity or survival across power loss. tmpfs/ramfs remain
+  recognized for locking but are volatile; use persistent local storage for
+  replay protection across reboot. Overlay layers and unrecognized drivers
+  remain unverified. The opt-out does not prove any of these properties.
+- Issuance through `AuthorizationJournal` checks the audit file's substrate;
+  a bare `SqliteLedger` or a custom runner audit sink does not gain this check
+  automatically. Independent stores sharing one ledger do not become one
+  execution lock: recovery still depends on the recorded owner/lock identity.
 - The guard is specified for Linux. On any other platform `execution_guard`
   refuses, so `execute` and `reconcile_unfinished` report
   `approval_store_unavailable` there even under the substrate opt-out.
@@ -333,7 +352,16 @@ commit-vs-rollback acknowledgment, threads, and suspended/killed processes.
 each named network filesystem, the default refusal of an unidentified one, the
 opt-out and its logged warning, the requirement withdrawing it, the incoherent
 pair, and the local-filesystem positive control under every policy — plus the
-real probe against the CI checkout). `test_owner_identity.py` plays a second
+real probe against the CI checkout). `test_opened_substrate.py` covers hidden
+descendants independent of table order, exact descriptor identity, unavailable
+metadata and journal reinspection. `test_substrate_linux.py` requires five real
+namespace cases: separately mounted store and journal files, a bind-mounted
+store/lock alias with subprocess contention, a hidden descendant and preservation
+of a live SQLite POSIX lock during journal inspection. Missing Linux or mount
+support fails these tests rather than skipping them. The guard mutations in
+`scripts/substrate_revert_proofs.py` pin both the number of reverts and the
+resulting call-phase failures; shortfall and excess both fail.
+`test_owner_identity.py` plays a second
 host against a shared ledger and store: the foreign owner's intent is left
 `owner_unverifiable` with no receipt lookup and no outcome recorded, a runner on
 the owner's kernel holding the same lock and the same machine after a reboot

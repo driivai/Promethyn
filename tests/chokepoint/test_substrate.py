@@ -16,7 +16,9 @@ an unexpected filesystem fails legibly instead of failing every store.
 from __future__ import annotations
 
 import logging
+import os
 import sys
+from pathlib import Path
 
 import pytest
 from f11_support import authorization_context
@@ -48,14 +50,27 @@ SUBSTRATE_LOGGER = "prometheus_protocol.chokepoint.substrate"
 
 
 def table(*mounts: tuple[str, str]) -> str:
-    """A ``/proc/self/mountinfo`` in the kernel's shape, one line per mount."""
+    """Chronological mounts with actual parent relationships and hidden trees.
+
+    Keep hidden entries in mountinfo but remove them from the path-resolution
+    view used to parent subsequent mounts. No production resolver is used.
+    """
 
     lines = []
+    visible = {}
+    if not mounts or mounts[0][0] != "/":
+        mounts = (("/", "ext4"), *mounts)
     for index, (mount_point, fs_type) in enumerate(mounts, start=20):
+        ancestors = [p for p in visible if p == "/" or mount_point == p
+                     or mount_point.startswith(p.rstrip("/") + "/")]
+        parent = visible[max(ancestors, key=len)] if ancestors else index
         lines.append(
-            f"{index} 1 0:{index} / {mount_point} rw,relatime shared:{index} - "
+            f"{index} {parent} 0:{index} / {mount_point} rw,relatime shared:{index} - "
             f"{fs_type} source-{index} rw"
         )
+        visible = {p: ident for p, ident in visible.items()
+                   if not (p == mount_point or p.startswith(mount_point.rstrip("/") + "/"))}
+        visible[mount_point] = index
     return "\n".join(lines) + "\n"
 
 
@@ -69,8 +84,19 @@ def report(verdict: str, fs_type: str | None = "nfs4") -> SubstrateReport:
     )
 
 
-def probe_returning(fixed: SubstrateReport):
-    return lambda path: fixed
+def probe_returning(fixed: SubstrateReport, expected: Path):
+    def probe(path):
+        assert Path(path) == expected, "wrong preflight object"
+        return fixed
+    return probe
+
+
+def opened_probe(fixed: SubstrateReport, expected: Path):
+    def probe(fd):
+        info, wanted = os.fstat(fd), expected.stat()
+        assert (info.st_dev, info.st_ino) == (wanted.st_dev, wanted.st_ino), "wrong opened object"
+        return fixed
+    return probe
 
 
 def target() -> DbTarget:
@@ -126,18 +152,17 @@ def test_an_overmount_shadows_the_mount_beneath_it():
 
 def test_escaped_mount_points_and_malformed_lines():
     mounts = (
-        "this line has no separator at all\n"
-        "21 1 0:21 / /mnt/net\\040share rw - nfs4 nas:/export rw\n"
-        "22 1 0:22 /\n"
-        "23 1 0:23 / / rw - ext4 /dev/root rw\n"
+        "21 23 0:21 / /mnt/net\\040share rw - nfs4 nas:/export rw\n"
+        "23 23 0:23 / / rw - ext4 /dev/root rw\n"
     )
     assert classify_path("/mnt/net share/store", mounts).verdict == SUBSTRATE_UNSAFE
     assert classify_path("/mnt/net share/store", mounts).mount_point == "/mnt/net share"
     assert classify_path("/home/store", mounts).verdict == SUBSTRATE_SAFE
+    assert classify_path("/home/store", mounts + "malformed line\n").verdict == SUBSTRATE_UNKNOWN
 
 
 def test_no_covering_mount_is_unknown():
-    verdict = classify_path("/srv/store", table(("/mnt", "ext4")))
+    verdict = classify_path("/srv/store", "20 1 0:20 / /mnt rw - ext4 source rw\n")
     assert verdict.verdict == SUBSTRATE_UNKNOWN and verdict.fs_type is None
 
 
@@ -174,7 +199,7 @@ def test_an_unreadable_mount_table_is_unknown_not_safe(monkeypatch, tmp_path):
 def test_an_unsafe_substrate_refuses_construction_and_creates_nothing(tmp_path, policy):
     store = tmp_path / "shared" / "store.db"
     with pytest.raises(ConfigError, match="no opt-out for a known-unsafe substrate"):
-        ConsumedApprovals(store, substrate_policy=policy, probe=probe_returning(report(SUBSTRATE_UNSAFE)))
+        ConsumedApprovals(store, substrate_policy=policy, probe=probe_returning(report(SUBSTRATE_UNSAFE), store.parent))
     assert not store.parent.exists(), "nothing of the runner's may be left on a refused substrate"
 
 
@@ -183,14 +208,14 @@ def test_an_unsafe_substrate_ignores_the_environment_opt_out(tmp_path):
         ConsumedApprovals(
             tmp_path / "store.db",
             env={UNVERIFIED_SUBSTRATE_ALLOWED_ENV: "1"},
-            probe=probe_returning(report(SUBSTRATE_UNSAFE)),
+            probe=probe_returning(report(SUBSTRATE_UNSAFE), tmp_path),
         )
 
 
 def test_an_unknown_substrate_is_refused_by_default(tmp_path):
     store = tmp_path / "somewhere" / "store.db"
     with pytest.raises(ConfigError, match="Couldn't-verify is not verified-safe") as refusal:
-        ConsumedApprovals(store, env={}, probe=probe_returning(report(SUBSTRATE_UNKNOWN, "overlay")))
+        ConsumedApprovals(store, env={}, probe=probe_returning(report(SUBSTRATE_UNKNOWN, "overlay"), store.parent))
     assert UNVERIFIED_SUBSTRATE_ALLOWED_ENV in str(refusal.value)
     assert not store.parent.exists()
 
@@ -198,13 +223,14 @@ def test_an_unknown_substrate_is_refused_by_default(tmp_path):
 @pytest.mark.parametrize("source", ["policy", "environment"])
 def test_an_unknown_substrate_proceeds_only_on_the_explicit_opt_out_and_warns(tmp_path, caplog, source):
     caplog.set_level(logging.WARNING, logger=SUBSTRATE_LOGGER)
-    probe = probe_returning(report(SUBSTRATE_UNKNOWN, "overlay"))
+    probe = probe_returning(report(SUBSTRATE_UNKNOWN, "overlay"), tmp_path)
+    inspect = opened_probe(report(SUBSTRATE_SAFE, "ext4"), tmp_path / "store.db")
     if source == "policy":
-        store = ConsumedApprovals(tmp_path / "store.db", substrate_policy=SubstratePolicy(allow_unverified=True), probe=probe)
+        store = ConsumedApprovals(tmp_path / "store.db", substrate_policy=SubstratePolicy(allow_unverified=True), probe=probe, opened_probe=inspect)
     else:
-        store = ConsumedApprovals(tmp_path / "store.db", env={UNVERIFIED_SUBSTRATE_ALLOWED_ENV: "yes"}, probe=probe)
+        store = ConsumedApprovals(tmp_path / "store.db", env={UNVERIFIED_SUBSTRATE_ALLOWED_ENV: "yes"}, probe=probe, opened_probe=inspect)
     try:
-        assert store.substrate.verdict == SUBSTRATE_UNKNOWN
+        assert store.substrate.verdict == SUBSTRATE_SAFE  # actual object, not preflight cache
         assert store.claim("nonce-1", "now") and not store.claim("nonce-1", "now")
     finally:
         store.close()
@@ -216,7 +242,7 @@ def test_an_unknown_substrate_proceeds_only_on_the_explicit_opt_out_and_warns(tm
 
 
 def test_the_requirement_withdraws_the_opt_out(tmp_path):
-    probe = probe_returning(report(SUBSTRATE_UNKNOWN, "overlay"))
+    probe = probe_returning(report(SUBSTRATE_UNKNOWN, "overlay"), tmp_path)
     with pytest.raises(ConfigError, match="require_verified_substrate=True cannot be honoured"):
         ConsumedApprovals(tmp_path / "store.db", substrate_policy=SubstratePolicy(require_verified=True), probe=probe)
     # Raised in the environment, it withdraws an opt-out set in a runner config.
@@ -235,11 +261,20 @@ def test_a_safe_substrate_constructs_normally_under_every_policy(tmp_path, caplo
     """The positive control: the check refuses the wrong thing, not everything."""
 
     caplog.set_level(logging.WARNING, logger=SUBSTRATE_LOGGER)
-    store = ConsumedApprovals(tmp_path / "store.db", substrate_policy=policy, probe=probe_returning(report(SUBSTRATE_SAFE, "ext4")))
+    safe = report(SUBSTRATE_SAFE, "ext4")
+    store = ConsumedApprovals(tmp_path / "store.db", substrate_policy=policy,
+                             probe=probe_returning(safe, tmp_path),
+                             opened_probe=opened_probe(safe, tmp_path / "store.db"))
     try:
         assert store.substrate.verdict == SUBSTRATE_SAFE
-        with store.execution_guard() as owned:
-            assert owned
+        if sys.platform.startswith("linux"):
+            with store.execution_guard() as owned:
+                assert owned
+        else:
+            from prometheus_protocol.chokepoint.runner import _OwnershipUnavailable
+            with pytest.raises(_OwnershipUnavailable, match="_PlatformUnsupported"):
+                with store.execution_guard():
+                    pytest.fail("non-Linux execution is not supported")
     finally:
         store.close()
     assert not [r for r in caplog.records if r.name == SUBSTRATE_LOGGER]
@@ -317,8 +352,12 @@ def test_both_settings_are_declared_security_fields_read_from_the_environment():
 
 
 def _build(tmp_path, monkeypatch, verdict: str, fs_type: str, **config_flags):
-    monkeypatch.setattr("prometheus_protocol.chokepoint.runner.probe_substrate", probe_returning(report(verdict, fs_type)))
-    monkeypatch.setattr("prometheus_protocol.chokepoint.authorization_journal.probe_substrate", probe_returning(report(verdict, fs_type)))
+    monkeypatch.setattr("prometheus_protocol.chokepoint.runner.probe_substrate",
+                        probe_returning(report(SUBSTRATE_SAFE, "ext4"), tmp_path / "chokepoint"))
+    monkeypatch.setattr("prometheus_protocol.chokepoint.runner.probe_opened_substrate",
+                        opened_probe(report(verdict, fs_type), tmp_path / "chokepoint" / "store.db"))
+    monkeypatch.setattr("prometheus_protocol.chokepoint.authorization_journal.probe_file_substrate",
+                        probe_returning(report(SUBSTRATE_SAFE, "ext4"), tmp_path / "audit.db"))
     calls: list[object] = []
     ledger = SqliteLedger.private(tmp_path / "audit.db")
     config = MigrationRunnerConfig(
@@ -332,11 +371,11 @@ def _build(tmp_path, monkeypatch, verdict: str, fs_type: str, **config_flags):
     )
 
 
-def test_the_builder_refuses_an_unsafe_substrate_before_creating_the_store(tmp_path, monkeypatch):
+def test_the_builder_refuses_an_unsafe_opened_store_before_sqlite(tmp_path, monkeypatch):
     ledger, calls, build = _build(tmp_path, monkeypatch, SUBSTRATE_UNSAFE, "nfs4")
     with pytest.raises(ConfigError, match="nfs4"):
         build()
-    assert calls == [] and not (tmp_path / "chokepoint").exists()
+    assert calls == [] and (tmp_path / "chokepoint" / "store.db").stat().st_size == 0
     ledger.close()
 
 
