@@ -50,6 +50,7 @@ from prometheus_protocol.core.errors import ConfigError
 from prometheus_protocol.core.interfaces import Provider
 from prometheus_protocol.core.models import Skill
 from prometheus_protocol.core.transport import (
+    DeadlineRequest,
     TransportErrors,
     build_opener,
     classify_open_error,
@@ -258,12 +259,12 @@ class RemoteModelProvider(Provider):
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
-        request = urllib.request.Request(url, data=body, headers=headers, method="POST")
+        request = DeadlineRequest(url, data=body, headers=headers, method="POST")
 
         # One monotonic deadline for DNS, TCP/TLS, writes, headers and body.
         # Pass it to the transport before opener.open begins network work.
         deadline = time.monotonic() + self.timeout_s
-        request._prom_deadline = deadline
+        request.prom_deadline = deadline
         try:
             response = self._opener.open(request, timeout=self.timeout_s)
         except ProviderError:

@@ -40,7 +40,11 @@ from prometheus_protocol.swarm.synthesis import RoleSynthesisEngine
 from prometheus_protocol.verifier.bank import VerifierBank
 from prometheus_protocol.verifier.model_judge import ModelJudgeVerifier
 from prometheus_protocol.verifier.runner import SubprocessVerifier
-from prometheus_protocol.verifier.store import InMemoryTrustStore, SqliteTrustStore
+from prometheus_protocol.verifier.store import (
+    InMemoryTrustStore,
+    SqliteTrustStore,
+    TrustStore,
+)
 
 _LOG = logging.getLogger(__name__)
 
@@ -264,6 +268,10 @@ def build_orchestrator(
     # Persist trust alongside the ledger; use an in-memory store when the ledger
     # is itself in-memory (tests). Register the verifier so its hard-tier prior
     # applies from the first judgment.
+    # Declared at the seam both branches satisfy: inferring the type from the
+    # first branch made the second an "incompatible assignment" for code that
+    # was always correct.
+    trust_store: TrustStore
     if str(config.ledger_path) == ":memory:":
         trust_store = InMemoryTrustStore()
     else:
@@ -321,6 +329,10 @@ def build_swarm_runtime(
     """
 
     config = config or Config()
+    # Declared at the seam both branches satisfy: inferring the type from the
+    # first branch made the second an "incompatible assignment" for code that
+    # was always correct.
+    trust_store: TrustStore
     if str(config.ledger_path) == ":memory:":
         trust_store = InMemoryTrustStore()
     else:

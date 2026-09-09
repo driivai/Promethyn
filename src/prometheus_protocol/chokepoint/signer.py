@@ -358,16 +358,22 @@ class PublicKeyVerifier(_EcdsaP256Verifier):
         if not isinstance(key_id, str) or not key_id:
             raise ValueError("PublicKeyVerifier needs a key_id")
         self.key_id = key_id
+        # A separate local for the decoded form: rebinding the parameter left it
+        # typed `bytes | str` for the rest of the function, so the DER handed on
+        # below was only accidentally a `bytes`.
+        spki: bytes
         if isinstance(public_key, str):
             _, _, serialization, _, _, _, _ = _crypto()
             try:
                 loaded = serialization.load_pem_public_key(public_key.encode("ascii"))
-                public_key = loaded.public_bytes(
+                spki = loaded.public_bytes(
                     serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
                 )
             except (ValueError, TypeError, UnicodeEncodeError) as exc:
                 raise SignerMalformed(f"unreadable public key PEM: {exc}") from exc
-        self._load_public(public_key, where="the pinned public key")
+        else:
+            spki = public_key
+        self._load_public(spki, where="the pinned public key")
 
     def sign(self, message: bytes) -> bytes:
         raise SignerCapabilityAbsent(

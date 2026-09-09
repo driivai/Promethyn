@@ -78,7 +78,7 @@ sys.stdout.write(response)
 """
 
 
-class SubprocessVerifier(Verifier):
+class SubprocessVerifier(Verifier[Task]):
     """Default verifier. See the module-level security notice.
 
     It is an authoritative hard check, and its outcome is one of two *types*, so

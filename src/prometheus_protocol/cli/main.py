@@ -65,7 +65,10 @@ def _cmd_demo(args: argparse.Namespace) -> int:
         config = Config(
             provider="mock",
             registry_dir=Path(tmp) / "skills",
-            ledger_path=":memory:",
+            # ``Path(":memory:")`` round-trips through str() to the sqlite
+            # sentinel, and is the form the rest of this module compares
+            # against (see the ledger_path checks below).
+            ledger_path=Path(":memory:"),
         )
         orch = build_orchestrator(config)
 

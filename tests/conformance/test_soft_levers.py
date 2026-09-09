@@ -403,7 +403,27 @@ _HARDEN4_CHANGED = frozenset({
     "src/prometheus_protocol/verifier/model_judge.py",
     "src/prometheus_protocol/verifier/grounding.py",
 })
-_SANCTIONED = _EX1_CHANGED | _HARDEN4_CHANGED
+
+# TYPE-GATE (whole-tree strict type checking, made CI-blocking) changed exactly
+# these two further protected files:
+#   * ``gate/promotion.py`` — ``ScoreFn`` was annotated ``Sequence[Task]`` while
+#     the gate already forwarded ``Sequence[LearnableTask]``; the annotation was
+#     wrong about the code. ``OUTCOME_UNAVAILABLE`` was added as a caller-side
+#     marker for "no judgment existed, so nothing was submitted"; the gate never
+#     returns it, and ``approved`` is untouched.
+#   * ``benchmarks/grounding_eval.py`` — ``run_grounding_eval`` read ``.verdict``
+#     off an ``Evidence | Unavailable`` and would crash when the judge could not
+#     run. It now records the could-not-run as ``judged=None`` +
+#     ``judge_unavailable=True``, the representation ``judge_eval.py`` already
+#     used for the same fault, and no longer parses a confidence off an
+#     Unavailable. The judge's own decision path is unchanged.
+# Same sanction discipline as EX-1: the delta is named here so the guard still
+# fails on ANY other protected change.
+_TYPE_GATE_CHANGED = frozenset({
+    "src/prometheus_protocol/gate/promotion.py",
+    "src/prometheus_protocol/benchmarks/grounding_eval.py",
+})
+_SANCTIONED = _EX1_CHANGED | _HARDEN4_CHANGED | _TYPE_GATE_CHANGED
 
 
 def _git(*args: str) -> subprocess.CompletedProcess:

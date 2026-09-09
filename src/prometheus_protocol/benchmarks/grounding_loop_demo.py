@@ -44,8 +44,10 @@ from prometheus_protocol.core.models import (
     Evidence,
     ExecutableAction,
     Tier,
+    Unavailable,
     Verdict,
 )
+from prometheus_protocol.core.reporting import render_judgment, render_outcome
 from prometheus_protocol.execution.controller import ExecutionController
 from prometheus_protocol.execution.executor import SandboxExecutor
 from prometheus_protocol.gate.authorization import ActionGate
@@ -112,10 +114,16 @@ def run_loop(*, out: Callable[[str], None] = print) -> dict:
     out("=== beat 1: the judge alone — confident, and still not enough ===")
     out(f"[loop] claim   : {grounded.claim!r}")
     soft = judge.verify(code=grounded.claim, task=task_for(grounded))
-    out(f"[loop] judge   : {soft.verdict.value} (SOFT tier) — {soft.detail}")
+    out(f"[loop] judge   : {render_outcome(soft)} (SOFT tier)")
     judgment = bank.judge([soft])
-    out(f"[loop] bank    : verdict={judgment.verdict.value} "
-        f"confidence={judgment.confidence:.2f} authoritative={judgment.authoritative}")
+    out(f"[loop] bank    : {render_judgment(judgment)}")
+    if isinstance(judgment, Unavailable):
+        # No judgment, so nothing to authorize on. The gate is not consulted and
+        # the beat is recorded as unavailable rather than crashing on a verdict
+        # that does not exist.
+        out("[loop] gate    : NOT SUBMITTED — there is no judgment to authorize on")
+        summary["soft_only"] = {"outcome": "unavailable", "executed": False}
+        return summary
     if bank.needs_escalation(judgment):
         out("[loop] bank    : advisory judgment below the escalation bar -> "
             "human review is required")
@@ -140,36 +148,43 @@ def run_loop(*, out: Callable[[str], None] = print) -> dict:
         note="claim is entailed by the source (admission is free)",
     )
     fused = bank.judge([soft, human])
-    out(f"[loop] human   : {human.verdict.value} (HUMAN tier, authoritative)")
-    out(f"[loop] bank    : verdict={fused.verdict.value} "
-        f"confidence={fused.confidence:.2f} authoritative={fused.authoritative} "
+    out(f"[loop] human   : {human.decided.value} (HUMAN tier, authoritative)")
+    out(f"[loop] bank    : {render_judgment(fused)} "
         f"(judge calibrated against the human decision)")
+    if isinstance(fused, Unavailable):
+        out("[loop] gate    : NOT SUBMITTED — there is no judgment to authorize on")
+        summary["human_unlocked"] = {"outcome": "unavailable", "executed": False}
+        return summary
     outcome = controller.submit(
         judgment=fused,
         action=_publish_action(grounded.claim),
         risk_class="medium",
         subject_id=f"publish:{grounded.item_id}",
     )
-    executed = bool(outcome.execution and outcome.execution.executed)
+    execution = outcome.execution
+    executed = execution is not None and execution.executed
     out(f"[loop] gate    : {outcome.outcome.upper()} — {outcome.decision.reason}")
-    if executed:
+    if execution is not None and execution.executed:
         out(f"[loop] publish : executed in sandbox "
-            f"'{outcome.execution.sandbox_name}' (exit {outcome.execution.exit_status})")
-        out(f"[loop] output  : {outcome.execution.stdout.strip()!r}")
+            f"'{execution.sandbox_name}' (exit {execution.exit_status})")
+        out(f"[loop] output  : {execution.stdout.strip()!r}")
     summary["human_unlocked"] = {"outcome": outcome.outcome, "executed": executed}
 
     out("")
     out("=== beat 3: an ungrounded claim — judge flags it, human confirms ===")
     out(f"[loop] claim   : {ungrounded.claim!r}")
     soft_bad = judge.verify(code=ungrounded.claim, task=task_for(ungrounded))
-    out(f"[loop] judge   : {soft_bad.verdict.value} (SOFT tier) — {soft_bad.detail}")
+    out(f"[loop] judge   : {render_outcome(soft_bad)} (SOFT tier)")
     human_bad = human_review(
         Verdict.FAIL, reviewer="demo-operator",
         note="the source states no cause for the closure",
     )
     fused_bad = bank.judge([soft_bad, human_bad])
-    out(f"[loop] bank    : verdict={fused_bad.verdict.value} "
-        f"confidence={fused_bad.confidence:.2f} authoritative={fused_bad.authoritative}")
+    out(f"[loop] bank    : {render_judgment(fused_bad)}")
+    if isinstance(fused_bad, Unavailable):
+        out("[loop] gate    : NOT SUBMITTED — there is no judgment to authorize on")
+        summary["ungrounded"] = {"outcome": "unavailable", "executed": False}
+        return summary
     outcome = controller.submit(
         judgment=fused_bad,
         action=_publish_action(ungrounded.claim),
@@ -185,9 +200,12 @@ def run_loop(*, out: Callable[[str], None] = print) -> dict:
     out("")
     out("=== beat 4: a malformed judge reply is an abstention, not a verdict ===")
     soft_abstain = judge.verify(code=unparseable.claim, task=task_for(unparseable))
-    out(f"[loop] judge   : {soft_abstain.verdict.value} — reply was not a "
-        f"verdict ({soft_abstain.detail!r})")
+    out(f"[loop] judge   : {render_outcome(soft_abstain)} — reply was not a verdict")
     judgment_abstain = bank.judge([soft_abstain])
+    if isinstance(judgment_abstain, Unavailable):
+        out("[loop] gate    : NOT SUBMITTED — there is no judgment to authorize on")
+        summary["abstain"] = {"outcome": "unavailable", "executed": False}
+        return summary
     outcome = controller.submit(
         judgment=judgment_abstain,
         action=_publish_action(unparseable.claim),

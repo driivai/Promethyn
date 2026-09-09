@@ -27,7 +27,12 @@ import sys
 from dataclasses import dataclass
 from typing import Sequence
 
-from prometheus_protocol.core.models import SPLIT_HELDOUT, SPLIT_TRAIN, Verdict
+from prometheus_protocol.core.models import (
+    SPLIT_HELDOUT,
+    SPLIT_TRAIN,
+    Unavailable,
+    Verdict,
+)
 from prometheus_protocol.verifier.sql import SqlTask, SqlVerifier
 
 SQL_TASK_SET_VERSION = "sql-v1 (32 tasks)"
@@ -459,6 +464,10 @@ def run_reliability(*, out=print) -> dict:
     verifier = SqlVerifier()
     tasks = build_sql_tasks()
     abstains: list[str] = []
+    #: The verifier could not RUN at all (sandbox refused, engine missing). That
+    #: is not an abstention — the sweep observed nothing — so it gets its own
+    #: bucket and fails the run, rather than being counted as a judged outcome.
+    unavailable: list[str] = []
     self_fail: list[str] = []
     deviations: list[str] = []
     probe_counts = {"correct_pass": 0, "correct_total": 0,
@@ -466,27 +475,39 @@ def run_reliability(*, out=print) -> dict:
 
     for task in tasks:
         evidence = verifier.verify(code=task.reference_query, task=task)
-        if evidence.verdict == Verdict.ABSTAIN:
+        if isinstance(evidence, Unavailable):
+            unavailable.append(
+                f"{task.id} (self-check): could not run — "
+                f"{evidence.reason.value}: {evidence.detail or 'no detail'}"
+            )
+            continue
+        if evidence.decided == Verdict.ABSTAIN:
             abstains.append(f"{task.id} (self-check): {evidence.detail}")
             continue
-        if evidence.verdict != Verdict.PASS:
+        if evidence.decided != Verdict.PASS:
             self_fail.append(f"{task.id}: reference does not verify against itself")
         for probe in SQL_PROBES.get(task.id, ()):
             got = verifier.verify(code=probe.query, task=task)
-            if got.verdict == Verdict.ABSTAIN:
+            if isinstance(got, Unavailable):
+                unavailable.append(
+                    f"{task.id} ({probe.note}): could not run — "
+                    f"{got.reason.value}: {got.detail or 'no detail'}"
+                )
+                continue
+            if got.decided == Verdict.ABSTAIN:
                 abstains.append(f"{task.id} ({probe.note}): {got.detail}")
                 continue
             key = "correct" if probe.expect_pass else "wrong"
             probe_counts[f"{key}_total"] += 1
             expected = Verdict.PASS if probe.expect_pass else Verdict.FAIL
-            if got.verdict == expected:
+            if got.decided == expected:
                 probe_counts[
                     "correct_pass" if probe.expect_pass else "wrong_fail"
                 ] += 1
             else:
                 deviations.append(
                     f"{task.id}: probe [{probe.note}] expected "
-                    f"{expected.value}, got {got.verdict.value} — {got.detail}"
+                    f"{expected.value}, got {got.decided.value} — {got.detail}"
                 )
 
     out(f"# SQL verifier reliability ({SQL_TASK_SET_VERSION})")
@@ -500,14 +521,18 @@ def run_reliability(*, out=print) -> dict:
     fp = probe_counts["wrong_total"] - probe_counts["wrong_fail"]
     out(f"false-PASS on designed-wrong probes: {fp}/{probe_counts['wrong_total']}")
     out(f"abstains             : {len(abstains)}")
-    for line in abstains + self_fail + deviations:
+    out(f"could not run        : {len(unavailable)}")
+    for line in abstains + unavailable + self_fail + deviations:
         out(f"  DEVIATION: {line}")
-    ok = not (abstains or self_fail or deviations)
+    # A sweep that could not run is not a clean sweep: nothing was measured, so
+    # nothing is demonstrated. Fails the run exactly as a deviation does.
+    ok = not (abstains or unavailable or self_fail or deviations)
     out("verdict              : " + ("CLEAN — every reference self-verifies, every "
         "designed-wrong probe FAILs" if ok else "DEVIATIONS FOUND (see above)"))
     return {
         "tasks": len(tasks),
         "abstains": abstains,
+        "unavailable": unavailable,
         "self_fail": self_fail,
         "deviations": deviations,
         **probe_counts,
@@ -521,7 +546,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.parse_args(argv)
     summary = run_reliability()
-    clean = not (summary["abstains"] or summary["self_fail"] or summary["deviations"])
+    clean = not (
+        summary["abstains"]
+        or summary["unavailable"]
+        or summary["self_fail"]
+        or summary["deviations"]
+    )
     return 0 if clean else 1
 
 

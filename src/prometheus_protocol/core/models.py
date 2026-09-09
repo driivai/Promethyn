@@ -9,7 +9,25 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, NoReturn
+
+
+def assert_never(value: NoReturn) -> NoReturn:
+    """Exhaustiveness, checked by the type checker rather than remembered.
+
+    Put this in the ``else`` of a union match. Every member the branches above
+    narrowed away leaves ``value`` as ``Never`` here, which type-checks; a
+    member that is *not* handled leaves a real type and mypy reports it — at
+    every consumer, the moment a third member is added to a union. Without it a
+    new member falls silently through to whatever the ``else`` does, which for
+    ``Evidence | Unavailable`` is exactly the class of defect EX-1 exists to
+    make unrepresentable.
+
+    ``typing.assert_never`` is 3.11+, and this repository supports 3.10; the
+    ``NoReturn`` parameter is the older idiom mypy special-cases identically.
+    """
+
+    raise AssertionError(f"unhandled union member: {value!r}")
 
 # Allowed values for ``Task.split``. The whole safety story of the protocol
 # rests on these two partitions never mixing (see ``gate`` and ``spec``).
@@ -162,6 +180,29 @@ class Evidence:
             derived = Verdict.PASS if self.passed else Verdict.FAIL
             object.__setattr__(self, "verdict", derived)
 
+    @property
+    def decided(self) -> Verdict:
+        """The verdict this evidence carries, as a plain :class:`Verdict`.
+
+        ``verdict`` is ``Verdict | None`` because that is the *constructor's*
+        contract — a caller may leave it unset and let ``__post_init__`` derive
+        it from ``passed``. Every constructed Evidence therefore has one, but
+        the field's type cannot say so, and consumers were re-deriving that
+        invariant (or reaching for ``.verdict.value`` and being told by the type
+        checker that ``None`` has no ``.value``).
+
+        This accessor states the guarantee once and checks it once. It is not a
+        default: there is no verdict to invent here, and an Evidence that
+        somehow escaped ``__post_init__`` raises rather than answering.
+        """
+
+        if self.verdict is None:  # pragma: no cover - __post_init__ prevents it
+            raise AssertionError(
+                "Evidence without a verdict escaped __post_init__; refusing to "
+                "invent one"
+            )
+        return self.verdict
+
 
 @dataclass(frozen=True)
 class Unavailable:
@@ -206,7 +247,12 @@ class Attempt:
     split: str
     entry_point: str
     code: str
-    evidence: Evidence
+    # An attempt whose verifier could NOT run still happened and still has to be
+    # writable to the ledger. Typing this ``Evidence`` alone left callers with
+    # nowhere to put an ``Unavailable`` — so the swarm reached for ``.verdict``
+    # on one and crashed. "Could not run" is an outcome of an attempt, not the
+    # absence of one.
+    evidence: Evidence | Unavailable
     skills_used: tuple[str, ...] = field(default_factory=tuple)
     judgment: "Judgment | None" = None
 

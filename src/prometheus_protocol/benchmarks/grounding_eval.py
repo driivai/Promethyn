@@ -55,7 +55,7 @@ from prometheus_protocol.benchmarks.judge_eval import (
     compute_metrics,
 )
 from prometheus_protocol.core.interfaces import Provider, Verifier
-from prometheus_protocol.core.models import Skill, Verdict
+from prometheus_protocol.core.models import Skill, Unavailable, Verdict
 from prometheus_protocol.verifier.grounding import (
     GroundingVerifier,
     parse_grounding_confidence,
@@ -259,13 +259,23 @@ def run_grounding_eval(
     rows = []
     for item in items:
         judged = judge.verify(code=item.claim, task=task_for(item))
+        # A judge that could NOT execute returns Unavailable (no verdict). Kept
+        # as an explicit None + flag — exactly as the code-domain eval does — so
+        # it is counted as an operational fault rather than being read as an
+        # abstention the judge never expressed. A confidence is not parsed off an
+        # Unavailable: there is no verdict for it to be a confidence IN.
         rows.append(
             JudgedRow(
                 item_id=item.item_id,
                 actor_model="-",
                 reference=_GOLD_VERDICT[item.gold],
-                judged=judged.verdict,
-                confidence=parse_grounding_confidence(judged.detail),
+                judged=None if isinstance(judged, Unavailable) else judged.verdict,
+                confidence=(
+                    None
+                    if isinstance(judged, Unavailable)
+                    else parse_grounding_confidence(judged.detail)
+                ),
+                judge_unavailable=isinstance(judged, Unavailable),
             )
         )
     return tuple(rows)
@@ -294,7 +304,8 @@ def render_grounding_report(
         f"item set    : {item_set_version}",
         f"items       : {m.n_items}",
         f"with gold reference : {m.n_reference}",
-        f"judge decided : {m.n_decided}  |  judge abstained : {m.n_abstained}",
+        f"judge decided : {m.n_decided}  |  judge abstained : {m.n_abstained}"
+        f"  |  judge could not run : {m.n_judge_unavailable}",
         "",
         "| metric | value |",
         "|---|---|",

@@ -30,7 +30,15 @@ import time
 from typing import Callable, Sequence
 
 from prometheus_protocol.core.interfaces import Provider, Verifier
-from prometheus_protocol.core.models import Evidence, Skill, Tier, Verdict
+from prometheus_protocol.core.models import (
+    Evidence,
+    Skill,
+    Tier,
+    Unavailability,
+    Unavailable,
+    Verdict,
+    assert_never,
+)
 
 #: A parser that reads a stated confidence out of a judge reply / Evidence
 #: detail (the domain supplies its own: code vs grounding vocabulary).
@@ -69,6 +77,34 @@ def parse_vote_fraction(detail: str) -> float | None:
         return None
     m = _VOTE_FRACTION.search(detail)
     return float(m.group(1)) if m else None
+
+
+def _unavailable_ensemble(
+    verifier_id: str, missing: Sequence[Unavailable], total: int
+) -> Unavailable:
+    """The aggregating levers' "the check I promise did not happen" outcome.
+
+    A lever stays SOFT here too: its tier is the tier it emits Evidence at, and
+    an unavailability that claimed authority would let a calibration wrapper
+    halt a pipeline its base judge never could. The reason is the strongest one
+    among the absent judges — a policy refusal is not an infrastructure fault
+    and the two are never flattened — and the detail names how many of how many
+    were missing, so an operator can see whether one judge or all of them fell
+    over.
+    """
+
+    reason = (
+        Unavailability.POLICY_REFUSAL
+        if any(m.reason == Unavailability.POLICY_REFUSAL for m in missing)
+        else Unavailability.INFRA_FAULT
+    )
+    detail = "; ".join(f"{m.verifier_id}: {m.detail or m.reason.value}" for m in missing)
+    return Unavailable(
+        verifier_id=verifier_id,
+        tier=Tier.SOFT,
+        reason=reason,
+        detail=f"{len(missing)} of {total} judges could not run — {detail}"[:1000],
+    )
 
 
 def _soft_evidence(
@@ -124,9 +160,19 @@ class ConfidenceThresholdJudge(Verifier):
 
     model_calls_per_item = 1
 
-    def verify(self, *, code: str, task) -> Evidence:
-        ev = self._base.verify(code=code, task=task)
-        if ev.verdict != Verdict.PASS:
+    def verify(self, *, code: str, task) -> Evidence | Unavailable:
+        result = self._base.verify(code=code, task=task)
+        if isinstance(result, Unavailable):
+            # The base judge could not run. There is no PASS to gate, and a
+            # lever that turned "did not run" into an ABSTAIN would be asserting
+            # the judge executed and had no opinion — the exact collapse EX-1
+            # makes unrepresentable. Propagate it unchanged.
+            return result
+        if isinstance(result, Evidence):
+            ev = result
+        else:
+            assert_never(result)
+        if ev.decided != Verdict.PASS:
             return ev  # FAIL / ABSTAIN pass through unchanged (already SOFT)
         conf = self._parse(ev.detail)
         if conf is None or conf < self._min:
@@ -181,10 +227,21 @@ class EnsembleJudge(Verifier):
     def model_calls_per_item(self) -> int:
         return len(self._judges)
 
-    def verify(self, *, code: str, task) -> Evidence:
+    def verify(self, *, code: str, task) -> Evidence | Unavailable:
         started = time.monotonic()
-        verdicts = [j.verify(code=code, task=task).verdict for j in self._judges]
+        results = [j.verify(code=code, task=task) for j in self._judges]
         cost = time.monotonic() - started
+        missing = [r for r in results if isinstance(r, Unavailable)]
+        if missing:
+            # An ensemble's claim is "N independent judges agreed". If any judge
+            # could not run, that check did not happen, so there is nothing to
+            # report a vote on. Dropping the absentees and polling the rest
+            # would answer a different question than the one this class
+            # promises; calling it an ABSTAIN would claim every judge ran.
+            # Unavailable is the only truthful answer, and it is the closed one:
+            # it can never be read as a PASS.
+            return _unavailable_ensemble(self.verifier_id, missing, len(results))
+        verdicts = [r.decided for r in results if isinstance(r, Evidence)]
         n = len(verdicts)
         passes = verdicts.count(Verdict.PASS)
         fails = verdicts.count(Verdict.FAIL)
@@ -258,10 +315,18 @@ class RepeatedSamplingJudge(Verifier):
     def model_calls_per_item(self) -> int:
         return self._k
 
-    def verify(self, *, code: str, task) -> Evidence:
+    def verify(self, *, code: str, task) -> Evidence | Unavailable:
         started = time.monotonic()
-        verdicts = [self._base.verify(code=code, task=task).verdict for _ in range(self._k)]
+        results = [self._base.verify(code=code, task=task) for _ in range(self._k)]
         cost = time.monotonic() - started
+        missing = [r for r in results if isinstance(r, Unavailable)]
+        if missing:
+            # Same reasoning as the ensemble: k samples were promised and fewer
+            # were taken, so the majority/unanimity test this lever advertises
+            # was not performed. Answering from the survivors would silently
+            # change k; answering ABSTAIN would claim samples that never ran.
+            return _unavailable_ensemble(self.verifier_id, missing, len(results))
+        verdicts = [r.decided for r in results if isinstance(r, Evidence)]
         passes = verdicts.count(Verdict.PASS)
         fails = verdicts.count(Verdict.FAIL)
 
@@ -341,7 +406,14 @@ class AdversarialSelfCheckProvider(Provider):
 
 
 def _base_id(base: Verifier) -> str:
-    return getattr(base, "verifier_id", None) or getattr(base, "VERIFIER_ID", "judge")
+    """The wrapped judge's identity, for the lever's composed id.
+
+    ``Verifier`` declares ``verifier_id`` now, so this reads the seam instead of
+    probing two attribute names and hoping. A verifier that left the identity
+    empty gets the generic label rather than an ``AttributeError``.
+    """
+
+    return base.verifier_id or "judge"
 
 
 __all__ = [

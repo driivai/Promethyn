@@ -217,7 +217,20 @@ def _git(*args: str) -> subprocess.CompletedProcess:
 _HARDEN4_CHANGED = frozenset({
     "src/prometheus_protocol/verifier/grounding.py",
 })
-_SANCTIONED = _EX1_CHANGED | _HARDEN4_CHANGED
+
+# TYPE-GATE (whole-tree strict type checking, made CI-blocking) changed exactly
+# one further file on this list: ``gate/promotion.py``. ``ScoreFn`` was annotated
+# ``Sequence[Task]`` while the gate already forwarded ``Sequence[LearnableTask]``
+# — the annotation was wrong about the code, and the mismatch was invisible while
+# the file sat outside the checked set. ``OUTCOME_UNAVAILABLE`` was added as a
+# caller-side marker for "no judgment existed, so nothing was submitted"; the
+# gate never returns it. ``approved``, the single field the executor checks, is
+# untouched. Named here as EX-1's delta is, so the guard still fails on ANY other
+# Hearth change.
+_TYPE_GATE_CHANGED = frozenset({
+    "src/prometheus_protocol/gate/promotion.py",
+})
+_SANCTIONED = _EX1_CHANGED | _HARDEN4_CHANGED | _TYPE_GATE_CHANGED
 
 
 @pytest.mark.skipif(

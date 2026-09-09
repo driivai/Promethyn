@@ -28,12 +28,19 @@ from prometheus_protocol.core.models import (
     ACTION_PYTHON_CODE,
     ExecutableAction,
     Tier,
+    Unavailable,
     Verdict,
 )
+from prometheus_protocol.core.reporting import render_judgment, render_outcome
 from prometheus_protocol.execution.controller import ExecutionController
 from prometheus_protocol.execution.executor import SandboxExecutor
 from prometheus_protocol.gate.authorization import ActionGate
-from prometheus_protocol.gate.promotion import OUTCOME_APPROVE, OUTCOME_BLOCK, OUTCOME_ROUTE
+from prometheus_protocol.gate.promotion import (
+    OUTCOME_APPROVE,
+    OUTCOME_BLOCK,
+    OUTCOME_ROUTE,
+    OUTCOME_UNAVAILABLE,
+)
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
 from prometheus_protocol.provider.mock import MockProvider
 from prometheus_protocol.verifier.bank import VerifierBank
@@ -103,27 +110,36 @@ def run_loop(*, out: Callable[[str], None] = print) -> dict:
         out(f"[loop] {task.id} ({risk_class} risk)")
         out(f"[loop]   proposed : {proposal}")
         evidence = verifier.verify(code=proposal, task=task)
-        out(f"[loop]   verified : {evidence.verdict.value.upper()} — {evidence.detail}")
+        out(f"[loop]   verified : {render_outcome(evidence)}")
         judgment = bank.judge([evidence])
-        out(f"[loop]   judged   : {judgment.verdict.value} "
-            f"(confidence {judgment.confidence:.2f}, "
-            f"authoritative={judgment.authoritative})")
+        out(f"[loop]   judged   : {render_judgment(judgment)}")
+        if isinstance(judgment, Unavailable):
+            # There is no judgment, so there is nothing to authorize on. The gate
+            # is not consulted and no action is proposed: an action the verifier
+            # could not judge must never reach execution.
+            out("[loop]   gate     : NOT SUBMITTED — the verifier could not run, "
+                "so there is no judgment to authorize on")
+            out("[loop]   executed : never (no judgment, no authorization)")
+            summary[task_id] = OUTCOME_UNAVAILABLE
+            return
         outcome = controller.submit(
             judgment=judgment,
             action=_action_for(task, proposal),
             risk_class=risk_class,
             subject_id=task.id,
         )
-        if outcome.outcome == OUTCOME_APPROVE:
+        execution = outcome.execution
+        pending = outcome.pending
+        if outcome.outcome == OUTCOME_APPROVE and execution is not None:
             out(f"[loop]   gate     : APPROVED -> executed in sandbox "
-                f"{outcome.execution.sandbox_name!r} "
-                f"(exit {outcome.execution.exit_status})")
-            out(f"[loop]   output   : {outcome.execution.stdout.strip()!r}")
-        elif outcome.outcome == OUTCOME_ROUTE:
-            out(f"[loop]   gate     : ROUTED to a human (pending #{outcome.pending.id}) "
+                f"{execution.sandbox_name!r} "
+                f"(exit {execution.exit_status})")
+            out(f"[loop]   output   : {execution.stdout.strip()!r}")
+        elif outcome.outcome == OUTCOME_ROUTE and pending is not None:
+            out(f"[loop]   gate     : ROUTED to a human (pending #{pending.id}) "
                 f"— {outcome.decision.reason}")
             result = controller.approve(
-                outcome.pending.id, identity="demo-operator",
+                pending.id, identity="demo-operator",
                 reason="export reviewed and accepted",
             )
             out(f"[loop]   human    : APPROVED by demo-operator -> executed "

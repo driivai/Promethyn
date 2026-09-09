@@ -166,11 +166,21 @@ class SandboxResult:
     detail: str = ""
 
 
-def clip(text: str | None, limit: int) -> tuple[str, bool]:
-    """Truncate ``text`` to ``limit`` bytes-ish; return (text, truncated)."""
+def clip(text: str | bytes | None, limit: int) -> tuple[str, bool]:
+    """Truncate ``text`` to ``limit`` bytes-ish; return (text, truncated).
+
+    Accepts bytes as well as str because the callers feed it captured process
+    output, and ``TimeoutExpired.stdout`` is bytes-typed regardless of how the
+    child was launched — a ``text=True`` run raises with str, a byte-mode one
+    with bytes, and this is the one place both arrive. Decoding here (replacing
+    undecodable bytes rather than raising) keeps a timed-out candidate's output
+    readable instead of losing it to a UnicodeDecodeError inside the harness.
+    """
 
     if not text:
         return "", False
+    if isinstance(text, (bytes, bytearray)):
+        text = bytes(text).decode("utf-8", errors="replace")
     if len(text) <= limit:
         return text, False
     return text[:limit] + "\n... (truncated)", True

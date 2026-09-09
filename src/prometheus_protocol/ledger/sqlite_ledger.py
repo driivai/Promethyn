@@ -18,7 +18,7 @@ from pathlib import Path
 
 from prometheus_protocol.core.errors import StateError
 from prometheus_protocol.core.interfaces import Ledger
-from prometheus_protocol.core.models import Attempt
+from prometheus_protocol.core.models import Attempt, Evidence
 from prometheus_protocol.ledger.audit_chain import (
     GENESIS_ROOT,
     NOT_VERIFIABLE,
@@ -145,6 +145,22 @@ CREATE TABLE IF NOT EXISTS audit_chain (
 );
 """
 
+def _inserted_id(cur: sqlite3.Cursor) -> int:
+    """The row id sqlite just assigned, or a refusal.
+
+    ``Cursor.lastrowid`` is ``int | None`` because a cursor that did not INSERT
+    has no row id. Every caller here has just executed one, so ``None`` would
+    mean the write did not happen — which must say so, rather than being
+    coerced by ``int(None)`` into a ``TypeError`` several frames away from the
+    cause.
+    """
+
+    row_id = cur.lastrowid
+    if row_id is None:  # pragma: no cover - an INSERT always assigns one
+        raise StateError("sqlite reported no row id for an insert that should have made one")
+    return row_id
+
+
 # Terminal states a pending action can settle into. ``pending`` is the only
 # non-terminal state; once decided it is never re-opened.
 _PENDING_STATUS = "pending"
@@ -153,7 +169,14 @@ _PENDING_STATUS = "pending"
 # write path can always populate them: the judgment columns promoted for
 # querying, and the execution -> pending-hold link.
 _ADDITIVE_COLUMNS: dict[str, list[tuple[str, str]]] = {
-    "attempts": [("verdict", "TEXT"), ("confidence", "REAL")],
+    "attempts": [
+        ("verdict", "TEXT"),
+        ("confidence", "REAL"),
+        # EX-1 discriminator, the same one the executions table carries: 1 when
+        # this attempt's verifier could not RUN, so the NOT NULL count columns'
+        # zeros are never mistaken for "ran and found nothing".
+        ("unavailable", "INTEGER"),
+    ],
     "executions": [
         ("verdict", "TEXT"),
         ("confidence", "REAL"),
@@ -313,6 +336,18 @@ class SqliteLedger(Ledger):
 
     def record_attempt(self, attempt: Attempt, *, cycle: int, kind: str) -> int:
         evidence = dict(asdict(attempt.evidence))
+        # The pass/total/passed_count columns describe a check that RAN, and are
+        # NOT NULL in the schema. An attempt whose verifier could not run has no
+        # counts to report, and 0/0/0 alone would be indistinguishable from a
+        # check that ran and found nothing — so the `unavailable` discriminator
+        # says which it is, exactly as the executions table already does for
+        # EX-1. The evidence JSON carries the Unavailable's verifier_id, tier and
+        # reason; the discriminator is what makes the two permanently separable.
+        ran = attempt.evidence if isinstance(attempt.evidence, Evidence) else None
+        passed = int(ran.passed) if ran is not None else 0
+        total = ran.total if ran is not None else 0
+        passed_count = ran.passed_count if ran is not None else 0
+        unavailable = 0 if ran is not None else 1
         # Record the fused judgment (verdict + calibrated confidence) additively
         # inside the existing JSON column, so no table schema change is needed.
         if attempt.judgment is not None:
@@ -329,8 +364,8 @@ class SqliteLedger(Ledger):
             INSERT INTO attempts (
                 cycle, kind, task_id, split, entry_point,
                 passed, total, passed_count, skills_used, code, evidence,
-                verdict, confidence
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                verdict, confidence, unavailable
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 cycle,
@@ -338,18 +373,19 @@ class SqliteLedger(Ledger):
                 attempt.task_id,
                 attempt.split,
                 attempt.entry_point,
-                int(attempt.evidence.passed),
-                attempt.evidence.total,
-                attempt.evidence.passed_count,
+                passed,
+                total,
+                passed_count,
                 json.dumps(list(attempt.skills_used)),
                 attempt.code,
                 json.dumps(evidence),
                 verdict,
                 confidence,
+                unavailable,
             ),
         )
         self._conn.commit()
-        return int(cur.lastrowid)
+        return _inserted_id(cur)
 
     def record_promotion(
         self,
@@ -368,7 +404,7 @@ class SqliteLedger(Ledger):
             (cycle, skill_id, action, rate_before, rate_after),
         )
         self._conn.commit()
-        return int(cur.lastrowid)
+        return _inserted_id(cur)
 
     def attempts(self) -> list[dict]:
         rows = self._conn.execute("SELECT * FROM attempts ORDER BY id").fetchall()
@@ -412,7 +448,7 @@ class SqliteLedger(Ledger):
             ),
         )
         self._conn.commit()
-        return int(cur.lastrowid)
+        return _inserted_id(cur)
 
     def resolve_pending_action(
         self,
@@ -542,7 +578,7 @@ class SqliteLedger(Ledger):
             ),
         )
         self._conn.commit()
-        return int(cur.lastrowid)
+        return _inserted_id(cur)
 
     def executions(self) -> list[dict]:
         rows = self._conn.execute("SELECT * FROM executions ORDER BY id").fetchall()
@@ -596,7 +632,7 @@ class SqliteLedger(Ledger):
             ),
         )
         self._conn.commit()
-        return int(cur.lastrowid)
+        return _inserted_id(cur)
 
     def workflow_steps(self, workflow_id: str) -> list[dict]:
         """Every recorded step of one workflow, in insertion order."""

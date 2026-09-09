@@ -176,14 +176,20 @@ def run_hero(repo: Path | str, *, out: Callable[[str], None] = print) -> dict:
             risk_class=risk,
             subject_id=f"delete-branch:{branch}",
         )
-        if outcome.outcome == OUTCOME_APPROVE and outcome.execution.executed:
+        execution = outcome.execution
+        pending = outcome.pending
+        if (
+            outcome.outcome == OUTCOME_APPROVE
+            and execution is not None
+            and execution.executed
+        ):
             deleted.append(branch)
             out(f"[hero] {branch}: 0 commits off main -> auto-approved -> "
-                f"deleted in sandbox (exit {outcome.execution.exit_status})")
-        elif outcome.outcome == OUTCOME_ROUTE:
-            held.append((branch, outcome.pending.id))
+                f"deleted in sandbox (exit {execution.exit_status})")
+        elif outcome.outcome == OUTCOME_ROUTE and pending is not None:
+            held.append((branch, pending.id))
             out(f"[hero] {branch}: {classification.unmerged_commits} commit(s) "
-                f"NOT on main -> HELD for human review (pending #{outcome.pending.id})")
+                f"NOT on main -> HELD for human review (pending #{pending.id})")
         else:  # pragma: no cover - the fixture never produces this
             out(f"[hero] {branch}: {outcome.outcome} ({outcome.decision.reason})")
 

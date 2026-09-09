@@ -145,6 +145,17 @@ def run_demo(*, out: Callable[[str], None] = print) -> dict:
     run = runtime.run(workflow)
 
     for rec in run.steps:
+        # A step whose grader could not run (or that was halted by an unavailable
+        # dependency) has no tier and no confidence — printing "tier=None" or
+        # inventing 0.00 would read as a graded result. Say what happened instead.
+        if rec.tier is None or rec.confidence is None:
+            why = "grader could not run" if rec.unavailable else (
+                "halted — a dependency could not run" if rec.halted
+                else "no graded result"
+            )
+            out(f"[step] {rec.step_id} ({rec.agent_id}): {why} "
+                f"-> {rec.outcome.upper()}")
+            continue
         out(f"[step] {rec.step_id} ({rec.agent_id}): "
             f"tier={rec.tier.value} confidence={rec.confidence:.2f} "
             f"-> {rec.outcome.upper()}"
@@ -161,12 +172,15 @@ def run_demo(*, out: Callable[[str], None] = print) -> dict:
 
     # The high-risk export was held; the operator approves it through the
     # existing controller (the orchestrator cannot).
-    held = [r for r in run.steps if r.pending_id is not None]
-    for rec in held:
+    held = [
+        (r, pid) for r in run.steps
+        if (pid := r.pending_id) is not None
+    ]
+    for rec, pending_id in held:
         out("")
         out(f"[human] operator reviews held step {rec.step_id} "
-            f"(pending #{rec.pending_id}) and approves it:")
-        result = controller.approve(rec.pending_id, identity="demo-operator",
+            f"(pending #{pending_id}) and approves it:")
+        result = controller.approve(pending_id, identity="demo-operator",
                                     reason="reviewed and accepted")
         out(f"[human]   executed in sandbox '{result.sandbox_name}' "
             f"(exit {result.exit_status}); output {result.stdout.strip()!r}")
@@ -187,7 +201,7 @@ def run_demo(*, out: Callable[[str], None] = print) -> dict:
 
     return {
         "steps": len(run.steps),
-        "held": [r.step_id for r in held],
+        "held": [r.step_id for r, _ in held],
         "executed": executed,
         "workflow_steps": steps,
         "chain_placeholder": run.chain_confidence_placeholder,

@@ -285,6 +285,27 @@ _EX1_CHANGED = frozenset({
     "src/prometheus_protocol/execution/pending.py",
 })
 
+# TYPE-GATE (whole-tree strict type checking, made CI-blocking) changed exactly
+# ONE further frozen file, with explicit approval — the second sanctioned delta.
+# In ``gate/promotion.py`` it:
+#   * corrected ``ScoreFn`` from ``Sequence[Task]`` to ``Sequence[LearnableTask]``.
+#     The gate ALREADY forwarded ``LearnableTask``s (``score_fn(list(heldout_tasks),
+#     ...)``, where ``heldout_tasks`` is a ``Sequence[LearnableTask]``); the old
+#     annotation named the code domain's concrete ``Task``, which the SQL and
+#     grounding domains do not use. The annotation was wrong about the code, and
+#     that mismatch was invisible while the file sat outside the checked set.
+#   * added ``OUTCOME_UNAVAILABLE``, a caller-side marker for "no judgment
+#     existed, so no authorization was ever requested". The gate never returns
+#     it and no ``GateDecision`` carries it.
+# Neither touches ``approved`` — the single load-bearing field the executor
+# checks — so the wall is unchanged. As with ``_EX1_CHANGED``, the file STAYS in
+# ``_HEARTH_FILES``: it is named here, not unguarded.
+_TYPE_GATE_CHANGED = frozenset({
+    "src/prometheus_protocol/gate/promotion.py",
+})
+
+_SANCTIONED_HEARTH_CHANGES = _EX1_CHANGED | _TYPE_GATE_CHANGED
+
 
 def _git(*args: str) -> subprocess.CompletedProcess:
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -297,12 +318,13 @@ def _git(*args: str) -> subprocess.CompletedProcess:
 )
 def test_hearth_and_orchestration_core_unchanged_versus_main():
     """This sprint adds composition.py + a benchmark; it changes no trusted-core
-    file and no orchestration-skeleton file, EXCEPT the files EX-1 (PR #52) changed
-    with approval (``_EX1_CHANGED``). The ledger is not in this set (it is
-    unchanged here, but the study needs no ledger change)."""
+    file and no orchestration-skeleton file, EXCEPT the files EX-1 (PR #52) and
+    TYPE-GATE changed with approval (``_SANCTIONED_HEARTH_CHANGES``). The ledger
+    is not in this set (it is unchanged here, but the study needs no ledger
+    change)."""
 
     diff = _git("diff", "--name-only", "origin/main", "--", *_HEARTH_FILES)
     assert diff.returncode == 0, diff.stderr
     changed = [line for line in diff.stdout.splitlines() if line.strip()]
-    unsanctioned = [f for f in changed if f not in _EX1_CHANGED]
+    unsanctioned = [f for f in changed if f not in _SANCTIONED_HEARTH_CHANGES]
     assert unsanctioned == [], f"unsanctioned Hearth change vs origin/main: {unsanctioned}"

@@ -53,13 +53,20 @@ class Rate:
         return None if self.den == 0 else 3.0 / self.den
 
     def render(self) -> str:
-        if self.den == 0:
+        # Both derived quantities are None for exactly one reason — an empty
+        # denominator — but that correlation lives in two separate property
+        # bodies. Read them into locals and narrow each explicitly, so a rate
+        # that does not exist is rendered as absent rather than as a number
+        # computed from nothing.
+        value = self.value
+        ceiling = self.rule_of_three_ceiling
+        if value is None:
             return f"{self.num}/{self.den} = -"
-        s = f"{self.num}/{self.den} = {100 * self.value:.1f}%"
-        if self.den < THIN_DENOMINATOR:
+        s = f"{self.num}/{self.den} = {100 * value:.1f}%"
+        if self.den < THIN_DENOMINATOR and ceiling is not None:
             s += (
                 f"  [thin d<{THIN_DENOMINATOR}: rule-of-three ceiling "
-                f"≤ {100 * self.rule_of_three_ceiling:.1f}%]"
+                f"≤ {100 * ceiling:.1f}%]"
             )
         return s
 

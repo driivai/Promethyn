@@ -34,6 +34,7 @@ import argparse
 import os
 from typing import Sequence
 
+from prometheus_protocol.benchmarks.judge_eval import JudgedRow
 from prometheus_protocol.core.interfaces import Provider, Verifier
 from prometheus_protocol.verifier.grounding import (
     GROUNDING_JUDGE_SYSTEM_PROMPT,
@@ -130,12 +131,12 @@ def build_lever_judge(
         ), 1
     if lever == "ensemble":
         judges = [_make_domain_judge(domain, p) for p in providers]
-        j = EnsembleJudge(judges, on_disagreement=on_disagreement)
-        return j, j.model_calls_per_item
+        ensemble = EnsembleJudge(judges, on_disagreement=on_disagreement)
+        return ensemble, ensemble.model_calls_per_item
     if lever == "k-sample":
         base = _make_domain_judge(domain, providers[0])
-        j = RepeatedSamplingJudge(base, k=k, require=require)
-        return j, j.model_calls_per_item
+        sampler = RepeatedSamplingJudge(base, k=k, require=require)
+        return sampler, sampler.model_calls_per_item
     if lever == "adversarial":
         wrapped = AdversarialSelfCheckProvider(providers[0])
         return _make_domain_judge(domain, wrapped), 2
@@ -150,49 +151,58 @@ def build_lever_judge(
 def _run_and_render(*, domain: str, item_set: str, judge: Verifier, judge_model: str,
                     calls_per_item: int, lever: str, live: bool, arm: str,
                     persist: str | None = None) -> str:
+    # The two domains have different item types and different eval entry points,
+    # so each branch keeps its OWN items/rows locals. Sharing one name across
+    # them would only be possible by widening both to Any — which is exactly the
+    # kind of erasure this gate exists to prevent.
+    rows: tuple[JudgedRow, ...]
+    n_items: int
     if domain == "grounding":
         from prometheus_protocol.benchmarks import grounding_eval as ge
 
         if item_set == "grounding-v2":
             from prometheus_protocol.benchmarks.grounding_items_v2 import (
-                GROUNDING_ITEM_SET_VERSION_V2 as version,
-                build_grounding_items_v2 as build_items,
+                GROUNDING_ITEM_SET_VERSION_V2 as grounding_version,
+                build_grounding_items_v2 as build_grounding,
             )
         else:
             from prometheus_protocol.benchmarks.grounding_items import (
-                GROUNDING_ITEM_SET_VERSION as version,
-                build_grounding_items as build_items,
+                GROUNDING_ITEM_SET_VERSION as grounding_version,
+                build_grounding_items as build_grounding,
             )
-        items = build_items()
-        rows = ge.run_grounding_eval(items, judge=judge)
+        grounding_items = build_grounding()
+        n_items = len(grounding_items)
+        rows = ge.run_grounding_eval(grounding_items, judge=judge)
         report = ge.render_grounding_report(
-            rows, items, judge_model=judge_model,
+            rows, grounding_items, judge_model=judge_model,
             mode=f"lever={lever} | {'live provider' if live else 'offline scripted SMOKE'}",
-            item_set_version=version,
+            item_set_version=grounding_version,
         )
     else:
         from prometheus_protocol.benchmarks import judge_eval as je
 
         if item_set == "live-v2":
             from prometheus_protocol.benchmarks.live_items_v2 import (
-                LIVE_ITEM_SET_VERSION as version, build_live_eval_items as build_items,
+                LIVE_ITEM_SET_VERSION as live_version,
+                build_live_eval_items as build_live,
             )
         else:
             from prometheus_protocol.benchmarks.live_items import (
-                LIVE_ITEM_SET_VERSION as version, build_live_eval_items as build_items,
+                LIVE_ITEM_SET_VERSION as live_version,
+                build_live_eval_items as build_live,
             )
         from prometheus_protocol.verifier.runner import SubprocessVerifier
 
-        items = build_items()
+        live_items = build_live()
+        n_items = len(live_items)
         reference = SubprocessVerifier(memory_mb=0)
-        rows = je.run_judge_eval(items, judge=judge, reference=reference)
+        rows = je.run_judge_eval(live_items, judge=judge, reference=reference)
         report = je.render_report(
             rows, judge_model=judge_model,
-            mode=f"lever={lever}, item set {version} | "
+            mode=f"lever={lever}, item set {live_version} | "
             f"{'live provider' if live else 'offline scripted SMOKE'}",
         )
 
-    n_items = len(items)
     from prometheus_protocol.benchmarks.soft_calibration_report import render_block, summarize
 
     if persist:
@@ -223,20 +233,24 @@ def _offline_providers(domain: str, lever: str) -> list[Provider]:
         from prometheus_protocol.benchmarks.grounding_items_v2 import build_grounding_items_v2
 
         items = build_grounding_items_v2()
-        base = ScriptedGroundingJudgeProvider(items, SCRIPTED_REPLIES_V2, model="scripted-a")
+        grounding_a = ScriptedGroundingJudgeProvider(
+            items, SCRIPTED_REPLIES_V2, model="scripted-a"
+        )
         if lever == "ensemble":
-            strict = ScriptedGroundingJudgeProvider(items, SCRIPTED_REPLIES_V2, model="scripted-b")
-            return [base, strict]
-        return [base]
+            grounding_b = ScriptedGroundingJudgeProvider(
+                items, SCRIPTED_REPLIES_V2, model="scripted-b"
+            )
+            return [grounding_a, grounding_b]
+        return [grounding_a]
 
     from prometheus_protocol.benchmarks.judge_eval import (
         SCRIPTED_REPLIES, ScriptedJudgeProvider,
     )
 
-    base = ScriptedJudgeProvider(SCRIPTED_REPLIES, model="scripted-a")
+    code_a = ScriptedJudgeProvider(SCRIPTED_REPLIES, model="scripted-a")
     if lever == "ensemble":
-        return [base, ScriptedJudgeProvider(SCRIPTED_REPLIES, model="scripted-b")]
-    return [base]
+        return [code_a, ScriptedJudgeProvider(SCRIPTED_REPLIES, model="scripted-b")]
+    return [code_a]
 
 
 # --------------------------------------------------------------------------
