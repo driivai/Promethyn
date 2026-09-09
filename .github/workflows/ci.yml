@@ -197,7 +197,15 @@ jobs:
       - name: Union-narrowing reverts (must be caught)
         run: python scripts/type_gate_revert_proofs.py
 
-      - name: Type gate at the DECLARED FLOOR of the supported mypy range
+      - name: Type gate at the declared floor of the supported checker range
+        # The step NAME deliberately does not contain the checker's name: the
+        # voidguard scan parses workflow step names for type-check invocations,
+        # and read "... supported mypy range" as a mypy run whose target path is
+        # `range` — a VOID finding for a path matching no files. The finding was
+        # wrong about this step but right about the shape it looks for (a type
+        # gate over nothing is always green), so the name is changed rather than
+        # the scan suppressed.
+        #
         # pyproject declares `mypy>=1.11`; constraints.txt pins 2.3.1 and CI
         # installs under it, so every build so far exercised only the newest
         # checker in the range. #87 was green that way while an independent
