@@ -89,6 +89,9 @@ jobs:
       - name: F11 reconciliation guard reverts (must be caught)
         run: python scripts/f11_reconcile_revert_proofs.py
 
+      - name: PROM-FIX-B guard reverts (strict booleans, lock identity, header syntax; must be caught)
+        run: python scripts/fix_b_revert_proofs.py
+
       - name: IP consistency (owner, license, no stray former license)
         # What a prime's counsel verifies by hand (docs/IP-READINESS.md §7),
         # verified on every build. The --history mode, which requires the

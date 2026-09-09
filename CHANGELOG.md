@@ -37,6 +37,17 @@ in `spec/invariants.md` is a major version bump.
   `tests/chokepoint/test_substrate.py` and `test_owner_identity.py`.
 
 ### Changed
+- **PROM-FIX-B: executed revert evidence for every new guard, pinned and in
+  CI.** `scripts/fix_b_revert_proofs.py` mutates each guard in memory — the
+  strict boolean parser (unknown word read as false; programmatic value
+  coerced), the link-count refusal, the identity-keyed lock (re-keyed to a
+  pathname), the in-process mutex, the same-lock requirement, the legacy
+  intent, the raw header-line and status-line checks, the unterminated
+  header block, the parser-defect check and the `malformed` classification —
+  and runs the tests that must go red: 12 reversions caught, 133 call-phase
+  failures, pinned; a shortfall or an excess fails the build.
+  `tests/conformance/test_fix_b_revert_pins.py` proves the pins and that
+  every revert target still exists.
 - **PROM-F11 close-out: the revert runners are pinned, and CI fails on a
   shortfall.** `scripts/f11_reconcile_revert_proofs.py` (43 reversions / 72
   call-phase failures) and `scripts/f11_source_revert_proofs.py` (15 / 21)
@@ -57,6 +68,24 @@ in `spec/invariants.md` is a major version bump.
   implied.
 
 ### Fixed
+- **Finding 3 (F5 fail-open): raw header syntax is validated before framing
+  is trusted (PROM-FIX-B part 3).** A header line without a colon made
+  `http.client`'s permissive parser drop every later header,
+  `Content-Length` included; the strict framing check then saw no declared
+  length, accepted EOF framing, and a 57-byte body declared as 10000 read
+  clean — an empty anchor history verified `VALID`, a provider reply
+  verified `PASS`. `core/transport.py` now validates every status line and
+  header line against its grammar before the parser sees it, requires the
+  header block to end with its blank line, caps lines and the block, and
+  refuses any parser defect that remains as an independent second check.
+  The refusal is a new `malformed` kind in the shared error bundle:
+  `ProviderMalformedResponse` for the provider, `AnchorUnavailable` for the
+  anchor, and an anchor history behind it is `NOT_VERIFIABLE`. Both clients
+  share the fix; `tests/conformance/test_header_integrity.py` drives real
+  sockets through both with the review's wire, every defect class the
+  parser can record, every raw-syntax violation it accepts silently, and
+  positive controls. Honest scope: this closes the demonstrated case, not
+  every conceivable header anomaly.
 - **Finding 2 (F3 fail-open): the execution guard is keyed to the store's
   identity, not its pathname (PROM-FIX-B part 2).** The independent review
   reproduced, with real subprocesses, hard links, SQLite and OS locks, that

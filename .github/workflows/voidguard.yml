@@ -25,6 +25,7 @@ on:
       - "src/prometheus_protocol/cli/reconcile.py"
       - "tests/chokepoint/test_reconciliation.py"
       - "scripts/f11_reconcile_revert_proofs.py"
+      - "scripts/fix_b_revert_proofs.py"
       - ".github/workflows/ci.yml"
 
 permissions:
