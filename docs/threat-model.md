@@ -39,14 +39,20 @@ present, plausible, and void is the failure mode we exist to name.
 **Execution recovery follow-up (F2/F3):** negative executor results and lost
 COMMIT responses no longer establish rollback. Unknown events leave an intent
 pending until receipt reconciliation proves its outcome. A cross-process guard
-covers the interval before the executor connects — but that guard is an OS
-file lock keyed to the store's *pathname* (`<store>.execution.lock`), not to
-the store's identity, so it excludes only runners that name the store by the
-same path. Two aliases of one store — a hard link, a file bind mount — give
-two runners two different locks, both acquired; a runner recovering through
-an alias then reads the live owner's missing receipt as "not committed" while
-the owner is still running (independent review, finding 2, reproduced with
-real subprocesses, hard links, SQLite and OS locks; open). The substrate
+covers the interval before the executor connects. Until PROM-FIX-B that guard
+was an OS file lock keyed to the store's *pathname*, so it excluded only
+runners that named the store by the same path: two aliases of one store — a
+hard link, a file bind mount — gave two runners two locks, both acquired, and
+a runner recovering through an alias read the live owner's missing receipt as
+"not committed" (independent review, finding 2, reproduced with real
+subprocesses, hard links, SQLite and OS locks). The guard is now an `flock`
+on the store's own inode, held for the store's lifetime, so every alias of
+the store contends for one lock object across processes; a multiply linked
+store is refused at construction and before every use; and every intent
+records the identity of the lock its owner held, so "same kernel" establishes
+a dead owner only when it is provably the same lock (`chokepoint/runner.py`,
+`chokepoint/ownership.py`; `tests/chokepoint/test_lock_identity.py`
+reproduces the review's scenario and shows it failing closed). The substrate
 check from PROM-FIX-A is narrower than its earlier wording here claimed: it
 classifies, from the mount table, the filesystem *type* at the pathname of
 the store's parent directory (`chokepoint/substrate.py`) and refuses the known
@@ -56,11 +62,11 @@ the same exclusive guard" (findings 1A/1B, open). A filesystem the probe
 cannot identify is refused unless explicitly opted out of
 (`allow_unverified_substrate`, logged; withdrawn by
 `require_verified_substrate`). Every execution intent records its owner's
-host identity (`chokepoint/ownership.py`), and a recovering runner that cannot
-place the recorded owner on its own kernel or its own rebooted machine leaves
-the intent pending as `owner_unverifiable`. "Its own kernel" currently means
-the same boot id plus holding a guard, which — per finding 2 — is not proof
-that the owner's lock and this runner's are the same object. Multi-host
+host identity and lock identity (`chokepoint/ownership.py`), and a recovering
+runner that cannot place the recorded owner — on its own kernel holding the
+same lock object, or on its own rebooted machine — leaves the intent pending
+as `owner_unverifiable`; intents with no identity, or with a host but no lock
+identity, stay pending until the operator's recorded assertion. Multi-host
 execution is unsupported. See `docs/chokepoint-threat-model.md`, "Recovery
 follow-up: F2/F3", for what is detected, what is not, and the regression
 coverage.

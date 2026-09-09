@@ -1,7 +1,7 @@
 """Where the approval store lives: the filesystem the execution guard needs.
 
-``ConsumedApprovals.execution_guard`` is an ``flock`` on a companion lock file
-beside the consumed-approval store. That lock is mutual exclusion only where
+``ConsumedApprovals.execution_guard`` is an ``flock`` on the consumed-approval
+store's own inode. That lock is mutual exclusion only where
 the kernel granting it is the one kernel every runner talks to: a local
 filesystem on one host. On a network filesystem the lock is one client's view,
 emulated by a daemon, or not coordinated between hosts at all — and the F3

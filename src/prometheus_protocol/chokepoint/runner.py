@@ -13,13 +13,16 @@ Order of enforcement in :meth:`execute` (each step fail-closed):
    expiry) — a bound-field failure refuses *before* any DB contact;
 2. acquire cross-process execution/recovery ownership and reconcile older
    unfinished intents; contention or ambiguity blocks without spending approval.
-   Ownership is an OS file lock beside the approval store, which is mutual
-   exclusion only on a local filesystem of one host — so the store's filesystem
-   is probed at construction (``substrate.py``: a network filesystem is refused,
-   an unidentified one is refused unless explicitly opted out of) and every
-   intent records the owner's host identity (``ownership.py``), so a recovering
-   runner that cannot establish the recorded owner is dead leaves the intent
-   pending instead of declaring it not committed;
+   Ownership is an OS file lock on the approval store's own inode — keyed to
+   the store's identity, so every alias of the store contends for one lock —
+   which is mutual exclusion only on a local filesystem of one host; so the
+   filesystem type at the store's parent path is classified at construction
+   (``substrate.py``: a network filesystem is refused, an unidentified one is
+   refused unless explicitly opted out of), a multiply linked store is refused,
+   and every intent records the owner's host identity and the identity of the
+   lock it held (``ownership.py``), so a recovering runner that cannot establish
+   the recorded owner is dead — same kernel AND the same lock object, or a
+   reboot — leaves the intent pending instead of declaring it not committed;
 3. atomically **spend** the approval's nonce — a second use of the same approval
    loses the race and is refused as a replay;
 4. durably record an execution intent — an unavailable audit sink refuses before
@@ -48,8 +51,14 @@ import logging
 import os
 import sqlite3
 import stat
+import sys
 import threading
 import time
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows has no flock; the guard refuses there
+    fcntl = None  # type: ignore[assignment]
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -71,7 +80,6 @@ from prometheus_protocol.chokepoint.authorization_record import (
     recovered_evidence,
 )
 from prometheus_protocol.chokepoint.ownership import (
-    OWNER_LEGACY,
     OwnerIdentity,
     assess_owner,
     local_identity,
@@ -131,6 +139,26 @@ _RECEIPT_TABLE = "migration_receipts"
 
 class _OwnershipUnavailable(RuntimeError):
     """The cross-process guard could not be acquired safely."""
+
+
+class _MultiplyLinkedStore(OSError):
+    """The store inode has more than one name. Every name would resolve to the
+    same lock object, so this is not itself a bypass — but a store with two
+    names is a store being aliased, and it is refused rather than reasoned
+    about (finding 2)."""
+
+
+class _PlatformUnsupported(OSError):
+    """Execution ownership needs Linux ``flock`` semantics: an ``flock`` on the
+    store's inode that is independent of SQLite's POSIX locks on the same
+    file. Elsewhere the guard refuses rather than guesses."""
+
+
+def _singly_linked(info: os.stat_result) -> bool:
+    """One name for one inode. Checked at construction AND before every guard
+    acquisition: aliases can be created after construction."""
+
+    return info.st_nlink == 1
 
 
 @dataclass(frozen=True)
@@ -774,14 +802,20 @@ class ConsumedApprovals:
     detects the PID change and reconnects instead of reusing an inherited SQLite
     connection.
 
-    The filesystem behind ``path`` is probed before anything is created there
-    (``substrate.py``): the execution guard is an flock beside this file, which
-    is mutual exclusion only on a local filesystem of one host. A network or
-    host-shared filesystem is refused with ``ConfigError``; a filesystem the
-    probe cannot identify is refused unless ``substrate_policy`` (or, when it
-    is not given, the environment) carries the explicit opt-out, and is then
-    warned about. ``probe`` is injectable so a test can stand in an NFS mount
-    without mounting one."""
+    The filesystem type at the pathname of ``path``'s parent directory is
+    classified before anything is created there (``substrate.py``): the
+    execution guard is an flock, which is mutual exclusion only on a local
+    filesystem of one host. A network or host-shared filesystem is refused
+    with ``ConfigError``; a filesystem the probe cannot identify is refused
+    unless ``substrate_policy`` (or, when it is not given, the environment)
+    carries the explicit opt-out, and is then warned about. ``probe`` is
+    injectable so a test can stand in an NFS mount without mounting one.
+
+    The execution guard itself is keyed to the store's *identity*, not its
+    pathname: it is an ``flock`` on a descriptor of this file's own inode,
+    opened once here and held for the store's lifetime (``execution_guard``).
+    A store with more than one name (a hard link) is refused at construction
+    and again before every guard acquisition."""
 
     def __init__(
         self,
@@ -830,12 +864,27 @@ class ConsumedApprovals:
                 os.close(descriptor)
         self._validate_file(durable_path)
         info = durable_path.stat()
+        if not _singly_linked(info):
+            raise ValueError(
+                "consumed-approval store must be singly linked: a hard link is a "
+                "second name for the store, and a store with two names is refused "
+                "rather than reasoned about"
+            )
         self._file_identity = (info.st_dev, info.st_ino)
         self.path = durable_path
         self._lock = threading.RLock()
+        # In-process exclusion for the guard. The flock below is per open file
+        # description and this store keeps ONE descriptor, so a second thread
+        # re-locking it would succeed; the mutex is what makes two threads of
+        # one process contend the way two processes do.
+        self._guard_mutex = threading.Lock()
         self._pid = os.getpid()
         self._conn: sqlite3.Connection | None = None
+        self._guard_fd: int | None = None
+        self._guard_pid: int | None = None
         try:
+            self._guard_fd = self._open_guard()
+            self._guard_pid = os.getpid()
             self._conn = self._connect()
             self._conn.execute(
                 "CREATE TABLE IF NOT EXISTS consumed ("
@@ -918,63 +967,150 @@ class ConsumedApprovals:
                 conn.rollback()
                 raise
 
+    @property
+    def identity(self) -> tuple[int, int]:
+        """``(st_dev, st_ino)`` of the store: the lock object's identity."""
+
+        return self._file_identity
+
+    @property
+    def lock_id(self) -> str:
+        """The lock's identity as recorded in every execution intent, so a
+        recovering runner can tell whether the lock it holds is the one the
+        intent's owner held. Every alias of the store yields the same value."""
+
+        return f"{self._file_identity[0]}:{self._file_identity[1]}"
+
+    def _open_guard(self) -> int:
+        """A descriptor on the store's own inode, for ``flock``.
+
+        The lock object is the inode: a hard link, a file bind mount or a
+        symlink to this store opens the same inode, and the kernel evaluates
+        ``flock`` conflicts per inode, across processes. That is what makes the
+        guard identity-keyed rather than path-keyed. The descriptor is held
+        open for the store's lifetime and released with ``LOCK_UN`` rather than
+        by closing, because closing any descriptor of a file drops the
+        process's POSIX locks on that file — the locks SQLite holds during a
+        transaction. ``flock`` locks are independent of those on Linux, which
+        is the platform this guard is specified for.
+        """
+
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+        fd = os.open(self.path, flags)
+        try:
+            info = os.fstat(fd)
+            if (info.st_dev, info.st_ino) != self._file_identity:
+                raise OSError("approval store was replaced between validation and open")
+        except BaseException:
+            os.close(fd)
+            raise
+        return fd
+
+    def _guard_descriptor(self) -> int:
+        if self._guard_fd is None:
+            raise RuntimeError("consumed-approval store is closed")
+        if os.getpid() != self._guard_pid:
+            # Inherited across fork(): the parent's lock lives on the shared
+            # open file description, and a child re-locking through it would
+            # "succeed". The child contends with a descriptor of its own.
+            try:
+                os.close(self._guard_fd)
+            except OSError:
+                pass
+            self._guard_fd = None
+            self._guard_fd = self._open_guard()
+            self._guard_pid = os.getpid()
+        return self._guard_fd
+
     @contextmanager
     def execution_guard(self) -> Iterator[bool]:
         """Exclusive nonblocking ownership across execution AND recovery.
 
-        All runners must share this store and the audit ledger on one trusted
-        host/local filesystem. A companion lock file avoids interference with
-        SQLite's own locking (notably on macOS). It spans the pre-connection interval without a SQLite write
-        transaction. A suspended owner retains the lock; a dead owner cannot
-        resume, and any surviving DB transaction retains its receipt lock.
+        The lock is an ``flock`` on the store's own inode (``_open_guard``), so
+        every runner that names this store by any path contends for ONE lock
+        object; before each acquisition the descriptor is re-checked to still
+        be the inode at ``path``, singly linked, private and owned. All runners
+        must share this store and the audit ledger on one trusted host. The
+        guard spans the pre-connection interval without a SQLite write
+        transaction. A suspended owner retains the lock; a dead owner's lock
+        is released by the kernel; any surviving DB transaction retains its
+        receipt lock.
 
         No lease expiry or time-based takeover is safe here. Do not unlink or
-        replace the store while runners exist, or fork an active runner.
+        replace the store while runners exist. Linux only: elsewhere the guard
+        refuses (``_PlatformUnsupported``) rather than risk an ``flock`` that
+        interacts with SQLite's POSIX locks.
         """
-        fd = None
+        held = False
+        fd = -1
         try:
-            import fcntl
-
+            if fcntl is None or not sys.platform.startswith("linux"):
+                raise _PlatformUnsupported(
+                    "execution ownership needs Linux flock semantics"
+                )
             with self._lock:
                 self._connection()  # Refuse a closed store; refresh after fork.
-            flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
-            lock_path = self.path.with_name(self.path.name + ".execution.lock")
-            fd = os.open(lock_path, flags, 0o600)
+                fd = self._guard_descriptor()
             info = os.fstat(fd)
+            if (info.st_dev, info.st_ino) != self._file_identity:
+                raise OSError("approval store descriptor is not the validated store")
+            current = self.path.stat()
+            if (current.st_dev, current.st_ino) != self._file_identity:
+                raise OSError(
+                    "approval store was replaced; execution ownership unavailable"
+                )
+            if not _singly_linked(info):
+                raise _MultiplyLinkedStore(
+                    "approval store has more than one name; execution ownership "
+                    "unavailable"
+                )
             if (
                 not stat.S_ISREG(info.st_mode)
                 or info.st_mode & 0o077
                 or info.st_uid != os.geteuid()
             ):
-                raise OSError("unsafe execution lock file")
-            store_info = self.path.stat()
-            if (store_info.st_dev, store_info.st_ino) != self._file_identity:
-                raise OSError(
-                    "approval store was replaced; execution ownership unavailable"
-                )
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
+                raise OSError("unsafe approval store")
+            if not self._guard_mutex.acquire(blocking=False):
                 owned = False
             else:
-                owned = True
+                held = True
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    self._guard_mutex.release()
+                    held = False
+                    owned = False
+                else:
+                    owned = True
         except (OSError, RuntimeError, ImportError, sqlite3.Error) as exc:
-            if fd is not None:
-                os.close(fd)
+            if held:
+                self._guard_mutex.release()
             raise _OwnershipUnavailable(type(exc).__name__) from exc
         try:
             yield owned
         finally:
-            # Closing this separately-opened descriptor releases ownership on
-            # normal return, exceptions and process death. It is not inherited
-            # by exec (Python opens descriptors non-inheritable).
-            os.close(fd)
+            if held:
+                # LOCK_UN, never close: the descriptor stays open for the
+                # store's lifetime (see _open_guard). Process death releases
+                # the lock through the kernel.
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                finally:
+                    self._guard_mutex.release()
 
     def close(self) -> None:
         with self._lock:
             if self._conn is not None:
                 self._conn.close()
                 self._conn = None
+            # After SQLite: closing a descriptor of the store drops this
+            # process's POSIX locks on it, so it must not happen mid-transaction.
+            if self._guard_fd is not None:
+                try:
+                    os.close(self._guard_fd)
+                except OSError:
+                    pass
+                self._guard_fd = None
 
 
 class BrokeredMigrationRunner:
@@ -1090,7 +1226,7 @@ class BrokeredMigrationRunner:
                     None,
                     STORE_UNAVAILABLE,
                     False,
-                    detail=f"execution ownership unavailable: {type(exc).__name__}",
+                    detail=f"execution ownership unavailable: {exc}",
                 ),
             )
 
@@ -1236,10 +1372,14 @@ class BrokeredMigrationRunner:
                     )
                     continue
 
-                # The F3 race in its multi-host form: this runner's guard proves
-                # nothing about an owner on another kernel. Absence of a receipt
-                # may not be read as non-commit until the owner is placed.
-                owner = assess_owner(payload, self._identity)
+                # The F3 race in its multi-host and aliased forms: this runner's
+                # guard proves nothing about an owner on another kernel, and
+                # nothing about an owner on this kernel unless the lock it held
+                # is provably the object this runner now holds. Absence of a
+                # receipt may not be read as non-commit until the owner is placed.
+                owner = assess_owner(
+                    payload, self._identity, lock_id=self._consumed.lock_id
+                )
                 owner_override = False
                 if not owner.established:
                     if not assume_owner_dead:
@@ -1257,12 +1397,6 @@ class BrokeredMigrationRunner:
                     _LOG.warning(
                         "reconciling intent %s on the operator's assertion that "
                         "its owner is dead (assume_owner_dead=True): %s",
-                        execution_id,
-                        owner.detail,
-                    )
-                elif owner.basis == OWNER_LEGACY:
-                    _LOG.warning(
-                        "reconciling intent %s that carries no owner identity: %s",
                         execution_id,
                         owner.detail,
                     )
@@ -1401,14 +1535,14 @@ class BrokeredMigrationRunner:
                     "phase": "ownership",
                     **execution_evidence(approval),
                     "reason": STORE_UNAVAILABLE,
-                    "error_type": type(exc).__name__,
+                    "error_type": str(exc),
                 },
             )
             return MigrationResult(
                 False,
                 True,
                 STORE_UNAVAILABLE,
-                f"execution ownership unavailable: {type(exc).__name__}",
+                f"execution ownership unavailable: {exc}",
                 audit_recorded=audit.recorded,
             )
 
@@ -1507,6 +1641,10 @@ class BrokeredMigrationRunner:
                 "artifact_sha256": artifact.sha256,
                 "target": self._target.identity.canonical,
                 **self._identity.as_payload(),
+                # The lock this owner holds: a recovering runner on the same
+                # kernel may treat its own exclusive lock as proof the owner
+                # is gone only if it is provably this same object.
+                "owner_lock_id": self._consumed.lock_id,
             },
         )
         if not intent.recorded:

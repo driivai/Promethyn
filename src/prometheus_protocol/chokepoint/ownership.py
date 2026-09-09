@@ -1,33 +1,38 @@
-"""Who owns an execution: host identity in the ownership record.
+"""Who owns an execution: host and lock identity in the ownership record.
 
-The execution guard (an ``flock`` beside the approval store) proves a previous
-owner is dead only where that lock is the same kernel's lock: one host. Two
-runners on two hosts that share a store or a ledger cannot be told apart by an
-``flock`` at all — which is the F3 race in its multi-host form: a recovering
-runner on host B finds host A's intent, finds no receipt yet (A has not
-connected), and records "not committed" while A is about to commit.
+The execution guard is an ``flock`` on the consumed-approval store's own
+inode (``ConsumedApprovals.execution_guard``). It proves a previous owner is
+dead only where two things hold at once: the lock is the same kernel's lock
+(one host), and it is the *same lock object* the owner held. The independent
+review's finding 2 showed the second half is not free: with a guard keyed to
+the store's pathname, two aliases of one store gave two runners two locks,
+and "I hold the guard" proved nothing about the owner. The guard is now keyed
+to the store's identity, and every intent records which lock its owner held,
+so that a recovering runner can check both halves before it reads "no
+receipt" as "not committed":
 
-So every execution intent records who took it — hostname, kernel boot id,
-machine id, pid — and a recovering runner compares that record with itself
-before it is allowed to say "no receipt, so not committed":
+* **same boot id and the same lock identity** — the recorded owner ran on
+  this kernel and locked the inode this runner now holds exclusively; the
+  owner is dead (or is this very process). Established.
+* **same boot id, a different or missing lock identity** — the owner ran on
+  this kernel but held some other lock, or an intent written before lock
+  identities were recorded. Holding this lock says nothing about it. Not
+  established (``lock_mismatch``).
+* **same machine id and hostname, different boot id** — this machine
+  rebooted since the intent; the owner process did not survive that.
+  Established, whatever lock it held.
+* **anything else** — the owner may be alive on another host. Not
+  established (``foreign``).
+* **no identity at all** — an intent written before identities were
+  recorded. Nothing about it can be established (``legacy``).
 
-* **same boot id** — the recorded owner ran on this kernel, and this runner
-  holds the exclusive lock that owner would have had to hold; the owner is
-  dead (or is this very process). Established.
-* **same machine id and hostname, different boot id** — this machine rebooted
-  since the intent; the owner process did not survive that. Established.
-* **anything else** — the owner may be alive on another host. Liveness cannot
-  be established from here. The intent stays pending as ``owner_unverifiable``
-  until an operator who has established it by other means reconciles with
-  ``assume_owner_dead=True``, which the audit event records.
-* **no identity at all** — an intent written before identities were recorded.
-  It is reconciled under the same-host assumption those runners were deployed
-  under, with a warning; the upgrade window is named in the threat model.
-
-This does not make multi-host execution supported. It makes the unsupported
-case fail closed instead of producing false recovery evidence. The residuals —
-a cloned machine id on two hosts with the same hostname, a kernel that
-reports no boot id — are named in ``docs/chokepoint-threat-model.md``.
+Whatever is not established stays pending as ``owner_unverifiable`` until an
+operator who has established it by other means reconciles with
+``assume_owner_dead=True``, which the audit event records. This does not make
+multi-host execution supported; it makes the unsupported cases fail closed
+instead of producing false recovery evidence. The residuals — a cloned
+machine id on two hosts with the same hostname, a kernel that reports no
+boot id — are named in ``docs/chokepoint-threat-model.md``.
 """
 
 from __future__ import annotations
@@ -45,6 +50,9 @@ OWNER_SAME_KERNEL = "same_kernel"
 OWNER_REBOOTED = "rebooted"
 OWNER_LEGACY = "legacy"
 OWNER_FOREIGN = "foreign"
+#: Same kernel, but the owner's guard was not this runner's lock object (or
+#: the intent predates lock identities): a held lock proves nothing here.
+OWNER_LOCK_MISMATCH = "lock_mismatch"
 
 _IDENTITY_TOKEN = re.compile(r"^[0-9A-Za-z-]{8,64}$")
 _OWNER_FIELDS = ("owner_host", "owner_boot_id", "owner_machine_id", "owner_pid")
@@ -112,29 +120,50 @@ def _text(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def assess_owner(payload: Mapping[str, object], local: OwnerIdentity) -> OwnerAssessment:
+def assess_owner(
+    payload: Mapping[str, object],
+    local: OwnerIdentity,
+    *,
+    lock_id: str | None = None,
+) -> OwnerAssessment:
     """Compare an intent's recorded owner with ``local`` (the runner that now
-    holds the execution guard)."""
+    holds the execution guard) and ``lock_id`` (the identity of the lock it
+    holds: the store inode's ``dev:ino``)."""
 
     if not any(field in payload for field in _OWNER_FIELDS):
         return OwnerAssessment(
-            established=True,
+            established=False,
             basis=OWNER_LEGACY,
             detail=(
-                "intent predates ownership identity; reconciled under the "
-                "same-host assumption its runner was deployed under"
+                "intent carries no owner identity, so nothing this runner holds "
+                "says whether its owner is dead; it stays pending until an "
+                "operator asserts otherwise"
             ),
         )
     host = _text(payload.get("owner_host"))
     boot_id = _text(payload.get("owner_boot_id"))
     machine_id = _text(payload.get("owner_machine_id"))
+    recorded_lock = _text(payload.get("owner_lock_id"))
     if boot_id is not None and local.boot_id is not None and boot_id == local.boot_id:
+        if recorded_lock is not None and lock_id is not None and recorded_lock == lock_id:
+            return OwnerAssessment(
+                established=True,
+                basis=OWNER_SAME_KERNEL,
+                detail=(
+                    f"owner {host or '?'} ran on this kernel (boot {boot_id}) and "
+                    f"held lock {recorded_lock}, the store inode this runner now "
+                    "holds exclusively; the owner is gone"
+                ),
+            )
         return OwnerAssessment(
-            established=True,
-            basis=OWNER_SAME_KERNEL,
+            established=False,
+            basis=OWNER_LOCK_MISMATCH,
             detail=(
-                f"owner {host or '?'} ran on this kernel (boot {boot_id}); the "
-                "exclusive execution guard this runner holds proves it is gone"
+                f"owner {host or '?'} ran on this kernel (boot {boot_id}) but held "
+                f"lock {recorded_lock or 'unrecorded'} while this runner holds "
+                f"{lock_id or 'no lock identity'}: not provably the same object, "
+                "so holding it says nothing about the owner; the intent stays "
+                "pending"
             ),
         )
     if (
@@ -144,9 +173,8 @@ def assess_owner(payload: Mapping[str, object], local: OwnerIdentity) -> OwnerAs
         and host is not None
         and host == local.host
     ):
-        # Same machine and hostname. Either this kernel (then the exclusive
-        # guard proves the owner gone) or an earlier boot (then the reboot did):
-        # the owner is dead either way, so a missing boot id does not weaken it.
+        # Same machine and hostname under another boot: the reboot ended the
+        # owner's process whatever lock it held.
         return OwnerAssessment(
             established=True,
             basis=OWNER_REBOOTED,

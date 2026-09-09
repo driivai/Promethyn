@@ -211,7 +211,7 @@ class Config:
 
     # Approval-store substrate (threat model §2, F3; docs/chokepoint-threat-
     # model.md "Recovery follow-up"). The chokepoint's cross-process execution
-    # guard is an flock beside the consumed-approval store, which is mutual
+    # guard is an flock on the consumed-approval store's inode, which is mutual
     # exclusion only on a local filesystem of one host. The runner probes the
     # filesystem before it builds: a network or host-shared filesystem is
     # refused outright, and one it cannot identify is refused by default.

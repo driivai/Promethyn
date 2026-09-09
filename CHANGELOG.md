@@ -57,6 +57,29 @@ in `spec/invariants.md` is a major version bump.
   implied.
 
 ### Fixed
+- **Finding 2 (F3 fail-open): the execution guard is keyed to the store's
+  identity, not its pathname (PROM-FIX-B part 2).** The independent review
+  reproduced, with real subprocesses, hard links, SQLite and OS locks, that
+  two hard links to one consumed-store inode gave two runners two different
+  companion locks, both acquired, and recovery recorded `not_committed` for
+  an owner that was still running. The guard is now an `flock` on a
+  descriptor of the store's own inode, opened once and held for the store's
+  lifetime, released with `LOCK_UN`: every alias of the store — hard link,
+  file bind mount, symlink — opens the same inode and the kernel evaluates
+  `flock` conflicts per inode across processes, so every alias resolves to
+  one lock object; an in-process mutex makes two threads contend the way two
+  processes do; a forked child contends with a descriptor of its own. A
+  multiply linked store is refused at construction and re-validated before
+  every acquisition. Every intent records the lock's identity
+  (`owner_lock_id`), and "same boot id" establishes a dead owner only when
+  the recorded lock is the lock this runner holds; otherwise, and for intents
+  with no identity, the intent stays `owner_unverifiable` until the
+  operator's recorded assertion. The guard is specified for Linux and
+  refuses elsewhere. The authorization journal's store was already inode
+  keyed by SQLite's own lock and singly-linked-checked before every use; a
+  test now proves it. `tests/chokepoint/test_lock_identity.py` reproduces
+  the review's scenario (a live subprocess owner, a real hard link, and
+  under a mount namespace a real file bind mount) and the positive controls.
 - **F9: one strict boolean parser at every entry point (PROM-FIX-B part 1).**
   The truth-set parser copied into seven modules and twenty-one test files
   had two fail-open shapes the independent review reproduced: a present but
