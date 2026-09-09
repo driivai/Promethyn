@@ -58,6 +58,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from prometheus_protocol.core.validation import require_positive
+from prometheus_protocol.core.interfaces import Verifier
 from prometheus_protocol.core.models import (
     SPLIT_TRAIN,
     SPLITS,
@@ -240,7 +241,7 @@ def results_equivalent(
 # --------------------------------------------------------------------------
 
 
-class SqlVerifier:
+class SqlVerifier(Verifier[SqlTask]):
     """HARD-tier SQL verifier: sandboxed execution + result equivalence."""
 
     VERIFIER_ID = "sql-result-equivalence"

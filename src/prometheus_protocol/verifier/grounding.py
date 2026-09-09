@@ -87,7 +87,7 @@ class GroundingTask:
     prompt: str = "State one claim that is supported by the source."
 
 
-class GroundingVerifier(Verifier):
+class GroundingVerifier(Verifier[GroundingTask]):
     """A soft verifier that judges claim-vs-source grounding via the provider."""
 
     VERIFIER_ID = "grounding-judge"

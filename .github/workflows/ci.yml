@@ -52,15 +52,24 @@ jobs:
       - name: Compile
         run: python -m compileall -q src tests scripts
 
-      - name: Trusted core and F11 type gate
+      - name: Whole-tree type gate
         # EX-1: "could not execute" is a distinct type (core.models.Unavailable)
         # that carries no `verdict`, so an authoritative verifier that could not
         # run can never be narrowed into a verdict. That guarantee is only real if
         # a checker enforces it — a type contract that never runs is the exact
-        # class of bug EX-1 fixes — so it runs here and the build FAILS if the
-        # Hearth does not type-check. mypy.ini pins the core and F11 files (and
-        # `mypy_path=src` so the real types resolve and the gate has teeth); the
-        # rest of the repo is not checked here (no yak-shaving).
+        # class of bug EX-1 fixes.
+        #
+        # This step used to check an ENTRY-POINT LIST of files. An independent
+        # review then reproduced eleven crashes and one authorization fail-open;
+        # every one was already visible to mypy, and they shipped because five of
+        # the affected files were outside that list. The checker knew and nobody
+        # asked it. mypy.ini now checks the WHOLE of src/prometheus_protocol,
+        # this step runs it on all three supported Pythons, and the build FAILS
+        # on any diagnostic — not advisory, not report-only. The next consumer
+        # that forgets to narrow Evidence | Unavailable cannot merge.
+        #
+        # tests/conformance/test_type_gate.py fails the build if mypy.ini is
+        # narrowed back to a file list, or grows a per-module ignore section.
         run: python -m mypy --config-file mypy.ini
 
       - name: Repository hygiene
@@ -137,6 +146,37 @@ jobs:
 
       - name: Config attestation guard reverts (must be caught)
         run: python scripts/pih4a_revert_proofs.py
+
+      - name: Union-handling proofs (exact collection, zero skips)
+        # A type fix that satisfies mypy but still crashes at runtime is a void
+        # guard: mypy proves the Unavailable branch is WRITTEN, not that it is
+        # reached or that it produces a sensible outcome. These drive each crash
+        # site the independent review reproduced with a REAL Unavailable — a real
+        # verifier over a provider that times out, or over an isolation runtime
+        # that refuses to start — and assert a structured non-crash outcome. The
+        # collection count is pinned so a test that stops running is caught, and
+        # none of them may skip: the fault under test IS a runtime being absent,
+        # so none of them needs one.
+        run: |
+          python -m pytest -q tests/conformance/test_unavailable_consumers_do_not_crash.py tests/conformance/test_type_gate.py tests/conformance/test_type_gate_revert_pins.py --junitxml=type-gate-proofs.xml
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          cases = list(ET.parse("type-gate-proofs.xml").iter("testcase"))
+          expected = {
+              "test_unavailable_consumers_do_not_crash": 22,
+              "test_type_gate": 16,
+              "test_type_gate_revert_pins": 4,
+          }
+          for module, count in expected.items():
+              actual = sum(c.get("classname", "").endswith(module) for c in cases)
+              assert actual == count, (module, actual, count)
+          assert len(cases) == sum(expected.values())
+          assert all(c.find(t) is None for c in cases for t in ("skipped", "failure", "error"))
+          print(f"Union handling: {len(cases)} proofs; zero skips/failures/errors")
+          PY
+
+      - name: Union-narrowing reverts (must be caught)
+        run: python scripts/type_gate_revert_proofs.py
 
       - name: IP consistency (owner, license, no stray former license)
         # What a prime's counsel verifies by hand (docs/IP-READINESS.md §7),

@@ -365,8 +365,24 @@ class _HTTPSConnection(http.client.HTTPSConnection):
             raise
 
 
-def _request_deadline(req) -> float:
-    deadline = getattr(req, "_prom_deadline", None)
+class DeadlineRequest(urllib.request.Request):
+    """A request carrying F6's single monotonic deadline for the whole exchange.
+
+    The deadline used to be stashed on a plain ``Request`` as ``_prom_deadline``
+    and read back with a ``getattr`` probe: an attribute the type checker knew
+    nothing about at either end, so a typo in the name on the producing side
+    would have silently reverted every call to per-operation timeouts — the
+    exact defect F6 exists to remove. Declaring the carrier makes both ends
+    checkable.
+    """
+
+    #: Monotonic instant the whole exchange must finish by, or ``None`` to fall
+    #: back to the request's own timeout.
+    prom_deadline: float | None = None
+
+
+def _request_deadline(req: urllib.request.Request) -> float:
+    deadline = req.prom_deadline if isinstance(req, DeadlineRequest) else None
     if deadline is None:
         deadline = time.monotonic() + require_positive(req.timeout, name="HTTP timeout")
     remaining(deadline)

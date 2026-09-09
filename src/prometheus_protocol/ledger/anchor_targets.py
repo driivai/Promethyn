@@ -489,18 +489,26 @@ def build_tip_anchor(
     if spec.kind == ANCHOR_WORM:
         return ObjectLockTipAnchor(DirectoryObjectStore(spec.target), retain_for_s=retain_for_s)
     if spec.kind == ANCHOR_LOG:
-        from prometheus_protocol.ledger.anchor_http import HttpAppendOnlyLog
+        from prometheus_protocol.ledger.anchor_http import (
+            DEFAULT_MAX_RESPONSE_BYTES,
+            HttpAppendOnlyLog,
+        )
 
-        options: dict[str, object] = {}
-        if max_response_bytes is not None:
-            options["max_response_bytes"] = max_response_bytes
         return LogTipAnchor(
             HttpAppendOnlyLog(
                 spec.target,
                 token=token,
                 timeout_s=timeout_s,
                 allow_insecure_loopback=allow_insecure_loopback,
-                **options,  # type: ignore[arg-type]
+                # Named, not splatted from an untyped dict. The dict existed only
+                # to omit the argument and inherit the callee's default; naming
+                # that same constant keeps one source of truth AND a typed
+                # argument, so the cap cannot be widened by a stray dict entry.
+                max_response_bytes=(
+                    DEFAULT_MAX_RESPONSE_BYTES
+                    if max_response_bytes is None
+                    else max_response_bytes
+                ),
             )
         )
     raise ConfigError(f"unknown anchor kind {spec.kind!r}")

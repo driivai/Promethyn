@@ -34,20 +34,65 @@ THETAS = tuple(t / 100 for t in range(50, 100, 5))
 # --------------------------------------------------------------------------
 
 
+class UnrecordableRow(ValueError):
+    """Raised when a row carries no verdict to persist as a baseline record."""
+
+
 def record_from_row(row: JudgedRow) -> dict:
     """One persisted baseline record. ``gold`` is the reference verdict; the
-    judge is SOFT tier by construction (a lever never changes that)."""
+    judge is SOFT tier by construction (a lever never changes that).
 
+    A row whose judge or reference could NOT RUN has no verdict at all, so
+    there is no record to make of it. That is refused rather than persisted:
+    the θ frontier is recomputed post-hoc off this file, and a record with an
+    invented verdict — or a baseline quietly missing rows — would move every
+    rate computed from it. The caller must decide what to do about the fault
+    (see ``persist_records``), which is why this raises instead of dropping.
+    """
+
+    judged, reference = row.judged, row.reference
+    if judged is None or reference is None:
+        missing = ", ".join(
+            name for name, present in
+            (("judge verdict", judged is not None),
+             ("reference verdict", reference is not None))
+            if not present
+        )
+        raise UnrecordableRow(
+            f"item {row.item_id!r} has no {missing} "
+            f"(judge_unavailable={row.judge_unavailable}, "
+            f"reference_unavailable={row.reference_unavailable}); a baseline "
+            "record cannot be made from a check that produced no verdict"
+        )
     return {
         "item_id": row.item_id,
-        "verdict": row.judged.value,
+        "verdict": judged.value,
         "confidence": row.confidence,
-        "gold": row.reference.value,
+        "gold": reference.value,
         "tier": "soft",
     }
 
 
 def persist_records(rows: Sequence[JudgedRow], path: str, *, set_name: str, arm: str) -> None:
+    """Write the baseline the θ frontier is recomputed from.
+
+    Every row must carry a verdict. If any check could not run, no file is
+    written and the fault is named: a partial baseline silently changes every
+    denominator downstream, and the θ sweep reports rates as if the missing
+    items had never been asked for.
+    """
+
+    unrecordable = [
+        r for r in rows if r.judged is None or r.reference is None
+    ]
+    if unrecordable:
+        raise UnrecordableRow(
+            f"{len(unrecordable)} of {len(rows)} row(s) produced no verdict "
+            f"({', '.join(r.item_id for r in unrecordable[:5])}"
+            f"{', ...' if len(unrecordable) > 5 else ''}); refusing to persist a "
+            "partial baseline — every rate recomputed from it would be measured "
+            "against a denominator that quietly lost these items"
+        )
     payload = {
         "set": set_name,
         "arm": arm,

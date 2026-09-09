@@ -49,6 +49,7 @@ import urllib.request
 
 from prometheus_protocol.core.endpoint import validate_endpoint
 from prometheus_protocol.core.transport import (
+    DeadlineRequest,
     TransportErrors,
     build_opener,
     classify_open_error,
@@ -184,12 +185,12 @@ class HttpAppendOnlyLog:
             headers["Content-Type"] = "application/json"
         if self._token:
             headers["Authorization"] = f"Bearer {self._token}"
-        request = urllib.request.Request(url, data=body, headers=headers, method=method)
+        request = DeadlineRequest(url, data=body, headers=headers, method=method)
 
         # One monotonic deadline for DNS, TCP/TLS, writes, headers and body.
         # Pass it to the transport before opener.open begins network work.
         deadline = time.monotonic() + self.timeout_s
-        request._prom_deadline = deadline
+        request.prom_deadline = deadline
         try:
             response = self._opener.open(request, timeout=self.timeout_s)
         except AnchorUnavailable:

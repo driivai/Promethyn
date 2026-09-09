@@ -98,11 +98,16 @@ def create_pids_cgroup(
     # Prefer cgroup v2: one directory holds pids, memory, and cpu.
     v2 = _v2_self_dir()
     if v2 is not None:
-        cgroup = v2 / name
+        # A separate optional name for "the directory we managed to create":
+        # rebinding the Path to None left the variable typed Path while holding
+        # None, which is exactly the shape that reads fine and dereferences a
+        # None later.
+        created: Path | None = v2 / name
         try:
-            cgroup.mkdir()
+            (v2 / name).mkdir()
         except OSError:
-            cgroup = None
+            created = None
+        cgroup = created
         if cgroup is not None:
             if (cgroup / "pids.max").exists() and _write(cgroup / "pids.max", str(pids_max)):
                 if memory_bytes > 0 and (cgroup / "memory.max").exists():

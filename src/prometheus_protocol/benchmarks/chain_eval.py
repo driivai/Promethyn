@@ -44,7 +44,7 @@ from prometheus_protocol.benchmarks.chain_items import (
     SOFT_UNCAL,
     ChainCase,
 )
-from prometheus_protocol.core.models import Evidence, Tier, Verdict
+from prometheus_protocol.core.models import Evidence, Tier, Unavailable, Verdict
 from prometheus_protocol.orchestration.composition import RULES
 from prometheus_protocol.verifier.bank import VerifierBank
 from prometheus_protocol.verifier.sql import SqlTask, SqlVerifier
@@ -101,6 +101,16 @@ def profile_confidence(profile: str) -> float:
         j = bank.judge([_ev(_ADVISOR, Tier.SOFT, True)])
     else:
         raise ValueError(f"unknown profile {profile!r}")
+    if isinstance(j, Unavailable):
+        # The profiles above are built from synthetic Evidence with no
+        # Unavailable member, so the bank has something to fuse in every case.
+        # If that ever stops holding, the study must not proceed on a confidence
+        # it invented for a judgment that does not exist.
+        raise RuntimeError(
+            f"profile {profile!r} produced no judgment "
+            f"({j.reason.value}: {j.detail or 'no detail'}); the instrument "
+            "cannot report a per-step confidence it did not measure"
+        )
     return j.confidence
 
 
@@ -116,9 +126,16 @@ class ChainOutcome:
     n_steps: int
     confidences: tuple[float, ...]
     tiers: tuple[Tier, ...]
-    #: True = executed correct, False = executed incorrect, None = abstained.
+    #: True = executed correct, False = executed incorrect, None = no ground
+    #: truth for this chain (the verifier abstained, or — see ``unavailable`` —
+    #: could not run at all).
     correct: bool | None
     detail: str = ""
+    #: True when the SQL verifier could NOT EXECUTE this chain (sandbox refused,
+    #: engine missing). Distinct from an abstention: an abstention is a judgment
+    #: the verifier formed after running, this is the absence of a run. Both are
+    #: excluded from calibration, but only one of them is a measurement.
+    unavailable: bool = False
 
 
 def run_chain(case: ChainCase, verifier: SqlVerifier) -> ChainOutcome:
@@ -133,10 +150,20 @@ def run_chain(case: ChainCase, verifier: SqlVerifier) -> ChainOutcome:
         reference_query=case.reference_query(),
     )
     ev = verifier.verify(code=case.candidate_query(), task=task)
-    if ev.verdict == Verdict.ABSTAIN:
+    if isinstance(ev, Unavailable):
+        # No executed ground truth for this chain. Excluded from calibration and
+        # reported as could-not-run — never folded into the abstention bucket,
+        # which would read as an outcome the verifier actually judged.
+        return ChainOutcome(
+            chain_id=case.chain_id, scenario=case.scenario, n_steps=case.n_steps,
+            confidences=confidences, tiers=tiers, correct=None,
+            detail=f"could not run — {ev.reason.value}: {ev.detail or 'no detail'}",
+            unavailable=True,
+        )
+    if ev.decided == Verdict.ABSTAIN:
         correct: bool | None = None
     else:
-        correct = ev.verdict == Verdict.PASS
+        correct = ev.decided == Verdict.PASS
     return ChainOutcome(
         chain_id=case.chain_id, scenario=case.scenario, n_steps=case.n_steps,
         confidences=confidences, tiers=tiers, correct=correct, detail=ev.detail,
@@ -307,7 +334,8 @@ def run_study(*, threshold: float = 0.8, out=print) -> dict:
     outcomes = [run_chain(c, verifier) for c in CHAINS]
 
     decided = [o for o in outcomes if o.correct is not None]
-    abstained = [o for o in outcomes if o.correct is None]
+    abstained = [o for o in outcomes if o.correct is None and not o.unavailable]
+    unavailable = [o for o in outcomes if o.unavailable]
     n_correct = sum(1 for o in decided if o.correct)
     n_incorrect = sum(1 for o in decided if not o.correct)
 
@@ -317,7 +345,7 @@ def run_study(*, threshold: float = 0.8, out=print) -> dict:
     out(f"chains: {len(outcomes)}  step-length distribution: "
         + ", ".join(f"N={n}:{dist[n]}" for n in lengths))
     out(f"ground truth (EXECUTED): correct {n_correct}, incorrect {n_incorrect}, "
-        f"abstained/excluded {len(abstained)}")
+        f"abstained/excluded {len(abstained)}, could-not-run {len(unavailable)}")
     by_scn: dict[str, tuple[int, int]] = {}
     for o in decided:
         c, w = by_scn.get(o.scenario, (0, 0))
@@ -327,6 +355,10 @@ def run_study(*, threshold: float = 0.8, out=print) -> dict:
     if abstained:
         out("ABSTAINED chains (excluded from calibration): "
             + ", ".join(o.chain_id for o in abstained))
+    if unavailable:
+        out("COULD-NOT-RUN chains (no ground truth was executed for these; "
+            "excluded from calibration): "
+            + ", ".join(f"{o.chain_id} [{o.detail}]" for o in unavailable))
 
     out("")
     out("=== instrument self-calibration (what per-step signal composition saw) ===")
@@ -396,6 +428,7 @@ def run_study(*, threshold: float = 0.8, out=print) -> dict:
         "correct": n_correct,
         "incorrect": n_incorrect,
         "abstained": [o.chain_id for o in abstained],
+        "unavailable": [o.chain_id for o in unavailable],
         "reports": reports,
         "threshold": threshold,
     }
@@ -424,18 +457,31 @@ def instrument_self_check(out=print) -> bool:
         # 1. reference self-verifies PASS
         ref = verifier.verify(code=case.reference_query(), task=task)
         n_ref_checked += 1
-        if ref.verdict != Verdict.PASS:
+        # A check that could not RUN has not demonstrated soundness. This gate
+        # exists to earn the right to report a measurement, so an unavailable
+        # verifier fails it — silence is not evidence of a sound instrument.
+        if isinstance(ref, Unavailable):
+            ok = False
+            out(f"  UNSOUND: the reference check for {case.chain_id} could not run "
+                f"({ref.reason.value}: {ref.detail or 'no detail'}) — soundness "
+                "was not demonstrated")
+        elif ref.decided != Verdict.PASS:
             ok = False
             out(f"  UNSOUND: reference for {case.chain_id} did not self-verify "
-                f"({ref.verdict.value}: {ref.detail})")
+                f"({ref.decided.value}: {ref.detail})")
         # 2. a chain DESIGNED to end incorrect must execute FAIL
         if not case.ends_correct():
             n_wrong_checked += 1
             cand = verifier.verify(code=case.candidate_query(), task=task)
-            if cand.verdict != Verdict.FAIL:
+            if isinstance(cand, Unavailable):
+                ok = False
+                out(f"  UNSOUND: the designed-wrong check for {case.chain_id} could "
+                    f"not run ({cand.reason.value}: {cand.detail or 'no detail'}) — "
+                    "coincidental equivalence was neither ruled out nor found")
+            elif cand.decided != Verdict.FAIL:
                 ok = False
                 out(f"  UNSOUND: {case.chain_id} is designed-wrong but executed "
-                    f"{cand.verdict.value} (coincidental equivalence?): "
+                    f"{cand.decided.value} (coincidental equivalence?): "
                     f"cand={case.candidate_query()!r}")
     out(f"  instrument self-check: {n_ref_checked} references self-verified, "
         f"{n_wrong_checked} designed-wrong candidates executed — "

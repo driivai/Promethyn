@@ -51,9 +51,11 @@ from prometheus_protocol.core.models import (
     SPLIT_TRAIN,
     Attempt,
     Evidence,
+    Judgment,
     Tier,
     Unavailable,
     Verdict,
+    assert_never,
 )
 from prometheus_protocol.forge.miner import LessonForge
 from prometheus_protocol.gate.promotion import FirewallError, assert_disjoint
@@ -102,12 +104,26 @@ class VerifierCase:
 
 @dataclass(frozen=True)
 class CheckResult:
-    """One check's outcome: name, pass/fail, and a human-readable reason."""
+    """One check's outcome: name, pass/fail, and a human-readable reason.
+
+    Four outcomes, kept apart on purpose — collapsing any pair is how a harness
+    starts reporting things it did not establish:
+
+    * ``ok`` — the property was demonstrated.
+    * not ``ok`` — the property was demonstrated NOT to hold.
+    * ``skipped`` — the check was deliberately not attempted (no isolation
+      runtime), and says so.
+    * ``unavailable`` — the check WAS attempted and the verifier could not run,
+      so nothing was established either way. It is not ``ok``: a conformance
+      property that could not be exercised has not been certified, and the
+      report must not read as if it had.
+    """
 
     name: str
     ok: bool
     detail: str
     skipped: bool = False
+    unavailable: bool = False
 
 
 @dataclass(frozen=True)
@@ -128,11 +144,56 @@ class ConformanceReport:
     def render(self) -> str:
         lines = [f"conformance report: {self.case_name}"]
         for c in self.checks:
-            mark = "SKIP" if c.skipped else ("PASS" if c.ok else "FAIL")
+            if c.skipped:
+                mark = "SKIP"
+            elif c.unavailable:
+                mark = "UNAVAIL"
+            else:
+                mark = "PASS" if c.ok else "FAIL"
             lines.append(f"  [{mark}] {c.name}: {c.detail}")
         verdict = "WELL-BEHAVED" if self.ok else "REJECTED"
         lines.append(f"  => {verdict}")
         return "\n".join(lines)
+
+
+def _behavioural(
+    name: str,
+    outcome: Evidence | Unavailable,
+    *,
+    expected: Verdict,
+    expected_tier: Tier | None,
+    note: str,
+) -> CheckResult:
+    """Grade one behavioural check, with "could not run" as its own outcome.
+
+    A verifier that could not run has not demonstrated the property this check
+    certifies — and it has not disproved it either. Reporting it as a pass would
+    certify something nobody observed; reporting it as a failure would blame the
+    verifier for its environment. It is reported as unavailable, which is not
+    ``ok``: the harness only certifies what it saw.
+    """
+
+    if isinstance(outcome, Unavailable):
+        return CheckResult(
+            name, False,
+            f"the verifier could not run the candidate "
+            f"({outcome.reason.value}: {outcome.detail or 'no detail'}) — "
+            f"{expected.value!r} was neither demonstrated nor disproved",
+            unavailable=True,
+        )
+    if isinstance(outcome, Evidence):
+        tier_ok = expected_tier is None or outcome.tier == expected_tier
+        where = (
+            f" at tier {outcome.tier.value if outcome.tier else None!r}"
+            if expected_tier is not None else ""
+        )
+        return CheckResult(
+            name,
+            outcome.decided == expected and tier_ok,
+            f"a known-{'correct' if expected is Verdict.PASS else 'faulty'} "
+            f"candidate verified {outcome.decided.value!r}{where}{note}",
+        )
+    assert_never(outcome)
 
 
 def _bank_with(verifier_id: str, tier: Tier) -> VerifierBank:
@@ -193,13 +254,26 @@ def check_verifier(
     )
     judgment = _bank_with(case.verifier.verifier_id, case.tier).judge([honest])
     expect_auth = case.tier in AUTHORITATIVE_TIERS
-    checks.append(CheckResult(
-        "authority-matches-tier",
-        judgment.authoritative == expect_auth,
-        f"a {case.tier.value!r} PASS is "
-        f"{'authoritative' if judgment.authoritative else 'advisory'} "
-        f"(expected {'authoritative' if expect_auth else 'advisory'})",
-    ))
+    if isinstance(judgment, Unavailable):
+        # The bank could not judge honest Evidence. Nothing about authority was
+        # established, so this is not a passing check.
+        checks.append(CheckResult(
+            "authority-matches-tier", False,
+            f"the bank could not judge an honest {case.tier.value!r} PASS "
+            f"({judgment.reason.value}: {judgment.detail}) — authority was not "
+            "established either way",
+            unavailable=True,
+        ))
+    elif isinstance(judgment, Judgment):
+        checks.append(CheckResult(
+            "authority-matches-tier",
+            judgment.authoritative == expect_auth,
+            f"a {case.tier.value!r} PASS is "
+            f"{'authoritative' if judgment.authoritative else 'advisory'} "
+            f"(expected {'authoritative' if expect_auth else 'advisory'})",
+        ))
+    else:
+        assert_never(judgment)
 
     # -- fail-closed (always runnable: the injected source refuses to run) --
     # The injected fault is a ground-truth source that cannot be USED at all —
@@ -218,18 +292,23 @@ def check_verifier(
     #     it is not what this fault injects.
     fc_verifier, (fc_code, fc_task) = case.failclosed
     fc_evidence = fc_verifier.verify(code=fc_code, task=fc_task)
-    fc_ok = isinstance(fc_evidence, Unavailable)
     who = "executable verifier" if case.tier in AUTHORITATIVE_TIERS else "advisory judge"
-    fc_detail = (
-        f"with its ground-truth source unusable the {who} returned "
-        + (
-            "an Unavailable (could-not-run — no verdict to guess or abstain)"
-            if fc_ok
-            else f"{getattr(fc_evidence, 'verdict', fc_evidence)!r} "
-            "(a verifier that could not run must return Unavailable at any tier — "
-            "never a verdict, and never an abstention that reads as an opinion)"
+    # Narrowed, not probed. The getattr default that used to render this branch
+    # would have quietly printed the object itself if the union ever gained a
+    # third member; assert_never makes that a build failure instead.
+    if isinstance(fc_evidence, Unavailable):
+        fc_ok = True
+        returned = "an Unavailable (could-not-run — no verdict to guess or abstain)"
+    elif isinstance(fc_evidence, Evidence):
+        fc_ok = False
+        returned = (
+            f"{fc_evidence.decided.value!r} (a verifier that could not run must "
+            "return Unavailable at any tier — never a verdict, and never an "
+            "abstention that reads as an opinion)"
         )
-    )
+    else:
+        assert_never(fc_evidence)
+    fc_detail = f"with its ground-truth source unusable the {who} returned {returned}"
     checks.append(CheckResult("fail-closed", fc_ok, fc_detail))
 
     # -- emits its declared tier (catches a soft process stamping HARD) -----
@@ -252,12 +331,12 @@ def check_verifier(
     if case.passing is not None:
         if run_behavioural:
             code, task = case.passing
-            ev = case.verifier.verify(code=code, task=task)
-            checks.append(CheckResult(
+            checks.append(_behavioural(
                 "passes-a-correct-candidate",
-                ev.verdict == Verdict.PASS and ev.tier == case.tier,
-                f"a known-correct candidate verified "
-                f"{ev.verdict.value!r} at tier {ev.tier.value if ev.tier else None!r}",
+                case.verifier.verify(code=code, task=task),
+                expected=Verdict.PASS,
+                expected_tier=case.tier,
+                note="",
             ))
         else:
             checks.append(CheckResult(
@@ -268,12 +347,12 @@ def check_verifier(
     if case.failing is not None:
         if run_behavioural:
             code, task = case.failing
-            ev = case.verifier.verify(code=code, task=task)
-            checks.append(CheckResult(
+            checks.append(_behavioural(
                 "fails-a-faulty-candidate",
-                ev.verdict == Verdict.FAIL,
-                f"a known-faulty candidate verified {ev.verdict.value!r} "
-                "(candidate fault must be FAIL, not ABSTAIN or PASS)",
+                case.verifier.verify(code=code, task=task),
+                expected=Verdict.FAIL,
+                expected_tier=None,
+                note=" (candidate fault must be FAIL, not ABSTAIN or PASS)",
             ))
         else:
             checks.append(CheckResult(

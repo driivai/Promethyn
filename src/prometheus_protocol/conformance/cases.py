@@ -16,7 +16,16 @@ from typing import Sequence
 
 from prometheus_protocol.conformance.contract import VerifierCase
 from prometheus_protocol.core.interfaces import Provider
-from prometheus_protocol.core.models import Case, Skill, Tier, Task, Verdict
+from prometheus_protocol.core.models import (
+    Case,
+    Evidence,
+    Skill,
+    Task,
+    Tier,
+    Unavailable,
+    Verdict,
+    assert_never,
+)
 from prometheus_protocol.sandbox import NullSandbox
 from prometheus_protocol.verifier.grounding import GroundingTask, GroundingVerifier
 from prometheus_protocol.verifier.runner import SubprocessVerifier
@@ -45,11 +54,20 @@ def _code_adversarial() -> tuple[bool, str]:
         "os._exit(0)\n"
     )
     ev = SubprocessVerifier(memory_mb=0).verify(code=liar, task=_CODE_TASK)
-    ok = ev.verdict == Verdict.FAIL
-    return ok, (
-        "a candidate that writes forged pass counts without returning values is "
-        f"FAILed ({ev.verdict.value}; only the parent computes verdicts)"
-    )
+    if isinstance(ev, Unavailable):
+        # The probe never ran, so soundness was not demonstrated. Reporting it
+        # sound would certify a property nobody observed.
+        return False, (
+            f"the verifier could not run the forging candidate "
+            f"({ev.reason.value}: {ev.detail or 'no detail'}) — forged pass "
+            "counts were neither rejected nor accepted here"
+        )
+    if isinstance(ev, Evidence):
+        return ev.decided == Verdict.FAIL, (
+            "a candidate that writes forged pass counts without returning values is "
+            f"FAILed ({ev.decided.value}; only the parent computes verdicts)"
+        )
+    assert_never(ev)
 
 
 def code_case() -> VerifierCase:
@@ -167,11 +185,18 @@ def _grounding_adversarial() -> tuple[bool, str]:
     ev = GroundingVerifier(_GibberishProvider()).verify(
         code=_GROUNDING_CLAIM_PASS, task=_GROUNDING_TASK
     )
-    ok = ev.verdict == Verdict.ABSTAIN
-    return ok, (
-        "an unparseable judge reply yields "
-        f"{ev.verdict.value!r} (ABSTAIN — a verdict is never guessed)"
-    )
+    if isinstance(ev, Unavailable):
+        return False, (
+            f"the judge could not run against the gibberish provider "
+            f"({ev.reason.value}: {ev.detail or 'no detail'}) — whether an "
+            "unparseable reply yields an ABSTAIN was not demonstrated"
+        )
+    if isinstance(ev, Evidence):
+        return ev.decided == Verdict.ABSTAIN, (
+            "an unparseable judge reply yields "
+            f"{ev.decided.value!r} (ABSTAIN — a verdict is never guessed)"
+        )
+    assert_never(ev)
 
 
 def grounding_case() -> VerifierCase:

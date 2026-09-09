@@ -9,9 +9,16 @@ downstream code can program against the interfaces, not the implementations.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Protocol, Sequence
+from typing import Generic, Protocol, Sequence, TypeVar
 
-from prometheus_protocol.core.models import Attempt, Evidence, Task, Skill, Unavailable
+from prometheus_protocol.core.models import (
+    Attempt,
+    Evidence,
+    Skill,
+    Task,
+    Tier,
+    Unavailable,
+)
 
 
 class LearnableTask(Protocol):
@@ -30,12 +37,28 @@ class LearnableTask(Protocol):
     ``cases``, the SQL domain's schema/fixture/reference) are NOT part of this
     port — the loop must not require them. The matching domain verifier is
     what consumes them, behind the shared ``Verifier`` seam.
+
+    The members are declared read-only (as properties) because that is what the
+    loop actually needs: it reads a task's id, prompt, split and cluster and
+    never writes them. Declared as plain variables they were *settable*
+    requirements, which no domain task could satisfy — ``Task``, ``SqlTask`` and
+    ``GroundingTask`` are all frozen dataclasses, so their attributes are
+    read-only and every one of them failed the port it was written for. The
+    port described something the system does not have, and every caller passing
+    a real task was a type error nobody was asking for.
     """
 
-    id: str
-    prompt: str
-    split: str
-    cluster: str | None
+    @property
+    def id(self) -> str: ...
+
+    @property
+    def prompt(self) -> str: ...
+
+    @property
+    def split(self) -> str: ...
+
+    @property
+    def cluster(self) -> str | None: ...
 
 
 class Provider(ABC):
@@ -82,8 +105,27 @@ class Provider(ABC):
         raise NotImplementedError("this provider does not support generation")
 
 
-class Verifier(ABC):
+#: The domain task a verifier grades. Deliberately UNBOUNDED: verification and
+#: the promotion loop have different requirements, and conflating them was the
+#: original mistake. ``LearnableTask`` is the *loop's* port (id/prompt/split/
+#: cluster); a verifier grades whatever its domain defines, and
+#: ``GroundingTask`` — which has no split because grounding items never ride the
+#: promotion loop — is a real verifiable task that would fail that bound. The
+#: extras each verifier consumes are the parameter's business, not the seam's.
+TaskT = TypeVar("TaskT")
+
+
+class Verifier(ABC, Generic[TaskT]):
     """Runs candidate code against a task's hidden cases and returns evidence.
+
+    Generic in the task it grades. ``verify`` used to be annotated with the code
+    domain's :class:`Task` specifically, which made every other domain's
+    verifier an incompatible override (a Liskov violation mypy reports) and
+    every call that passed a ``SqlTask`` or a ``GroundingTask`` a type error —
+    for code that was correct. A verifier is *for a domain*; the seam says so
+    now. A bare ``Verifier`` still means "a verifier for some task type", so
+    existing annotations keep working; a site that wants the check writes
+    ``Verifier[Task]``.
 
     A verifier returns :class:`Evidence` when it ran the check (a PASS/FAIL, or a
     genuine ABSTAIN — it executed and the result is ambiguous or the task had
@@ -95,10 +137,25 @@ class Verifier(ABC):
     degrade into an abstention. Advisory verifiers that always run (a model judge)
     only ever return Evidence; the union is what an authoritative executable
     verifier needs.
+
+    ``verifier_id`` and ``tier`` are part of the seam, not incidental
+    attributes of some implementations. The bank refuses to register a verifier
+    without a tier and keys trust by id; the conformance harness reports by id.
+    Both were nonetheless read off the base class, which never declared them —
+    so a verifier that simply omitted one was a type error nobody was asking
+    for and an ``AttributeError`` waiting for the first consumer. They are
+    declared here, with the identity empty and the tier advisory by default, so
+    an implementation that forgets to set them is visibly the least-privileged
+    thing rather than an unpredictable one.
     """
 
+    #: Stable identity for trust accounting and audit. Implementations set it.
+    verifier_id: str = ""
+    #: Authority of this verifier's verdicts. SOFT (advisory) unless raised.
+    tier: Tier = Tier.SOFT
+
     @abstractmethod
-    def verify(self, *, code: str, task: Task) -> Evidence | Unavailable:
+    def verify(self, *, code: str, task: TaskT) -> Evidence | Unavailable:
         raise NotImplementedError
 
 
@@ -140,7 +197,11 @@ class Gate(ABC):
         *,
         candidate: Skill,
         train_ids: Sequence[str],
-        heldout_tasks: Sequence[Task],
+        # The gate enforces the held-out firewall by task id and scores through
+        # the caller's score_fn; it needs the shared loop port, not the code
+        # domain's Task. Naming Task here made every non-code domain's gate call
+        # a type error for correct code.
+        heldout_tasks: Sequence[LearnableTask],
         score_fn,
         rate_before: float,
     ):

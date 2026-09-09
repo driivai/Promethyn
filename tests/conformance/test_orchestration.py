@@ -301,6 +301,28 @@ _EX1_CHANGED = frozenset({
     "src/prometheus_protocol/execution/pending.py",
 })
 
+# TYPE-GATE (whole-tree strict type checking, made CI-blocking) changed exactly
+# one further frozen file: ``gate/promotion.py``. ``ScoreFn`` was annotated
+# ``Sequence[Task]`` while the gate already forwarded ``Sequence[LearnableTask]``
+# — the annotation was wrong about the code, and the mismatch was invisible while
+# the file sat outside the checked set. ``OUTCOME_UNAVAILABLE`` was added as a
+# caller-side marker for "no judgment existed, so nothing was submitted"; the
+# gate never returns it. ``approved``, the single field the executor checks, is
+# untouched. Named here as EX-1's delta is, so the guard still fails on ANY other
+# Hearth change.
+#
+# TYPE-GATE also changed ``verifier/bank.py``, which is already inside
+# ``_EX1_CHANGED`` above and so needs no new entry — recorded here so an auditor
+# reading "what did TYPE-GATE touch in the Hearth" is not misled by the entry
+# list alone. The change: the four ratcheted ``# type: ignore[arg-type]`` there
+# are replaced by ``Evidence.decided``, which states the ``__post_init__``
+# guarantee that the ``Verdict | None`` field type could not. The fused verdict,
+# the confidence arithmetic and the calibration writes are unchanged.
+_TYPE_GATE_CHANGED = frozenset({
+    "src/prometheus_protocol/gate/promotion.py",
+})
+_SANCTIONED = _EX1_CHANGED | _TYPE_GATE_CHANGED
+
 
 def _git(*args: str) -> subprocess.CompletedProcess:
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -314,12 +336,12 @@ def _git(*args: str) -> subprocess.CompletedProcess:
 def test_hearth_is_unchanged_versus_main():
     """The orchestration layer is a contained module: it changes no Hearth-core
     file (bank, both gates, executor, controller, pending, forge, core models
-    and interfaces), EXCEPT the files EX-1 (PR #52) changed with approval
-    (``_EX1_CHANGED``). The ledger is extended additively and is intentionally not
-    in this set."""
+    and interfaces), EXCEPT the files EX-1 (PR #52) and TYPE-GATE changed with
+    approval (``_SANCTIONED``). The ledger is extended additively and is
+    intentionally not in this set."""
 
     diff = _git("diff", "--name-only", "origin/main", "--", *_HEARTH_FILES)
     assert diff.returncode == 0, diff.stderr
     changed = [line for line in diff.stdout.splitlines() if line.strip()]
-    unsanctioned = [f for f in changed if f not in _EX1_CHANGED]
+    unsanctioned = [f for f in changed if f not in _SANCTIONED]
     assert unsanctioned == [], f"unsanctioned Hearth change vs origin/main: {unsanctioned}"

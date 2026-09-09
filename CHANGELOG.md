@@ -8,6 +8,52 @@ in `spec/invariants.md` is a major version bump.
 ## [Unreleased]
 
 ### Added
+- **TYPE-GATE: the type checker now reads the whole source tree, and the build
+  fails on any diagnostic.** `mypy.ini` used to name an entry-point list of
+  files. An independent review then reproduced eleven crashes and one
+  authorization fail-open; **every one was already visible to mypy**, and they
+  shipped because five of the affected files sat outside that list. The checker
+  knew and nobody asked it. `files` is now `src/prometheus_protocol` entire, the
+  CI step runs it on 3.10/3.11/3.12 and is blocking (not advisory, not
+  report-only), and the pre-fix whole-tree baseline — **132 diagnostics across
+  26 files, 70 of them `union-attr`** — is now zero. There are **no per-module
+  ignore sections, no `disallow_*=False` carve-outs, no exclusions and no
+  `# type: ignore` anywhere in the tree**; `warn_unused_ignores` and
+  `warn_redundant_casts` are on so neither shortcut can sit unnoticed. The point
+  is not the diagnostics cleared once: it is that the next consumer who forgets
+  to narrow `Evidence | Unavailable` cannot merge.
+  `tests/conformance/test_type_gate.py` fails the build if `files` is narrowed
+  back to a list, if a per-module section appears, if a `disallow_*` is relaxed,
+  if the CI step becomes conditional or swallows its exit status, or if a
+  blanket ignore or a `getattr(..., "verdict", <default>)` appears in the source
+  tree — the same source-sweep discipline as the strict-boolean guard.
+- **The four outcomes are now representable everywhere they are consumed.**
+  Where a consumer had no way to say "the verifier could not run", one was
+  **added** rather than folded into an existing bucket: `CheckResult.
+  unavailable` (a conformance check that was attempted and could not run is
+  neither a pass nor a skip), `ChainOutcome.unavailable` (a chain with no
+  executed ground truth is excluded from calibration and reported as such, not
+  filed as an abstention), a could-not-run bucket in the SQL reliability sweep
+  that also refuses to call the sweep CLEAN, and `OUTCOME_UNAVAILABLE` for a
+  loop that never submitted an action because there was no judgment to
+  authorize on. `core/reporting.py` renders either union member without
+  inventing anything, and deliberately offers no "get me a verdict from this".
+- **`Evidence.decided`** exposes the `__post_init__` guarantee that a verdict
+  exists, so consumers stop working around a `Verdict | None` that is never
+  actually `None`; **`assert_never`** (the 3.10-compatible idiom) makes a future
+  third union member a build failure at every branch point rather than a silent
+  fallthrough.
+- **Behavioural proof that the fixes hold at runtime, not only in the checker.**
+  `tests/conformance/test_unavailable_consumers_do_not_crash.py` drives every
+  reproduced crash site with a **real** `Unavailable` — a real
+  `ModelJudgeVerifier`/`GroundingVerifier` over a provider raising
+  `TimeoutError`, or a real `SqlVerifier`/`SubprocessVerifier` over a
+  `NullSandbox` that refuses to start — and asserts a structured non-crash
+  outcome, never merely "it did not raise". `scripts/type_gate_revert_proofs.py`
+  puts each narrowing back the way the review found it, in memory, and shows the
+  behavioural test going red: **12 reverts / 17 call-phase failures, observed
+  then pinned**, with a shortfall and an excess both refused. All of it runs in
+  CI with a pinned collection count and zero skips.
 - **PIH-4a: signed config digests — a silent security-posture downgrade is
   detectable by an external witness.** The near-term slice of Defense 4,
   composed from the two seams that already exist rather than rebuilt: signing
@@ -42,6 +88,34 @@ in `spec/invariants.md` is a major version bump.
   PIH-1 attacker-controls-the-anchor residual restated.
 
 ### Fixed
+- **Every consumer that read an Evidence-only field off `Evidence | Unavailable`
+  now narrows explicitly (TYPE-GATE).** The three soft levers propagate a
+  could-not-run instead of collapsing it into an ABSTAIN (and an ensemble whose
+  member never ran no longer lets the reachable judges speak for a quorum that
+  never met); the conformance harness reports an unrun behavioural check as
+  `UNAVAIL` rather than certifying a property nobody observed; both adversarial
+  probes report **not sound** when the probe could not run; the swarm runtime's
+  `_verify` return type now says what it returns (it claimed `Evidence | None`
+  and returned `Evidence | Unavailable`) and an unavailable judgment **fails
+  closed** — nothing is built, the gate is not consulted, nothing executes, and
+  the chain records why, with the routing decision left to Phase 1.2 rather than
+  guessed; the grounding eval records a could-not-run as `judged=None` +
+  `judge_unavailable=True` and no longer parses a confidence off a non-judgment;
+  the SQL sweep, the chain study and its soundness gate, and both loop demos all
+  handle it. **No `getattr` default, no `cast`, no ignore was added anywhere** —
+  three pre-existing `getattr` probes were *removed*.
+- **Interfaces improved rather than silenced (TYPE-GATE).** `Verifier` is now
+  `ABC, Generic[TaskT]` declaring `verifier_id`/`tier`, so a verifier's metadata
+  is part of the contract instead of something callers probe for; `LearnableTask`
+  is read-only properties a frozen dataclass can actually satisfy;
+  `ScoreFn` says `Sequence[LearnableTask]`, which is what the gate has always
+  forwarded (the old `Sequence[Task]` named the code domain's concrete type, and
+  the SQL and grounding domains do not use it); `DeadlineRequest` is a typed
+  `Request` subclass replacing a `_prom_deadline` attribute probe; and the
+  `attempts` table gains an `unavailable` discriminator column — mirroring the
+  existing `executions.unavailable` precedent — so an attempt whose verifier
+  could not run is writable and visible rather than unrepresentable against
+  `NOT NULL` count columns.
 - **A mount table row is judged per resolution, not per table
   (SUBSTRATE-ROBUST).** One unrelated `nsfs` mount — a Docker service network
   namespace, whose mount root the kernel writes as a label

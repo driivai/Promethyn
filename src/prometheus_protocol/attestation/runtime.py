@@ -16,6 +16,7 @@ is no second path that could resolve a different one.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping
@@ -160,7 +161,7 @@ def resolve_attestation_signer(
             "unverifiable by the next one."
         )
     return resolve_signer(
-        _SignerRequest(signer=signer, signing_key=signing_key),  # type: ignore[arg-type]
+        _SignerRequest(signer=signer, signing_key=signing_key),
         settings=config,
         env=env,
     )
@@ -288,9 +289,6 @@ def build_config_attestor(
         if required:  # pragma: no cover - attestation_target_for already refused
             raise ConfigError("config attestation is required and no target is configured")
         return None
-    kwargs: dict[str, object] = {}
-    if clock is not None:
-        kwargs["clock"] = clock
     return ConfigAttestor(
         target=target,
         signer=signer,
@@ -299,5 +297,9 @@ def build_config_attestor(
         ),
         required=required,
         interval_s=interval_s,
-        **kwargs,  # type: ignore[arg-type]
+        # Passed as a keyword, not splatted from an untyped dict. The dict was
+        # there only to omit the argument and let the callee's default apply;
+        # naming the default here says the same thing and keeps the argument
+        # typed. (A test injects a clock; production takes the wall clock.)
+        clock=time.time if clock is None else clock,
     )

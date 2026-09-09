@@ -19,8 +19,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Sequence
 
-from prometheus_protocol.core.interfaces import Gate
-from prometheus_protocol.core.models import ExecutableAction, Judgment, Skill, Task
+from prometheus_protocol.core.interfaces import Gate, LearnableTask
+from prometheus_protocol.core.models import ExecutableAction, Judgment, Skill
 
 # The three action-authorization outcomes. ``approve`` executes; ``route`` holds
 # the action for a human (a pending action); ``block`` denies it terminally.
@@ -29,6 +29,14 @@ from prometheus_protocol.core.models import ExecutableAction, Judgment, Skill, T
 OUTCOME_APPROVE = "approve"
 OUTCOME_ROUTE = "route"
 OUTCOME_BLOCK = "block"
+
+# Not a gate outcome: the gate never returns this and no GateDecision ever
+# carries it. It is the CALLER-side marker for "the verifier could not run, so
+# no judgment existed and the action was never submitted for authorization at
+# all". Recorded distinctly so a loop that never asked the question is not
+# reported as a loop that asked and was denied — the same could-not-run /
+# was-denied distinction Unavailable draws one layer down.
+OUTCOME_UNAVAILABLE = "unavailable"
 
 
 class FirewallError(AssertionError):
@@ -97,8 +105,11 @@ class GateDecision:
 
 # A scorer runs the held-out tasks with a candidate skill in context and
 # returns the resulting pass rate. The gate stays decoupled from the provider
-# and verifier behind this callable.
-ScoreFn = Callable[[Sequence[Task], Skill], float]
+# and verifier behind this callable. It scores whatever the loop can run —
+# ``LearnableTask``, the shared loop port — not the code domain's concrete
+# ``Task``: the SQL and grounding domains have their own task types and the
+# gate reads nothing beyond the port.
+ScoreFn = Callable[[Sequence[LearnableTask], Skill], float]
 
 
 class PromotionGate(Gate):
@@ -112,7 +123,9 @@ class PromotionGate(Gate):
         *,
         candidate: Skill,
         train_ids: Sequence[str],
-        heldout_tasks: Sequence[Task],
+        # Only ``task.id`` is read here and the list is forwarded to the
+        # caller's score_fn, so the shared loop port is exactly what this needs.
+        heldout_tasks: Sequence[LearnableTask],
         score_fn: ScoreFn,
         rate_before: float,
     ) -> GateDecision:

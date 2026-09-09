@@ -255,7 +255,13 @@ class Orchestrator:
         ).pass_rate
 
         train_report = self.run_split(train_tasks, cycle=cycle, kind="train")
-        failures = [o.attempt for o in train_report.outcomes if not o.passed]
+        # An outcome with no Attempt has nothing for the forge to mine. Filtered
+        # explicitly rather than passed through as a None the forge would have
+        # to guard against — the list's type says what it contains now.
+        failures = [
+            o.attempt for o in train_report.outcomes
+            if not o.passed and o.attempt is not None
+        ]
         tasks_by_id = {task.id: task for task in train_tasks}
 
         mined = self.forge.mine(failures, tasks_by_id)

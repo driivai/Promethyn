@@ -181,10 +181,15 @@ def test_opening_an_old_ledger_adds_the_columns(tmp_path):
             # ledgers so an infra/policy unavailability is forever separable from
             # a genuine abstention.
             "executions.unavailable",
+            # TYPE-GATE: the same discriminator on attempts. Attempt.evidence is
+            # Evidence | Unavailable now, so an attempt whose verifier could not
+            # run is recordable — and its NOT NULL 0/0/0 counts must never read
+            # as "ran and found nothing".
+            "attempts.unavailable",
             "pending_actions.execution_committed_at",
         }
         cols = {r["name"] for r in ledger._conn.execute("PRAGMA table_info(attempts)")}
-        assert {"verdict", "confidence"} <= cols
+        assert {"verdict", "confidence", "unavailable"} <= cols
         exec_cols = {r["name"] for r in ledger._conn.execute("PRAGMA table_info(executions)")}
         assert "unavailable" in exec_cols
     finally:
