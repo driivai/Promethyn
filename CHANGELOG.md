@@ -7,6 +7,47 @@ in `spec/invariants.md` is a major version bump.
 
 ## [Unreleased]
 
+### Fixed
+- **A mount table row is judged per resolution, not per table
+  (SUBSTRATE-ROBUST).** One unrelated `nsfs` mount — a Docker service network
+  namespace, whose mount root the kernel writes as a label
+  (`net:[4026533001]`) rather than a pathname — appearing anywhere in
+  `/proc/self/mountinfo` used to flip the store's classification from safe to
+  unknown and refuse startup on a stock CI runner. The refusal direction was
+  right; the coupling was not: an entry that has nothing to do with the path
+  being resolved must not degrade that resolution. `parse_mount_table` now
+  reads every row on its own terms and retains one it cannot read as an
+  `UnparsedEntry` — with its mount id, parent id, mount point, raw line and
+  reason — rather than failing the table or, worse, dropping the row. Each
+  resolution then applies a deliberately conservative relevance rule
+  (`could_affect_path`, and `could_affect_mount_id` for the descriptor join):
+  a row is set aside only where it is *established* that it cannot matter —
+  its location is readable and lies on a wholly unrelated subtree. A row that
+  is an ancestor of the target, the target itself, at or below the target, or
+  whose own location is unreadable, is relevant and still refuses. Topology
+  anomalies (a parent that does not contain its child, a cycle, a self-parent
+  away from `/`, a duplicated mount id) demote their own row the same way
+  instead of poisoning coherent rows. What was set aside is carried on
+  `SubstrateReport.set_aside`, named in every refusal and warning, logged at
+  debug, and printed by the new `scripts/mountinfo_diagnostic.py`: setting a
+  row aside silently would be the void-guard version of this fix. Verdicts are
+  unchanged in kind — this reduces false refusals and relaxes nothing.
+- **A mount whose source was unlinked is read, not refused
+  (SUBSTRATE-ROBUST).** The kernel's generic dentry path printer appends
+  `//deleted` to the mount root of a mount whose source dentry has been
+  removed, so a bind-mounted store whose source file was deleted produced a
+  row this parser could not read — and on the store's own path that refused
+  startup. That shape is now recognized: an absolute normalized pathname with
+  the exact `//deleted` suffix, not scoped to a driver because no driver emits
+  it (it is the path printer, and it was measured on ext4). Recognition
+  decides only whether a row is read; the driver still decides the verdict,
+  and no driver is added to a safe list. `scripts/mountinfo_diagnostic.py`
+  reports the observed per-row distribution on every Linux CI job, and the
+  Linux integration suite produces the `//deleted` row from a real mount on
+  the host rather than asserting a fixture of it. The recognized set remains
+  **empirical, not exhaustive**: an unrecognized shape on the resolution path
+  refuses startup, which is the deliberate trade for not guessing.
+
 ### Added
 - **F3: the execution guard's substrate is checked, not assumed
   (PROM-FIX-A).** The cross-process execution guard is an OS file lock beside

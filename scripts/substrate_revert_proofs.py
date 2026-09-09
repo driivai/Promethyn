@@ -10,8 +10,14 @@ import fix_b_revert_proofs as harness
 UNIT = "tests/chokepoint/test_opened_substrate.py"
 BUILD = "tests/chokepoint/test_substrate.py"
 JOURNAL = "tests/chokepoint/test_authorization_record.py"
-EXPECTED_REVERTS = 20
-EXPECTED_CALL_FAILURES = 53
+SCOPE = "tests/chokepoint/test_mount_relevance.py"
+FORMATS = "tests/chokepoint/test_mount_root_formats.py"
+#: Observed, then pinned — never the other way round. SUBSTRATE-ROBUST raised
+#: these from 20 / 53: eight relevance-rule reversions, three for the
+#: ``//deleted`` root shape and its scope, and ``namespace-entry-discarded``
+#: retargeted onto the per-row parser.
+EXPECTED_REVERTS = 31
+EXPECTED_CALL_FAILURES = 102
 
 
 def enforce_expected(caught: int, failures: int) -> None:
@@ -83,9 +89,54 @@ def mutations():
         ("namespace-label-shape-unchecked", substrate._valid_mount_root,
          [(' and _NAMESPACE_ROOT.fullmatch(root) is not None', '')],
          UNIT, "namespace_metadata_does_not_weaken_validation"),
-        ("namespace-entry-discarded", substrate.parse_mountinfo,
-         [('        ids.add(mount_id)', '        if fs_type == "nsfs":\n            continue\n        ids.add(mount_id)')],
+        ("namespace-entry-discarded", substrate.parse_mount_table,
+         [("        if isinstance(row, UnparsedEntry):",
+           '        if isinstance(row, MountEntry) and row.fs_type == "nsfs":\n            continue\n        if isinstance(row, UnparsedEntry):')],
          UNIT, "namespace_root_label_preserves"),
+        # SUBSTRATE-ROBUST: relevance scoping. Each clause of the rule is
+        # reverted on its own, so a proof that stops exercising one clause
+        # cannot be masked by another still failing.
+        ("unreadable-location-set-aside", substrate.could_affect_path,
+         [("    if point is None:\n        return True", "    if point is None:\n        return False")],
+         SCOPE, "location_is_unreadable_can_never_be_set_aside"),
+        ("row-on-the-path-ignored", substrate.could_affect_path,
+         [("    return _covers(point, path) or _covers(path, point)", "    return False")],
+         SCOPE, "on_the_resolution_path_refuses or same_path_stack_member or refuses_when_the_unread_row_is_on_its_path"),
+        ("descendant-assumed-harmless", substrate.could_affect_path,
+         [(" or _covers(path, point)", "")],
+         SCOPE, "on_the_resolution_path_refuses"),
+        ("unread-rows-dropped", substrate.parse_mount_table,
+         [("        if isinstance(row, UnparsedEntry):\n            unparsed.append(row)\n            continue",
+           "        if isinstance(row, UnparsedEntry):\n            continue")],
+         SCOPE, "recorded_as_unread or on_the_resolution_path_refuses or never_be_set_aside"),
+        ("set-aside-not-recorded", substrate._partition,
+         [("    return tuple(blocking), tuple(set_aside)", "    return tuple(blocking), ()")],
+         SCOPE, "names_what_it_set_aside or still_sees_what_was_set_aside or carried_by_relevance"),
+        ("descriptor-join-ignores-unread-rows", substrate.could_affect_mount_id,
+         [("    return entry.mount_id is None or entry.mount_id == mount_id", "    return False")],
+         SCOPE, "could_be_its_mount or far_away_does_not_excuse"),
+        ("topology-anomaly-treated-as-coherent", substrate._incoherent_parentage,
+         [("    seen: set[int] = set()", "    return None\n    seen: set[int] = set()")],
+         SCOPE, "topology_anomaly_demotes_its_own_row"),
+        ("duplicate-mount-id-tolerated", substrate.parse_mount_table,
+         [("        if counts[row.mount_id] > 1:", "        if False:")],
+         SCOPE, "topology_anomaly_demotes_its_own_row"),
+        # SUBSTRATE-ROBUST part A: the "//deleted" root shape. One reversion
+        # for the recognition itself (the valid form stops being read) and two
+        # for its scope (a near miss starts being read), which is the nsfs
+        # evidence pattern: sensitive to the bug, and not accepting everything.
+        ("deleted-suffix-unrecognized", substrate._valid_mount_root,
+         [("        base = (root[: -len(_DELETED_SUFFIX)]\n                if root.endswith(_DELETED_SUFFIX) else root)",
+           "        base = root")],
+         FORMATS, "deleted_suffix_is_read_now or recognized_root_is_read or not_scoped_to_a_driver"),
+        ("deleted-suffix-matched-anywhere", substrate._valid_mount_root,
+         [("        base = (root[: -len(_DELETED_SUFFIX)]\n                if root.endswith(_DELETED_SUFFIX) else root)",
+           "        base = root.split(_DELETED_SUFFIX)[0] if _DELETED_SUFFIX in root else root")],
+         FORMATS, "near_miss_of_a_recognized_shape"),
+        ("deleted-suffix-skips-path-validation", substrate._valid_mount_root,
+         [('        return (base.startswith("/") and os.path.normpath(base) == base\n                and "\\x00" not in root)',
+           "        return True")],
+         FORMATS, "near_miss_of_a_recognized_shape"),
     ]
 
 

@@ -21,7 +21,7 @@ def proof_runner():
 
 
 def test_opened_substrate_proofs_are_pinned_and_targets_exist(proof_runner):
-    assert (proof_runner.EXPECTED_REVERTS, proof_runner.EXPECTED_CALL_FAILURES) == (20, 53)
+    assert (proof_runner.EXPECTED_REVERTS, proof_runner.EXPECTED_CALL_FAILURES) == (31, 102)
     plan = proof_runner.mutations()
     assert len(plan) == proof_runner.EXPECTED_REVERTS
     assert len({name for name, *_ in plan}) == len(plan)

@@ -31,6 +31,8 @@ on:
       - "src/prometheus_protocol/chokepoint/runner.py"
       - "src/prometheus_protocol/chokepoint/authorization_journal.py"
       - "tests/chokepoint/test_*substrate*.py"
+      - "tests/chokepoint/test_mount_relevance.py"
+      - "scripts/mountinfo_diagnostic.py"
       - ".github/workflows/ci.yml"
 
 permissions:
