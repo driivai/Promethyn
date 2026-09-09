@@ -11,8 +11,11 @@ back, with nothing in the process to notice.
 Until this module, that requirement was a sentence in a document. Here it is
 something the runner checks before it builds:
 
-* :func:`probe_substrate` names the filesystem behind a path where the
-  platform exposes it (Linux, via ``/proc/self/mountinfo``) and classifies it
+* :func:`probe_opened_substrate` joins a held descriptor's ``fstat`` device to
+  its Linux ``fdinfo`` mount ID and the corresponding ``mountinfo`` entry.
+  :func:`probe_substrate` is the separate directory preflight, walking visible
+  mount parentage rather than selecting a global longest pathname prefix.
+  Both classify the identified driver
   as ``safe`` (a local filesystem whose ``flock`` is coherent for every
   process on the one kernel that mounts it), ``unsafe`` (a network, shared or
   multi-host filesystem) or ``unknown`` (a filesystem this module does not
@@ -25,19 +28,19 @@ something the runner checks before it builds:
   with no opt-out. ``unknown`` is refused by default: couldn't-verify is not
   verified-safe. An operator who has verified the substrate by other means
   may set ``allow_unverified_substrate`` (``PROM_ALLOW_UNVERIFIED_SUBSTRATE``)
-  and proceed under a warning logged at every construction, because the guard
+  and proceed under a warning logged at every accepted inspection, because the guard
   it re-enables is unproven there. ``require_verified_substrate``
   (``PROM_REQUIRE_VERIFIED_SUBSTRATE``, the OR of its sources) withdraws that
   opt-out for a production posture.
 
-The probe reads the kernel's own mount table rather than calling ``statfs``
-through ``ctypes``: it needs no per-architecture struct layout, it reports the
-driver's *name* (so ``fuse.sshfs`` and ``fuse.glusterfs`` are distinguishable
-from a local FUSE mount), and it can be fed a synthetic table in tests without
-mounting anything. What it cannot see is named in ``docs/threat-model.md``
-§2: the layers beneath an overlay, and whether a filesystem that looks local
-is exported to other hosts from *this* one (those hosts see a network
-filesystem and refuse on their side).
+Missing, contradictory or ambiguous metadata is unverified, not a pathname or
+device-only fallback. The issuance journal uses an ``O_PATH`` descriptor so
+inspection does not disturb SQLite's process-owned POSIX locks. This trusts
+the kernel, its proc metadata and a stable trusted mount namespace; it does
+not bind Python SQLite's later pathname open atomically to our descriptor.
+Driver recognition is not proof of physical storage durability, the layers
+beneath an overlay, or the absence of exports to other hosts. See the named
+residuals in ``docs/chokepoint-threat-model.md``.
 """
 
 from __future__ import annotations
@@ -125,12 +128,17 @@ UNSAFE_FILESYSTEMS = frozenset(
 
 _OVERLAY_FILESYSTEMS = frozenset({"overlay", "overlayfs"})
 _OCTAL_ESCAPE = re.compile(r"\\([0-7]{3})")
+_NAMESPACE_ROOT = re.compile(r"[a-z][a-z0-9_]*:\[[0-9]+\]")
 
 
 @dataclass(frozen=True)
 class MountEntry:
-    """One line of the mount table: where it is mounted and what drives it."""
+    """A mount identity, including the topology and superblock device."""
 
+    mount_id: int
+    parent_id: int
+    device: tuple[int, int]
+    root: str
     mount_point: str
     fs_type: str
 
@@ -149,6 +157,9 @@ class SubstrateReport:
     fs_type: str | None
     mount_point: str | None
     detail: str
+    device: int | None = None
+    inode: int | None = None
+    mount_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -158,6 +169,12 @@ class SubstratePolicy:
 
     require_verified: bool = False
     allow_unverified: bool = False
+
+    def __post_init__(self) -> None:
+        require_bool(self.require_verified, name="SubstratePolicy.require_verified")
+        require_bool(self.allow_unverified, name="SubstratePolicy.allow_unverified")
+        if self.require_verified and self.allow_unverified:
+            raise ConfigError("verified substrate requirement conflicts with opt-out")
 
 
 def _flag(env: Mapping[str, str], name: str) -> bool:
@@ -181,25 +198,61 @@ def _unescape(field: str) -> str:
     return _OCTAL_ESCAPE.sub(lambda match: chr(int(match.group(1), 8)), field)
 
 
+def _valid_mount_root(root: str, fs_type: str) -> bool:
+    # Field 4 is supplied by the filesystem's show_path implementation, not
+    # necessarily pathname lookup. Linux nsfs_show_path emits e.g. net:[123].
+    # Retain that entry; discarding it could expose the safe mount underneath.
+    # This is syntax recognition only: nsfs remains an UNKNOWN substrate.
+    if root.startswith("/"):
+        return os.path.normpath(root) == root and "\x00" not in root
+    return fs_type == "nsfs" and _NAMESPACE_ROOT.fullmatch(root) is not None
+
+
 def parse_mountinfo(text: str) -> list[MountEntry]:
-    """Parse ``/proc/self/mountinfo``: ``ID PARENT MAJ:MIN ROOT MOUNT_POINT
-    OPTIONS [optional...] - FSTYPE SOURCE SUPER_OPTIONS``. Lines that do not
-    have that shape are skipped, not guessed at."""
+    """Retain mount identity and parentage; malformed/ambiguous tables refuse.
+
+    Missing parents are possible outside a process root. They are retained,
+    not invented; pathname resolution below requires one visible root.
+    """
 
     entries: list[MountEntry] = []
+    ids: set[int] = set()
     for line in text.splitlines():
         parts = line.split(" ")
         try:
             separator = parts.index("-")
-        except ValueError:
-            continue
-        if separator < 5 or len(parts) < separator + 2:
-            continue
+            mount_id, parent_id = int(parts[0]), int(parts[1])
+            major, minor = (int(n) for n in parts[2].split(":"))
+        except (ValueError, IndexError) as exc:
+            raise ValueError("malformed mount identity") from exc
+        if (separator < 6 or len(parts) < separator + 4 or mount_id <= 0
+                or parent_id < 0 or major < 0 or minor < 0 or mount_id in ids):
+            raise ValueError("malformed or duplicate mount identity")
+        root = _unescape(parts[3])
         mount_point = _unescape(parts[4])
         fs_type = parts[separator + 1].strip()
-        if not mount_point.startswith("/") or not fs_type:
-            continue
-        entries.append(MountEntry(mount_point=mount_point, fs_type=fs_type))
+        if (not _valid_mount_root(root, fs_type)
+                or not mount_point.startswith("/")
+                or os.path.normpath(mount_point) != mount_point
+                or "\x00" in mount_point or not fs_type):
+            raise ValueError("malformed mount path or filesystem")
+        ids.add(mount_id)
+        entries.append(MountEntry(mount_id, parent_id, (major, minor), root,
+                                  mount_point, fs_type))
+    by_id = {entry.mount_id: entry for entry in entries}
+    for entry in entries:
+        seen: set[int] = set()
+        node = entry
+        while node.parent_id in by_id and node.parent_id != node.mount_id:
+            if node.mount_id in seen:
+                raise ValueError("mount parent cycle")
+            seen.add(node.mount_id)
+            parent = by_id[node.parent_id]
+            if not _covers(parent.mount_point, node.mount_point):
+                raise ValueError("mount outside parent")
+            node = parent
+        if node.parent_id == node.mount_id and node.mount_point != "/":
+            raise ValueError("non-root self-parent mount")
     return entries
 
 
@@ -211,16 +264,40 @@ def _covers(mount_point: str, path: str) -> bool:
 
 
 def mount_for(path: str, entries: list[MountEntry]) -> MountEntry | None:
-    """The most specific mount covering ``path``. Ties (a mount over a mount)
-    go to the later line, which is the one the kernel shows at that point."""
+    """Walk visible children from the root, following stacked mount parents.
 
-    best: MountEntry | None = None
+    A stack at the current pathname hides *all* children of its lower mount.
+    An earlier (shorter) child mount also hides lower-parent descendants. Two
+    competing children at the same pathname are ambiguous, never list-ordered.
+    This pure helper is for the directory preflight, not descriptor inspection.
+    """
+    ids = {entry.mount_id for entry in entries}
+    roots = [e for e in entries if e.mount_point == "/"
+             and (e.parent_id not in ids or e.parent_id == e.mount_id)]
+    if len(roots) != 1:
+        return None
+    children: dict[int, list[MountEntry]] = {}
     for entry in entries:
-        if not _covers(entry.mount_point, path):
-            continue
-        if best is None or len(entry.mount_point) >= len(best.mount_point):
-            best = entry
-    return best
+        if entry.parent_id != entry.mount_id:
+            children.setdefault(entry.parent_id, []).append(entry)
+    current = roots[0]
+    seen: set[int] = set()
+    while current.mount_id not in seen:
+        seen.add(current.mount_id)
+        candidates = [e for e in children.get(current.mount_id, [])
+                      if _covers(e.mount_point, path)]
+        if not candidates:
+            # A disconnected covering mount cannot safely be ignored.
+            if any(e.parent_id not in ids and e.mount_id != roots[0].mount_id
+                   and _covers(e.mount_point, path) for e in entries):
+                return None
+            return current
+        nearest = min(len(e.mount_point) for e in candidates)
+        next_mounts = [e for e in candidates if len(e.mount_point) == nearest]
+        if len(next_mounts) != 1:
+            return None
+        current = next_mounts[0]
+    return None
 
 
 def classify_filesystem(fs_type: str) -> tuple[str, str]:
@@ -260,14 +337,17 @@ def classify_path(path: str, mountinfo: str) -> SubstrateReport:
     filesystem, so a synthetic table can stand in for an NFS mount in a test."""
 
     normalized = os.path.normpath(path)
-    entry = mount_for(normalized, parse_mountinfo(mountinfo))
+    try:
+        entry = mount_for(normalized, parse_mountinfo(mountinfo))
+    except ValueError:
+        entry = None
     if entry is None:
         return SubstrateReport(
             path=normalized,
             verdict=SUBSTRATE_UNKNOWN,
             fs_type=None,
             mount_point=None,
-            detail="no mount table entry covers the path",
+            detail="mount topology is malformed, missing or ambiguous",
         )
     verdict, detail = classify_filesystem(entry.fs_type)
     return SubstrateReport(
@@ -276,7 +356,73 @@ def classify_path(path: str, mountinfo: str) -> SubstrateReport:
         fs_type=entry.fs_type,
         mount_point=entry.mount_point,
         detail=detail,
+        mount_id=entry.mount_id,
     )
+
+
+def classify_opened(info: os.stat_result, fdinfo: str, mountinfo: str) -> SubstrateReport:
+    """Join fstat's device to the opened descriptor's exact Linux mount ID.
+
+    Device alone is not unique (bind mounts share it); a pathname is not used.
+    An open descriptor can still reference a hidden mount. That is the actual
+    object being classified, not the object now accessible at its old pathname.
+    """
+    entry = None
+    try:
+        values = [line.split(":", 1)[1].strip() for line in fdinfo.splitlines()
+                  if line.startswith("mnt_id:")]
+        if len(values) != 1 or not values[0].isascii() or not values[0].isdecimal():
+            raise ValueError("missing or ambiguous descriptor mount ID")
+        mount_id = int(values[0])
+        matches = [e for e in parse_mountinfo(mountinfo) if e.mount_id == mount_id]
+        if len(matches) != 1:
+            raise ValueError("descriptor mount absent from this namespace")
+        entry = matches[0]
+        if entry.device != (os.major(info.st_dev), os.minor(info.st_dev)):
+            raise ValueError("descriptor device and mount disagree")
+    except ValueError:
+        entry = None
+    if entry is None:
+        return SubstrateReport("opened object", SUBSTRATE_UNKNOWN, None, None,
+                               "descriptor mount identity could not be established",
+                               info.st_dev, info.st_ino)
+    verdict, detail = classify_filesystem(entry.fs_type)
+    return SubstrateReport("opened object", verdict, entry.fs_type, entry.mount_point,
+                           detail, info.st_dev, info.st_ino, entry.mount_id)
+
+
+def probe_opened_substrate(fd: int) -> SubstrateReport:
+    """Inspect the held descriptor; no parent/pathname fallback on uncertainty."""
+    info = os.fstat(fd)
+    if sys.platform.startswith("linux"):
+        try:
+            return classify_opened(
+                info,
+                Path(f"/proc/self/fdinfo/{fd}").read_text(encoding="ascii"),
+                Path(MOUNTINFO_PATH).read_text(encoding="utf-8"),
+            )
+        except (OSError, UnicodeError):
+            pass
+    return SubstrateReport("opened object", SUBSTRATE_UNKNOWN, None, None,
+                           "descriptor mount metadata unavailable on this platform",
+                           info.st_dev, info.st_ino)
+
+
+def probe_file_substrate(path: Path) -> SubstrateReport:
+    """Inspect an existing journal through Linux O_PATH, without SQLite I/O.
+
+    Closing O_PATH does not drop SQLite's process-owned POSIX locks. Never use
+    an extra ordinary file descriptor here: another journal thread may hold a
+    transaction. Non-Linux/missing O_PATH is explicitly unverified.
+    """
+    if not sys.platform.startswith("linux") or not hasattr(os, "O_PATH"):
+        return SubstrateReport(str(path), SUBSTRATE_UNKNOWN, None, None,
+                               "Linux O_PATH inspection is unavailable")
+    fd = os.open(path, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        return probe_opened_substrate(fd)
+    finally:
+        os.close(fd)
 
 
 def _nearest_existing(path: Path) -> Path:
@@ -333,28 +479,28 @@ def resolve_substrate_policy(
 
     # A programmatic value is an actual bool or a refusal: "false" is a
     # non-empty string, and bool("false") would have enabled the opt-out.
-    require = (
+    require = any((
         require_bool(
             getattr(config, "require_verified_substrate", False),
             name="runner config require_verified_substrate",
-        )
-        or require_bool(
+        ),
+        require_bool(
             getattr(settings, "require_verified_substrate", False),
             name="Config.require_verified_substrate",
-        )
-        or verified_substrate_required(env)
-    )
-    allow = (
+        ),
+        verified_substrate_required(env),
+    ))
+    allow = any((
         require_bool(
             getattr(config, "allow_unverified_substrate", False),
             name="runner config allow_unverified_substrate",
-        )
-        or require_bool(
+        ),
+        require_bool(
             getattr(settings, "allow_unverified_substrate", False),
             name="Config.allow_unverified_substrate",
-        )
-        or unverified_substrate_allowed(env)
-    )
+        ),
+        unverified_substrate_allowed(env),
+    ))
     if require and allow:
         raise ConfigError(
             "require_verified_substrate=True cannot be honoured alongside "

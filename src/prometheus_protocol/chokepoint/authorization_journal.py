@@ -22,7 +22,7 @@ from prometheus_protocol.chokepoint.authorization_record import (
 from prometheus_protocol.chokepoint.substrate import (
     SubstratePolicy,
     enforce_substrate,
-    probe_substrate,
+    probe_file_substrate,
 )
 from prometheus_protocol.ledger.audit_chain import canonical_json
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
@@ -55,7 +55,7 @@ class AuthorizationJournal:
                 "issuance requires a private file-backed SqliteLedger"
             )
         self.path = Path(audit.path).absolute()
-        enforce_substrate(probe_substrate(self.path.parent), substrate_policy)
+        self._substrate_policy = substrate_policy
         SqliteLedger.check_private_path(self.path)
         self._anchor = audit.tip_anchor
         if require_anchor and (self._anchor is None or not self._anchor.append_only):
@@ -64,12 +64,19 @@ class AuthorizationJournal:
             )
         info = self.path.stat()
         self._identity = (info.st_dev, info.st_ino)
+        self._check_path()
 
     def _check_path(self) -> None:
         SqliteLedger.check_private_path(self.path)
         info = self.path.stat()
         if (info.st_dev, info.st_ino) != self._identity:
             raise AuthorizationUnavailable("authorization ledger was replaced")
+        # The journal already exists. An inspected O_PATH descriptor, not its
+        # parent, establishes placement without interfering with SQLite locks.
+        report = probe_file_substrate(self.path)
+        if report.device is not None and (report.device, report.inode) != self._identity:
+            raise AuthorizationUnavailable("authorization ledger changed during inspection")
+        enforce_substrate(report, self._substrate_policy)
 
     @contextmanager
     def _session(self):

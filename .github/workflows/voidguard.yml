@@ -26,6 +26,11 @@ on:
       - "tests/chokepoint/test_reconciliation.py"
       - "scripts/f11_reconcile_revert_proofs.py"
       - "scripts/fix_b_revert_proofs.py"
+      - "scripts/substrate_revert_proofs.py"
+      - "src/prometheus_protocol/chokepoint/substrate.py"
+      - "src/prometheus_protocol/chokepoint/runner.py"
+      - "src/prometheus_protocol/chokepoint/authorization_journal.py"
+      - "tests/chokepoint/test_*substrate*.py"
       - ".github/workflows/ci.yml"
 
 permissions:

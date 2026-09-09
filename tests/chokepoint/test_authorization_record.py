@@ -355,6 +355,34 @@ def test_duplicate_decision_is_never_resigned(live, monkeypatch):
     assert len(kms.sign_log()) == 1
 
 
+@pytest.mark.parametrize("placement", ["network", "unknown", "local"])
+def test_private_storage_separately_mounted_file(tmp_path, monkeypatch, placement):
+    from pathlib import Path
+    from prometheus_protocol.chokepoint import authorization_journal as journal_module
+    from prometheus_protocol.chokepoint.substrate import SubstratePolicy, classify_path
+    from prometheus_protocol.core.errors import ConfigError
+
+    ledger = SqliteLedger.private(tmp_path / "mounted.db")
+    file = Path(ledger.path).absolute()
+    fs = {"network": "nfs4", "unknown": "overlay", "local": "ext4"}[placement]
+    table = f"10 10 8:1 / / rw - ext4 root rw\n20 10 0:20 /file {file} rw - {fs} source rw\n"
+    queried = []
+    def inspect(path):
+        queried.append(path)
+        assert path == file, "journal queried the parent instead of the existing file"
+        return classify_path(str(path), table)
+    monkeypatch.setattr(journal_module, "probe_file_substrate", inspect)
+    try:
+        if placement == "local":
+            journal_module.AuthorizationJournal(ledger, substrate_policy=SubstratePolicy(require_verified=True))
+        else:
+            with pytest.raises(ConfigError):
+                journal_module.AuthorizationJournal(ledger, substrate_policy=SubstratePolicy(require_verified=True))
+        assert queried == [file]
+    finally:
+        ledger.close()
+
+
 def test_private_storage_required(tmp_path):
     from prometheus_protocol.chokepoint.authorization_journal import (
         AuthorizationJournal,

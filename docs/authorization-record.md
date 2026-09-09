@@ -697,7 +697,19 @@ Create new storage with `SqliteLedger.private(path, tip_anchor=...)`. Its parent
 must be gate-owned and private (no group/other permissions); the file must be
 gate-owned, regular, singly linked and private. The factory uses 0700/0600 for
 new storage and refuses existing insecure paths without chmoding them. Journal
-operations recheck permissions and inode identity. Signed results contain a
+operations recheck permissions and inode identity. The 1A/1B follow-up also
+inspects the existing journal file, not its parent: a Linux `O_PATH` descriptor
+provides `fstat` device/inode and `fdinfo` mount identity for an exact
+`mountinfo` join, with the same substrate policy as the approval store.
+Inspection occurs at journal construction and around per-operation SQLite
+opens. `O_PATH` avoids dropping a concurrent transaction's process-owned
+POSIX locks when the inspection descriptor is closed. Non-Linux or missing
+metadata is unverified and requires the explicit strict opt-out; a known
+unsafe filesystem has no opt-out. This does not make SQLite's pathname open
+atomic with inspection: trusted, stable paths and mounts are still required.
+Driver recognition does not establish physical power-loss durability, and
+constructing a bare `SqliteLedger` alone does not enforce this journal policy.
+Signed results contain a
 bearer signature until expiry: do not expose this database, backups or raw
 payloads to the agent. The demo prints only event headers and tampers with a
 copy for illustration, not its durable journal.
@@ -753,9 +765,12 @@ Load-bearing proofs in `tests/chokepoint/test_authorization_record.py`:
 
 The CI matrix has a dedicated persistence step that requires at least one test
 and zero skipped/failed/error cases; all new proofs are also in the full suite.
-These tests use an explicit unverified-substrate opt-out on macOS only; Linux
-uses the real probe. This proves persistence behavior, not macOS isolation or
-multi-host correctness. Each operation currently verifies the full history:
+Issuance persistence tests use an explicit unverified-substrate opt-out on
+macOS; Linux uses the real probe. Execution-positive controls require Linux
+because PROM-FIX-B's execution guard refuses other platforms even with that
+opt-out. The Linux suite is required; a partial macOS run is not its substitute.
+This proves neither macOS isolation nor multi-host correctness.
+Each operation currently verifies the full history:
 cost grows with ledger size and may exhaust a short approval interval. Refuse
 on expiry; do not bypass verification. Indexing/streaming, real-source coverage,
 retention proof and reconciliation remain separate work. There is no atomic

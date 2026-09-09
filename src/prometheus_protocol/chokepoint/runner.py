@@ -16,9 +16,10 @@ Order of enforcement in :meth:`execute` (each step fail-closed):
    Ownership is an OS file lock on the approval store's own inode — keyed to
    the store's identity, so every alias of the store contends for one lock —
    which is mutual exclusion only on a local filesystem of one host; so the
-   filesystem type at the store's parent path is classified at construction
-   (``substrate.py``: a network filesystem is refused, an unidentified one is
-   refused unless explicitly opted out of), a multiply linked store is refused,
+   parent preflight is followed by classification of the opened store/lock
+   descriptor's device and Linux mount identity, rechecked before locking
+   (``substrate.py``: a known network filesystem is refused, an unidentified
+   one is refused unless explicitly opted out of), a multiply linked store is refused,
    and every intent records the owner's host identity and the identity of the
    lock it held (``ownership.py``), so a recovering runner that cannot establish
    the recorded owner is dead — same kernel AND the same lock object, or a
@@ -90,6 +91,7 @@ from prometheus_protocol.chokepoint.substrate import (
     SubstratePolicy,
     SubstrateReport,
     enforce_substrate,
+    probe_opened_substrate,
     probe_substrate,
     resolve_substrate_policy,
 )
@@ -802,14 +804,17 @@ class ConsumedApprovals:
     detects the PID change and reconnects instead of reusing an inherited SQLite
     connection.
 
-    The filesystem type at the pathname of ``path``'s parent directory is
-    classified before anything is created there (``substrate.py``): the
-    execution guard is an flock, which is mutual exclusion only on a local
-    filesystem of one host. A network or host-shared filesystem is refused
+    The parent directory is preflighted before creation. The opened store's
+    descriptor is then classified by device and Linux mount identity before
+    SQLite initializes it, and again before every execution guard acquisition.
+    A parent refusal creates nothing; an opened-object refusal can leave an
+    empty newly created file. The execution guard is an flock, which is mutual
+    exclusion only on a local filesystem of one host. A known network or host-shared filesystem is refused
     with ``ConfigError``; a filesystem the probe cannot identify is refused
     unless ``substrate_policy`` (or, when it is not given, the environment)
-    carries the explicit opt-out, and is then warned about. ``probe`` is
-    injectable so a test can stand in an NFS mount without mounting one.
+    carries the explicit opt-out, and is then warned about. ``probe`` and
+    ``opened_probe`` are distinct injection seams for metadata unit tests;
+    Linux integration uses the actual descriptors and kernel metadata.
 
     The execution guard itself is keyed to the store's *identity*, not its
     pathname: it is an ``flock`` on a descriptor of this file's own inode,
@@ -824,6 +829,7 @@ class ConsumedApprovals:
         substrate_policy: SubstratePolicy | None = None,
         env: Mapping[str, str] | None = None,
         probe: Callable[[str | os.PathLike[str]], SubstrateReport] | None = None,
+        opened_probe: Callable[[int], SubstrateReport] | None = None,
     ) -> None:
         raw_path = os.fspath(path)
         if not raw_path or raw_path == ":memory:":
@@ -834,13 +840,14 @@ class ConsumedApprovals:
         if configured_path.is_symlink():
             raise ValueError("consumed-approval store cannot be a symlink")
         durable_path = configured_path.absolute()
-        # Refuse an unsafe or unverified substrate BEFORE creating the directory
-        # or the store there: nothing of the runner's is left on a filesystem
-        # it will not use.
+        # A conservative directory preflight before creation, including SQLite
+        # sidecar placement. The opened-object check below is still mandatory.
         if substrate_policy is None:
             substrate_policy = resolve_substrate_policy(env=env)
+        self._substrate_policy = substrate_policy
+        self._opened_probe = opened_probe if opened_probe is not None else probe_opened_substrate
         # Looked up at call time (not bound as a default) so the module-level
-        # probe stays the single seam a test replaces to simulate a mount.
+        # preflight can be replaced separately from the opened-object probe.
         self.substrate = (probe if probe is not None else probe_substrate)(
             durable_path.parent
         )
@@ -1001,6 +1008,10 @@ class ConsumedApprovals:
             info = os.fstat(fd)
             if (info.st_dev, info.st_ino) != self._file_identity:
                 raise OSError("approval store was replaced between validation and open")
+            # This descriptor is BOTH the inspected store and FIX-B's lock
+            # object. Inspect before SQLite opens/initializes the store.
+            self.substrate = self._opened_probe(fd)
+            enforce_substrate(self.substrate, self._substrate_policy)
         except BaseException:
             os.close(fd)
             raise
@@ -1070,6 +1081,10 @@ class ConsumedApprovals:
                 or info.st_uid != os.geteuid()
             ):
                 raise OSError("unsafe approval store")
+            # Reinspect the very descriptor about to be flocked, including a
+            # descriptor reopened after fork. Never use the constructor's
+            # parent preflight or a cached safe report as execution evidence.
+            enforce_substrate(self._opened_probe(fd), self._substrate_policy)
             if not self._guard_mutex.acquire(blocking=False):
                 owned = False
             else:
@@ -1082,7 +1097,7 @@ class ConsumedApprovals:
                     owned = False
                 else:
                     owned = True
-        except (OSError, RuntimeError, ImportError, sqlite3.Error) as exc:
+        except (OSError, RuntimeError, ImportError, sqlite3.Error, ConfigError) as exc:
             if held:
                 self._guard_mutex.release()
             raise _OwnershipUnavailable(type(exc).__name__) from exc
