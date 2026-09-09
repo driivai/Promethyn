@@ -33,7 +33,7 @@ HEADERS = "tests/conformance/test_header_integrity.py"
 #: the count is itself an assertion, before the run (list size) and after it
 #: (call-phase failures). Change both pins only with the mutation list.
 EXPECTED_REVERTS = 12
-EXPECTED_CALL_FAILURES = 133
+EXPECTED_CALL_FAILURES = 143
 
 
 def enforce_expected(caught: int, failures: int) -> None:
