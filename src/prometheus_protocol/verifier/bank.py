@@ -203,27 +203,31 @@ class VerifierBank:
 
         # The verdict is decided by the authoritative reference alone — an
         # advisory verdict can never override it (I6).
-        ref_contributions = [(s, e.verdict) for (e, s) in reference]
-        # EX-1 mypy baseline (pre-existing, NOT introduced here): Evidence.verdict
-        # is typed Verdict|None though __post_init__ always sets it. Ratcheted, not
-        # fixed — see the mypy-gate follow-up. warn_unused_ignores flags this the
-        # moment the root type is tightened.
-        ref_verdict, _ = fuse(ref_contributions)  # type: ignore[arg-type]
+        # ``decided`` states the __post_init__ guarantee that every constructed
+        # Evidence carries a verdict, so the fusion calls below take a plain
+        # ``Verdict``. This replaces the four ratcheted ``# type: ignore[arg-type]``
+        # the EX-1 mypy baseline left here: the field is ``Verdict | None`` because
+        # that is the CONSTRUCTOR's contract, and the ignores were standing in for
+        # an invariant the type could not express. Nothing is defaulted — an
+        # Evidence that somehow escaped __post_init__ raises rather than being
+        # fused as a verdict nobody reached.
+        ref_contributions = [(s, e.decided) for (e, s) in reference]
+        ref_verdict, _ = fuse(ref_contributions)
 
         # Confidence additionally reflects every non-reference verifier, each
         # weighted by the trust it has earned: an agreeing advisor raises
         # confidence, a dissenting one lowers it, while the verdict stays put.
         # An un-audited verifier contributes a log-LR of ~0 (I7), so it moves
         # confidence negligibly until it has earned weight through calibration.
-        all_contributions = ref_contributions + [(s, e.verdict) for (e, s) in others]
-        probability = p_pass(total_log_odds(all_contributions))  # type: ignore[arg-type]  # EX-1 baseline (Evidence.verdict is Verdict|None)
+        all_contributions = ref_contributions + [(s, e.decided) for (e, s) in others]
+        probability = p_pass(total_log_odds(all_contributions))
         confidence = probability if ref_verdict == Verdict.PASS else 1.0 - probability
 
         # Calibrate each non-reference verifier against the reference verdict.
         for e, s in others:
             self._store.put(
                 e.verifier_id,
-                updated(s, predicted=e.verdict, actual=ref_verdict),  # type: ignore[arg-type]  # EX-1 baseline (Evidence.verdict is Verdict|None)
+                updated(s, predicted=e.decided, actual=ref_verdict),
             )
 
         conflict = any(e.verdict != ref_verdict for e, _ in authoritative)
@@ -241,8 +245,8 @@ class VerifierBank:
     ) -> Judgment:
         # No authoritative reference is available, so we report the fused
         # advisory verdict but record no calibration (there is no ground truth).
-        contributions = [(s, e.verdict) for (e, s) in advisory]
-        verdict, confidence = fuse(contributions)  # type: ignore[arg-type]  # EX-1 baseline (Evidence.verdict is Verdict|None)
+        contributions = [(s, e.decided) for (e, s) in advisory]
+        verdict, confidence = fuse(contributions)
         return Judgment(
             verdict=verdict,
             confidence=confidence,

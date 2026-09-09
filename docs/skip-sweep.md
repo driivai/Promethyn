@@ -169,6 +169,20 @@ _teeth_probe.py:3: error: Item "Unavailable" of "Evidence | Unavailable"
 `mypy.ini` therefore pins `mypy_path = src` + `explicit_package_bases = True`, and
 the teeth-probe is kept as the standing check that the gate is not toothless.
 
+> **Update (TYPE-GATE).** The gate above was toothed but *narrow*: `mypy.ini`
+> named an entry-point list of files. An independent review later reproduced
+> eleven crashes and one authorization fail-open, and **every one was already a
+> `[union-attr]` mypy would have reported** — they shipped because five of the
+> affected files were outside the list. Same family as the near-miss above: a
+> check that reports success over the part of the tree nobody asked about. The
+> gate now checks `src/prometheus_protocol` **entire** (132 diagnostics on the
+> first whole-tree run, now zero), is blocking on all three Pythons, and carries
+> no per-module ignore section, no `disallow_*` carve-out and no `# type: ignore`
+> anywhere in the tree. `tests/conformance/test_type_gate.py` fails the build if
+> any of that is walked back. The `Verdict | None` follow-up recorded below is
+> closed by the same sprint: `Evidence.decided` states the `__post_init__`
+> guarantee, and the four ratcheted ignores in `verifier/bank.py` are gone.
+
 **Why this belongs in the skip sweep: it is the same pattern, a third time.** A
 check that reports success while verifying nothing is exactly the failure this
 project keeps finding — and EX-1 is a nest of it:
@@ -229,6 +243,14 @@ so they are not forgotten:
   not fixed (out of scope; the diff stays minimal). Follow-up: tighten
   `Evidence.verdict` to `Verdict` at construction and delete the four ignores
   (`warn_unused_ignores` will prove they are gone the moment the root is fixed).
+  **CLOSED (TYPE-GATE).** Not by tightening the field — `Verdict | None` is the
+  *constructor's* honest contract, since a caller may leave it unset and let
+  `__post_init__` derive it from `passed` — but by stating the guarantee where it
+  actually holds: `Evidence.decided` returns a plain `Verdict` and raises rather
+  than inventing one if an Evidence ever escaped `__post_init__`. The four
+  ignores in `verifier/bank.py` are gone, and so are the other four that existed
+  elsewhere in the tree; `test_type_gate.py` now pins the whole source tree at
+  **zero** ignore directives.
 - **Surface the reference partition in the *published* report.** `compute_metrics`
   now carries `n_reference_abstained` and asserts the reference denominator is total
   (`n_items == n_reference + n_reference_abstained + n_reference_unavailable`), but

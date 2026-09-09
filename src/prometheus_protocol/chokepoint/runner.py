@@ -56,16 +56,25 @@ import sys
 import threading
 import time
 
-try:
-    import fcntl
-except ImportError:  # pragma: no cover - Windows has no flock; the guard refuses there
-    fcntl = None  # type: ignore[assignment]
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from importlib import import_module
 from pathlib import Path
+from types import ModuleType
 from typing import Protocol
+
+#: ``flock`` is POSIX-only. Declared as an optional module rather than assigned
+#: ``None`` behind a ``# type: ignore[assignment]``: the annotation states the
+#: real shape — the module, or nothing — so every use site is checked against
+#: it, and the checker (not a comment) is what requires the None branch.
+fcntl: ModuleType | None
+try:
+    import fcntl as _fcntl
+except ImportError:  # pragma: no cover - Windows has no flock; the guard refuses there
+    fcntl = None
+else:
+    fcntl = _fcntl
 
 from prometheus_protocol.chokepoint.approval import (
     Approval,
@@ -1794,8 +1803,29 @@ class MigrationRuntime:
         self.close()
 
 
+class SignerRequest(Protocol):
+    """What ``resolve_signer`` actually reads: three attributes, no more.
+
+    ``MigrationRunnerConfig`` satisfies this, and so does any other carrier that
+    needs a signer resolved — the attestation path builds one. Naming the real
+    requirement here is what removed a ``# type: ignore[arg-type]`` at that call
+    site: the annotation used to demand the whole runner config for three
+    fields, so an honest caller with exactly those three had to silence the
+    checker to pass them.
+    """
+
+    @property
+    def signer(self) -> ApprovalSigner | None: ...
+
+    @property
+    def signing_key(self) -> bytes | None: ...
+
+    @property
+    def require_external_signer(self) -> bool: ...
+
+
 def resolve_signer(
-    config: MigrationRunnerConfig,
+    config: SignerRequest,
     *,
     settings: object | None = None,
     env: Mapping[str, str] | None = None,

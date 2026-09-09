@@ -227,6 +227,14 @@ _HARDEN4_CHANGED = frozenset({
 # gate never returns it. ``approved``, the single field the executor checks, is
 # untouched. Named here as EX-1's delta is, so the guard still fails on ANY other
 # Hearth change.
+#
+# TYPE-GATE also changed ``verifier/bank.py``, which is already inside
+# ``_EX1_CHANGED`` above and so needs no new entry — recorded here so an auditor
+# reading "what did TYPE-GATE touch in the Hearth" is not misled by the entry
+# list alone. The change: the four ratcheted ``# type: ignore[arg-type]`` there
+# are replaced by ``Evidence.decided``, which states the ``__post_init__``
+# guarantee that the ``Verdict | None`` field type could not. The fused verdict,
+# the confidence arithmetic and the calibration writes are unchanged.
 _TYPE_GATE_CHANGED = frozenset({
     "src/prometheus_protocol/gate/promotion.py",
 })

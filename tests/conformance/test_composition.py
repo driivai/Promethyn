@@ -300,6 +300,14 @@ _EX1_CHANGED = frozenset({
 # Neither touches ``approved`` — the single load-bearing field the executor
 # checks — so the wall is unchanged. As with ``_EX1_CHANGED``, the file STAYS in
 # ``_HEARTH_FILES``: it is named here, not unguarded.
+#
+# TYPE-GATE also changed ``verifier/bank.py``, which is already inside
+# ``_EX1_CHANGED`` above and so needs no new entry — recorded here so an auditor
+# reading "what did TYPE-GATE touch in the Hearth" is not misled by the entry
+# list alone. The change: the four ratcheted ``# type: ignore[arg-type]`` there
+# are replaced by ``Evidence.decided``, which states the ``__post_init__``
+# guarantee that the ``Verdict | None`` field type could not. The fused verdict,
+# the confidence arithmetic and the calibration writes are unchanged.
 _TYPE_GATE_CHANGED = frozenset({
     "src/prometheus_protocol/gate/promotion.py",
 })
