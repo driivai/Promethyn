@@ -31,7 +31,7 @@ def runner():
 
 
 def test_the_runner_is_pinned_and_every_target_still_exists(runner):
-    assert (runner.EXPECTED_REVERTS, runner.EXPECTED_CALL_FAILURES) == (12, 133)
+    assert (runner.EXPECTED_REVERTS, runner.EXPECTED_CALL_FAILURES) == (12, 143)
     plan = runner.mutations()
     assert len(plan) == runner.EXPECTED_REVERTS
     assert len({name for name, *_ in plan}) == len(plan), "duplicate mutation names"

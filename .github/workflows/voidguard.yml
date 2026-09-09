@@ -33,6 +33,9 @@ on:
       - "tests/chokepoint/test_*substrate*.py"
       - "tests/chokepoint/test_mount_relevance.py"
       - "scripts/mountinfo_diagnostic.py"
+      - "scripts/pih4a_revert_proofs.py"
+      - "src/prometheus_protocol/attestation/**"
+      - "tests/conformance/test_config_attestation.py"
       - ".github/workflows/ci.yml"
 
 permissions:
