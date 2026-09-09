@@ -74,6 +74,7 @@ _ERRORS = TransportErrors(
     tls=AnchorUnavailable,
     redirect=AnchorUnavailable,
     too_large=AnchorUnavailable,
+    malformed=AnchorUnavailable,
 )
 
 

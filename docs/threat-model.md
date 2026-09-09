@@ -820,20 +820,26 @@ Each measured on the pre-fix code against a local server, not inferred.
   followed by padding — would be reported as a normal answer, and that test
   exists. A declared `Content-Length` over the ceiling is refused before a byte
   is read. HTTP error bodies are read under the same bounds.
-- **F5 checks declared framing before JSON parsing** in both the provider and
-  anchor. A short Content-Length body, contradictory/unsupported framing,
-  missing final chunk terminator or malformed chunk boundary raises a typed
-  transport failure. It does **not** validate raw header syntax: a header line
-  without a colon makes the permissive parser drop every later header,
-  `Content-Length` included, after which the framing check sees a
-  close-delimited body and accepts EOF as its end — a 57-byte body declared as
-  10000 bytes read clean, an empty anchor history verified `VALID`, and a
-  provider reply verified `PASS` (independent review, finding 3, reproduced;
-  open). An incomplete anchor history is therefore `NOT_VERIFIABLE` only when
-  its framing was declared and parsed. Positive controls and malformed framing
-  use real sockets in `tests/conformance/test_response_integrity.py`.
-  Supported framing and its intentional strictness are specified in
-  `docs/ledger-integrity.md`.
+- **F5 checks raw header syntax, then declared framing, before JSON parsing**
+  in both the provider and anchor. A short Content-Length body,
+  contradictory/unsupported framing, missing final chunk terminator or
+  malformed chunk boundary raises a typed transport failure. Since
+  PROM-FIX-B (independent review, finding 3): a header line without a colon
+  used to make the permissive parser drop every later header,
+  `Content-Length` included, after which the framing check saw a
+  close-delimited body and accepted EOF as its end — a 57-byte body declared
+  as 10000 bytes read clean, an empty anchor history verified `VALID`, a
+  provider reply verified `PASS`. Every status line and header line is now
+  matched against its grammar *before* the parser sees it, the header block
+  must end with its blank line, and any parser defect that remains is
+  refused as a second, independent check; the refusal is the client's
+  `malformed` error (`ProviderMalformedResponse`, `AnchorUnavailable`) and
+  an anchor history behind it is `NOT_VERIFIABLE`, never `VALID`. Honest
+  scope: this closes the demonstrated case and the parser's defect list; it
+  is not proof of complete strict-header validation. Real-socket cases for
+  both clients are in `tests/conformance/test_header_integrity.py` and
+  `test_response_integrity.py`. Supported framing and its intentional
+  strictness are specified in `docs/ledger-integrity.md`.
 - **F6 carries one monotonic budget across the network request**, starting
   immediately before network work: DNS, all connection attempts, proxy CONNECT,
   TLS, request writes, status/headers, chunk framing and response body (including

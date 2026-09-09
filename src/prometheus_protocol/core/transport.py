@@ -59,6 +59,12 @@ class ResponseTooLarge(TransportError):
     """The body exceeded the ceiling. Nothing was parsed."""
 
 
+class MalformedResponse(TransportError):
+    """The response's raw HTTP syntax was invalid before any framing could be
+    trusted: a status or header line that is not one, or a header block the
+    connection closed inside of. Nothing after it was parsed."""
+
+
 @dataclass(frozen=True)
 class TransportErrors:
     """The exception classes one client wants raised for each failure kind.
@@ -72,6 +78,7 @@ class TransportErrors:
     tls: type[Exception] = TLSFailure
     redirect: type[Exception] = RedirectRefused
     too_large: type[Exception] = ResponseTooLarge
+    malformed: type[Exception] = MalformedResponse
 
 
 DEFAULT_ERRORS = TransportErrors()
@@ -152,10 +159,109 @@ _TRAILER_LINE = re.compile(_TOKEN + rb":[\t\x20-\x7e\x80-\xff]*\r\n")
 _FRAMING_LINE_LIMIT = 8192
 _TRAILER_LIMIT = 64 * 1024
 
+# Raw header syntax is validated BEFORE http.client's permissive parser sees a
+# line (independent review, finding 3). That parser hands the header block to
+# email.parser, which treats a line without a colon — and everything after it,
+# Content-Length included — as BODY and records the fact only as a "defect";
+# the message then looked close-delimited and a truncated body read as
+# complete. Every status line and header line is matched here first, and the
+# header block must end with its blank line before any framing is trusted.
+# A header line is ``token ":" field-value CRLF`` with no leading whitespace
+# (no obsolete folding), no bare CR or LF, and no control characters; the
+# status line is ``HTTP/1.x SP 3DIGIT [SP reason] CRLF``. Lines are capped at
+# the framing line limit and the block at 64 KiB / 100 lines.
+_STATUS_LINE = re.compile(rb"HTTP/1\.[01] [0-9]{3}(?: [\t\x20-\x7e\x80-\xff]*)?\r\n")
+_HEADER_LINE = re.compile(_TOKEN + rb":[\t\x20-\x7e\x80-\xff]*\r\n")
+_HEADER_BLOCK_LIMIT = 64 * 1024
+_HEADER_LINE_COUNT_LIMIT = 100
+
+
+class MalformedResponseHeaders(http.client.HTTPException):
+    """A status or header line that is not one, or a header block the
+    connection closed inside of. Raised below ``http.client`` so it surfaces
+    from ``opener.open()`` and is classified as the client's ``malformed``
+    error. Its messages are fixed strings: nothing from the wire is echoed."""
+
+
+class _StrictHeaderReader:
+    """The response stream for the duration of ``begin()``: every line that
+    ``http.client`` reads for the status line and headers passes through here
+    first, and a line that is not a valid status or header line, or a block
+    the connection closes inside of, is refused before the parser sees it."""
+
+    def __init__(self, raw) -> None:
+        self._raw = raw
+        self._expect_status = True
+        self._lines = 0
+        self._bytes = 0
+
+    def readline(self, limit: int = -1) -> bytes:
+        line = self._raw.readline(_FRAMING_LINE_LIMIT + 1)
+        if self._expect_status:
+            if not line:
+                # http.client reports an empty status line as RemoteDisconnected.
+                return line
+            if len(line) > _FRAMING_LINE_LIMIT or _STATUS_LINE.fullmatch(line) is None:
+                raise MalformedResponseHeaders("malformed status line")
+            self._expect_status = False
+            self._lines = 0
+            self._bytes = 0
+            return line
+        if not line:
+            raise MalformedResponseHeaders(
+                "connection closed inside the response headers; the header block "
+                "was never terminated"
+            )
+        if line == b"\r\n":
+            # End of this block. A 1xx block may be followed by another status.
+            self._expect_status = True
+            return line
+        self._lines += 1
+        self._bytes += len(line)
+        if (
+            len(line) > _FRAMING_LINE_LIMIT
+            or self._lines > _HEADER_LINE_COUNT_LIMIT
+            or self._bytes > _HEADER_BLOCK_LIMIT
+        ):
+            raise MalformedResponseHeaders("response headers exceed framing limit")
+        if _HEADER_LINE.fullmatch(line) is None:
+            raise MalformedResponseHeaders(
+                "malformed header line: not a field name, a colon and a value "
+                "ending in CRLF (obsolete folding, a bare CR or LF, a control "
+                "character or a missing colon)"
+            )
+        return line
+
+    def __getattr__(self, name: str):
+        return getattr(self._raw, name)
+
 
 class _StrictHTTPResponse(http.client.HTTPResponse):
     def begin(self) -> None:
-        super().begin()
+        if self.headers is not None:
+            return
+        raw = self.fp
+        reader = _StrictHeaderReader(raw)
+        self.fp = reader
+        try:
+            # Explicit base call rather than zero-argument super(): the revert
+            # runner re-compiles this method from source, and a __class__ cell
+            # would make the mutated code object differ in free variables.
+            http.client.HTTPResponse.begin(self)
+        finally:
+            # http.client may have closed and dropped the stream (HEAD, 1xx
+            # handling); only restore what it still holds.
+            if self.fp is reader:
+                self.fp = raw
+        # Second line of defence: whatever the parser flagged is a refusal.
+        # With the raw check above this should never trigger; it is kept so
+        # the two checks fail independently.
+        defects = list(getattr(self.headers, "defects", None) or ())
+        if defects:
+            raise MalformedResponseHeaders(
+                "response headers carry parser defects: "
+                + ", ".join(sorted({type(defect).__name__ for defect in defects}))
+            )
         declared_length(self)
         if _header_values(self, "Transfer-Encoding"):
             self.chunked = True
@@ -339,6 +445,8 @@ def classify_open_error(
         return errors.timeout(f"endpoint did not answer within {timeout_s}s")
     if isinstance(exc, ssl.SSLError):
         return errors.tls(f"TLS failure: {exc}")
+    if isinstance(exc, MalformedResponseHeaders):
+        return errors.malformed(f"malformed HTTP response: {exc}")
     if isinstance(exc, (http.client.HTTPException, OSError)):
         return errors.transport(f"could not reach endpoint: {exc}")
     return None
