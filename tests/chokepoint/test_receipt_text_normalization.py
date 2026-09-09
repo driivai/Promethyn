@@ -84,9 +84,14 @@ def _install_fake_driver(monkeypatch, receipt_row: object) -> None:
     """
 
     cursor = _FakeCursor([(True,), ("promethyn_internal.migration_receipts",), receipt_row])
+    # A stand-in psycopg. ``ModuleType`` declares no attributes, so assigning
+    # them directly is invisible to the checker; setattr states that these are
+    # deliberately dynamic module attributes, which is exactly what a module
+    # stand-in is. Nothing is silenced — a typo in a name the code under test
+    # reads still fails the test, loudly, at the call.
     module = types.ModuleType("psycopg")
-    module.Error = type("Error", (Exception,), {})
-    module.connect = lambda **kwargs: _FakeConnection(cursor)
+    setattr(module, "Error", type("Error", (Exception,), {}))
+    setattr(module, "connect", lambda **kwargs: _FakeConnection(cursor))
     monkeypatch.setitem(sys.modules, "psycopg", module)
 
 

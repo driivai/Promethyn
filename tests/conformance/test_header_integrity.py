@@ -38,7 +38,16 @@ assert len(BODY) == 57  # the review's 57-byte body
 OK = b"HTTP/1.1 200 OK\r\n"
 
 
+class _RawServer(ThreadingHTTPServer):
+    """The raw-bytes endpoint, with the field the handler reads DECLARED."""
+
+    raw: bytes
+
+
 class _RawHandler(BaseHTTPRequestHandler):
+    #: Only ever constructed by _RawServer.
+    server: "_RawServer"
+
     """Answers every request with the server's raw bytes, status line included,
     then closes: nothing is normalised between the test and the socket."""
 
@@ -59,7 +68,7 @@ def endpoint():
     servers = []
 
     def make(raw: bytes) -> str:
-        server = ThreadingHTTPServer(("127.0.0.1", 0), _RawHandler)
+        server = _RawServer(("127.0.0.1", 0), _RawHandler)
         server.daemon_threads = True
         server.raw = raw
         thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)

@@ -36,6 +36,8 @@ MPL-2.0.
 | `build` | 1.6.0 | MIT | wheel builder | — |
 | `pyproject_hooks` | 1.2.0 | MIT | build dependency | — |
 | `mypy` | 2.3.1 | MIT | type gate (`mypy.ini`) | — |
+| `PyYAML` | 6.0.3 | MIT | the CI-workflow guard parses `ci.yml` as a structure (`tests/conformance/test_type_gate.py`); the guard it replaced matched substrings and an independent review walked past it with one line | — |
+| `types-PyYAML` | 6.0.12.20260906 | Apache-2.0 | PyYAML stubs; mypy at the declared floor of the supported range needs them to check the guard | stub-only package, no runtime code |
 | `mypy_extensions` | 1.1.0 | MIT | mypy dependency | — |
 | `typing_extensions` | 4.16.0 | PSF-2.0 | mypy dependency | — |
 | `pathspec` | 1.1.1 | **MPL-2.0** | mypy dependency | file-level copyleft on `pathspec`'s own files only; not modified, not shipped — no obligation attaches to this code |
@@ -117,3 +119,11 @@ pip install cyclonedx-bom && cyclonedx-py environment /tmp/closure \
 
 Then update the tables above for any package that changed, and re-read its
 license: the position in this document is only as current as its date.
+
+**Outstanding (TYPE-GATE-HARDEN).** `PyYAML` and `types-PyYAML` were added to
+the dev extra and to `constraints.txt`, and are recorded in the table above with
+their licenses read. `docs/sbom.cdx.json` has NOT been regenerated for them — it
+still describes the 18-package closure as of 2026-09-06. Said here rather than
+left for a reader to discover by diffing: the machine-readable SBOM is stale by
+exactly these two dev-only, stub-and-parser packages until the command above is
+re-run.

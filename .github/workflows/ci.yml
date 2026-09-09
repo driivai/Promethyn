@@ -62,15 +62,24 @@ jobs:
         # This step used to check an ENTRY-POINT LIST of files. An independent
         # review then reproduced eleven crashes and one authorization fail-open;
         # every one was already visible to mypy, and they shipped because five of
-        # the affected files were outside that list. The checker knew and nobody
-        # asked it. mypy.ini now checks the WHOLE of src/prometheus_protocol,
-        # this step runs it on all three supported Pythons, and the build FAILS
-        # on any diagnostic — not advisory, not report-only. The next consumer
-        # that forgets to narrow Evidence | Unavailable cannot merge.
+        # the affected files were outside that list. mypy.ini now checks the WHOLE
+        # of src/prometheus_protocol, this step runs it on all three supported
+        # Pythons, and the build FAILS on any diagnostic.
         #
-        # tests/conformance/test_type_gate.py fails the build if mypy.ini is
-        # narrowed back to a file list, or grows a per-module ignore section.
-        run: python -m mypy --config-file mypy.ini
+        # It runs through scripts/type_gate.py rather than invoking mypy directly,
+        # because a later review turned the direct invocation off with one line —
+        # `true || python -m mypy ...` contains the command and never runs it. The
+        # runner prints the checker version (pyproject allows a RANGE, and #87 was
+        # green on 2.3.1 while a review's 1.20.2 found a real defect), refuses a
+        # run that checked fewer files than its floor, and writes a receipt that
+        # the next step demands. Presence is not execution.
+        run: python scripts/type_gate.py
+
+      - name: Type gate receipt (the gate must have EXECUTED, not merely existed)
+        # The half of the proof that cannot be spelled around: no receipt means
+        # the gate step did not run, however that was arranged. Also refuses a
+        # receipt whose recorded config digest does not match mypy.ini on disk.
+        run: python scripts/check_type_gate_receipt.py
 
       - name: Repository hygiene
         run: python scripts/check_hygiene.py
@@ -155,8 +164,18 @@ jobs:
         # verifier over a provider that times out, or over an isolation runtime
         # that refuses to start — and assert a structured non-crash outcome. The
         # collection count is pinned so a test that stops running is caught, and
-        # none of them may skip: the fault under test IS a runtime being absent,
-        # so none of them needs one.
+        # none of them may skip.
+        #
+        # On host requirements, corrected: the NEGATIVE tests need no isolation
+        # runtime, because the fault under test IS the runtime being absent. The
+        # POSITIVE control (a working verifier must still execute) does need a
+        # runnable sandbox, and until this sprint it took the auto-detected
+        # adapter — so on a host without unprivileged user namespaces it FAILED
+        # rather than skipped, which an independent review hit. It now uses
+        # UnsafeLocalSandbox explicitly: deterministic on every host, and
+        # appropriate because its "candidate" is a two-line arithmetic fixture
+        # the test itself wrote, not an untrusted proposal. Isolation is still
+        # demanded by the tests that verify isolation, in the sandbox suite.
         run: |
           python -m pytest -q tests/conformance/test_unavailable_consumers_do_not_crash.py tests/conformance/test_type_gate.py tests/conformance/test_type_gate_revert_pins.py --junitxml=type-gate-proofs.xml
           python - <<'PY'
@@ -164,8 +183,8 @@ jobs:
           cases = list(ET.parse("type-gate-proofs.xml").iter("testcase"))
           expected = {
               "test_unavailable_consumers_do_not_crash": 22,
-              "test_type_gate": 16,
-              "test_type_gate_revert_pins": 4,
+              "test_type_gate": 19,
+              "test_type_gate_revert_pins": 6,
           }
           for module, count in expected.items():
               actual = sum(c.get("classname", "").endswith(module) for c in cases)
@@ -177,6 +196,29 @@ jobs:
 
       - name: Union-narrowing reverts (must be caught)
         run: python scripts/type_gate_revert_proofs.py
+
+      - name: Type gate at the declared floor of the supported checker range
+        # The step NAME deliberately does not contain the checker's name: the
+        # voidguard scan parses workflow step names for type-check invocations,
+        # and read "... supported mypy range" as a mypy run whose target path is
+        # `range` — a VOID finding for a path matching no files. The finding was
+        # wrong about this step but right about the shape it looks for (a type
+        # gate over nothing is always green), so the name is changed rather than
+        # the scan suppressed.
+        #
+        # pyproject declares `mypy>=1.11`; constraints.txt pins 2.3.1 and CI
+        # installs under it, so every build so far exercised only the newest
+        # checker in the range. #87 was green that way while an independent
+        # review's 1.20.2 — also inside the declared range — reported a real
+        # union-attr defect nobody in CI could see.
+        #
+        # This runs the same gate against the floor, in an isolated venv so the
+        # pinned closure is untouched. A diagnostic that only the floor reports
+        # now fails the build here instead of surfacing in someone else's
+        # review. The floor is raised deliberately (see docs/DEPENDENCY-LICENSES)
+        # and never to make a diagnostic go away — 1.20.2, the checker that
+        # found the defect, stays inside the supported range.
+        run: python scripts/type_gate_floor.py
 
       - name: IP consistency (owner, license, no stray former license)
         # What a prime's counsel verifies by hand (docs/IP-READINESS.md §7),

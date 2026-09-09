@@ -19,7 +19,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Sequence
 
 from prometheus_protocol.sandbox._start_signal import (
     pipe_candidate_started,
@@ -35,6 +35,7 @@ from prometheus_protocol.sandbox.base import (
     clip,
 )
 from prometheus_protocol.sandbox.cgroup import (
+    PidsCgroup,
     create_pids_cgroup,
     join_current_process,
 )
@@ -52,6 +53,29 @@ _UNSHARE_FLAGS = (
     "--fork",
     "--kill-child",
 )
+
+
+def _join_cgroup_at_exec(cgroup: PidsCgroup | None) -> Callable[[], None] | None:
+    """The ``preexec_fn`` that puts the child in ``cgroup``, or None for no cgroup.
+
+    The path is read HERE, past the ``is None`` return, and captured as a plain
+    ``str``. Reading it in a lambda default instead — ``lambda procs=cgroup.
+    procs_path: ...`` inside a conditional expression — puts the attribute access
+    in the lambda's own definition scope, where the enclosing ``cgroup is not
+    None`` narrowing does not reach: mypy 1.20.2 reports ``Item "None" of
+    "PidsCgroup | None" has no attribute "procs_path"`` there and mypy 2.3.1 does
+    not. ``pyproject`` allows ``mypy>=1.8`` with no ceiling, so both checkers are
+    inside the supported install space and the expression has to be one neither
+    can fault. Hoisting the value is that expression; it is also the clearer one,
+    since what the child inherits is now a value, not a late attribute lookup.
+
+    Behaviour is unchanged: the same path string, bound once at definition time.
+    """
+
+    if cgroup is None:
+        return None
+    procs_path = cgroup.procs_path
+    return lambda: join_current_process(procs_path)
 
 
 class NamespaceSandbox(Sandbox):
@@ -122,11 +146,7 @@ class NamespaceSandbox(Sandbox):
             cpu_seconds=limits.cpu_time_s,
         )
         limiter = "cgroup" if cgroup is not None else "rlimit"
-        preexec = (
-            (lambda procs=cgroup.procs_path: join_current_process(procs))
-            if cgroup is not None
-            else None
-        )
+        preexec = _join_cgroup_at_exec(cgroup)
         try:
             os.set_inheritable(status_w, True)
             command = [

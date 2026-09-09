@@ -47,7 +47,15 @@ from dataclasses import dataclass
 from typing import Sequence
 
 from prometheus_protocol.core.interfaces import Provider, Verifier
-from prometheus_protocol.core.models import Case, Evidence, Skill, Task, Unavailable, Verdict
+from prometheus_protocol.core.models import (
+    Case,
+    Evidence,
+    Skill,
+    Task,
+    Unavailable,
+    Verdict,
+    assert_never,
+)
 from prometheus_protocol.verifier.model_judge import ModelJudgeVerifier
 
 #: Evaluation-only judge system prompt. Same one-word verdict contract as the
@@ -426,23 +434,55 @@ def run_judge_eval(
         # A verifier that could NOT execute returns Unavailable (no verdict). Keep
         # it as an explicit None + flag, so it is counted as an operational fault
         # downstream rather than silently vanishing from a denominator.
+        #
+        # Narrowed in STATEMENT form with a terminal ``assert_never`` (see
+        # ``_verdict_of`` below), not as a row of ternaries: a third union member
+        # would take every ``else`` branch at once and be recorded as a verdict
+        # nobody reached, and each ternary would still be well-typed. This way a
+        # third member fails the build instead.
+        ref_verdict, ref_unavailable = _verdict_of(ref)
+        judged_verdict, judge_unavailable = _verdict_of(judged)
         rows.append(
             JudgedRow(
                 item_id=item.item_id,
                 actor_model=item.actor_model,
-                reference=None if isinstance(ref, Unavailable) else ref.verdict,
-                judged=None if isinstance(judged, Unavailable) else judged.verdict,
+                reference=ref_verdict,
+                judged=judged_verdict,
                 confidence=(
-                    None
-                    if isinstance(judged, Unavailable)
-                    else parse_confidence(judged.detail)
+                    None if judge_unavailable
+                    else parse_confidence(_detail_of(judged))
                 ),
-                reference_unavailable=isinstance(ref, Unavailable),
-                judge_unavailable=isinstance(judged, Unavailable),
+                reference_unavailable=ref_unavailable,
+                judge_unavailable=judge_unavailable,
             )
         )
     return tuple(rows)
 
+
+def _verdict_of(outcome: Evidence | Unavailable) -> tuple[Verdict | None, bool]:
+    """``(verdict, could_not_run)`` — exhaustively, for one outcome.
+
+    An ``Unavailable`` has no verdict BY DESIGN, so the pair is ``(None, True)``
+    and the caller must carry the flag; an ``Evidence`` always has one (see
+    ``Evidence.decided``). Anything else reaches ``assert_never``.
+    """
+
+    if isinstance(outcome, Unavailable):
+        return None, True
+    if isinstance(outcome, Evidence):
+        return outcome.decided, False
+    assert_never(outcome)
+
+
+def _detail_of(outcome: Evidence | Unavailable) -> str:
+    """The reply text, for confidence parsing. Never read off an Unavailable's
+    detail as if it were a judgment — callers gate on the flag first."""
+
+    if isinstance(outcome, Unavailable):
+        return ""
+    if isinstance(outcome, Evidence):
+        return outcome.detail
+    assert_never(outcome)
 
 # --------------------------------------------------------------------------
 # rendering (deterministic markdown; no timestamps)

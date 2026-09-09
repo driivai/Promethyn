@@ -21,6 +21,7 @@ from prometheus_protocol.core.models import (
     Unavailability,
     Unavailable,
     Verdict,
+    partition_outcomes,
 )
 from prometheus_protocol.verifier.aggregate import fuse, p_pass, total_log_odds
 from prometheus_protocol.verifier.store import InMemoryTrustStore, TrustStore
@@ -138,8 +139,13 @@ class VerifierBank:
         # and it must never be aggregated into a verdict. Separate it out by TYPE
         # before anything reads a ``.verdict`` — so no Unavailable can ever enter
         # the fusion below, by construction rather than by a forgotten guard.
-        graded = [item for item in evidence if isinstance(item, Evidence)]
-        unavailable = [item for item in evidence if isinstance(item, Unavailable)]
+        # Partitioned exhaustively rather than by two complementary
+        # comprehensions. The comprehensions produced exactly these two lists
+        # today, so nothing about aggregation changes here (that is Phase 1.2) —
+        # but a filter drops anything that is neither member with no diagnostic,
+        # and this is the one place where a dropped outcome would silently leave
+        # a fusion. A third member now fails the build instead.
+        graded, unavailable = partition_outcomes(evidence)
 
         for item in graded:
             self._observe(item)

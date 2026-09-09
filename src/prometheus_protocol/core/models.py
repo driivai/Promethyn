@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, NoReturn
+from typing import Any, NoReturn, Sequence
 
 
 def assert_never(value: NoReturn) -> NoReturn:
@@ -320,3 +320,39 @@ class ExecutableAction:
                 f"unknown action kind {self.kind!r}; expected one of "
                 f"{sorted(EXECUTABLE_ACTION_KINDS)}"
             )
+
+
+def partition_outcomes(
+    results: "Sequence[Evidence | Unavailable]",
+) -> "tuple[list[Evidence], list[Unavailable]]":
+    """Split a batch of outcomes into (ran-and-judged, could-not-run).
+
+    Exhaustively. This exists because the obvious spelling is not:
+
+        decided = [r for r in results if isinstance(r, Evidence)]
+
+    A comprehension that filters *to* one member silently DROPS anything that is
+    neither — and drops it with no diagnostic, because a narrowed comprehension
+    is well-typed whatever else the union holds. An independent review named
+    exactly this: the union has two members today and the narrowing is correct,
+    so it is not a runtime defect, but a third member added later would vanish
+    out of a quorum instead of failing the build. In a lever whose whole claim is
+    "N independent judges agreed", a silently smaller N is the wrong kind of
+    wrong.
+
+    Here the loop handles both members and reaches ``assert_never`` for anything
+    else, so a third member is a build failure at the one place that would
+    otherwise have swallowed it. Callers get both halves and must decide what to
+    do with each — there is no default, and no member is dropped for them.
+    """
+
+    decided: list[Evidence] = []
+    missing: list[Unavailable] = []
+    for result in results:
+        if isinstance(result, Unavailable):
+            missing.append(result)
+        elif isinstance(result, Evidence):
+            decided.append(result)
+        else:
+            assert_never(result)
+    return decided, missing

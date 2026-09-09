@@ -285,7 +285,12 @@ class SwarmRuntime:
         # records none. Why it could not is not lost — the evidence field
         # carries the Unavailable and the ledger's `unavailable` discriminator
         # marks the row — so this narrows rather than inventing a placeholder.
-        judged = judgment if isinstance(judgment, Judgment) else None
+        if judgment is None or isinstance(judgment, Unavailable):
+            judged: Judgment | None = None
+        elif isinstance(judgment, Judgment):
+            judged = judgment
+        else:
+            assert_never(judgment)
         attempt = Attempt(
             task_id=packet_id,
             split="swarm",

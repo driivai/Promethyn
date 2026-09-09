@@ -79,7 +79,11 @@ class _CyclingJudge(Verifier):
 
 
 def _run(judge: Verifier) -> Evidence:
-    return judge.verify(code="x", task=None)
+    outcome = judge.verify(code="x", task=None)
+    # Every stub judge above returns Evidence unconditionally, so an Unavailable
+    # here means a stub changed, not that a lever misbehaved — say which.
+    assert isinstance(outcome, Evidence), f"a stub judge could not run: {outcome}"
+    return outcome
 
 
 # --------------------------------------------------------------------------

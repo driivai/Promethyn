@@ -17,7 +17,7 @@ from prometheus_protocol.benchmarks.live_items_v2 import (
     LIVE_ITEM_SET_VERSION,
     build_live_eval_items,
 )
-from prometheus_protocol.core.models import Verdict
+from prometheus_protocol.core.models import Unavailable, Verdict
 from prometheus_protocol.verifier.runner import SubprocessVerifier
 
 
@@ -39,7 +39,17 @@ def test_every_item_is_authoritative_with_the_pinned_composition():
     undecided = []
     verdicts = {Verdict.PASS: 0, Verdict.FAIL: 0}
     for item in build_live_eval_items():
-        verdict = reference.verify(code=item.code, task=item.task).verdict
+        # No availability guard here at all: the default sandbox selection may
+        # produce an Unavailable on a host without an isolating runtime, and
+        # reading .verdict off it crashes the test instead of reporting that the
+        # ground truth could not be established. An item with no executed
+        # verdict is not authoritative — which is exactly what this test checks
+        # — so it belongs in `undecided`, not in an AttributeError.
+        outcome = reference.verify(code=item.code, task=item.task)
+        if isinstance(outcome, Unavailable):
+            undecided.append(f"{item.item_id} (could not run: {outcome.reason.value})")
+            continue
+        verdict = outcome.decided
         if verdict in verdicts:
             verdicts[verdict] += 1
         else:

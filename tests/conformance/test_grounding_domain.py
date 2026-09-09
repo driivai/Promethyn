@@ -17,6 +17,8 @@ the sandbox); everything else runs anywhere.
 
 from __future__ import annotations
 
+from typing import Sequence
+
 import os
 
 import pytest
@@ -39,10 +41,12 @@ from prometheus_protocol.benchmarks.grounding_loop_demo import (
     run_loop,
 )
 from prometheus_protocol.benchmarks.judge_eval import compute_metrics
+from prometheus_protocol.core.interfaces import Provider
 from prometheus_protocol.core.models import (
     ACTION_PYTHON_CODE,
     Evidence,
     ExecutableAction,
+    Skill,
     Tier,
     Unavailability,
     Unavailable,
@@ -59,12 +63,22 @@ from prometheus_protocol.verifier.grounding import GroundingTask, GroundingVerif
 _REQUIRE = parse_env_bool("PROM_REQUIRE_SANDBOX", os.environ.get("PROM_REQUIRE_SANDBOX"), default=False)
 
 
-class _OneReplyProvider:
-    """A provider whose assess() always returns one scripted reply."""
+class _OneReplyProvider(Provider):
+    """A provider whose assess() always returns one scripted reply.
+
+    Declares the real ``Provider`` base rather than duck-typing it: the verifier
+    takes a ``Provider``, and a stub that merely happens to have the right method
+    names is a stub that can drift out of the contract silently.
+    """
 
     def __init__(self, reply: str | Exception) -> None:
         self._reply = reply
         self.model = "scripted"
+
+    def propose_solution(
+        self, *, prompt: str, entry_point: str, skills: Sequence[Skill] = ()
+    ) -> str:
+        raise NotImplementedError("the scripted grounding provider only assesses")
 
     def assess(self, *, prompt: str, system: str | None = None) -> str:
         if isinstance(self._reply, Exception):
@@ -87,6 +101,19 @@ _TASK = GroundingTask(id="grounding/x", source="The sky was clear all day.")
 
 
 def _soft(reply: str | Exception) -> Evidence:
+    outcome = GroundingVerifier(_OneReplyProvider(reply)).verify(
+        code="It did not rain.", task=_TASK
+    )
+    # _OneReplyProvider raising IS one of the cases under test, and it produces
+    # an Unavailable — which the caller must handle, not this helper. Callers
+    # that want the could-not-run path use _soft_outcome below.
+    assert isinstance(outcome, Evidence), f"the judge could not run: {outcome}"
+    return outcome
+
+
+def _soft_outcome(reply: str | Exception) -> Evidence | Unavailable:
+    """The un-narrowed outcome, for the tests that assert on a could-not-run."""
+
     return GroundingVerifier(_OneReplyProvider(reply)).verify(
         code="It did not rain.", task=_TASK
     )
@@ -107,7 +134,7 @@ def test_grounding_evidence_is_soft_tier_and_strictly_parsed():
         assert (evidence.tier, evidence.verdict) == (Tier.SOFT, Verdict.ABSTAIN), malformed
     # A provider that cannot be reached is not an abstention: the judge did not
     # run. It comes back as Unavailable, with no verdict at all (threat model §4).
-    unavailable = _soft(RuntimeError("gateway down"))
+    unavailable = _soft_outcome(RuntimeError("gateway down"))
     assert isinstance(unavailable, Unavailable)
     assert unavailable.reason == Unavailability.INFRA_FAULT
     assert not hasattr(unavailable, "verdict")

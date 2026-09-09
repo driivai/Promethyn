@@ -139,7 +139,7 @@ def _process_execute(
 
 def test_store_requires_a_durable_path():
     with pytest.raises(TypeError):
-        ConsumedApprovals()  # type: ignore[call-arg]
+        ConsumedApprovals()
     with pytest.raises(ValueError, match="durable filesystem path"):
         ConsumedApprovals(":memory:")
 
@@ -387,7 +387,7 @@ def test_production_runtime_uses_stable_key_store_and_required_audit(tmp_path):
         audit.close()
 
     with pytest.raises(ValueError, match="audit sink is required"):
-        build_migration_runtime(config, audit=None)  # type: ignore[arg-type]
+        build_migration_runtime(config, audit=None)
 
 
 def test_production_config_rejects_weak_key_and_missing_store_path():
@@ -411,7 +411,7 @@ def test_runner_rejects_missing_audit_sink(tmp_path):
                 consumed=store,
                 executor=_SpyExecutor(),
                 receipt_lookup=_no_receipt,
-                audit=None,  # type: ignore[arg-type]
+                audit=None,
                 clock=lambda: 1_001.0,
             )
     finally:
@@ -718,7 +718,7 @@ def test_driver_executor_reports_database_error(monkeypatch):
     def fail_connect(**kwargs):
         raise driver.Error("connection refused")
 
-    driver.connect = fail_connect  # type: ignore[method-assign]
+    driver.connect = fail_connect
     monkeypatch.setattr(
         "prometheus_protocol.chokepoint.runner.import_module", lambda _: driver
     )

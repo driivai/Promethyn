@@ -463,7 +463,7 @@ def test_malformed_direct_approval_never_raises_or_reaches_executor(tmp_path):
     good = auth.mint(
         artifact_sha256=artifact.sha256, target=target.identity, now=1000.0
     )
-    malformed = dataclasses.replace(good, nonce=object())  # type: ignore[arg-type]
+    malformed = dataclasses.replace(good, nonce=object())
     spy = _SpyExecutor()
     runner = _runner(auth, target, spy, lambda: 1001.0, tmp_path / "malformed.db")
 

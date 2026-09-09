@@ -8,6 +8,47 @@ in `spec/invariants.md` is a major version bump.
 ## [Unreleased]
 
 ### Added
+- **TYPE-GATE-HARDEN: both guards protecting the type gate were bypassable in
+  one line, and the gate itself was red.** An independent review reproduced all
+  three. The union work from TYPE-GATE held up — every consumer narrows, no
+  forbidden shape survives, the four outcomes stay distinct — but the guards
+  around it were **denylists of specific spellings**, which is the shape this
+  repository already rejects elsewhere ("an allowlist is a denylist wearing a
+  disguise"). Both are replaced.
+  - **The config guard is now an allowlist plus a behavioural proof.**
+    `disable_error_code = union-attr` — one line the old denylist never
+    considered — turned the gate green with a real `union-attr` defect sitting
+    in the tree. The guard now enumerates the keys and values `mypy.ini` is
+    permitted to have, so a *new* key fails whether or not anyone anticipated
+    it; and `test_a_planted_union_defect_still_fails_the_gate` writes a real
+    union-attr defect into the checked tree, runs the exact CI command, and
+    requires a non-zero exit naming it. That second one does not depend on
+    predicting the bypass: if the config is weakened by *any* means the planted
+    defect stops being reported and the test goes red.
+  - **The CI guard now parses the workflow structurally and proves execution.**
+    `run: true || python -m mypy ...` contains the gate command, carries no
+    blacklisted escape and no `if:`, and never runs mypy. A job-level
+    `if: false` was uncovered entirely, and the Python-version check searched
+    the file's text rather than the job's matrix. The guard now reads the parsed
+    job — conditions, matrix, and the step's actual command — and the gate runs
+    through `scripts/type_gate.py`, which emits a **receipt** naming the checker
+    version, the file count and the config digest that a separate mandatory step
+    demands. A step that did not execute writes no receipt, however the
+    non-execution was spelled.
+  - **The gate runs at both ends of the supported mypy range.** `pyproject`
+    declared `mypy>=1.8` with no ceiling while `constraints.txt` pinned 2.3.1,
+    so every build exercised only the newest checker — and #87 was green that
+    way while the review's 1.20.2, also inside the declared range, reported a
+    real defect. `scripts/type_gate_floor.py` now runs the same config at the
+    declared floor on every build.
+- **The gate covers `tests/` and `scripts/` as well as `src/`** — 244 files,
+  up from 127. Two tests dereferenced `.verdict` on a verifier result with no
+  narrowing (one behind an availability probe that a later launch failure
+  defeats, one with no guard at all), which made the suite
+  environment-sensitive: a crash there masks the assertion the test exists to
+  make. Sixty-four diagnostics surfaced across the two new trees and all are
+  fixed. Eight stale `# type: ignore` directives were found by
+  `warn_unused_ignores` and removed rather than kept.
 - **TYPE-GATE: the type checker now reads the whole source tree, and the build
   fails on any diagnostic.** `mypy.ini` used to name an entry-point list of
   files. An independent review then reproduced eleven crashes and one
@@ -22,11 +63,10 @@ in `spec/invariants.md` is a major version bump.
   `warn_redundant_casts` are on so neither shortcut can sit unnoticed. The point
   is not the diagnostics cleared once: it is that the next consumer who forgets
   to narrow `Evidence | Unavailable` cannot merge.
-  `tests/conformance/test_type_gate.py` fails the build if `files` is narrowed
-  back to a list, if a per-module section appears, if a `disallow_*` is relaxed,
-  if the CI step becomes conditional or swallows its exit status, or if a
-  blanket ignore or a `getattr(..., "verdict", <default>)` appears in the source
-  tree — the same source-sweep discipline as the strict-boolean guard.
+  `tests/conformance/test_type_gate.py` guards all of that. (It did so as a
+  denylist of specific spellings, which an independent review then bypassed in
+  one line; TYPE-GATE-HARDEN replaced it with an allowlist plus a
+  planted-defect behavioural proof — see the entry above.)
 - **The four outcomes are now representable everywhere they are consumed.**
   Where a consumer had no way to say "the verifier could not run", one was
   **added** rather than folded into an existing bucket: `CheckResult.
@@ -41,8 +81,12 @@ in `spec/invariants.md` is a major version bump.
 - **`Evidence.decided`** exposes the `__post_init__` guarantee that a verdict
   exists, so consumers stop working around a `Verdict | None` that is never
   actually `None`; **`assert_never`** (the 3.10-compatible idiom) makes a future
-  third union member a build failure at every branch point rather than a silent
-  fallthrough.
+  third union member a build failure rather than a silent fallthrough.
+  (TYPE-GATE first claimed this held "at every branch point". It did not:
+  several consumers narrowed in *expression* form — ternaries in a row
+  constructor, comprehension filters collecting the survivors — where no
+  terminal branch can go. TYPE-GATE-HARDEN made the claim true by converting
+  every one of them, so it now holds as written.)
 - **Behavioural proof that the fixes hold at runtime, not only in the checker.**
   `tests/conformance/test_unavailable_consumers_do_not_crash.py` drives every
   reproduced crash site with a **real** `Unavailable` — a real
@@ -52,8 +96,12 @@ in `spec/invariants.md` is a major version bump.
   outcome, never merely "it did not raise". `scripts/type_gate_revert_proofs.py`
   puts each narrowing back the way the review found it, in memory, and shows the
   behavioural test going red: **12 reverts / 17 call-phase failures, observed
-  then pinned**, with a shortfall and an excess both refused. All of it runs in
-  CI with a pinned collection count and zero skips.
+  then pinned**, with a shortfall and an excess both refused (TYPE-GATE-HARDEN
+  added a second phase for the guards themselves: **5 guard bypasses / 6 guard
+  failures**). All of it runs in CI with a pinned collection count and zero
+  skips. What that proves is bounded, and the runner now says so where the
+  assurance is described: the pinned mutations still fail, not that the mutation
+  set is complete or externally anchored.
 - **PIH-4a: signed config digests — a silent security-posture downgrade is
   detectable by an external witness.** The near-term slice of Defense 4,
   composed from the two seams that already exist rather than rebuilt: signing

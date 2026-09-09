@@ -107,6 +107,12 @@ FORGED = [{"step": 0}, {"step": 1}, {"forged": "the migration never happened"}]
 class _LogHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
+    #: ``BaseHTTPRequestHandler`` types ``server`` as ``BaseServer``, which has
+    #: none of the fields this handler reads. This handler is only ever
+    #: constructed by ``_LogServer`` (below), which declares every one of them —
+    #: saying so is what makes those reads checkable instead of invisible.
+    server: "_LogServer"
+
     def log_message(self, *_args) -> None:  # noqa: D401 - silence the server
         pass
 
@@ -339,7 +345,11 @@ def _assert_forgery_is_internally_valid(path: Path) -> ChainTip:
             "the forged chain was not internally consistent, so this test would "
             f"prove nothing: {unanchored.render()}"
         )
-        return forged.chain_tip()
+        tip = forged.chain_tip()
+        # A chain that just verified as VALID has rows, so it has a tip. Saying
+        # so keeps `ChainTip | None` out of every caller of this premise helper.
+        assert tip is not None, "the forged chain verified but reported no tip"
+        return tip
     finally:
         forged.close()
 
