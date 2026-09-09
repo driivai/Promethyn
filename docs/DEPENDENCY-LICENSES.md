@@ -120,10 +120,9 @@ pip install cyclonedx-bom && cyclonedx-py environment /tmp/closure \
 Then update the tables above for any package that changed, and re-read its
 license: the position in this document is only as current as its date.
 
-**Outstanding (TYPE-GATE-HARDEN).** `PyYAML` and `types-PyYAML` were added to
-the dev extra and to `constraints.txt`, and are recorded in the table above with
-their licenses read. `docs/sbom.cdx.json` has NOT been regenerated for them — it
-still describes the 18-package closure as of 2026-09-06. Said here rather than
-left for a reader to discover by diffing: the machine-readable SBOM is stale by
-exactly these two dev-only, stub-and-parser packages until the command above is
-re-run.
+**SBOM regenerated (TYPE-GATE-HARDEN-2).** `docs/sbom.cdx.json` was knowingly
+stale after TYPE-GATE-HARDEN — it described the 18-package closure and omitted
+`PyYAML` and `types-PyYAML`. It has been regenerated from the pinned closure and
+now carries 22 components including both. The three packages still absent from
+it — `colorama`, `exceptiongroup`, `tomli` — are the pre-existing Python 3.10
+note above, not new drift.

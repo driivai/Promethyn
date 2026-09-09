@@ -60,8 +60,8 @@ EXPECTED_REVERTS = 12
 EXPECTED_CALL_FAILURES = 17
 
 #: Phase 2 (the guards themselves). Observed then pinned, same discipline.
-EXPECTED_CONFIG_MUTATIONS = 5
-EXPECTED_GUARD_FAILURES = 6
+EXPECTED_CONFIG_MUTATIONS = 10
+EXPECTED_GUARD_FAILURES = 11
 
 
 def enforce_expected(caught: int, failures: int) -> None:
@@ -277,6 +277,55 @@ def config_mutations():
             "  build:\n    if: false\n    runs-on: ubuntu-latest",
             GATE_TESTS,
             "build_job_itself_is_unconditional",
+        ),
+        (
+            # TYPE-GATE-HARDEN-2 / F-1: the class the config allowlist could not
+            # see. A per-file directive, no config change at all.
+            "source-file-reconfigures-the-checker-inline",
+            "src/prometheus_protocol/core/reporting.py",
+            '"""Human-readable renderings of the outcome unions. Reporting only.',
+            '# mypy: disable-error-code="union-attr"\n'
+            '"""Human-readable renderings of the outcome unions. Reporting only.',
+            GATE_TESTS,
+            "inline_mypy_directive",
+        ),
+        (
+            # F-2: one scope up from the step-level check that was bypassed.
+            "ci-job-is-made-advisory",
+            ".github/workflows/ci.yml",
+            "  build:\n    runs-on: ubuntu-latest",
+            "  build:\n    continue-on-error: true\n    runs-on: ubuntu-latest",
+            GATE_TESTS,
+            "build_job_carries_exactly_the_permitted_keys",
+        ),
+        (
+            # F-2 again, a key nobody would have thought to blacklist.
+            "ci-job-is-starved-of-time",
+            ".github/workflows/ci.yml",
+            "  build:\n    runs-on: ubuntu-latest",
+            "  build:\n    timeout-minutes: 1\n    runs-on: ubuntu-latest",
+            GATE_TESTS,
+            "build_job_carries_exactly_the_permitted_keys",
+        ),
+        (
+            # F-3: the workflow simply never fires on a pull request.
+            "ci-stops-answering-to-pull-requests",
+            ".github/workflows/ci.yml",
+            "on:\n  push:\n    branches: [main]\n  pull_request:\n",
+            "on:\n  push:\n    branches: [main]\n",
+            GATE_TESTS,
+            "workflow_answers_to_exactly_the_permitted_triggers",
+        ),
+        (
+            # F-5: a flag inside the entry point, which the old proof never
+            # passed through.
+            "gate-script-suppresses-the-union-error-code",
+            "scripts/type_gate.py",
+            '[sys.executable, "-m", "mypy", "--config-file", str(CONFIG)],',
+            '[sys.executable, "-m", "mypy", "--disable-error-code=union-attr", '
+            '"--config-file", str(CONFIG)],',
+            GATE_TESTS,
+            "planted_union_defect",
         ),
         (
             # Presence is not execution: delete the receipt check and the

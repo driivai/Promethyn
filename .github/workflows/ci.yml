@@ -156,43 +156,29 @@ jobs:
       - name: Config attestation guard reverts (must be caught)
         run: python scripts/pih4a_revert_proofs.py
 
-      - name: Union-handling proofs (exact collection, zero skips)
+      - name: Union-handling proofs (exact test NAMES, zero skips)
         # A type fix that satisfies mypy but still crashes at runtime is a void
         # guard: mypy proves the Unavailable branch is WRITTEN, not that it is
         # reached or that it produces a sensible outcome. These drive each crash
         # site the independent review reproduced with a REAL Unavailable — a real
         # verifier over a provider that times out, or over an isolation runtime
-        # that refuses to start — and assert a structured non-crash outcome. The
-        # collection count is pinned so a test that stops running is caught, and
-        # none of them may skip.
+        # that refuses to start — and assert a structured non-crash outcome.
         #
-        # On host requirements, corrected: the NEGATIVE tests need no isolation
-        # runtime, because the fault under test IS the runtime being absent. The
-        # POSITIVE control (a working verifier must still execute) does need a
-        # runnable sandbox, and until this sprint it took the auto-detected
-        # adapter — so on a host without unprivileged user namespaces it FAILED
-        # rather than skipped, which an independent review hit. It now uses
-        # UnsafeLocalSandbox explicitly: deterministic on every host, and
-        # appropriate because its "candidate" is a two-line arithmetic fixture
-        # the test itself wrote, not an untrusted proposal. Isolation is still
-        # demanded by the tests that verify isolation, in the sandbox suite.
+        # Pinned by NAME, not by count. A count catches deletion but not
+        # delete-one-add-one: drop the planted-defect proof, add a trivial
+        # passing test, and the number is unchanged. The manifest names every
+        # test, so a removed or renamed proof fails the build and an added one
+        # has to be added deliberately.
+        #
+        # On host requirements: the NEGATIVE tests need no isolation runtime,
+        # because the fault under test IS the runtime being absent. The POSITIVE
+        # control uses UnsafeLocalSandbox explicitly — deterministic on every
+        # host, and appropriate because its "candidate" is a two-line arithmetic
+        # fixture the test itself wrote, not an untrusted proposal. Isolation is
+        # still demanded by the tests that verify isolation, in the sandbox suite.
         run: |
           python -m pytest -q tests/conformance/test_unavailable_consumers_do_not_crash.py tests/conformance/test_type_gate.py tests/conformance/test_type_gate_revert_pins.py --junitxml=type-gate-proofs.xml
-          python - <<'PY'
-          import xml.etree.ElementTree as ET
-          cases = list(ET.parse("type-gate-proofs.xml").iter("testcase"))
-          expected = {
-              "test_unavailable_consumers_do_not_crash": 22,
-              "test_type_gate": 19,
-              "test_type_gate_revert_pins": 6,
-          }
-          for module, count in expected.items():
-              actual = sum(c.get("classname", "").endswith(module) for c in cases)
-              assert actual == count, (module, actual, count)
-          assert len(cases) == sum(expected.values())
-          assert all(c.find(t) is None for c in cases for t in ("skipped", "failure", "error"))
-          print(f"Union handling: {len(cases)} proofs; zero skips/failures/errors")
-          PY
+          python scripts/check_type_gate_manifest.py type-gate-proofs.xml
 
       - name: Union-narrowing reverts (must be caught)
         run: python scripts/type_gate_revert_proofs.py

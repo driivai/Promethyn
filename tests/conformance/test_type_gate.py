@@ -40,6 +40,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import tokenize
 
 import pytest
 
@@ -210,8 +211,42 @@ def read_a_verdict_off_the_union(outcome: Evidence | Unavailable) -> str:
 """
 
 
-def _run_gate(config: pathlib.Path, cwd: pathlib.Path) -> subprocess.CompletedProcess:
-    """The EXACT command CI runs, against ``config``."""
+#: The REAL CI entry point. CI runs ``python scripts/type_gate.py``; it is that
+#: script — not a bare mypy invocation — that decides whether the build passes.
+GATE_ENTRY_POINT = REPO / "scripts" / "type_gate.py"
+
+
+def _run_gate(cwd: pathlib.Path) -> subprocess.CompletedProcess:
+    """Run the gate THROUGH the real CI entry point.
+
+    This used to run ``python -m mypy --config-file <config>`` directly while
+    claiming to be "the EXACT command CI runs". It was not: CI runs
+    ``scripts/type_gate.py``, which builds its own mypy invocation. A flag added
+    inside that script — ``--disable-error-code=union-attr`` — left the gate
+    green WITH a valid receipt, and the proof, which never passed through the
+    script, stayed green with it.
+
+    Going through the entry point means the proof covers the whole execution
+    path: the config, the script's flags, and the script's body. Stubbing
+    ``main()`` to ``return 0`` now fails the proof too, because the proof
+    requires a NON-ZERO exit when a real defect is planted.
+    """
+
+    return subprocess.run(
+        [sys.executable, str(GATE_ENTRY_POINT)],
+        capture_output=True, text=True, cwd=cwd,
+    )
+
+
+def _run_mypy_directly(
+    config: pathlib.Path, cwd: pathlib.Path
+) -> subprocess.CompletedProcess:
+    """A SECOND, INDEPENDENT LAYER — not the mechanism.
+
+    Bypassing the entry point is what lets this layer catch a weakening of the
+    entry point itself. It is deliberately a different path, and it is named as a
+    layer so nobody mistakes it for the primary proof again.
+    """
 
     return subprocess.run(
         [sys.executable, "-m", "mypy", "--config-file", str(config)],
@@ -235,21 +270,26 @@ def _planted_defect():
 def test_a_planted_union_defect_still_fails_the_gate():
     """The load-bearing test, and the only one here that cannot be spelled around.
 
-    Every other assertion in this module reasons about the config's TEXT. This
-    one reasons about what the gate DOES: it writes a real union-attr defect into
-    the checked tree, runs the exact CI command, and requires a non-zero exit
-    naming that defect.
+    Every other assertion in this module reasons about TEXT — the config's, the
+    workflow's. This one reasons about what the gate DOES: it writes a real
+    union-attr defect into the checked tree, runs ``scripts/type_gate.py`` (the
+    entry point CI actually runs), and requires a non-zero exit naming it.
 
-    If the config is ever weakened — by ``disable_error_code``, by an
-    ``enable_error_code`` inversion, by a per-module section, by a future mypy
-    option nobody here has heard of, by any spelling at all — the planted defect
-    stops being reported and this test goes red. That property does not depend on
-    anyone having predicted the bypass, which is exactly what the denylist this
-    replaces could not offer.
+    WHAT IT COVERS. Everything on the real execution path: ``mypy.ini``, the
+    flags ``type_gate.py`` builds, and ``type_gate.py``'s body. Weakening any of
+    the three stops the planted defect being reported and turns this red, without
+    anyone having predicted the spelling.
+
+    WHAT IT DOES NOT COVER, corrected from the previous sprint's claim that it
+    caught weakening "by any spelling at all". It does not, and could not, catch
+    an INLINE ``# mypy:`` directive in another file: such a directive is scoped
+    to its own file and the planted defect is in a different one. That class is
+    governed separately and structurally, by
+    ``test_no_inline_mypy_directive_reconfigures_the_checker_per_file``.
     """
 
     with _planted_defect() as path:
-        result = _run_gate(MYPY_INI, REPO)
+        result = _run_gate(REPO)
 
     assert result.returncode != 0, (
         "the type gate reported success with a real union-attr defect planted in "
@@ -292,8 +332,11 @@ def test_the_behavioural_proof_catches_a_config_the_denylist_missed():
         config = pathlib.Path(tmp) / "mypy-bypassed.ini"
         config.write_text(weakened, encoding="utf-8")
         with _planted_defect():
-            bypassed = _run_gate(config, REPO)
-            honest = _run_gate(MYPY_INI, REPO)
+            # The bypassed CONFIG cannot go through the entry point (which pins
+            # mypy.ini), so this arm uses the independent direct-mypy layer; the
+            # honest arm goes through the real entry point, as the proof does.
+            bypassed = _run_mypy_directly(config, REPO)
+            honest = _run_gate(REPO)
 
     assert bypassed.returncode == 0, (
         "the review's bypass no longer turns the gate green — if mypy changed, "
@@ -381,6 +424,104 @@ def _step_named(job: dict, name: str) -> dict:
         f"{len(matches)}. The gate must be a single, named, findable step."
     )
     return matches[0]
+
+
+#: THE JOB-LEVEL ALLOWLIST, and the trigger allowlist beside it.
+#:
+#: The previous sprint asserted ``"if" not in job`` and step-level
+#: ``continue-on-error``, and an independent review walked past both: setting
+#: ``continue-on-error`` on the JOB makes every step advisory (19 guards passed),
+#: and deleting the ``pull_request`` trigger means the workflow never fires on a
+#: PR at all (19 guards passed). Neither shape had been enumerated.
+#:
+#: Adding those two to a rejected list would leave ``timeout-minutes: 1``, a
+#: second matrix dimension via ``include:``, ``strategy.max-parallel``, and every
+#: future job-level key. So this states what the job is PERMITTED to carry —
+#: exactly the discipline that held for the config keys, and the only guard in
+#: three rounds that survived attack.
+#:
+#: Triggers are governed here too. They are INSIDE the boundary the honest-limit
+#: note above draws: branch protection lives outside the repository, but which
+#: events the workflow answers to is committed in this file.
+_ALLOWED_JOB_KEYS = {
+    "runs-on": "ubuntu-latest",
+    "services": None,     # value not pinned: the Postgres fixture is its own concern
+    "strategy": None,     # pinned in detail by the matrix test below
+    "steps": None,        # pinned in detail by the step tests below
+}
+
+#: Note the key: PyYAML resolves a bare ``on:`` to the BOOLEAN True (YAML 1.1
+#: treats on/off/yes/no as booleans). A guard that looked for the string "on"
+#: would silently find nothing and pass — which is the failure mode this whole
+#: sprint is about, so it is named rather than left as a trap.
+_TRIGGER_KEY = True
+
+_ALLOWED_TRIGGERS = {
+    "push": {"branches": ["main"]},
+    "pull_request": None,
+}
+
+
+def _workflow_triggers() -> dict:
+    workflow = _workflow()
+    assert _TRIGGER_KEY in workflow, (
+        "ci.yml has no `on:` key at all — the workflow answers to no events"
+    )
+    return workflow[_TRIGGER_KEY]
+
+
+def test_the_workflow_answers_to_exactly_the_permitted_triggers():
+    """An allowlist: the gate is worth nothing on a workflow that never fires.
+
+    Deleting ``pull_request:`` leaves every guard passing and every PR unchecked.
+    """
+
+    triggers = _workflow_triggers()
+    assert set(triggers) == set(_ALLOWED_TRIGGERS), (
+        f"ci.yml triggers are {sorted(triggers)}; permitted is "
+        f"{sorted(_ALLOWED_TRIGGERS)}. A workflow that does not fire on "
+        "pull_request leaves every PR ungated while every guard here passes."
+    )
+    for name, expected in _ALLOWED_TRIGGERS.items():
+        if expected is not None:
+            assert triggers[name] == expected, (
+                f"trigger {name!r} is {triggers[name]!r}, permitted {expected!r} "
+                "— narrowing which pushes or branches run the gate narrows the gate"
+            )
+
+
+def test_the_build_job_carries_exactly_the_permitted_keys():
+    """An allowlist over job-level keys, not a list of forbidden ones.
+
+    ``continue-on-error``, ``if``, ``timeout-minutes`` and anything else a future
+    Actions release adds are all refused by not being on the list.
+    """
+
+    job = _build_job()
+    unexpected = sorted(set(job) - set(_ALLOWED_JOB_KEYS))
+    assert unexpected == [], (
+        f"jobs.build carries key(s) {unexpected} that are not permitted. This is "
+        "how the gate is turned off one scope up: `continue-on-error: true` on "
+        "the job makes every step advisory, and `if: false` skips the job and "
+        "every guard in it. If a key genuinely belongs, add it to "
+        "_ALLOWED_JOB_KEYS deliberately, with the reason."
+    )
+    missing = sorted(set(_ALLOWED_JOB_KEYS) - set(job))
+    assert missing == [], f"jobs.build has lost key(s) {missing}"
+    for key, expected in _ALLOWED_JOB_KEYS.items():
+        if expected is not None:
+            assert job[key] == expected, (
+                f"jobs.build.{key} is {job[key]!r}, permitted {expected!r}"
+            )
+
+
+def test_the_workflow_defines_exactly_the_expected_jobs():
+    """A second job could carry the required-check name while doing nothing."""
+
+    jobs = _workflow()["jobs"]
+    assert sorted(jobs) == ["build"], (
+        f"ci.yml defines jobs {sorted(jobs)}; expected exactly ['build']"
+    )
 
 
 def test_the_build_job_itself_is_unconditional():
@@ -535,23 +676,44 @@ _UNION_TYPES = {"Unavailable", "Evidence", "Judgment"}
 
 
 class _ExpressionNarrowings(ast.NodeVisitor):
-    """Collect ``isinstance(x, <union member>)`` used in expression position."""
+    """Any expression-position TEST that mentions a union member.
+
+    The previous version required ``ast.Call`` -> ``isinstance`` ->
+    ``unparse(args[1])`` in a name set, and an independent review put four other
+    spellings straight through it — including ``not isinstance(r, Unavailable)``,
+    which is the most natural way to write the survivor filter this exists to
+    forbid:
+
+        [r for r in rs if not isinstance(r, Unavailable)]   # missed
+        [r for r in rs if type(r) is Evidence]              # missed
+        [r for r in rs if isinstance(r, (Evidence,))]       # missed
+        list(filter(lambda r: not isinstance(r, Unavailable), rs))  # missed
+
+    So it no longer asks "is this the isinstance shape I thought of?" — an
+    enumeration, and enumerations have now failed three times here. It asks
+    whether an expression-position test MENTIONS a union member at all, and
+    permits none. The syntax of the narrowing stops mattering.
+    """
 
     def __init__(self) -> None:
         self.hits: list[tuple[str, int]] = []
 
-    def _narrows_a_union(self, node: ast.AST) -> bool:
-        return (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == "isinstance"
-            and len(node.args) == 2
-            and ast.unparse(node.args[1]) in _UNION_TYPES
+    def _mentions_a_union(self, node: ast.AST) -> bool:
+        return any(
+            isinstance(child, ast.Name) and child.id in _UNION_TYPES
+            for child in ast.walk(node)
         )
 
     def visit_IfExp(self, node: ast.IfExp) -> None:
-        if self._narrows_a_union(node.test):
+        if self._mentions_a_union(node.test):
             self.hits.append(("ternary", node.lineno))
+        self.generic_visit(node)
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        # ``filter(lambda r: not isinstance(r, Unavailable), rs)`` is the same
+        # survivor filter wearing a different hat.
+        if self._mentions_a_union(node.body):
+            self.hits.append(("lambda", node.lineno))
         self.generic_visit(node)
 
     def generic_visit(self, node: ast.AST) -> None:
@@ -560,7 +722,7 @@ class _ExpressionNarrowings(ast.NodeVisitor):
         ):
             for generator in node.generators:
                 for condition in generator.ifs:
-                    if self._narrows_a_union(condition):
+                    if self._mentions_a_union(condition):
                         self.hits.append(("comprehension filter", condition.lineno))
         super().generic_visit(node)
 
@@ -581,11 +743,11 @@ def test_no_union_is_narrowed_in_expression_position():
         ]
 
     assert offenders == [], (
-        f"union narrowed in expression position at {offenders}. A ternary or a "
-        "comprehension filter cannot carry an exhaustive terminal branch, so a "
-        "third union member is silently taken by the else-branch (a verdict "
-        "nobody reached) or silently dropped from a collection (a quorum that "
-        "never met). Narrow in statement form with assert_never, or use "
+        f"union narrowed in expression position at {offenders}. A ternary, a "
+        "comprehension filter or a lambda cannot carry an exhaustive terminal "
+        "branch, so a third union member is silently taken by the else-branch (a "
+        "verdict nobody reached) or silently dropped from a collection (a quorum "
+        "that never met). Narrow in statement form with assert_never, or use "
         "core.models.partition_outcomes for the collection case."
     )
 
@@ -681,6 +843,70 @@ _SELF = pathlib.Path(__file__).name
 
 def _swept_files() -> list[pathlib.Path]:
     return [p for p in _source_files() if p.name != _SELF]
+
+
+#: INLINE mypy CONFIGURATION, governed as an allowlist whose permitted set is
+#: EMPTY. A comment of the form ``# mypy: <key>=<value>`` at the top of a file
+#: reconfigures the checker for that whole file. An independent review used one
+#: line — ``# mypy: disable-error-code="union-attr"`` — to leave a real
+#: union-attr defect in the checked tree with the gate green, the receipt valid,
+#: 19 guards passing, 22 behavioural tests passing and the revert runner passing.
+#: Nothing saw it.
+#:
+#: The planted-defect proof could not see it BY CONSTRUCTION: an inline directive
+#: is scoped to its own file, and the planted defect lives in a different one. So
+#: the previous sprint's claim — that weakening the checker "by any spelling at
+#: all" makes the proof go red — was false for this entire class, not by an
+#: oversight in the regex but because the proof is per-file and the attack is
+#: per-file.
+#:
+#: This is therefore governed the way the CONFIG KEYS are governed, which is the
+#: only guard in three rounds that survived attack: by stating what is permitted.
+#: The permitted set is empty. Adding ``disable-error-code`` to a rejected list
+#: would close one spelling and leave ``ignore-errors``, the underscore form, and
+#: every future inline key — the denylist trap this repository has now walked
+#: into three times.
+#: Matched against real COMMENT TOKENS, not raw text. ``type_gate_revert_
+#: proofs.py`` necessarily carries the directive as a STRING — it is the
+#: mutation this guard is proved against — and a text sweep flagged that string,
+#: which would have pushed the fix towards excluding the runner and turning the
+#: exclusion into a hiding place. Tokenising asks the precise question instead:
+#: is there a comment that reconfigures the checker?
+_INLINE_MYPY_DIRECTIVE = re.compile(r"^#\s*mypy\s*:")
+
+#: Sanctioned inline directives, by ``path:line``. EMPTY, and it stays empty
+#: unless a directive is genuinely unavoidable — in which case the entry names
+#: the file, the line, and the reason, and is reviewed on its own merits.
+_SANCTIONED_INLINE_DIRECTIVES: frozenset[str] = frozenset()
+
+
+def test_no_inline_mypy_directive_reconfigures_the_checker_per_file():
+    """An allowlist with an empty permitted set: no file may reconfigure mypy.
+
+    ``mypy.ini`` is governed by ``_ALLOWED_CONFIG``. This governs the OTHER place
+    mypy takes configuration from — the source files themselves — which was
+    ungoverned entirely.
+    """
+
+    offenders = []
+    for path in _swept_files():
+        with path.open("rb") as handle:
+            for token in tokenize.tokenize(handle.readline):
+                if token.type != tokenize.COMMENT:
+                    continue
+                if not _INLINE_MYPY_DIRECTIVE.match(token.string.strip()):
+                    continue
+                location = f"{path.relative_to(REPO)}:{token.start[0]}"
+                if location not in _SANCTIONED_INLINE_DIRECTIVES:
+                    offenders.append(location)
+    assert offenders == [], (
+        f"inline mypy configuration at {offenders}. A '# mypy:' comment "
+        "reconfigures the checker for that whole file, and the planted-defect "
+        "proof cannot see it — the defect it plants is in a different file. If a "
+        "directive is genuinely unavoidable, add it to "
+        "_SANCTIONED_INLINE_DIRECTIVES with the reason; do not tolerate it "
+        "silently."
+    )
 
 
 def test_no_type_ignore_survives_anywhere_in_the_source_tree():
