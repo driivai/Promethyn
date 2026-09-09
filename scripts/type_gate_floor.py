@@ -7,10 +7,16 @@ running 1.20.2 (also inside the declared range), reported a real ``union-attr``
 defect in ``sandbox/namespace.py`` that CI could not see. "Green" meant "green
 on one checker we happened to pin", and nothing said so.
 
-This closes that: it reads the floor out of ``pyproject.toml``, installs exactly
-that version into a throwaway venv (the pinned closure is untouched), and runs
-the same config. A diagnostic only the floor reports fails the build here,
-instead of surfacing in somebody else's review.
+This closes that: it reads the floor out of ``pyproject.toml``, installs the
+project's pinned closure into a throwaway venv with ONLY the checker moved to
+the floor, and runs the same config. A diagnostic only the floor reports fails
+the build here, instead of surfacing in somebody else's review.
+
+The closure matters. An earlier version installed mypy and the type stubs alone,
+so third-party imports degraded to ``Any`` at the floor while being real in the
+main run — same config, different environment, and therefore a weaker check
+wearing the same name. Now the only variable between the two jobs is the
+checker.
 
 The floor is a claim about what this project supports. Raise it deliberately —
 never to make a diagnostic go away. The version that found the defect must stay
@@ -34,17 +40,31 @@ CONFIG = REPO / "mypy.ini"
 _FLOOR = re.compile(r'"mypy>=([0-9][0-9.]*)"')
 
 
-def declared_type_stubs() -> list[str]:
-    """The ``types-*`` pins from ``constraints.txt``.
+def floor_constraints(floor: str, into: Path) -> Path:
+    """``constraints.txt`` with the mypy pin replaced by the declared floor.
 
-    The floor venv has to mirror what a developer installing ``.[dev]`` at the
-    floor would have. Without the stubs, the floor reports "Library stubs not
-    installed" — a diagnostic about the venv, not about the code, which would
-    make this job noise and get it switched off.
+    The venv used to get ``mypy=={floor}`` and the type stubs and NOTHING ELSE —
+    no ``psycopg``, no ``cryptography``, no ``pytest``. With
+    ``ignore_missing_imports = True`` those imports degrade to ``Any`` at the
+    floor while being real in the main run, so the two jobs were checking
+    different things and a review observed that "the job proves less than it
+    appears to".
+
+    Installing the real pinned closure with only the checker moved to the floor
+    makes the environments match: same packages, same versions, one different
+    checker — which is the single variable this job exists to vary.
     """
 
     text = (REPO / "constraints.txt").read_text(encoding="utf-8")
-    return re.findall(r"^(types-[A-Za-z0-9._-]+==[0-9][^\s]*)$", text, re.MULTILINE)
+    swapped, n = re.subn(r"^mypy==.*$", f"mypy=={floor}", text, count=1, flags=re.MULTILINE)
+    if n != 1:
+        raise SystemExit(
+            "constraints.txt no longer carries exactly one 'mypy==' pin; this "
+            "check cannot construct the floor environment"
+        )
+    path = into / "constraints-floor.txt"
+    path.write_text(swapped, encoding="utf-8")
+    return path
 
 
 def declared_floor() -> str:
@@ -65,11 +85,12 @@ def main() -> int:
         venv = Path(tmp) / "venv"
         subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True)
         python = venv / "bin" / "python"
-        stubs = declared_type_stubs()
-        print(f"[type-gate-floor] type stubs: {stubs or '(none pinned)'}")
+        constraints = floor_constraints(floor, Path(tmp))
+        print(f"[type-gate-floor] installing the pinned closure with mypy=={floor}")
         subprocess.run(
-            [str(python), "-m", "pip", "install", "--quiet", f"mypy=={floor}", *stubs],
-            check=True,
+            [str(python), "-m", "pip", "install", "--quiet",
+             "-e", str(REPO) + "[dev]", "-c", str(constraints)],
+            check=True, cwd=REPO,
         )
         subprocess.run([str(python), "-m", "mypy", "--version"], check=True, cwd=REPO)
         result = subprocess.run(

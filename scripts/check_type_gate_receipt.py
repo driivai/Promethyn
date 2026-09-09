@@ -1,15 +1,30 @@
 """Require EVIDENCE that the type gate ran in this job. Mandatory CI step.
 
-This is the half of the execution proof that cannot be spelled around. The gate
-step writes a receipt (``scripts/type_gate.py``); this step demands it. If the
-gate step did not execute — ``true ||``, a shell function, a subshell, ``if
-false; then``, an alternate shell, anything at all — there is no receipt and
-this fails the build. Nobody has to have predicted the spelling.
+The gate step writes a receipt (``scripts/type_gate.py``); this step demands it.
+If the gate step did not execute — ``true ||``, a shell function, a subshell,
+``if false; then``, an alternate shell — there is no receipt and this fails the
+build, without anyone having predicted the spelling.
 
-It also refuses a STALE receipt: the recorded config digest must equal the
-SHA-256 of ``mypy.ini`` on disk right now, so a receipt from an earlier, weaker
-config (or one committed to the repository) cannot stand in for a run against
-the config that is actually shipping.
+WHAT THIS PROVES, stated honestly because the previous version overclaimed. This
+is an ACCIDENT AND STALENESS detector, not a forgery detector. An independent
+review hand-wrote a receipt naming a checker that does not exist and this check
+accepted it. It refuses:
+
+* a MISSING receipt — the gate step did not run;
+* a STALE one — the recorded config digest must equal the SHA-256 of
+  ``mypy.ini`` as it is right now, so a receipt describing an earlier or weaker
+  config cannot stand in for the config that is shipping;
+* a REPLAYED one — in CI the recorded run identity must match this run's, so a
+  receipt restored from a cache, carried over from another run, or committed to
+  the tree is refused even if the config is unchanged;
+* one that names NO checker, or too few files.
+
+It does NOT refuse a receipt written by someone who can edit the workflow or the
+gate script: every value available to the gate step is available to a forging
+step in the same workflow. See ``scripts/type_gate.py`` for why nothing inside
+this repository can close that, and for what does the real work instead
+(``test_a_planted_union_defect_still_fails_the_gate``, which plants a defect and
+runs the gate script itself).
 
 Run: python scripts/check_type_gate_receipt.py
 """
@@ -20,7 +35,13 @@ import json
 import sys
 from pathlib import Path
 
-from type_gate import CONFIG, MINIMUM_CHECKED_FILES, RECEIPT, config_digest
+from type_gate import (
+    CONFIG,
+    MINIMUM_CHECKED_FILES,
+    RECEIPT,
+    config_digest,
+    run_identity,
+)
 
 
 def main() -> int:
@@ -45,6 +66,25 @@ def main() -> int:
             "different config than the one shipping.",
             file=sys.stderr,
         )
+        return 1
+
+    # Replay: in CI the run identity must be THIS run. Absent locally (every
+    # field empty), where there is no run to be confused with.
+    here = run_identity()
+    if any(here.values()):
+        recorded_run = receipt.get("run") or {}
+        if recorded_run != here:
+            print(
+                f"REPLAYED TYPE-GATE RECEIPT: it records run {recorded_run!r} but "
+                f"this run is {here!r}. A receipt from another run — cached, "
+                "committed, or carried over — is not evidence that the gate ran "
+                "here.",
+                file=sys.stderr,
+            )
+            return 1
+
+    if not str(receipt.get("mypy", "")).strip():
+        print("TYPE-GATE RECEIPT names no checker.", file=sys.stderr)
         return 1
 
     checked = receipt.get("checked_files", 0)

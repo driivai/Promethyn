@@ -36,6 +36,46 @@ present, plausible, and void is the failure mode we exist to name.
 
 ## Design principles the whole model rests on
 
+**A guard states what is PERMITTED, or proves the property BEHAVIOURALLY.**
+Never a list of forbidden shapes. A guard that enumerates forbidden shapes will
+be bypassed by a shape nobody enumerated — this is not a hypothesis here, it is
+three rounds of measured evidence against this repository's own type gate:
+
+| guard | form | outcome under independent review |
+|---|---|---|
+| `mypy.ini` key/value allowlist | **allowlist** | **survived attack** |
+| step-level `continue-on-error` check | enumerated shape | bypassed — set it on the *job* |
+| single-`isinstance` AST sweep | enumerated shape | bypassed — four other spellings |
+| config-file-only suppression check | enumerated shape | bypassed — a per-file `# mypy:` comment |
+| trigger governance | *absent* | bypassed — delete the `pull_request` trigger |
+| receipt "proves the gate ran" | claim, not a guard | bypassed — a hand-written receipt is accepted |
+
+Each bypass was a single line, and each was found on first contact. The pattern
+is not that the authors were careless about which shapes to list; it is that
+listing shapes is the wrong move. So every guard in this repository now takes
+one of two forms:
+
+* an **allowlist** — it enumerates what is permitted and refuses everything else,
+  so an unanticipated spelling fails by *not being on the list* rather than by
+  having been predicted. The mypy config keys, the workflow's job-level keys and
+  triggers, the inline `# mypy:` directives (permitted set: empty), and the
+  type-gate proof manifest are all this form; or
+* a **behavioural proof** — it exercises the protected property through the real
+  path and requires the real failure, so a weakening anywhere on that path shows
+  up as the property no longer holding. `test_a_planted_union_defect_still_fails_
+  the_gate` plants a genuine `union-attr` defect and runs the actual CI entry
+  point; the `Unavailable` consumer suite drives each crash site with a real
+  could-not-run.
+
+**The two layers are not redundant, and the evidence for that is specific.**
+Reverting `EnsembleJudge` to a survivor filter spelled `[r for r in results if
+not isinstance(r, Unavailable)]` makes two unreachable judges return
+`Evidence(PASS)` — a fail-open. mypy stays clean (the narrowing is correct for a
+two-member union) *and*, before this sprint, the AST guard passed too. The
+behavioural suite caught it. A static guard tells you a shape is absent; only
+running the thing tells you the property holds. Where they disagree, the
+behavioural layer is the one that is load-bearing.
+
 **Execution recovery follow-up (F2/F3):** negative executor results and lost
 COMMIT responses no longer establish rollback. Unknown events leave an intent
 pending until receipt reconciliation proves its outcome. A cross-process guard

@@ -8,6 +8,67 @@ in `spec/invariants.md` is a major version bump.
 ## [Unreleased]
 
 ### Added
+- **TYPE-GATE-HARDEN-2: the allowlist discipline, applied everywhere the last
+  sprint enumerated shapes.** Three rounds of independent review produced one
+  unambiguous result: *where a guard states what is permitted it survives attack;
+  where it lists forbidden shapes it is bypassed on first contact.* The config-key
+  allowlist held. The step-level `continue-on-error` check, the
+  single-`isinstance` AST sweep, and the config-file-only suppression check were
+  each defeated by one line. Each is now an allowlist or a behavioural proof.
+  - **Inline `# mypy:` directives are governed, permitted set empty.** One source
+    comment — `# mypy: disable-error-code="union-attr"` — left a real union-attr
+    defect in the checked tree with the gate green, the receipt valid, 19 guards
+    passing, 22 behavioural tests passing and the revert runner passing. The
+    planted-defect proof could not see it *by construction*: an inline directive
+    is scoped to its own file and the planted defect is in a different one. The
+    sweep reads real comment tokens (not raw text, so the revert runner's own
+    mutation string is not a false positive) and permits none.
+  - **The planted-defect proof now runs the real CI entry point.** It claimed to
+    run "the EXACT command CI runs" and did not: it invoked mypy directly while
+    CI runs `scripts/type_gate.py`. A `--disable-error-code` flag inside that
+    script left the gate green *with a valid receipt*. The proof now covers the
+    whole execution path — config, flags, script body — and the direct-mypy run
+    is kept as an explicitly-labelled second layer.
+  - **Job-level keys and workflow triggers are allowlisted.** `continue-on-error`
+    was checked on the step and not the job; `on:` was not checked at all.
+    Setting `continue-on-error: true` on the job, or deleting the `pull_request`
+    trigger, left all 19 guards passing. Both are refused now by not being on the
+    list — as are `timeout-minutes`, a second matrix dimension, and whatever
+    Actions adds next.
+  - **The AST guard asks whether an expression-position test MENTIONS a union
+    member**, not whether it matches one `isinstance` shape. Four spellings went
+    through the old one, including `not isinstance(r, Unavailable)` — the most
+    natural way to write the survivor filter it exists to forbid.
+- **The type-gate proof set is pinned by NAME.** The collection-count pin caught
+  deletion but not delete-one-add-one: drop the planted-defect proof, add a
+  trivial passing test, and the number is unchanged.
+  `tests/conformance/type_gate_test_manifest.json` names all 51 proofs.
+
+### Changed
+- **The receipt's claim is corrected, and its binding strengthened as far as is
+  honestly possible.** It said "a step that did not execute writes no receipt,
+  and the build fails — no matter how the non-execution was spelled." That was
+  false: a hand-written receipt naming a checker that does not exist was
+  accepted. The receipt is now documented as an **accident and staleness
+  detector, not a forgery detector**, and it additionally refuses a *replayed*
+  receipt (run identity must match this CI run) and one that names no checker.
+  What it cannot do is stated plainly: every binding available to the gate step
+  is available to a forging step in the same workflow, and the constructions that
+  would not be require `pull_request_target`, which this repository will not
+  trade for. The real protection is the planted-defect proof.
+- **The floor job installs the pinned closure**, with only the checker moved to
+  the floor. It previously installed mypy and type stubs alone, so third-party
+  imports degraded to `Any` at the floor while being real in the main run — same
+  config, different environment.
+- **`MINIMUM_CHECKED_FILES` tightened** from 230 against 244 real files (14 files
+  of silent slack) to the observed count minus a stated two-file tolerance, with
+  the update rule written down.
+- **`docs/sbom.cdx.json` regenerated** — 22 components, including the `PyYAML`
+  and `types-PyYAML` it was knowingly missing.
+- **`docs/threat-model.md` gains the doctrine**: *a guard states what is
+  permitted, or proves the property behaviourally* — with the three-round
+  evidence table, and the specific demonstration that the behavioural layer is
+  the load-bearing one where the two disagree.
 - **TYPE-GATE-HARDEN: both guards protecting the type gate were bypassable in
   one line, and the gate itself was red.** An independent review reproduced all
   three. The union work from TYPE-GATE held up — every consumer narrows, no
@@ -21,10 +82,10 @@ in `spec/invariants.md` is a major version bump.
     in the tree. The guard now enumerates the keys and values `mypy.ini` is
     permitted to have, so a *new* key fails whether or not anyone anticipated
     it; and `test_a_planted_union_defect_still_fails_the_gate` writes a real
-    union-attr defect into the checked tree, runs the exact CI command, and
-    requires a non-zero exit naming it. That second one does not depend on
-    predicting the bypass: if the config is weakened by *any* means the planted
-    defect stops being reported and the test goes red.
+    union-attr defect into the checked tree and requires a non-zero exit naming
+    it. (Two corrections from TYPE-GATE-HARDEN-2: it ran mypy directly, not the
+    CI command, and it never saw the per-file inline-directive class at all.
+    Both are fixed above.)
   - **The CI guard now parses the workflow structurally and proves execution.**
     `run: true || python -m mypy ...` contains the gate command, carries no
     blacklisted escape and no `if:`, and never runs mypy. A job-level
@@ -33,8 +94,9 @@ in `spec/invariants.md` is a major version bump.
     job — conditions, matrix, and the step's actual command — and the gate runs
     through `scripts/type_gate.py`, which emits a **receipt** naming the checker
     version, the file count and the config digest that a separate mandatory step
-    demands. A step that did not execute writes no receipt, however the
-    non-execution was spelled.
+    demands. (Corrected in TYPE-GATE-HARDEN-2: the receipt is an accident and
+    staleness detector, not a forgery detector — a hand-written one was
+    accepted.)
   - **The gate runs at both ends of the supported mypy range.** `pyproject`
     declared `mypy>=1.8` with no ceiling while `constraints.txt` pinned 2.3.1,
     so every build exercised only the newest checker — and #87 was green that
