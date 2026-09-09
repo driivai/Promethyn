@@ -146,6 +146,38 @@ finally:
     finally:
         ledger.close()
 
+elif case == "deleted_source":
+    # Measured, not assumed: the kernel appends "//deleted" to the root it
+    # prints for a mount whose source dentry was unlinked. Produce that row on
+    # this host, then show the parser READS it rather than leaving it unread —
+    # an unread row here is the descriptor's own mount, so it would refuse.
+    source, target = root / "source.db", root / "mounted.db"
+    source.touch(mode=0o600)
+    bind(source, target)
+    source.unlink()
+    table = parse_mount_table(Path("/proc/self/mountinfo").read_text())
+    matching = [e for e in table.entries if e.mount_point == str(target)]
+    unread = [u for u in table.unparsed if u.mount_point == str(target)]
+    assert not unread, f"deleted-source row was not read: {unread}"
+    assert len(matching) == 1, matching
+    assert matching[0].root.endswith("//deleted"), matching[0].root
+    fd = os.open(target, os.O_RDONLY | os.O_CLOEXEC)
+    try:
+        report = probe_opened_substrate(fd)
+        assert report.mount_id == matching[0].mount_id, report
+        assert report.verdict == "safe" and report.fs_type == matching[0].fs_type, report
+        enforce_substrate(report, policy)
+    finally:
+        os.close(fd)
+    # An ordinary store beside it is unaffected, in both directions.
+    store = ConsumedApprovals(root / "local.db", substrate_policy=policy)
+    try:
+        assert store.claim("deleted-source-positive-control", "now")
+        with store.execution_guard() as held:
+            assert held
+    finally:
+        store.close()
+
 elif case == "namespace_file":
     target = root / "namespace"
     bind(Path("/proc/self/ns/net"), target)
@@ -175,7 +207,8 @@ print(json.dumps({"case": case, "passed": True}))
 
 
 @pytest.mark.parametrize("case", ["database_file", "journal_file", "lock_file_alias",
-                                  "hidden_descendant", "journal_posix_lock", "namespace_file"])
+                                  "hidden_descendant", "journal_posix_lock", "namespace_file",
+                                  "deleted_source"])
 def test_linux_opened_substrate(case, tmp_path):
     assert sys.platform.startswith("linux"), "Linux mount integration is required, not skipped"
     command = ["unshare", "--mount", "--propagation", "private"]

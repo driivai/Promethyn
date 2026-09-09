@@ -102,12 +102,13 @@ jobs:
 
       - name: Opened substrate proofs (exact collection, zero skips)
         run: |
-          python -m pytest -q tests/chokepoint/test_substrate.py tests/chokepoint/test_opened_substrate.py tests/chokepoint/test_mount_relevance.py tests/conformance/test_substrate_revert_pins.py --junitxml=substrate-proofs.xml
+          python -m pytest -q tests/chokepoint/test_substrate.py tests/chokepoint/test_opened_substrate.py tests/chokepoint/test_mount_relevance.py tests/chokepoint/test_mount_root_formats.py tests/conformance/test_substrate_revert_pins.py --junitxml=substrate-proofs.xml
           python - <<'PY'
           import xml.etree.ElementTree as ET
           cases = list(ET.parse("substrate-proofs.xml").iter("testcase"))
           expected = {"test_substrate": 57, "test_opened_substrate": 49,
-                      "test_mount_relevance": 30, "test_substrate_revert_pins": 2}
+                      "test_mount_relevance": 30, "test_mount_root_formats": 32,
+                      "test_substrate_revert_pins": 2}
           for module, count in expected.items():
               actual = sum(c.get("classname", "").endswith(module) for c in cases)
               assert actual == count, (module, actual, count)
@@ -167,9 +168,12 @@ jobs:
           python - <<'PY'
           import xml.etree.ElementTree as ET
           cases = list(ET.parse("substrate-linux.xml").iter("testcase"))
-          assert len(cases) == 6, f"six Linux cases required; observed {len(cases)}"
+          # Six from the 1A/1B sprint, plus SUBSTRATE-ROBUST's deleted-source
+          # case, which produces the "//deleted" mount root on this very host
+          # rather than asserting a fixture of it.
+          assert len(cases) == 7, f"seven Linux cases required; observed {len(cases)}"
           assert all(c.find(t) is None for c in cases for t in ("skipped", "failure", "error"))
-          print("Linux opened substrate: 6 cases executed; zero skips/failures/errors")
+          print("Linux opened substrate: 7 cases executed; zero skips/failures/errors")
           PY
 
       - name: Cross-user workspace denial (must RUN as root, not skip)

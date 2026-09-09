@@ -11,11 +11,13 @@ UNIT = "tests/chokepoint/test_opened_substrate.py"
 BUILD = "tests/chokepoint/test_substrate.py"
 JOURNAL = "tests/chokepoint/test_authorization_record.py"
 SCOPE = "tests/chokepoint/test_mount_relevance.py"
+FORMATS = "tests/chokepoint/test_mount_root_formats.py"
 #: Observed, then pinned — never the other way round. SUBSTRATE-ROBUST raised
-#: these from 20 / 53 by adding the eight relevance-rule reversions below and
-#: retargeting ``namespace-entry-discarded`` onto the per-row parser.
-EXPECTED_REVERTS = 28
-EXPECTED_CALL_FAILURES = 90
+#: these from 20 / 53: eight relevance-rule reversions, three for the
+#: ``//deleted`` root shape and its scope, and ``namespace-entry-discarded``
+#: retargeted onto the per-row parser.
+EXPECTED_REVERTS = 31
+EXPECTED_CALL_FAILURES = 102
 
 
 def enforce_expected(caught: int, failures: int) -> None:
@@ -119,6 +121,22 @@ def mutations():
         ("duplicate-mount-id-tolerated", substrate.parse_mount_table,
          [("        if counts[row.mount_id] > 1:", "        if False:")],
          SCOPE, "topology_anomaly_demotes_its_own_row"),
+        # SUBSTRATE-ROBUST part A: the "//deleted" root shape. One reversion
+        # for the recognition itself (the valid form stops being read) and two
+        # for its scope (a near miss starts being read), which is the nsfs
+        # evidence pattern: sensitive to the bug, and not accepting everything.
+        ("deleted-suffix-unrecognized", substrate._valid_mount_root,
+         [("        base = (root[: -len(_DELETED_SUFFIX)]\n                if root.endswith(_DELETED_SUFFIX) else root)",
+           "        base = root")],
+         FORMATS, "deleted_suffix_is_read_now or recognized_root_is_read or not_scoped_to_a_driver"),
+        ("deleted-suffix-matched-anywhere", substrate._valid_mount_root,
+         [("        base = (root[: -len(_DELETED_SUFFIX)]\n                if root.endswith(_DELETED_SUFFIX) else root)",
+           "        base = root.split(_DELETED_SUFFIX)[0] if _DELETED_SUFFIX in root else root")],
+         FORMATS, "near_miss_of_a_recognized_shape"),
+        ("deleted-suffix-skips-path-validation", substrate._valid_mount_root,
+         [('        return (base.startswith("/") and os.path.normpath(base) == base\n                and "\\x00" not in root)',
+           "        return True")],
+         FORMATS, "near_miss_of_a_recognized_shape"),
     ]
 
 

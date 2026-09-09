@@ -150,6 +150,8 @@ UNSAFE_FILESYSTEMS = frozenset(
 _OVERLAY_FILESYSTEMS = frozenset({"overlay", "overlayfs"})
 _OCTAL_ESCAPE = re.compile(r"\\([0-7]{3})")
 _NAMESPACE_ROOT = re.compile(r"[a-z][a-z0-9_]*:\[[0-9]+\]")
+#: What the kernel appends to a mount root whose source dentry was unlinked.
+_DELETED_SUFFIX = "//deleted"
 
 
 @dataclass(frozen=True)
@@ -271,12 +273,33 @@ def _unescape(field: str) -> str:
 
 
 def _valid_mount_root(root: str, fs_type: str) -> bool:
-    # Field 4 is supplied by the filesystem's show_path implementation, not
-    # necessarily pathname lookup. Linux nsfs_show_path emits e.g. net:[123].
-    # Retain that entry; discarding it could expose the safe mount underneath.
-    # This is syntax recognition only: nsfs remains an UNKNOWN substrate.
+    """Is field 4 a mount root shape this parser recognizes?
+
+    Field 4 is whatever the kernel's path printer produced, not necessarily a
+    pathname, and the set of shapes here is **empirical**: each was observed
+    before it was recognized (``scripts/mountinfo_diagnostic.py`` reports what
+    each host has). Recognition decides only whether a row is *read*. It never
+    decides whether the filesystem is safe — that is the driver's
+    classification, and nothing here adds a driver to a safe list.
+
+    * An absolute normalized pathname: an ordinary mount, a bind mount of a
+      subdirectory, a btrfs subvolume root.
+    * The same, with a trailing ``//deleted``: the generic dentry path printer
+      marks an unlinked source that way, so a bind-mounted store whose source
+      file has been removed still names where it came from. Not scoped to a
+      driver, because no driver emits it — it is the path printer, and it was
+      measured on ext4.
+    * ``name:[inode]`` for ``nsfs`` only: ``nsfs_show_path`` writes namespace
+      files that way. Scoped to the one driver that emits it.
+
+    Anything else is unread, and an unread row on the resolution path refuses.
+    """
+
     if root.startswith("/"):
-        return os.path.normpath(root) == root and "\x00" not in root
+        base = (root[: -len(_DELETED_SUFFIX)]
+                if root.endswith(_DELETED_SUFFIX) else root)
+        return (base.startswith("/") and os.path.normpath(base) == base
+                and "\x00" not in root)
     return fs_type == "nsfs" and _NAMESPACE_ROOT.fullmatch(root) is not None
 
 

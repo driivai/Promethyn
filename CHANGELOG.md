@@ -32,6 +32,21 @@ in `spec/invariants.md` is a major version bump.
   debug, and printed by the new `scripts/mountinfo_diagnostic.py`: setting a
   row aside silently would be the void-guard version of this fix. Verdicts are
   unchanged in kind — this reduces false refusals and relaxes nothing.
+- **A mount whose source was unlinked is read, not refused
+  (SUBSTRATE-ROBUST).** The kernel's generic dentry path printer appends
+  `//deleted` to the mount root of a mount whose source dentry has been
+  removed, so a bind-mounted store whose source file was deleted produced a
+  row this parser could not read — and on the store's own path that refused
+  startup. That shape is now recognized: an absolute normalized pathname with
+  the exact `//deleted` suffix, not scoped to a driver because no driver emits
+  it (it is the path printer, and it was measured on ext4). Recognition
+  decides only whether a row is read; the driver still decides the verdict,
+  and no driver is added to a safe list. `scripts/mountinfo_diagnostic.py`
+  reports the observed per-row distribution on every Linux CI job, and the
+  Linux integration suite produces the `//deleted` row from a real mount on
+  the host rather than asserting a fixture of it. The recognized set remains
+  **empirical, not exhaustive**: an unrecognized shape on the resolution path
+  refuses startup, which is the deliberate trade for not guessing.
 
 ### Added
 - **F3: the execution guard's substrate is checked, not assumed

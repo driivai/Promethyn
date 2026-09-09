@@ -223,11 +223,20 @@ adds opened-object substrate inspection and topology-aware parent preflight.
   disconnected covering mounts and competing visible children are refused as
   unverified, not resolved by line order. Neither device-only matching nor a
   pathname fallback can establish an opened object's identity.
-  Mount roots are not always pathnames: Linux namespace mounts use `nsfs`
-  labels such as `net:[4026533001]`. Those labels are recognized only for
-  `nsfs`, retained in the topology, and remain unverified if selected as the
-  target. They do not invalidate unrelated local mounts or make namespace
-  objects safe storage. Mount points still require absolute normalized paths.
+  Mount roots are not always pathnames, and the shapes recognized here were
+  **measured before they were recognized** — `scripts/mountinfo_diagnostic.py`
+  reports the per-row distribution (driver, root format class, whether the
+  parser reads it) on every Linux CI job. Recognized today: an absolute
+  normalized pathname (an ordinary mount, a bind mount of a subdirectory, a
+  btrfs subvolume root); the same with a trailing `//deleted`, which the
+  generic dentry path printer appends for an unlinked source — not scoped to a
+  driver, because no driver emits it, and produced from a real mount by the
+  Linux integration suite rather than asserted from a fixture; and
+  `name:[inode]` for `nsfs` only, which `nsfs_show_path` writes for namespace
+  files. Recognition decides only whether a row is *read*: the driver is what
+  is classified, no driver is added to a safe list by recognizing its root
+  shape, and mount points still require absolute normalized paths for every
+  shape. An `nsfs` row remains unverified if it is the target.
 - **Relevance scoping (SUBSTRATE-ROBUST).** A row this parser cannot read no
   longer fails the whole table. Each row is read on its own terms; a row that
   is not readable is retained as an `UnparsedEntry` carrying whatever *was*

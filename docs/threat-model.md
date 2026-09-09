@@ -65,6 +65,17 @@ Missing, inconsistent or ambiguous metadata is unverified; a filesystem the
 probe cannot identify is refused unless explicitly opted out of
 (`allow_unverified_substrate`, logged; withdrawn by
 `require_verified_substrate`; all sources use strict boolean parsing).
+SUBSTRATE-ROBUST scopes that unverifiability to the resolution it belongs to:
+a mount table row is read on its own terms, and a row that cannot be read is
+retained (never dropped) and refuses only where it *could* affect the target —
+an ancestor, the target itself, at or below it, or a row whose own location is
+unreadable. A row on an unrelated subtree is recorded on
+`SubstrateReport.set_aside` and does not degrade a resolution it cannot
+influence, which is what one unrelated `nsfs` mount used to do. The recognized
+mount-root formats are empirical, not exhaustive: an unrecognized shape on the
+resolution path refuses startup — refuse on surprise, never bypass on
+surprise — and `scripts/mountinfo_diagnostic.py` keeps the distribution
+measured on every Linux CI job.
 These checks assume trusted kernel/proc metadata and stable trusted paths and
 mounts. They do not atomically bind SQLite's pathname opens to the inspected
 descriptors, establish power-loss durability, or enable multi-host execution.
