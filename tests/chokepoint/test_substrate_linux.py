@@ -17,7 +17,8 @@ PROBE = r'''
 import json, os, sqlite3, subprocess, sys
 from pathlib import Path
 from prometheus_protocol.chokepoint.substrate import (
-    probe_substrate, probe_opened_substrate, probe_file_substrate, classify_path, SubstratePolicy)
+    probe_substrate, probe_opened_substrate, probe_file_substrate, classify_path,
+    parse_mountinfo, enforce_substrate, SubstratePolicy)
 from prometheus_protocol.chokepoint.runner import ConsumedApprovals
 from prometheus_protocol.chokepoint.authorization_journal import AuthorizationJournal
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
@@ -144,6 +145,29 @@ finally:
         assert journal.records() == []
     finally:
         ledger.close()
+
+elif case == "namespace_file":
+    target = root / "namespace"
+    bind(Path("/proc/self/ns/net"), target)
+    entries = parse_mountinfo(Path("/proc/self/mountinfo").read_text())
+    matching = [e for e in entries if e.mount_point == str(target)]
+    assert len(matching) == 1
+    assert matching[0].fs_type == "nsfs" and matching[0].root.startswith("net:[")
+    fd = os.open(target, os.O_RDONLY | os.O_CLOEXEC)
+    try:
+        report = probe_opened_substrate(fd)
+        assert (report.fs_type, report.verdict, report.mount_id) == ("nsfs", "unknown", matching[0].mount_id)
+        reject(lambda: enforce_substrate(report, policy))
+    finally:
+        os.close(fd)
+    # A namespace file elsewhere must not poison the entire mount table.
+    store = ConsumedApprovals(root / "local.db", substrate_policy=policy)
+    try:
+        assert store.claim("namespace-positive-control", "now")
+        with store.execution_guard() as held:
+            assert held
+    finally:
+        store.close()
 else:
     raise AssertionError(case)
 print(json.dumps({"case": case, "passed": True}))
@@ -151,12 +175,14 @@ print(json.dumps({"case": case, "passed": True}))
 
 
 @pytest.mark.parametrize("case", ["database_file", "journal_file", "lock_file_alias",
-                                  "hidden_descendant", "journal_posix_lock"])
+                                  "hidden_descendant", "journal_posix_lock", "namespace_file"])
 def test_linux_opened_substrate(case, tmp_path):
     assert sys.platform.startswith("linux"), "Linux mount integration is required, not skipped"
     command = ["unshare", "--mount", "--propagation", "private"]
     if os.geteuid() != 0:
         command += ["--user", "--map-root-user"]
+    if case == "namespace_file":
+        command += ["--net"]
     result = subprocess.run(command + [sys.executable, "-c", PROBE, str(tmp_path), case],
                             capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stdout + result.stderr

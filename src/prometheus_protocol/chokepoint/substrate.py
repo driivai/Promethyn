@@ -128,6 +128,7 @@ UNSAFE_FILESYSTEMS = frozenset(
 
 _OVERLAY_FILESYSTEMS = frozenset({"overlay", "overlayfs"})
 _OCTAL_ESCAPE = re.compile(r"\\([0-7]{3})")
+_NAMESPACE_ROOT = re.compile(r"[a-z][a-z0-9_]*:\[[0-9]+\]")
 
 
 @dataclass(frozen=True)
@@ -197,6 +198,16 @@ def _unescape(field: str) -> str:
     return _OCTAL_ESCAPE.sub(lambda match: chr(int(match.group(1), 8)), field)
 
 
+def _valid_mount_root(root: str, fs_type: str) -> bool:
+    # Field 4 is supplied by the filesystem's show_path implementation, not
+    # necessarily pathname lookup. Linux nsfs_show_path emits e.g. net:[123].
+    # Retain that entry; discarding it could expose the safe mount underneath.
+    # This is syntax recognition only: nsfs remains an UNKNOWN substrate.
+    if root.startswith("/"):
+        return os.path.normpath(root) == root and "\x00" not in root
+    return fs_type == "nsfs" and _NAMESPACE_ROOT.fullmatch(root) is not None
+
+
 def parse_mountinfo(text: str) -> list[MountEntry]:
     """Retain mount identity and parentage; malformed/ambiguous tables refuse.
 
@@ -220,8 +231,10 @@ def parse_mountinfo(text: str) -> list[MountEntry]:
         root = _unescape(parts[3])
         mount_point = _unescape(parts[4])
         fs_type = parts[separator + 1].strip()
-        if any(not p.startswith("/") or os.path.normpath(p) != p or "\x00" in p
-               for p in (root, mount_point)) or not fs_type:
+        if (not _valid_mount_root(root, fs_type)
+                or not mount_point.startswith("/")
+                or os.path.normpath(mount_point) != mount_point
+                or "\x00" in mount_point or not fs_type):
             raise ValueError("malformed mount path or filesystem")
         ids.add(mount_id)
         entries.append(MountEntry(mount_id, parent_id, (major, minor), root,

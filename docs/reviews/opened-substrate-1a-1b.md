@@ -193,8 +193,46 @@ Local Python 3.12/macOS results:
 | Linux CI / Python 3.12 | Not run at local checkpoint; see PR checks | Unavailable at checkpoint |
 | Remote voidguard | Not run at local checkpoint; see PR checks | Local counts above only |
 
-The workflow enforces exact collection (57 + 38 + 2), 16/38 mutation pins and
-five real Linux cases with zero skips. Configuration is not execution evidence.
+At the initial checkpoint, the workflow enforced exact collection
+(57 + 38 + 2), 16/38 mutation pins and five real Linux cases with zero skips.
+The follow-up below extends those pins. Configuration is not execution evidence.
 The Linux matrix must run on the published PR before claiming those requirements
 are satisfied. The owner's publication authorization does not waive validation
 or authorize merging.
+
+## 8. Linux compatibility follow-up
+
+The first PR run (34309448542) failed on all three Python versions during the
+F11 step: 19 failures, 156 passes and 104 setup errors per job. The mount-table
+preflight returned unknown, so the guard refused rather than bypassing checks.
+The later real-mount integrations did not run.
+
+An independent local reproduction isolated a valid kernel format omitted from
+the fixtures: an `nsfs` mount root such as `net:[4026533001]`, used for mounted
+namespace files. Adding that unrelated mount to a simple ext4 table changed
+the store's classification from safe to unknown. Linux supplies this label
+through `nsfs_show_path`, rather than an ordinary absolute root pathname
+([kernel source](https://github.com/torvalds/linux/blob/master/fs/nsfs.c)).
+
+The correction recognizes that label syntax only for `nsfs`. Entries are not
+discarded, nsfs is not added to the safe list, mount-point validation remains
+strict, and descriptor device/mount identity still has to agree. Unrecognized
+root formats continue to refuse. The next CI run prints the observed namespace
+labels and checks the real workspace and temporary-directory mount metadata
+before the F11 tests, to confirm the runner's actual compatibility.
+
+Eleven new unit cases were executed before the fix: the five valid namespace
+formats failed, while all six malformed/wrong-driver/wrong-mount-point controls
+passed. The fixed implementation passes both sets. A sixth mandatory Linux
+integration creates a real mounted network-namespace file, verifies that this
+object remains unverified, then constructs and locks an ordinary local store
+beside it. It creates its own network and mount namespaces; no host mount is
+changed. Its real Linux execution remains pending the new CI run.
+
+Four additional executed mutations catch restoring pathname-only validation
+(5 call failures), removing the nsfs-driver restriction (1), accepting malformed
+labels (4), and discarding namespace entries (5). The new exact pins are
+**20 mutations / 53 call-phase failures**, with no errors or skips. The focused
+collection pin becomes **57 + 49 + 2 = 108**, and Linux integration requires
+**six** cases. The original 16/38 evidence above is the historical checkpoint,
+not the current pin.

@@ -66,6 +66,23 @@ jobs:
       - name: Repository hygiene
         run: python scripts/check_hygiene.py
 
+      - name: Linux mount-metadata compatibility
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import tempfile
+          from prometheus_protocol.chokepoint.substrate import parse_mountinfo, probe_substrate, enforce_substrate, SubstratePolicy
+          table = Path("/proc/self/mountinfo").read_text()
+          # Kernel-generated namespace labels only, not the host's full table.
+          print("Namespace roots:", [line.split()[3] for line in table.splitlines() if " - nsfs " in line])
+          entries = parse_mountinfo(table)
+          print(f"Mount metadata: {len(entries)} entries parsed")
+          for path in (Path.cwd(), Path(tempfile.gettempdir())):
+              report = probe_substrate(path)
+              enforce_substrate(report, SubstratePolicy(require_verified=True))
+              print(f"Local directory: {report.fs_type} / {report.verdict}")
+          PY
+
       - name: F11 persistence, source and reconciliation proofs (must execute, zero skips)
         run: |
           python -m pytest -q tests/chokepoint/test_authorization_record.py tests/chokepoint/test_audit_source.py tests/chokepoint/test_reconciliation.py --junitxml=f11-proofs.xml
@@ -98,7 +115,7 @@ jobs:
           python - <<'PY'
           import xml.etree.ElementTree as ET
           cases = list(ET.parse("substrate-proofs.xml").iter("testcase"))
-          expected = {"test_substrate": 57, "test_opened_substrate": 38, "test_substrate_revert_pins": 2}
+          expected = {"test_substrate": 57, "test_opened_substrate": 49, "test_substrate_revert_pins": 2}
           for module, count in expected.items():
               actual = sum(c.get("classname", "").endswith(module) for c in cases)
               assert actual == count, (module, actual, count)
@@ -158,9 +175,9 @@ jobs:
           python - <<'PY'
           import xml.etree.ElementTree as ET
           cases = list(ET.parse("substrate-linux.xml").iter("testcase"))
-          assert len(cases) == 5, f"five Linux cases required; observed {len(cases)}"
+          assert len(cases) == 6, f"six Linux cases required; observed {len(cases)}"
           assert all(c.find(t) is None for c in cases for t in ("skipped", "failure", "error"))
-          print("Linux opened substrate: 5 cases executed; zero skips/failures/errors")
+          print("Linux opened substrate: 6 cases executed; zero skips/failures/errors")
           PY
 
       - name: Cross-user workspace denial (must RUN as root, not skip)

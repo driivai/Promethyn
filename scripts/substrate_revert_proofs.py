@@ -10,8 +10,8 @@ import fix_b_revert_proofs as harness
 UNIT = "tests/chokepoint/test_opened_substrate.py"
 BUILD = "tests/chokepoint/test_substrate.py"
 JOURNAL = "tests/chokepoint/test_authorization_record.py"
-EXPECTED_REVERTS = 16
-EXPECTED_CALL_FAILURES = 38
+EXPECTED_REVERTS = 20
+EXPECTED_CALL_FAILURES = 53
 
 
 def enforce_expected(caught: int, failures: int) -> None:
@@ -74,6 +74,18 @@ def mutations():
         ("policy-sources-short-circuited", substrate.resolve_substrate_policy,
          [('    allow = any((', '    allow = bool(getattr(config, "allow_unverified_substrate", False)) or any((')],
          UNIT, "requirement_does_not_hide_invalid_opt_out_source"),
+        ("namespace-label-rejected-as-path", substrate._valid_mount_root,
+         [('return fs_type == "nsfs" and _NAMESPACE_ROOT.fullmatch(root) is not None', 'return False')],
+         UNIT, "namespace_root_label_preserves"),
+        ("namespace-label-driver-unchecked", substrate._valid_mount_root,
+         [('fs_type == "nsfs" and ', '')],
+         UNIT, "namespace_metadata_does_not_weaken_validation"),
+        ("namespace-label-shape-unchecked", substrate._valid_mount_root,
+         [(' and _NAMESPACE_ROOT.fullmatch(root) is not None', '')],
+         UNIT, "namespace_metadata_does_not_weaken_validation"),
+        ("namespace-entry-discarded", substrate.parse_mountinfo,
+         [('        ids.add(mount_id)', '        if fs_type == "nsfs":\n            continue\n        ids.add(mount_id)')],
+         UNIT, "namespace_root_label_preserves"),
     ]
 
 

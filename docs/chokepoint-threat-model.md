@@ -223,6 +223,11 @@ adds opened-object substrate inspection and topology-aware parent preflight.
   disconnected covering mounts and competing visible children are refused as
   unverified, not resolved by line order. Neither device-only matching nor a
   pathname fallback can establish an opened object's identity.
+  Mount roots are not always pathnames: Linux namespace mounts use `nsfs`
+  labels such as `net:[4026533001]`. Those labels are recognized only for
+  `nsfs`, retained in the topology, and remain unverified if selected as the
+  target. They do not invalidate unrelated local mounts or make namespace
+  objects safe storage. Mount points still require absolute normalized paths.
   Where the inspected object or preflight identifies a known
   network or host-shared filesystem — NFS, CIFS/SMB, 9p, virtiofs, vboxsf,
   Ceph, GFS2, OCFS2, Lustre, AFS, sshfs/glusterfs/s3fs and the like — the
@@ -357,7 +362,9 @@ descendants independent of table order, exact descriptor identity, unavailable
 metadata and journal reinspection. `test_substrate_linux.py` requires five real
 namespace cases: separately mounted store and journal files, a bind-mounted
 store/lock alias with subprocess contention, a hidden descendant and preservation
-of a live SQLite POSIX lock during journal inspection. Missing Linux or mount
+of a live SQLite POSIX lock during journal inspection. A sixth case adds a
+real namespace-file bind mount, checks that it stays unverified and confirms
+that an ordinary local store still works beside it. Missing Linux or mount
 support fails these tests rather than skipping them. The guard mutations in
 `scripts/substrate_revert_proofs.py` pin both the number of reverts and the
 resulting call-phase failures; shortfall and excess both fail.

@@ -51,6 +51,48 @@ def test_topology_fields_are_retained():
     assert entries[2].root == "/"
 
 
+@pytest.mark.parametrize("kind", ["net", "mnt", "user", "pid", "time"])
+def test_namespace_root_label_preserves_local_and_namespace_identity(kind):
+    # Linux nsfs_show_path emits a label, not a pathname. Docker's service
+    # network namespace mounts add this shape to otherwise local CI hosts.
+    label = f"{kind}:[4026533001]"
+    point = "/run/docker/netns/service"
+    table = ("10 1 8:1 / / rw - ext4 /dev/root rw\n"
+             f"50 10 0:4 {label} {point} rw - nsfs nsfs rw\n")
+    local = s.classify_path("/tmp/private/store.db", table)
+    assert (local.verdict, local.mount_id) == ("safe", 10)
+    entries = s.parse_mountinfo(table)
+    assert [(e.mount_id, e.root) for e in entries] == [(10, "/"), (50, label)]
+    info = SimpleNamespace(st_dev=os.makedev(8, 1), st_ino=42)
+    opened = s.classify_opened(info, "mnt_id: 10", table)
+    assert (opened.verdict, opened.mount_id) == ("safe", 10)
+    # Do not "fix" compatibility by discarding the namespace entry or treating
+    # it as local storage. Both pathname and exact descriptor lookup retain it.
+    namespace = s.classify_path(point, table)
+    ns_info = SimpleNamespace(st_dev=os.makedev(0, 4), st_ino=4026533001)
+    ns_opened = s.classify_opened(ns_info, "mnt_id: 50", table)
+    for report in (namespace, ns_opened):
+        assert (report.verdict, report.fs_type, report.mount_id) == ("unknown", "nsfs", 50)
+        with pytest.raises(ConfigError):
+            s.enforce_substrate(report, s.SubstratePolicy(require_verified=True))
+
+
+@pytest.mark.parametrize("root,point,driver", [
+    ("net:[oops]", "/run/ns", "nsfs"),
+    ("net:[123]junk", "/run/ns", "nsfs"),
+    ("net:[１２３]", "/run/ns", "nsfs"),
+    ("net:[123]", "/run/ns", "ext4"),
+    ("net:[123]", "run/ns", "nsfs"),
+    ("relative", "/run/ns", "nsfs"),
+])
+def test_namespace_metadata_does_not_weaken_validation(root, point, driver):
+    table = ("10 1 8:1 / / rw - ext4 /dev/root rw\n"
+             f"50 10 0:4 {root} {point} rw - {driver} source rw\n")
+    assert s.classify_path("/tmp/store.db", table).verdict == "unknown"
+    info = SimpleNamespace(st_dev=os.makedev(8, 1), st_ino=42)
+    assert s.classify_opened(info, "mnt_id: 10", table).verdict == "unknown"
+
+
 @pytest.mark.parametrize("table", [
     HIDDEN + "30 20 0:32 / /srv rw - ext4 wrong rw\n",
     HIDDEN + "99 10 0:99 / /srv rw - ext4 ambiguous rw\n",
