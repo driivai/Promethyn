@@ -39,21 +39,30 @@ present, plausible, and void is the failure mode we exist to name.
 **Execution recovery follow-up (F2/F3):** negative executor results and lost
 COMMIT responses no longer establish rollback. Unknown events leave an intent
 pending until receipt reconciliation proves its outcome. A cross-process guard
-also covers the interval before the executor connects, so recovery cannot
-declare a suspended live owner rolled back. That guard is an OS file lock,
-which is mutual exclusion only on a local filesystem of one host — and since
-PROM-FIX-A that is **checked, not assumed**: the approval store probes its
-filesystem before it creates anything there (`chokepoint/substrate.py`); a
-network or host-shared filesystem is refused outright, and one the probe
+covers the interval before the executor connects — but that guard is an OS
+file lock keyed to the store's *pathname* (`<store>.execution.lock`), not to
+the store's identity, so it excludes only runners that name the store by the
+same path. Two aliases of one store — a hard link, a file bind mount — give
+two runners two different locks, both acquired; a runner recovering through
+an alias then reads the live owner's missing receipt as "not committed" while
+the owner is still running (independent review, finding 2, reproduced with
+real subprocesses, hard links, SQLite and OS locks; open). The substrate
+check from PROM-FIX-A is narrower than its earlier wording here claimed: it
+classifies, from the mount table, the filesystem *type* at the pathname of
+the store's parent directory (`chokepoint/substrate.py`) and refuses the known
+network types; it does not examine the opened store or lock objects and uses
+no mount identity, so "local filesystem recognised" is not "every runner holds
+the same exclusive guard" (findings 1A/1B, open). A filesystem the probe
 cannot identify is refused unless explicitly opted out of
 (`allow_unverified_substrate`, logged; withdrawn by
 `require_verified_substrate`). Every execution intent records its owner's
 host identity (`chokepoint/ownership.py`), and a recovering runner that cannot
 place the recorded owner on its own kernel or its own rebooted machine leaves
-the intent pending as `owner_unverifiable` instead of declaring it not
-committed. Multi-host execution is still unsupported; the unsupported case
-now fails closed. See `docs/chokepoint-threat-model.md`, "Recovery follow-up:
-F2/F3", for what is detected, what remains undetectable, and the regression
+the intent pending as `owner_unverifiable`. "Its own kernel" currently means
+the same boot id plus holding a guard, which — per finding 2 — is not proof
+that the owner's lock and this runner's are the same object. Multi-host
+execution is unsupported. See `docs/chokepoint-threat-model.md`, "Recovery
+follow-up: F2/F3", for what is detected, what is not, and the regression
 coverage.
 
 1. **Couldn't-verify is never verified-clean.** A check that could not run
@@ -79,7 +88,7 @@ coverage.
 | # | Attacker | Surface | Enforced by construction | Deployment recommendation | Proven by | Residual (headline) |
 |---|---|---|---|---|---|---|
 | 1 | The sandboxed agent | env, filesystem, sockets, `/proc`, network | constructed environment; socket dirs hidden; private `/proc`; no interfaces | microVM for hostile multi-tenant work | `test_agent_zone_containment.py`, `test_isolation.py` | kernel / namespace escape |
-| 2 | The runner host (and, with PIH-2, the insider who reads its memory) | workspace mode, secrets in `repr`, spawn env, artifact bytes, the signing key | `0700` workspace; redacted secrets; every spawn env-clean; bytes-not-paths; approval signing through an external KMS whose key never exists on the host, every Sign logged by the KMS; a KMS failure mints nothing | service account, filesystem/network confinement; the KMS access policy (invoke ≠ administer ≠ audit); `PROM_REQUIRE_EXTERNAL_SIGNER=1` | `test_sandbox_privilege.py`, `test_credential_hygiene.py`, `test_artifact_integrity.py`, `test_key_custody.py` | an insider holding Sign-invoke gets a valid signature (witnessed, not prevented); root still holds the database credential |
+| 2 | The runner host (and, with PIH-2, the insider who reads its memory) | workspace mode, secrets in `repr`, spawn env, artifact bytes, the signing key | `0700` workspace; redacted secrets; every spawn env-clean; bytes-not-paths; approval signing through an external KMS whose key never exists on the host; a KMS failure mints nothing | service account, filesystem/network confinement; the KMS access policy (invoke ≠ administer ≠ audit); KMS audit logging enabled, delivered and retained — a Sign is logged only where the deployment made the KMS log it, which this code cannot enforce (`docs/key-custody.md`); `PROM_REQUIRE_EXTERNAL_SIGNER=1` | `test_sandbox_privilege.py`, `test_credential_hygiene.py`, `test_artifact_integrity.py`, `test_key_custody.py` | an insider holding Sign-invoke gets a valid signature (witnessed, not prevented); root still holds the database credential |
 | 3 | The ledger file (and, with PIH-1, the insider who rewrites it) | chain rewrite, deletion, numeric settings | tip anchored to an external append-only target after every append; the whole anchor history pinned on verify; refuses to rewind; a failed anchor write raised, the runner refuses; NaN/inf/range refused | object-lock retention that outlasts the audit horizon, or a log run by another party; `PROM_REQUIRE_LEDGER_ANCHOR=1` | `test_external_anchor.py`, `test_tip_anchor.py`, `test_ledger_verify_failure_modes.py`, `test_numeric_config_validation.py` | authority over the anchor medium: retention lapsed or bypassed, the log's operator |
 | 4 | The network | credentialed HTTP | `https://` required; redirects refused; bounded reads under a deadline; failures typed and `Unavailable` | certificate pinning per deployment | `test_transport_hardening.py` | system trust store; proxy env is host-controlled |
 | 5 | Misconfiguration | every security flag and combination | requirement honoured or refused; dead-flag mechanism; coherent combinations; hardened defaults | pin the sandbox image | `test_security_posture.py` | `require_digest_pin` and `require_ledger_anchor` off by default |
@@ -805,13 +814,20 @@ Each measured on the pre-fix code against a local server, not inferred.
   followed by padding — would be reported as a normal answer, and that test
   exists. A declared `Content-Length` over the ceiling is refused before a byte
   is read. HTTP error bodies are read under the same bounds.
-- **F5 checks response completeness before JSON parsing** in both the provider
-  and anchor. A short Content-Length body, contradictory/unsupported framing,
+- **F5 checks declared framing before JSON parsing** in both the provider and
+  anchor. A short Content-Length body, contradictory/unsupported framing,
   missing final chunk terminator or malformed chunk boundary raises a typed
-  transport failure. Incomplete anchor history yields `NOT_VERIFIABLE`, never
-  `VALID`. Positive controls and malformed responses use real sockets in
-  `tests/conformance/test_response_integrity.py`. Supported framing and its
-  intentional strictness are specified in `docs/ledger-integrity.md`.
+  transport failure. It does **not** validate raw header syntax: a header line
+  without a colon makes the permissive parser drop every later header,
+  `Content-Length` included, after which the framing check sees a
+  close-delimited body and accepts EOF as its end — a 57-byte body declared as
+  10000 bytes read clean, an empty anchor history verified `VALID`, and a
+  provider reply verified `PASS` (independent review, finding 3, reproduced;
+  open). An incomplete anchor history is therefore `NOT_VERIFIABLE` only when
+  its framing was declared and parsed. Positive controls and malformed framing
+  use real sockets in `tests/conformance/test_response_integrity.py`.
+  Supported framing and its intentional strictness are specified in
+  `docs/ledger-integrity.md`.
 - **F6 carries one monotonic budget across the network request**, starting
   immediately before network work: DNS, all connection attempts, proxy CONNECT,
   TLS, request writes, status/headers, chunk framing and response body (including

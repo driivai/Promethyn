@@ -194,20 +194,28 @@ the new migration without consuming its approval. Process suspension retains
 ownership; process death releases it. A surviving PostgreSQL transaction is
 separately protected by its session advisory lock. No age-based takeover is used.
 
-**Deployment boundary — checked, not assumed (PROM-FIX-A).** The guard is an
-OS file lock, which is mutual exclusion only where one kernel grants every
-lock: a local filesystem on one host. Until PROM-FIX-A that requirement was
-the previous version of this paragraph — a sentence an operator had to
-remember, with nothing in the process to notice a deployment that broke it,
-and in such a deployment the F3 race was live. It is now enforced at two
-points:
+**Deployment boundary — partly checked (PROM-FIX-A).** The guard is an OS
+file lock, which is mutual exclusion only where one kernel grants every lock
+*and every runner locks the same object*: a local filesystem on one host, one
+lock per store. Until PROM-FIX-A that requirement was the previous version of
+this paragraph — a sentence an operator had to remember, with nothing in the
+process to notice a deployment that broke it, and in such a deployment the F3
+race was live. PROM-FIX-A added two checks; the independent review found each
+narrower than this paragraph then claimed ("checked, not assumed"), and its
+meta-finding shapes both corrections below: "local filesystem recognised" is
+not "every runner holds the same exclusive execution guard".
 
-- **Substrate.** `ConsumedApprovals` probes the filesystem behind the store
-  before it creates anything there (`chokepoint/substrate.py`, from the
-  kernel's own mount table, `/proc/self/mountinfo`). A network or host-shared
-  filesystem — NFS, CIFS/SMB, 9p, virtiofs, vboxsf, Ceph, GFS2, OCFS2, Lustre,
-  AFS, sshfs/glusterfs/s3fs and the like — is **refused** with `ConfigError`,
-  and there is no opt-out. A filesystem the probe cannot identify — an overlay
+- **Substrate.** `ConsumedApprovals` classifies, from the kernel's mount
+  table (`/proc/self/mountinfo`), the filesystem *type* at the pathname of the
+  store's parent directory before it creates anything there
+  (`chokepoint/substrate.py`). That is a classification of a pathname, not an
+  inspection of the opened store or lock objects, and it uses no mount
+  identity: a store that is itself a separate mount, or an alias of the store
+  reached through another mount, is outside what it examines (independent
+  review, findings 1A/1B, open). Where the parent's path classifies as a
+  network or host-shared filesystem — NFS, CIFS/SMB, 9p, virtiofs, vboxsf,
+  Ceph, GFS2, OCFS2, Lustre, AFS, sshfs/glusterfs/s3fs and the like — the
+  store is **refused** with `ConfigError`, and there is no opt-out. A filesystem the probe cannot identify — an overlay
   (its lower layers are not visible from inside it, and copy-up gives one path
   two inodes), a generic FUSE mount, a driver the probe does not know, or a
   platform without a mount table — is refused by default: couldn't-verify is
@@ -223,12 +231,18 @@ points:
 - **Owner identity.** Every `execute_intent` records the owner's hostname,
   kernel boot id, machine id and pid (`chokepoint/ownership.py`). A recovering
   runner compares that record with itself before it may read "no receipt" as
-  "not committed": the same boot id means the owner ran on this kernel and the
-  exclusive guard this runner holds proves it gone; the same machine id *and*
-  hostname under another boot id means this machine rebooted and the owner
-  did not survive it; anything else means the owner may be alive on another
-  host, so the intent is reported `owner_unverifiable` and left pending — its
-  receipt is not even consulted. It is never recorded as
+  "not committed": the same boot id means the owner ran on this kernel, and
+  the runner then treats the exclusive guard it holds as proof the owner is
+  gone — which holds only if the owner's guard was the *same lock object*.
+  The guard is keyed to the store's pathname (`<store>.execution.lock`), so an
+  owner that reached the store by another path — a hard link, a file bind
+  mount — held a different lock and may still be running; recovery then
+  records `reconciled_not_committed` for a live owner (independent review,
+  finding 2, reproduced; open). The same machine id *and* hostname under
+  another boot id means this machine rebooted and the owner did not survive
+  it; anything else means the owner may be alive on another host, so the
+  intent is reported `owner_unverifiable` and left pending — its receipt is
+  not even consulted. It is never recorded as
   `reconciled_not_committed` by a runner that could not place its owner, and
   the runner's own execution path (`execute`) never asserts otherwise: new
   approvals for that target are refused `reconciliation_required`, unspent.
