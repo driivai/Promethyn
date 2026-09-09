@@ -26,6 +26,7 @@ from prometheus_protocol.chokepoint import (
     ReceiptStatus,
     execution_id_for,
 )
+from prometheus_protocol.chokepoint.ownership import local_identity
 from prometheus_protocol.core.models import Judgment, Verdict
 from prometheus_protocol.ledger.audit_chain import (
     BROKEN,
@@ -688,6 +689,11 @@ def test_unavailable_receipt_blocks_all_further_database_execution(tmp_path):
         artifact=old_artifact,
         target=target.identity,
     )
+    # The intent an earlier runner of this kernel wrote, holding the lock on
+    # this very store: the only owner a recovering runner may place as gone by
+    # holding that lock itself. An intent without identity stays pending
+    # instead (test_execution_recovery.py, test_owner_identity.py).
+    consumed = ConsumedApprovals(tmp_path / "blocked-consumed.db")
     ledger.record_chained(
         event="execute_intent",
         subject=target.identity.canonical,
@@ -696,6 +702,8 @@ def test_unavailable_receipt_blocks_all_further_database_execution(tmp_path):
             "execution_id": old_execution_id,
             "artifact_sha256": old_artifact.sha256,
             "target": target.identity.canonical,
+            **local_identity().as_payload(),
+            "owner_lock_id": consumed.lock_id,
         },
         created_at="1001.0",
     )
@@ -711,7 +719,7 @@ def test_unavailable_receipt_blocks_all_further_database_execution(tmp_path):
     runner = BrokeredMigrationRunner(
         authority=authority,
         target=target,
-        consumed=ConsumedApprovals(tmp_path / "blocked-consumed.db"),
+        consumed=consumed,
         executor=backend,
         receipt_lookup=lambda execution_id, artifact_sha256, bound: ReceiptStatus(
             receipt_state[0], detail="database offline"
