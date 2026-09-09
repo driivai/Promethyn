@@ -37,6 +37,17 @@ in `spec/invariants.md` is a major version bump.
   `tests/chokepoint/test_substrate.py` and `test_owner_identity.py`.
 
 ### Changed
+- **PROM-FIX-B: executed revert evidence for every new guard, pinned and in
+  CI.** `scripts/fix_b_revert_proofs.py` mutates each guard in memory — the
+  strict boolean parser (unknown word read as false; programmatic value
+  coerced), the link-count refusal, the identity-keyed lock (re-keyed to a
+  pathname), the in-process mutex, the same-lock requirement, the legacy
+  intent, the raw header-line and status-line checks, the unterminated
+  header block, the parser-defect check and the `malformed` classification —
+  and runs the tests that must go red: 12 reversions caught, 133 call-phase
+  failures, pinned; a shortfall or an excess fails the build.
+  `tests/conformance/test_fix_b_revert_pins.py` proves the pins and that
+  every revert target still exists.
 - **PROM-F11 close-out: the revert runners are pinned, and CI fails on a
   shortfall.** `scripts/f11_reconcile_revert_proofs.py` (43 reversions / 72
   call-phase failures) and `scripts/f11_source_revert_proofs.py` (15 / 21)
@@ -57,6 +68,72 @@ in `spec/invariants.md` is a major version bump.
   implied.
 
 ### Fixed
+- **Finding 3 (F5 fail-open): raw header syntax is validated before framing
+  is trusted (PROM-FIX-B part 3).** A header line without a colon made
+  `http.client`'s permissive parser drop every later header,
+  `Content-Length` included; the strict framing check then saw no declared
+  length, accepted EOF framing, and a 57-byte body declared as 10000 read
+  clean — an empty anchor history verified `VALID`, a provider reply
+  verified `PASS`. `core/transport.py` now validates every status line and
+  header line against its grammar before the parser sees it, requires the
+  header block to end with its blank line, caps lines and the block, and
+  refuses any parser defect that remains as an independent second check.
+  The refusal is a new `malformed` kind in the shared error bundle:
+  `ProviderMalformedResponse` for the provider, `AnchorUnavailable` for the
+  anchor, and an anchor history behind it is `NOT_VERIFIABLE`. Both clients
+  share the fix; `tests/conformance/test_header_integrity.py` drives real
+  sockets through both with the review's wire, every defect class the
+  parser can record, every raw-syntax violation it accepts silently, and
+  positive controls. Honest scope: this closes the demonstrated case, not
+  every conceivable header anomaly.
+- **Finding 2 (F3 fail-open): the execution guard is keyed to the store's
+  identity, not its pathname (PROM-FIX-B part 2).** The independent review
+  reproduced, with real subprocesses, hard links, SQLite and OS locks, that
+  two hard links to one consumed-store inode gave two runners two different
+  companion locks, both acquired, and recovery recorded `not_committed` for
+  an owner that was still running. The guard is now an `flock` on a
+  descriptor of the store's own inode, opened once and held for the store's
+  lifetime, released with `LOCK_UN`: every alias of the store — hard link,
+  file bind mount, symlink — opens the same inode and the kernel evaluates
+  `flock` conflicts per inode across processes, so every alias resolves to
+  one lock object; an in-process mutex makes two threads contend the way two
+  processes do; a forked child contends with a descriptor of its own. A
+  multiply linked store is refused at construction and re-validated before
+  every acquisition. Every intent records the lock's identity
+  (`owner_lock_id`), and "same boot id" establishes a dead owner only when
+  the recorded lock is the lock this runner holds; otherwise, and for intents
+  with no identity, the intent stays `owner_unverifiable` until the
+  operator's recorded assertion. The guard is specified for Linux and
+  refuses elsewhere. The authorization journal's store was already inode
+  keyed by SQLite's own lock and singly-linked-checked before every use; a
+  test now proves it. `tests/chokepoint/test_lock_identity.py` reproduces
+  the review's scenario (a live subprocess owner, a real hard link, and
+  under a mount namespace a real file bind mount) and the positive controls.
+- **F9: one strict boolean parser at every entry point (PROM-FIX-B part 1).**
+  The truth-set parser copied into seven modules and twenty-one test files
+  had two fail-open shapes the independent review reproduced: a present but
+  misspelled value (`PROM_REQUIRE_VERIFIED_SUBSTRATE=tru`) was silently
+  `False`, and a programmatic string (`allow_unverified_substrate="false"`)
+  was coerced with `bool()` and enabled the opt-out. `core/booleans.py` is now
+  the single parser: unset takes the default; a set value must be one of
+  `1/true/yes/on` or `0/false/no/off` and anything else is refused with
+  `ConfigError`, never read as false; a programmatic boolean must be an
+  actual `bool`. Applied to `Config` and `Config.from_env`,
+  `MigrationRunnerConfig`, `resolve_substrate_policy`, the substrate, signer,
+  ledger-anchor, unsafe-exec and digest-pin variables, and the CI gate flags
+  (`PROM_REQUIRE_SANDBOX`, `PROM_REQUIRE_PG`, `PROM_REQUIRE_PRIVILEGED`,
+  `PROM_REQUIRE_CONTAINER`), where a typo used to turn "fail, do not skip"
+  into a silent skip. `tests/conformance/test_strict_booleans.py` covers
+  every entry point and sweeps both trees for the old pattern.
+- **Five claims corrected to what the code establishes today (PROM-FIX-B
+  part 0).** The execution guard is keyed to the store's pathname, so
+  recovery through an alias can declare a live owner not committed
+  (finding 2); the substrate check classifies the filesystem type at the
+  parent directory's pathname, not the opened store or lock objects, and
+  uses no mount identity (findings 1A/1B); raw header syntax is not
+  validated, so a colonless header line lets a truncated body read clean and
+  an empty anchor history verify VALID (finding 3); "every Sign logged by the
+  KMS" is a deployment obligation, not enforced by construction.
 - **Two false documentation claims corrected (PROM-FIX-A).**
   `docs/threat-model.md` §2.4 said the chokepoint runner spawns no
   subprocesses; since #77 an `https://` ledger anchor resolves the log's

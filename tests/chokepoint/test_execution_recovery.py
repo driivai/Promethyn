@@ -14,6 +14,7 @@ from prometheus_protocol.chokepoint import (
     EXECUTION_COMMITTED,
     EXECUTION_NOT_COMMITTED,
     EXECUTION_UNKNOWN,
+    OWNER_UNVERIFIABLE,
     RECEIPT_COMMITTED,
     RECEIPT_NOT_FOUND,
     RECEIPT_UNAVAILABLE,
@@ -114,7 +115,13 @@ def test_unknown_stays_pending_and_blocks_until_receipt_proves_commit(tmp_path, 
     ledger.close()
 
 
-def test_legacy_false_outcome_is_reconciled_on_upgrade(tmp_path):
+def test_legacy_false_outcome_is_revisited_but_stays_pending_until_the_operator_asserts(tmp_path):
+    """A pre-upgrade false outcome is not terminal (F2), so its intent is
+    revisited. But a pre-upgrade intent carries no owner identity, and since
+    PROM-FIX-B no held lock is proof of a dead owner unless it is provably the
+    owner's, so the revisit leaves it pending; the operator's assertion then
+    lets the receipt speak, and the receipt proves COMMITTED."""
+
     ledger = SqliteLedger(tmp_path / "audit.db")
     payload = {
         "target": target().identity.canonical,
@@ -136,7 +143,10 @@ def test_legacy_false_outcome_is_reconciled_on_upgrade(tmp_path):
         lambda *a: pytest.fail("must not execute"),
         lambda *a: ReceiptStatus(RECEIPT_COMMITTED),
     )
-    report = r.reconcile_unfinished()
+    pending = r.reconcile_unfinished()
+    assert len(pending) == 1 and not pending[0].resolved
+    assert pending[0].state == OWNER_UNVERIFIABLE
+    report = r.reconcile_unfinished(assume_owner_dead=True)
     assert (
         len(report) == 1 and report[0].state == RECEIPT_COMMITTED and report[0].resolved
     )
@@ -339,16 +349,19 @@ def test_independent_threads_cannot_recover_a_live_owner(tmp_path):
     assert not thread.is_alive() and results[0].executed
 
 
-def test_unsafe_lock_file_refuses_execution(tmp_path):
+def test_a_store_with_a_second_name_refuses_execution(tmp_path):
+    """The guard is the store's own inode (PROM-FIX-B); a store that gains a
+    second name after construction is refused before use, and the refusal is
+    STORE_UNAVAILABLE, never a lock that happens to be free."""
+
     ledger = SqliteLedger(tmp_path / "audit.db")
-    lock = tmp_path / "store.db.execution.lock"
-    lock.symlink_to(tmp_path / "elsewhere")
     r = runner(
         tmp_path / "store.db",
         ledger,
         lambda *a: pytest.fail("must not execute"),
         lambda *a: ReceiptStatus(RECEIPT_NOT_FOUND),
     )
+    os.link(tmp_path / "store.db", tmp_path / "second-name.db")
     approval, artifact = approved()
     assert r.execute(approval=approval, artifact=artifact).reason == STORE_UNAVAILABLE
     assert not r.reconcile_unfinished()[0].resolved

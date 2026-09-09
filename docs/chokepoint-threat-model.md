@@ -187,27 +187,39 @@ Recovery revisits historical false outcomes without an explicit execution state;
 old `migration_error` events could represent committed transactions. An old
 acknowledged success remains terminal. Reconciliation does not execute SQL again.
 
-The guard is a nonblocking OS file lock on `<approval-store>.execution.lock`,
-held from before reconciliation through nonce claim, intent append, execution,
-and outcome append. It also gates standalone reconciliation. Contention refuses
-the new migration without consuming its approval. Process suspension retains
-ownership; process death releases it. A surviving PostgreSQL transaction is
-separately protected by its session advisory lock. No age-based takeover is used.
+The guard is a nonblocking `flock` on the approval store's own inode (a
+descriptor opened once at construction and held for the store's lifetime;
+PROM-FIX-B), held from before reconciliation through nonce claim, intent
+append, execution, and outcome append. It also gates standalone
+reconciliation. Contention refuses the new migration without consuming its
+approval. Process suspension retains ownership; process death releases it. A
+surviving PostgreSQL transaction is separately protected by its session
+advisory lock. No age-based takeover is used.
 
-**Deployment boundary — checked, not assumed (PROM-FIX-A).** The guard is an
-OS file lock, which is mutual exclusion only where one kernel grants every
-lock: a local filesystem on one host. Until PROM-FIX-A that requirement was
-the previous version of this paragraph — a sentence an operator had to
-remember, with nothing in the process to notice a deployment that broke it,
-and in such a deployment the F3 race was live. It is now enforced at two
-points:
+**Deployment boundary — partly checked (PROM-FIX-A), lock identity enforced
+(PROM-FIX-B).** The guard is an OS file lock, which is mutual exclusion only
+where one kernel grants every lock *and every runner locks the same object*:
+a local filesystem on one host, one lock per store. Until PROM-FIX-A that
+requirement was the previous version of this paragraph — a sentence an
+operator had to remember, with nothing in the process to notice a deployment
+that broke it, and in such a deployment the F3 race was live. PROM-FIX-A added
+two checks; the independent review found each narrower than this paragraph
+then claimed ("checked, not assumed"), and its meta-finding — "local
+filesystem recognised" is not "every runner holds the same exclusive execution
+guard" — is what PROM-FIX-B answers for the lock itself. The substrate
+classification is still the narrower thing it is (findings 1A/1B, open).
 
-- **Substrate.** `ConsumedApprovals` probes the filesystem behind the store
-  before it creates anything there (`chokepoint/substrate.py`, from the
-  kernel's own mount table, `/proc/self/mountinfo`). A network or host-shared
-  filesystem — NFS, CIFS/SMB, 9p, virtiofs, vboxsf, Ceph, GFS2, OCFS2, Lustre,
-  AFS, sshfs/glusterfs/s3fs and the like — is **refused** with `ConfigError`,
-  and there is no opt-out. A filesystem the probe cannot identify — an overlay
+- **Substrate.** `ConsumedApprovals` classifies, from the kernel's mount
+  table (`/proc/self/mountinfo`), the filesystem *type* at the pathname of the
+  store's parent directory before it creates anything there
+  (`chokepoint/substrate.py`). That is a classification of a pathname, not an
+  inspection of the opened store or lock objects, and it uses no mount
+  identity: a store that is itself a separate mount, or an alias of the store
+  reached through another mount, is outside what it examines (independent
+  review, findings 1A/1B, open). Where the parent's path classifies as a
+  network or host-shared filesystem — NFS, CIFS/SMB, 9p, virtiofs, vboxsf,
+  Ceph, GFS2, OCFS2, Lustre, AFS, sshfs/glusterfs/s3fs and the like — the
+  store is **refused** with `ConfigError`, and there is no opt-out. A filesystem the probe cannot identify — an overlay
   (its lower layers are not visible from inside it, and copy-up gives one path
   two inodes), a generic FUSE mount, a driver the probe does not know, or a
   platform without a mount table — is refused by default: couldn't-verify is
@@ -220,15 +232,49 @@ points:
   `substrate.SAFE_FILESYSTEMS` — proceeds. The refusal happens before the
   store's directory or file exists, so nothing of the runner's is left on a
   filesystem it will not use.
+- **Lock identity (PROM-FIX-B, finding 2).** The guard used to be an `flock`
+  on a companion file named after the store's path. The independent review
+  reproduced, with real subprocesses, hard links, SQLite and OS locks, what
+  that means: two hard links to one store inode gave two runners two lock
+  files, both acquired, and recovery recorded `reconciled_not_committed` for
+  an owner that was still running — the lock proved exclusion over a *path*,
+  not over *the store*. The guard is now an `flock` on a descriptor of the
+  store's own inode, opened once at construction and held for the store's
+  lifetime, released with `LOCK_UN`. The kernel evaluates `flock` conflicts
+  per inode, across processes, so every alias of the store — a hard link, a
+  file bind mount, a symlink — contends for one lock object by construction.
+  Two threads of one process contend through an in-process mutex (a second
+  `flock` on the same open file description would merely convert the lock);
+  a forked child contends with a descriptor of its own. Before every
+  acquisition the descriptor is re-checked to still be the inode at the
+  store's path, private, owned, and singly linked; a store with a second
+  name is refused at construction and refused before use if the name was
+  added later (`_MultiplyLinkedStore` → `approval_store_unavailable`). The
+  descriptor is never closed while the SQLite connection is open, because
+  closing any descriptor of a file drops the process's POSIX locks on that
+  file — the locks SQLite holds inside a transaction; `flock` locks are
+  independent of those on Linux, which is the platform the guard is
+  specified for, and elsewhere it refuses (`_PlatformUnsupported`) rather
+  than risk the interaction. Rejected as insufficient, as the review
+  pre-empted: `realpath()` (hard links survive it), refusing symlinks (both
+  lock files were valid regular files), comparing the store's inode to its
+  own saved inode (both aliases pass), and checking the link count only at
+  startup (aliases can appear later, and a file bind mount does not raise
+  the link count at all — only an inode-keyed lock excludes it).
 - **Owner identity.** Every `execute_intent` records the owner's hostname,
-  kernel boot id, machine id and pid (`chokepoint/ownership.py`). A recovering
-  runner compares that record with itself before it may read "no receipt" as
-  "not committed": the same boot id means the owner ran on this kernel and the
-  exclusive guard this runner holds proves it gone; the same machine id *and*
-  hostname under another boot id means this machine rebooted and the owner
-  did not survive it; anything else means the owner may be alive on another
-  host, so the intent is reported `owner_unverifiable` and left pending — its
-  receipt is not even consulted. It is never recorded as
+  kernel boot id, machine id, pid, and the identity of the lock it held
+  (`owner_lock_id`, the store inode's `dev:ino`; `chokepoint/ownership.py`).
+  A recovering runner compares that record with itself before it may read
+  "no receipt" as "not committed": the same boot id *and* the same lock
+  identity means the owner locked the inode this runner now holds
+  exclusively, so the owner is gone; the same boot id with a different or
+  unrecorded lock identity means a held lock proves nothing about it
+  (`lock_mismatch`); the same machine id *and* hostname under another boot
+  id means this machine rebooted and the owner did not survive it, whatever
+  lock it held; anything else means the owner may be alive on another host
+  (`foreign`); an intent with no identity at all establishes nothing
+  (`legacy`). Everything not established is reported `owner_unverifiable`
+  and left pending — its receipt is not even consulted. It is never recorded as
   `reconciled_not_committed` by a runner that could not place its owner, and
   the runner's own execution path (`execute`) never asserts otherwise: new
   approvals for that target are refused `reconciliation_required`, unspent.
@@ -255,21 +301,31 @@ its reason — instead of producing false recovery evidence.
   runtimes; non-Linux hosts): every recorded owner other than this exact
   machine is unplaceable, so recovery stays pending until an operator asserts
   otherwise. Fail closed and noisy — a wedge, not a race.
-- Intents written before ownership identity existed (`owner_basis: legacy`)
-  carry no owner and are reconciled under the same-host assumption their
-  runners were deployed under, with a warning. The window is the upgrade
-  itself.
+- Intents written before ownership identity existed (`owner_basis: legacy`),
+  and intents written by PROM-FIX-A runners that recorded a host but no lock
+  identity (`lock_mismatch`), establish nothing about their owner and stay
+  pending until an operator who has established it by other means reconciles
+  with `assume_owner_dead=True`. The window is the upgrade itself, and it
+  fails closed: a wedge an operator resolves on the record, not a race.
+- The substrate classification is of the store's parent directory's pathname
+  (findings 1A/1B, open): the opened store and lock objects are not probed
+  and mount identity is not used. The lock is inode-keyed regardless, so an
+  alias reached through another mount contends for the same lock; what the
+  classification can still miss is a store that is itself a network mount
+  beneath a local-looking parent.
 - The audit ledger's own substrate is not probed; deploy it beside the store.
   Independent stores sharing one ledger pass the substrate check on each host;
   it is the owner identity in the shared ledger's intents that catches the
   second host's recovery, so the ledger must be the one they share.
-- As before: do not replace/unlink the store or its lock file while runners
-  exist, fork an active runner, or mix old unguarded runners with new ones
-  during upgrade (stop the old processes first). Missing OS locking support
-  and unsafe lock files refuse execution. Asynchronously detached custom
-  executors are outside this ownership model; custom executors must stop all
-  execution activity before returning, and persist receipts atomically with
-  approved SQL.
+- The guard is specified for Linux. On any other platform `execution_guard`
+  refuses, so `execute` and `reconcile_unfinished` report
+  `approval_store_unavailable` there even under the substrate opt-out.
+- As before: do not replace or unlink the store while runners exist, or mix
+  old unguarded runners with new ones during upgrade (stop the old processes
+  first). Missing OS locking support refuses execution. Asynchronously
+  detached custom executors are outside this ownership model; custom
+  executors must stop all execution activity before returning, and persist
+  receipts atomically with approved SQL.
 
 `tests/chokepoint/test_execution_recovery.py` exercises unknown/legacy outcomes,
 commit-vs-rollback acknowledgment, threads, and suspended/killed processes.
@@ -280,8 +336,18 @@ pair, and the local-filesystem positive control under every policy — plus the
 real probe against the CI checkout). `test_owner_identity.py` plays a second
 host against a shared ledger and store: the foreign owner's intent is left
 `owner_unverifiable` with no receipt lookup and no outcome recorded, a runner on
-the owner's kernel and the same machine after a reboot reconcile it, the
-operator override is recorded, and a legacy intent warns. `test_migration_live.py`
+the owner's kernel holding the same lock and the same machine after a reboot
+reconcile it, the operator override is recorded, and a legacy intent stays
+pending until asserted. `test_lock_identity.py` reproduces the review's
+finding 2 exactly — a live subprocess owner on `original.db`, a real hard
+link `alias.db`, a recovering runner given the alias — and shows it BUSY with
+its executor never called and no outcome recorded for the live owner; that
+aliased stores resolve to one lock object (hard link, two processes, two
+threads, and under a private mount namespace a real file bind mount, which
+leaves the link count at 1); that a second name added after construction is
+caught before use; that a same-kernel runner on a *copy* of the store is
+`owner_unverifiable`; and the positive controls for a single-linked store and
+its own dead owner. `test_migration_live.py`
 adds real PostgreSQL tests for a dropped COMMIT response, suspension immediately
 after intent append, and an active database transaction surviving client death.
 The existing `PROM_REQUIRE_PG=1` CI step includes them; a local skip is not

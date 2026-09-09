@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Mapping
 
 from prometheus_protocol.core.anchor_spec import ANCHOR_FILE, parse_anchor_spec
+from prometheus_protocol.core.booleans import parse_env_bool, require_bool
 from prometheus_protocol.core.endpoint import validate_endpoint
 from prometheus_protocol.core.errors import ConfigError
 from prometheus_protocol.core.validation import (
@@ -66,10 +67,24 @@ SECURITY_FIELDS = (
 )
 
 
-def _as_bool(value: str | None, default: bool) -> bool:
-    if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
+#: Every boolean field, validated as an actual ``bool`` at load: a string,
+#: number or ``None`` here is refused, never coerced (F9; ``core/booleans.py``).
+BOOLEAN_FIELDS = (
+    "enable_model_judge",
+    "require_digest_pin",
+    "allow_insecure_loopback",
+    "require_ledger_anchor",
+    "require_external_signer",
+    "require_verified_substrate",
+    "allow_unverified_substrate",
+)
+
+
+def _env_bool(env: Mapping[str, str], name: str, default: bool = False) -> bool:
+    """The one strict parser, applied to one variable: unset takes the
+    default, a recognised word is its value, anything else is refused."""
+
+    return parse_env_bool(name, env.get(name), default=default)
 
 
 def _as_float(value: str | None, default: float) -> float:
@@ -196,7 +211,7 @@ class Config:
 
     # Approval-store substrate (threat model §2, F3; docs/chokepoint-threat-
     # model.md "Recovery follow-up"). The chokepoint's cross-process execution
-    # guard is an flock beside the consumed-approval store, which is mutual
+    # guard is an flock on the consumed-approval store's inode, which is mutual
     # exclusion only on a local filesystem of one host. The runner probes the
     # filesystem before it builds: a network or host-shared filesystem is
     # refused outright, and one it cannot identify is refused by default.
@@ -219,6 +234,10 @@ class Config:
         is the failure this project exists to name.
         """
 
+        # Booleans first: a security flag given as "false" is a non-empty
+        # string, and bool("false") is True. Refused, not coerced.
+        for field_name in BOOLEAN_FIELDS:
+            require_bool(getattr(self, field_name), name=field_name)
         require_range(
             self.judge_temperature, name="judge_temperature", minimum=0.0, maximum=2.0
         )
@@ -322,7 +341,7 @@ class Config:
             api_base=env.get("PROM_API_BASE"),
             model=env.get("PROM_MODEL"),
             api_key=env.get("PROM_API_KEY"),
-            enable_model_judge=_as_bool(env.get("PROM_ENABLE_MODEL_JUDGE"), False),
+            enable_model_judge=_env_bool(env, "PROM_ENABLE_MODEL_JUDGE"),
             judge_model=env.get("PROM_JUDGE_MODEL"),
             # Empty means unset for both: they then inherit the actor's endpoint.
             judge_api_base=env.get("PROM_JUDGE_API_BASE") or None,
@@ -338,14 +357,14 @@ class Config:
             verifier_cpu_seconds=_as_int(env.get("PROM_VERIFIER_CPU_SECONDS"), 5),
             verifier_max_processes=_as_int(env.get("PROM_VERIFIER_MAX_PROCESSES"), 64),
             sandbox=env.get("PROM_SANDBOX", "auto"),
-            require_digest_pin=_as_bool(env.get("PROM_REQUIRE_DIGEST_PIN"), False),
+            require_digest_pin=_env_bool(env, "PROM_REQUIRE_DIGEST_PIN"),
             gate_threshold=_as_float(env.get("PROM_GATE_THRESHOLD"), 0.0),
             retrieval_k=_as_int(env.get("PROM_RETRIEVAL_K"), 5),
             escalate_below=_as_float(env.get("PROM_ESCALATE_BELOW"), 0.75),
             pending_ttl_seconds=_as_int(env.get("PROM_PENDING_TTL"), 86_400),
             max_role_calls=_as_int(env.get("PROM_MAX_ROLE_CALLS"), 16),
             request_timeout_s=_as_float(env.get("PROM_REQUEST_TIMEOUT_S"), 30.0),
-            allow_insecure_loopback=_as_bool(env.get("PROM_ALLOW_INSECURE_LOOPBACK"), False),
+            allow_insecure_loopback=_env_bool(env, "PROM_ALLOW_INSECURE_LOOPBACK"),
             provider_max_response_bytes=_as_int(
                 env.get("PROM_PROVIDER_MAX_RESPONSE_BYTES"), 4 * 1024 * 1024
             ),
@@ -355,12 +374,8 @@ class Config:
             ledger_anchor_retention_days=_as_int(
                 env.get("PROM_LEDGER_ANCHOR_RETENTION_DAYS"), 3650
             ),
-            require_ledger_anchor=_as_bool(env.get("PROM_REQUIRE_LEDGER_ANCHOR"), False),
-            require_external_signer=_as_bool(env.get("PROM_REQUIRE_EXTERNAL_SIGNER"), False),
-            require_verified_substrate=_as_bool(
-                env.get("PROM_REQUIRE_VERIFIED_SUBSTRATE"), False
-            ),
-            allow_unverified_substrate=_as_bool(
-                env.get("PROM_ALLOW_UNVERIFIED_SUBSTRATE"), False
-            ),
+            require_ledger_anchor=_env_bool(env, "PROM_REQUIRE_LEDGER_ANCHOR"),
+            require_external_signer=_env_bool(env, "PROM_REQUIRE_EXTERNAL_SIGNER"),
+            require_verified_substrate=_env_bool(env, "PROM_REQUIRE_VERIFIED_SUBSTRATE"),
+            allow_unverified_substrate=_env_bool(env, "PROM_ALLOW_UNVERIFIED_SUBSTRATE"),
         )

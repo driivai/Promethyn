@@ -30,6 +30,8 @@ import subprocess
 from pathlib import Path
 from typing import Mapping, Sequence
 
+from prometheus_protocol.core.booleans import parse_env_bool, require_bool
+
 from prometheus_protocol.sandbox._start_signal import (
     exec_failed_line,
     interpret_stream,
@@ -180,9 +182,9 @@ def is_digest_pinned(image: str) -> bool:
 
 def _require_digest_pin(env: Mapping[str, str] | None = None) -> bool:
     env = os.environ if env is None else env
-    return (env.get("PROM_REQUIRE_DIGEST_PIN", "") or "").strip().lower() in {
-        "1", "true", "yes", "on",
-    }
+    return parse_env_bool(
+        "PROM_REQUIRE_DIGEST_PIN", env.get("PROM_REQUIRE_DIGEST_PIN"), default=False
+    )
 
 
 class ContainerSandbox(Sandbox):
@@ -201,7 +203,9 @@ class ContainerSandbox(Sandbox):
         # Refuse a bare-tag image when set (fail-closed); default off, resolved
         # from PROM_REQUIRE_DIGEST_PIN, so dev keeps its convenience.
         self.require_digest_pin = (
-            _require_digest_pin() if require_digest_pin is None else require_digest_pin
+            _require_digest_pin()
+            if require_digest_pin is None
+            else require_bool(require_digest_pin, name="require_digest_pin")
         )
         if not is_digest_pinned(self.image):
             _LOG.warning(

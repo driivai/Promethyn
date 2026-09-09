@@ -41,12 +41,11 @@ from pathlib import Path
 
 import pytest
 
+from prometheus_protocol.core.booleans import parse_env_bool
 from prometheus_protocol.sandbox.base import Limits
 from prometheus_protocol.sandbox.namespace import NamespaceSandbox
 
-_REQUIRE = (os.environ.get("PROM_REQUIRE_SANDBOX", "") or "").strip().lower() in {
-    "1", "true", "yes", "on",
-}
+_REQUIRE = parse_env_bool("PROM_REQUIRE_SANDBOX", os.environ.get("PROM_REQUIRE_SANDBOX"), default=False)
 
 # A value that appears nowhere else, so finding it is unambiguous evidence of a
 # leak rather than a coincidental substring match.

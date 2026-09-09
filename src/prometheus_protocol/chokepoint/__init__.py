@@ -39,6 +39,7 @@ from prometheus_protocol.chokepoint.kms_model import (
 from prometheus_protocol.chokepoint.ownership import (
     OWNER_FOREIGN,
     OWNER_LEGACY,
+    OWNER_LOCK_MISMATCH,
     OWNER_REBOOTED,
     OWNER_SAME_KERNEL,
     OwnerAssessment,
@@ -135,6 +136,7 @@ __all__ = [
     "INVALID_TIME",
     "OWNER_FOREIGN",
     "OWNER_LEGACY",
+    "OWNER_LOCK_MISMATCH",
     "OWNER_REBOOTED",
     "OWNER_SAME_KERNEL",
     "OWNER_UNVERIFIABLE",

@@ -1,7 +1,7 @@
 """Where the approval store lives: the filesystem the execution guard needs.
 
-``ConsumedApprovals.execution_guard`` is an ``flock`` on a companion lock file
-beside the consumed-approval store. That lock is mutual exclusion only where
+``ConsumedApprovals.execution_guard`` is an ``flock`` on the consumed-approval
+store's own inode. That lock is mutual exclusion only where
 the kernel granting it is the one kernel every runner talks to: a local
 filesystem on one host. On a network filesystem the lock is one client's view,
 emulated by a daemon, or not coordinated between hosts at all — and the F3
@@ -50,6 +50,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from prometheus_protocol.core.booleans import parse_env_bool, require_bool
 from prometheus_protocol.core.errors import ConfigError
 
 _LOG = logging.getLogger(__name__)
@@ -62,7 +63,6 @@ SUBSTRATE_UNKNOWN = "unknown"
 VERIFIED_SUBSTRATE_REQUIRED_ENV = "PROM_REQUIRE_VERIFIED_SUBSTRATE"
 #: The explicit, logged opt-out for an ``unknown`` (never an ``unsafe``) substrate.
 UNVERIFIED_SUBSTRATE_ALLOWED_ENV = "PROM_ALLOW_UNVERIFIED_SUBSTRATE"
-_TRUE = {"1", "true", "yes", "on"}
 
 MOUNTINFO_PATH = "/proc/self/mountinfo"
 
@@ -161,7 +161,8 @@ class SubstratePolicy:
 
 
 def _flag(env: Mapping[str, str], name: str) -> bool:
-    return (env.get(name) or "").strip().lower() in _TRUE
+    # The one strict parser: unset is the default, a misspelling is refused.
+    return parse_env_bool(name, env.get(name), default=False)
 
 
 def verified_substrate_required(env: Mapping[str, str] | None = None) -> bool:
@@ -330,14 +331,28 @@ def resolve_substrate_policy(
     ``allow_unverified_substrate`` everywhere; the pair set together is refused
     as incoherent rather than resolved by a quiet precedence."""
 
+    # A programmatic value is an actual bool or a refusal: "false" is a
+    # non-empty string, and bool("false") would have enabled the opt-out.
     require = (
-        bool(getattr(config, "require_verified_substrate", False))
-        or bool(getattr(settings, "require_verified_substrate", False))
+        require_bool(
+            getattr(config, "require_verified_substrate", False),
+            name="runner config require_verified_substrate",
+        )
+        or require_bool(
+            getattr(settings, "require_verified_substrate", False),
+            name="Config.require_verified_substrate",
+        )
         or verified_substrate_required(env)
     )
     allow = (
-        bool(getattr(config, "allow_unverified_substrate", False))
-        or bool(getattr(settings, "allow_unverified_substrate", False))
+        require_bool(
+            getattr(config, "allow_unverified_substrate", False),
+            name="runner config allow_unverified_substrate",
+        )
+        or require_bool(
+            getattr(settings, "allow_unverified_substrate", False),
+            name="Config.allow_unverified_substrate",
+        )
         or unverified_substrate_allowed(env)
     )
     if require and allow:

@@ -39,21 +39,36 @@ present, plausible, and void is the failure mode we exist to name.
 **Execution recovery follow-up (F2/F3):** negative executor results and lost
 COMMIT responses no longer establish rollback. Unknown events leave an intent
 pending until receipt reconciliation proves its outcome. A cross-process guard
-also covers the interval before the executor connects, so recovery cannot
-declare a suspended live owner rolled back. That guard is an OS file lock,
-which is mutual exclusion only on a local filesystem of one host — and since
-PROM-FIX-A that is **checked, not assumed**: the approval store probes its
-filesystem before it creates anything there (`chokepoint/substrate.py`); a
-network or host-shared filesystem is refused outright, and one the probe
+covers the interval before the executor connects. Until PROM-FIX-B that guard
+was an OS file lock keyed to the store's *pathname*, so it excluded only
+runners that named the store by the same path: two aliases of one store — a
+hard link, a file bind mount — gave two runners two locks, both acquired, and
+a runner recovering through an alias read the live owner's missing receipt as
+"not committed" (independent review, finding 2, reproduced with real
+subprocesses, hard links, SQLite and OS locks). The guard is now an `flock`
+on the store's own inode, held for the store's lifetime, so every alias of
+the store contends for one lock object across processes; a multiply linked
+store is refused at construction and before every use; and every intent
+records the identity of the lock its owner held, so "same kernel" establishes
+a dead owner only when it is provably the same lock (`chokepoint/runner.py`,
+`chokepoint/ownership.py`; `tests/chokepoint/test_lock_identity.py`
+reproduces the review's scenario and shows it failing closed). The substrate
+check from PROM-FIX-A is narrower than its earlier wording here claimed: it
+classifies, from the mount table, the filesystem *type* at the pathname of
+the store's parent directory (`chokepoint/substrate.py`) and refuses the known
+network types; it does not examine the opened store or lock objects and uses
+no mount identity, so "local filesystem recognised" is not "every runner holds
+the same exclusive guard" (findings 1A/1B, open). A filesystem the probe
 cannot identify is refused unless explicitly opted out of
 (`allow_unverified_substrate`, logged; withdrawn by
 `require_verified_substrate`). Every execution intent records its owner's
-host identity (`chokepoint/ownership.py`), and a recovering runner that cannot
-place the recorded owner on its own kernel or its own rebooted machine leaves
-the intent pending as `owner_unverifiable` instead of declaring it not
-committed. Multi-host execution is still unsupported; the unsupported case
-now fails closed. See `docs/chokepoint-threat-model.md`, "Recovery follow-up:
-F2/F3", for what is detected, what remains undetectable, and the regression
+host identity and lock identity (`chokepoint/ownership.py`), and a recovering
+runner that cannot place the recorded owner — on its own kernel holding the
+same lock object, or on its own rebooted machine — leaves the intent pending
+as `owner_unverifiable`; intents with no identity, or with a host but no lock
+identity, stay pending until the operator's recorded assertion. Multi-host
+execution is unsupported. See `docs/chokepoint-threat-model.md`, "Recovery
+follow-up: F2/F3", for what is detected, what is not, and the regression
 coverage.
 
 1. **Couldn't-verify is never verified-clean.** A check that could not run
@@ -79,7 +94,7 @@ coverage.
 | # | Attacker | Surface | Enforced by construction | Deployment recommendation | Proven by | Residual (headline) |
 |---|---|---|---|---|---|---|
 | 1 | The sandboxed agent | env, filesystem, sockets, `/proc`, network | constructed environment; socket dirs hidden; private `/proc`; no interfaces | microVM for hostile multi-tenant work | `test_agent_zone_containment.py`, `test_isolation.py` | kernel / namespace escape |
-| 2 | The runner host (and, with PIH-2, the insider who reads its memory) | workspace mode, secrets in `repr`, spawn env, artifact bytes, the signing key | `0700` workspace; redacted secrets; every spawn env-clean; bytes-not-paths; approval signing through an external KMS whose key never exists on the host, every Sign logged by the KMS; a KMS failure mints nothing | service account, filesystem/network confinement; the KMS access policy (invoke ≠ administer ≠ audit); `PROM_REQUIRE_EXTERNAL_SIGNER=1` | `test_sandbox_privilege.py`, `test_credential_hygiene.py`, `test_artifact_integrity.py`, `test_key_custody.py` | an insider holding Sign-invoke gets a valid signature (witnessed, not prevented); root still holds the database credential |
+| 2 | The runner host (and, with PIH-2, the insider who reads its memory) | workspace mode, secrets in `repr`, spawn env, artifact bytes, the signing key | `0700` workspace; redacted secrets; every spawn env-clean; bytes-not-paths; approval signing through an external KMS whose key never exists on the host; a KMS failure mints nothing | service account, filesystem/network confinement; the KMS access policy (invoke ≠ administer ≠ audit); KMS audit logging enabled, delivered and retained — a Sign is logged only where the deployment made the KMS log it, which this code cannot enforce (`docs/key-custody.md`); `PROM_REQUIRE_EXTERNAL_SIGNER=1` | `test_sandbox_privilege.py`, `test_credential_hygiene.py`, `test_artifact_integrity.py`, `test_key_custody.py` | an insider holding Sign-invoke gets a valid signature (witnessed, not prevented); root still holds the database credential |
 | 3 | The ledger file (and, with PIH-1, the insider who rewrites it) | chain rewrite, deletion, numeric settings | tip anchored to an external append-only target after every append; the whole anchor history pinned on verify; refuses to rewind; a failed anchor write raised, the runner refuses; NaN/inf/range refused | object-lock retention that outlasts the audit horizon, or a log run by another party; `PROM_REQUIRE_LEDGER_ANCHOR=1` | `test_external_anchor.py`, `test_tip_anchor.py`, `test_ledger_verify_failure_modes.py`, `test_numeric_config_validation.py` | authority over the anchor medium: retention lapsed or bypassed, the log's operator |
 | 4 | The network | credentialed HTTP | `https://` required; redirects refused; bounded reads under a deadline; failures typed and `Unavailable` | certificate pinning per deployment | `test_transport_hardening.py` | system trust store; proxy env is host-controlled |
 | 5 | Misconfiguration | every security flag and combination | requirement honoured or refused; dead-flag mechanism; coherent combinations; hardened defaults | pin the sandbox image | `test_security_posture.py` | `require_digest_pin` and `require_ledger_anchor` off by default |
@@ -805,13 +820,26 @@ Each measured on the pre-fix code against a local server, not inferred.
   followed by padding — would be reported as a normal answer, and that test
   exists. A declared `Content-Length` over the ceiling is refused before a byte
   is read. HTTP error bodies are read under the same bounds.
-- **F5 checks response completeness before JSON parsing** in both the provider
-  and anchor. A short Content-Length body, contradictory/unsupported framing,
-  missing final chunk terminator or malformed chunk boundary raises a typed
-  transport failure. Incomplete anchor history yields `NOT_VERIFIABLE`, never
-  `VALID`. Positive controls and malformed responses use real sockets in
-  `tests/conformance/test_response_integrity.py`. Supported framing and its
-  intentional strictness are specified in `docs/ledger-integrity.md`.
+- **F5 checks raw header syntax, then declared framing, before JSON parsing**
+  in both the provider and anchor. A short Content-Length body,
+  contradictory/unsupported framing, missing final chunk terminator or
+  malformed chunk boundary raises a typed transport failure. Since
+  PROM-FIX-B (independent review, finding 3): a header line without a colon
+  used to make the permissive parser drop every later header,
+  `Content-Length` included, after which the framing check saw a
+  close-delimited body and accepted EOF as its end — a 57-byte body declared
+  as 10000 bytes read clean, an empty anchor history verified `VALID`, a
+  provider reply verified `PASS`. Every status line and header line is now
+  matched against its grammar *before* the parser sees it, the header block
+  must end with its blank line, and any parser defect that remains is
+  refused as a second, independent check; the refusal is the client's
+  `malformed` error (`ProviderMalformedResponse`, `AnchorUnavailable`) and
+  an anchor history behind it is `NOT_VERIFIABLE`, never `VALID`. Honest
+  scope: this closes the demonstrated case and the parser's defect list; it
+  is not proof of complete strict-header validation. Real-socket cases for
+  both clients are in `tests/conformance/test_header_integrity.py` and
+  `test_response_integrity.py`. Supported framing and its intentional
+  strictness are specified in `docs/ledger-integrity.md`.
 - **F6 carries one monotonic budget across the network request**, starting
   immediately before network work: DNS, all connection attempts, proxy CONNECT,
   TLS, request writes, status/headers, chunk framing and response body (including
@@ -946,6 +974,27 @@ variable, and wired to nothing as a field. The audit that named it was right.
 - **The requirement is the OR of its sources.** `Config.require_digest_pin` and
   `PROM_REQUIRE_DIGEST_PIN` can each raise it; a programmatic `Config(False)`
   beside the environment variable does not switch pinning off.
+- **Boolean settings are parsed strictly, by one parser (F9, PROM-FIX-B).**
+  Every boolean security setting used to be read by a truth-set test copied
+  into seven modules and twenty-one test files, with two fail-open shapes the
+  independent review reproduced: a present but misspelled value
+  (`PROM_REQUIRE_VERIFIED_SUBSTRATE=tru`) was silently `False`, and a
+  programmatic string (`allow_unverified_substrate="false"`) was coerced with
+  `bool()` and *enabled* the opt-out. `core/booleans.py` is now the single
+  parser at every entry point — `Config` and `Config.from_env`,
+  `MigrationRunnerConfig`, `resolve_substrate_policy` and the substrate
+  variables, `PROM_REQUIRE_EXTERNAL_SIGNER`, `PROM_REQUIRE_LEDGER_ANCHOR`,
+  `PROM_ALLOW_UNSAFE_EXEC`, `PROM_REQUIRE_DIGEST_PIN` (factory and container
+  adapter), and the CI gate flags `PROM_REQUIRE_SANDBOX`, `PROM_REQUIRE_PG`,
+  `PROM_REQUIRE_PRIVILEGED` and `PROM_REQUIRE_CONTAINER` in the test tree.
+  Unset takes the default; a set value must be one of `1/true/yes/on` or
+  `0/false/no/off` (surrounding whitespace ignored, case-insensitive) and
+  anything else — `tru`, `y`, `t`, `enabled`, an empty string — is refused
+  with `ConfigError`, never read as `False`. A programmatic value must be an
+  actual `bool`; a string, number or `None` is refused, not coerced.
+  `tests/conformance/test_strict_booleans.py` runs the same value matrix
+  against every entry point and sweeps the source and test trees so the old
+  pattern cannot reappear at another site.
 - **Incoherent combinations are refused at load**, with the reason:
   `require_digest_pin=True` with `sandbox=namespace|unsafe`; `provider=remote`
   with `sandbox=unsafe`; an unknown sandbox name. The runtime half of the
@@ -986,6 +1035,7 @@ variable, and wired to nothing as a field. The audit that named it was right.
 | `ledger_anchor_retention_days` | Config, env | object-lock targets (requested per record) | out of `[1, 36500]` refused at load; the medium's honouring of it is a deployment property | enforced at load (§3.4) |
 | `require_verified_substrate` | Config, env, runner config (OR of sources) | `resolve_substrate_policy` → `ConsumedApprovals` at construction | an approval store on a filesystem the probe cannot identify → **refused at construction** ("cannot be honoured"), the opt-out below withdrawn; a known network or host-shared filesystem is refused regardless of any setting | enforced (§2, PROM-FIX-A) |
 | `allow_unverified_substrate` | Config, env, runner config (honoured from any source) | `ConsumedApprovals` at construction | the opt-out for an *unidentified* substrate only, logged as a warning at every construction; no effect on a known network filesystem; refused at load, at runner-config construction and at resolution beside `require_verified_substrate` | enforced (§2, PROM-FIX-A) |
+| every boolean setting above, and the CI gate flags | Config, env, runner config, test tree | `core/booleans.py` at every read | a set value outside `1/true/yes/on` and `0/false/no/off` → **refused at load** (`ConfigError`), never read as false; a programmatic non-`bool` → refused, never coerced; unset → the default | enforced (F9, PROM-FIX-B) |
 
 ### 5.4 Default posture
 

@@ -13,6 +13,7 @@ import os
 
 import pytest
 
+from prometheus_protocol.core.booleans import parse_env_bool
 from prometheus_protocol.sandbox import NamespaceSandbox
 from prometheus_protocol.tools.git import GitTool
 from prometheus_protocol.tools.stale_branch_demo import (
@@ -23,9 +24,7 @@ from prometheus_protocol.tools.stale_branch_demo import (
     run_hero,
 )
 
-_REQUIRE = (os.environ.get("PROM_REQUIRE_SANDBOX", "") or "").strip().lower() in {
-    "1", "true", "yes", "on",
-}
+_REQUIRE = parse_env_bool("PROM_REQUIRE_SANDBOX", os.environ.get("PROM_REQUIRE_SANDBOX"), default=False)
 
 
 def _require_runtime() -> None:

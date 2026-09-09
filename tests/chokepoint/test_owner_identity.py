@@ -153,13 +153,16 @@ def test_the_intent_records_its_owner(tmp_path):
          "same-name-other-machine", "same-machine-other-name", "no-boot-ids-same-machine", "nothing-to-compare"],
 )
 def test_assess_owner(recorded, local, established, basis):
-    assessment = assess_owner(recorded.as_payload(), local)
+    # Both runners hold the same lock object here (one store inode); the lock
+    # identity's own rules are in test_lock_identity.py.
+    payload = {**recorded.as_payload(), "owner_lock_id": "8:4242"}
+    assessment = assess_owner(payload, local, lock_id="8:4242")
     assert assessment.established is established and assessment.basis == basis
 
 
-def test_an_intent_without_identity_is_legacy():
-    assessment = assess_owner({"execution_id": "x", "artifact_sha256": "y"}, HOST_B)
-    assert assessment.established and assessment.basis == OWNER_LEGACY
+def test_an_intent_without_identity_is_legacy_and_never_established():
+    assessment = assess_owner({"execution_id": "x", "artifact_sha256": "y"}, HOST_B, lock_id="8:1")
+    assert not assessment.established and assessment.basis == OWNER_LEGACY
 
 
 # ---------------------------------------------------------------------------
@@ -270,7 +273,12 @@ def test_the_same_machine_after_a_reboot_is_established(tmp_path):
     ledger.close()
 
 
-def test_a_legacy_intent_is_reconciled_under_the_old_assumption_with_a_warning(tmp_path, caplog):
+def test_a_legacy_intent_stays_pending_until_the_operator_asserts(tmp_path, caplog):
+    """An intent with no owner identity says nothing about its owner, and the
+    guard this runner holds says nothing about it either (PROM-FIX-B: no
+    held lock is proof unless it is provably the owner's). It is left
+    pending; only the operator's explicit assertion resolves it, recorded."""
+
     caplog.set_level(logging.WARNING, logger=RUNNER_LOGGER)
     ledger = SqliteLedger(tmp_path / "audit.db")
     ledger.record_chained(
@@ -278,15 +286,21 @@ def test_a_legacy_intent_is_reconciled_under_the_old_assumption_with_a_warning(t
         payload={"target": target().identity.canonical, "artifact_sha256": "b" * 64, "execution_id": "a" * 64},
         created_at="1",
     )
-    host_b = runner(
-        tmp_path, ledger, HOST_B,
-        executor=lambda *a: pytest.fail("must not execute"),
-        lookup=lambda *a: ReceiptStatus(RECEIPT_NOT_FOUND),
-    )
+    lookups: list[object] = []
+
+    def lookup(*args):
+        lookups.append(args)
+        return ReceiptStatus(RECEIPT_NOT_FOUND)
+
+    host_b = runner(tmp_path, ledger, HOST_B, executor=lambda *a: pytest.fail("must not execute"), lookup=lookup)
     report = host_b.reconcile_unfinished()
-    assert len(report) == 1 and report[0].resolved
-    assert events(ledger)[-1][1]["owner_basis"] == OWNER_LEGACY
-    assert any("carries no owner identity" in r.getMessage() for r in caplog.records if r.name == RUNNER_LOGGER)
+    assert len(report) == 1 and not report[0].resolved and report[0].state == OWNER_UNVERIFIABLE
+    assert lookups == [] and not any(e == "execute_outcome" for e, _ in events(ledger))
+    forced = host_b.reconcile_unfinished(assume_owner_dead=True)
+    assert forced[0].resolved and forced[0].state == RECEIPT_NOT_FOUND
+    outcome = events(ledger)[-1][1]
+    assert outcome["owner_basis"] == OWNER_LEGACY and outcome["owner_override"] is True
+    assert any("assume_owner_dead=True" in r.getMessage() for r in caplog.records if r.name == RUNNER_LOGGER)
     host_b.close()
     ledger.close()
 

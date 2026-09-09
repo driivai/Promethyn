@@ -140,6 +140,7 @@ _ERRORS = TransportErrors(
     tls=ProviderTLSError,
     redirect=ProviderRedirectRefused,
     too_large=ProviderResponseTooLarge,
+    malformed=ProviderMalformedResponse,
 )
 
 

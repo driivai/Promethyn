@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Mapping
 
 from prometheus_protocol.core.anchor_spec import parse_anchor_spec
+from prometheus_protocol.core.booleans import parse_env_bool
 from prometheus_protocol.core.errors import ConfigError
 from prometheus_protocol.core.config import PROVIDER_REMOTE, Config
 from prometheus_protocol.core.interfaces import Ledger, Provider, Verifier
@@ -158,12 +159,13 @@ def build_sandbox_for(config: Config, *, env=None) -> Sandbox:
 #: as by ``Config.from_env`` so it is the OR of its sources: a programmatic
 #: ``Config(require_ledger_anchor=False)`` beside the variable does not lower it.
 LEDGER_ANCHOR_REQUIRED_ENV = "PROM_REQUIRE_LEDGER_ANCHOR"
-_TRUE = {"1", "true", "yes", "on"}
 
 
 def ledger_anchor_required(env: Mapping[str, str] | None = None) -> bool:
     env = os.environ if env is None else env
-    return (env.get(LEDGER_ANCHOR_REQUIRED_ENV) or "").strip().lower() in _TRUE
+    return parse_env_bool(
+        LEDGER_ANCHOR_REQUIRED_ENV, env.get(LEDGER_ANCHOR_REQUIRED_ENV), default=False
+    )
 
 
 def build_tip_anchor_for(config: Config, *, env: Mapping[str, str] | None = None) -> TipAnchor | None:

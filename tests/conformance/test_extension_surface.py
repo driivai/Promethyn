@@ -24,6 +24,7 @@ import subprocess
 
 import pytest
 
+from prometheus_protocol.core.booleans import parse_env_bool
 from prometheus_protocol.conformance import (
     check_firewall_is_domain_general,
     check_verifier,
@@ -35,9 +36,7 @@ from prometheus_protocol.conformance.contract import VerifierCase
 from prometheus_protocol.core.interfaces import Verifier
 from prometheus_protocol.core.models import Evidence, Tier, Verdict
 
-_REQUIRE = (os.environ.get("PROM_REQUIRE_SANDBOX", "") or "").strip().lower() in {
-    "1", "true", "yes", "on",
-}
+_REQUIRE = parse_env_bool("PROM_REQUIRE_SANDBOX", os.environ.get("PROM_REQUIRE_SANDBOX"), default=False)
 
 
 def _behavioural_wanted() -> bool:

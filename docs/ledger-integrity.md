@@ -328,11 +328,24 @@ invalid lengths (only 1–20 ASCII decimal digits after outer whitespace), combi
 Content-Length/Transfer-Encoding, and transfer encodings other than a single
 `chunked`. Chunk sizes, separators and final trailer termination must be valid
 CRLF-delimited framing. Metadata lines are capped at 8 KiB and trailers at
-64 KiB. Valid chunk extensions and trailers remain supported. A complete JSON
-prefix of an incomplete HTTP message is an error, not an empty verified history.
-Close-delimited responses remain supported: EOF is their HTTP boundary, so this
-cannot detect a server that intentionally sends a semantically incomplete but
-correctly framed history.
+64 KiB. Valid chunk extensions and trailers remain supported. Raw header
+syntax is validated before any of that framing is trusted (PROM-FIX-B,
+finding 3): the status line must be `HTTP/1.x SP 3DIGIT [SP reason] CRLF`,
+every header line `token ":" value CRLF` with no leading whitespace, bare CR
+or LF, or control character, the block must end with its blank line before
+the connection may close, lines are capped at 8 KiB and the block at 64 KiB
+and 100 lines, and any defect the parser still records is refused as a
+second, independent check. Before this, a header line without a colon made
+the permissive parser drop every later header, `Content-Length` included, the
+message was treated as close-delimited, and a truncated body — 57 bytes
+declared as 10000, carrying an empty `entries` list from a history that was
+not empty — read as a complete, verified history. A complete JSON prefix of
+an incomplete HTTP message is now an error whether the framing was declared
+or the headers were malformed. Honest scope: this closes the demonstrated
+case and the parser's defect list, not every conceivable header anomaly.
+Close-delimited responses remain supported: EOF is their HTTP boundary, so
+this cannot detect a server that intentionally sends a semantically
+incomplete but correctly framed history.
 
 F6 adds one **monotonic deadline per HTTP request**, beginning immediately before
 network work: DNS, TCP address attempts, optional proxy CONNECT, TLS, request
