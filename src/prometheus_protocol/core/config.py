@@ -64,6 +64,8 @@ SECURITY_FIELDS = (
     "require_external_signer",
     "require_verified_substrate",
     "allow_unverified_substrate",
+    "config_attestation_target",
+    "require_config_attestation",
 )
 
 
@@ -77,6 +79,7 @@ BOOLEAN_FIELDS = (
     "require_external_signer",
     "require_verified_substrate",
     "allow_unverified_substrate",
+    "require_config_attestation",
 )
 
 
@@ -223,6 +226,22 @@ class Config:
     require_verified_substrate: bool = False
     allow_unverified_substrate: bool = False
 
+    # Signed config attestation (threat model §4, PIH-4a). Where the digest of
+    # the RESOLVED security posture is signed (with the approval signer) and
+    # published, so a silent downgrade becomes visible to an external witness.
+    # Same three forms as ledger_anchor: worm:///directory (one immutable record
+    # per attestation on a write-once mount), https://host/path (an append-only
+    # log run by another party), or file:///path — a single local file, which is
+    # NON-PROTECTING because whoever changes the configuration rewrites it in
+    # the same breath, and which the requirement refuses.
+    config_attestation_target: str | None = None
+    # Bearer credential for the https:// target. Never logged.
+    config_attestation_token: str | None = None
+    # Production gate: refuse to run a posture that is not on an external
+    # record. Off by default — a development install has no external witness to
+    # publish to, exactly as with require_ledger_anchor (§5.4).
+    require_config_attestation: bool = False
+
     def __post_init__(self) -> None:
         """Reject non-finite, out-of-range and wrong-signed numeric settings.
 
@@ -333,6 +352,33 @@ class Config:
                     "worm:// or https://, or withdraw the requirement."
                 )
 
+        # -- the config attestation target: the same parse-at-load discipline,
+        # and the same refusal of a local-only witness under the requirement.
+        attestation = None
+        if self.config_attestation_target:
+            attestation = parse_anchor_spec(
+                self.config_attestation_target,
+                name="config_attestation_target",
+                allow_insecure_loopback=self.allow_insecure_loopback,
+            )
+        if self.require_config_attestation:
+            if attestation is None:
+                raise ConfigError(
+                    "require_config_attestation=True cannot be honoured: no "
+                    "config_attestation_target is configured. Set "
+                    "PROM_CONFIG_ATTESTATION_TARGET to worm:///directory or "
+                    "https://host/path, or withdraw the requirement."
+                )
+            if attestation.kind == ANCHOR_FILE:
+                raise ConfigError(
+                    "require_config_attestation=True cannot be honoured by a "
+                    "file:// target: a single local file is rewritten in place, "
+                    "so whoever changes the running configuration rewrites the "
+                    "record of it in the same breath and the attestation "
+                    "witnesses nothing. Use worm:// or https://, or withdraw "
+                    "the requirement."
+                )
+
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "Config":
         env = os.environ if env is None else env
@@ -378,4 +424,7 @@ class Config:
             require_external_signer=_env_bool(env, "PROM_REQUIRE_EXTERNAL_SIGNER"),
             require_verified_substrate=_env_bool(env, "PROM_REQUIRE_VERIFIED_SUBSTRATE"),
             allow_unverified_substrate=_env_bool(env, "PROM_ALLOW_UNVERIFIED_SUBSTRATE"),
+            config_attestation_target=env.get("PROM_CONFIG_ATTESTATION_TARGET") or None,
+            config_attestation_token=env.get("PROM_CONFIG_ATTESTATION_TOKEN") or None,
+            require_config_attestation=_env_bool(env, "PROM_REQUIRE_CONFIG_ATTESTATION"),
         )

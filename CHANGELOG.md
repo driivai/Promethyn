@@ -7,6 +7,40 @@ in `spec/invariants.md` is a major version bump.
 
 ## [Unreleased]
 
+### Added
+- **PIH-4a: signed config digests — a silent security-posture downgrade is
+  detectable by an external witness.** The near-term slice of Defense 4,
+  composed from the two seams that already exist rather than rebuilt: signing
+  goes through PIH-2's `ApprovalSigner` port (`KmsSigner` in production, so the
+  attestation is sealed by the key that never exists on this host) and
+  publishing goes to PIH-1's external targets (`ObjectStore` for a WORM mount or
+  object-locked bucket, `AppendOnlyLog` for a log run by another party). There
+  is no second signing path and no second publishing path, and a test on the
+  source enforces that. The new `attestation/` package computes a digest of the
+  **resolved** posture — the live sandbox adapter and its own `isolating`
+  answer, digest pinning as the built adapter reports it, the resolved anchor
+  target class, the signer actually in use, the resolved substrate policy and
+  its classification outcome, the TLS requirement, and the numeric caps in force
+  — signs it, and publishes it at startup and on a cadence the caller drives.
+  Hashing what `Config` *says* would have missed exactly the downgrade this
+  exists to catch: one declared configuration resolving to a `NullSandbox`, to
+  the namespace adapter, or to the unsafe runner produces three different
+  digests. The encoding is pinned (`sha256(DOMAIN || u64_be(field count) ||
+  per field lp(name) || lp(tag||value))`, with a known-answer vector), the same
+  discipline as the audit chain's entry hash. `prometheus-protocol
+  verify-config` reports ATTESTED, MISMATCH (the silent-downgrade catch) or
+  NOT_VERIFIABLE, which is never read as attested. `require_config_attestation`
+  (`PROM_REQUIRE_CONFIG_ATTESTATION`, read through the F9 strict parser) makes a
+  failure to publish fail closed and refuses a `file://` target as
+  non-protecting; without it a failure is a loud `ERROR`. **Two limits, each a
+  passing test:** binary integrity is not covered (that is PIH-4b, deferred and
+  platform-gated) and configuration correctness is not covered — a deliberately
+  weak posture attests exactly as well as a hardened one, so ATTESTED means
+  "this is the posture that is running, signed", never "this posture is safe".
+  **Residual:** an insider who controls both the running configuration and the
+  published target re-attests the weakened posture and is not detected, the
+  PIH-1 attacker-controls-the-anchor residual restated.
+
 ### Fixed
 - **A mount table row is judged per resolution, not per table
   (SUBSTRATE-ROBUST).** One unrelated `nsfs` mount — a Docker service network

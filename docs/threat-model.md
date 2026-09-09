@@ -766,7 +766,9 @@ controls both.
   detection window for size; nothing here does it.
 - **A verifier pointed at the wrong anchor sees nothing.** Whoever can change
   `PROM_LEDGER_ANCHOR` on the verifying host can point it at an empty prefix.
-  That is the silent-config-downgrade class, PIH-4a's subject, not this one's.
+  That is the silent-config-downgrade class, and PIH-4a (§4.6) is the slice of
+  it that is now covered: the resolved anchor target class is one of the fields
+  in the attested posture digest, so repointing it changes the digest.
 - **Numeric validation covers the fields enumerated in §3.1.** It is a fixed list,
   not a mechanism that catches a numeric field added later — a new unvalidated
   setting would be a new hole. The helpers exist to make adding validation cheap;
@@ -956,6 +958,97 @@ a review — it is called out at the top of the pull request.
   response are repeated in the exception message. That is attacker-influenced
   text in a log line, bounded and not parsed for meaning.
 
+### 4.6 Signed config digests — which posture is actually running (PIH-4a)
+
+The near-term slice of Defense 4, and the same shape as the two witnesses that
+came before it: PIH-1 puts the ledger tip somewhere the ledger-writer cannot
+rewrite, PIH-2 puts the signing key somewhere the host cannot read, and PIH-4a
+puts **the running security posture** somewhere the host cannot silently
+change. It is composed from those two seams, not from new machinery: signing
+goes through PIH-2's `ApprovalSigner` port (`KmsSigner` in production, so the
+attestation is sealed by the key that never exists on this host) and publishing
+goes to PIH-1's external targets (`ObjectStore` for a WORM mount or
+object-locked bucket, `AppendOnlyLog` for a log run by another party). There is
+no second signing path and no second publishing path.
+
+**What it detects: a silent posture downgrade, by an external witness.** At
+startup and on a cadence, `attestation/` computes a digest of the
+**resolved** posture, signs it, and publishes it. `prometheus-protocol
+verify-config` then answers one of three things: **ATTESTED** (the signature is
+valid under the pinned public key *and* the digest equals the live resolved
+posture), **MISMATCH** (valid signature, different posture — the
+silent-downgrade catch), or **NOT_VERIFIABLE** (invalid signature, unreadable
+record, or a live posture that could not be computed). Couldn't-verify is never
+attested-clean, the same distinction EX-1 draws for verifiers.
+
+**Resolved, never declared.** This is the load-bearing decision and it is the
+Attacker-5 lesson applied to attestation. The digest is taken over what the
+builders actually returned — the live sandbox adapter and its own `isolating`
+answer, digest pinning as the built adapter reports it, the resolved anchor
+target *class* (so a required anchor that resolved to the non-protecting local
+file is a different posture from a `worm://` one), the signer actually in use
+(local HMAC vs external KMS, and its non-secret key id), the resolved substrate
+policy *and* the classification outcome, the TLS requirement, this attestation's
+own target class, and the numeric caps in force. Had it hashed what `Config`
+*says*, an operator whose `sandbox="auto"` silently resolved to a `NullSandbox`
+or to the unsafe runner would publish an unchanged digest and the attestation
+would miss exactly the downgrade it exists to catch. One declared configuration
+resolving three ways produces three digests, and the test that proves it
+(`test_one_declared_config_resolving_weaker_produces_a_different_digest`) shows
+the declared configuration is byte-identical in all three.
+
+**The encoding is pinned.** `sha256(DOMAIN || u64_be(field count) || per field
+lp(name) || lp(tag||value))`, where `lp` length-prefixes, the field count is
+committed, the order is an explicit tuple, and every value carries a type tag —
+the same discipline as the audit chain's entry hash and the authorization
+record. Ambiguous encoding would mean two digests for one posture, which is the
+void-guard shape. A pinned known-answer vector fixes the whole encoding, so a
+drift in any part of it fails a test rather than changing what an auditor's
+records mean.
+
+**Publish failure is not swallowed.** Under `require_config_attestation` it is
+**fail-closed**: a posture that cannot be attested is refused, because being
+unable to attest a downgrade is itself the signal, and this repository's rule is
+that a requested security property which cannot be honoured is refused rather
+than degraded. Without the requirement it is a loud `ERROR` naming that the
+posture is on no external record, and the runtime continues — attestation is
+then an optional witness, and turning an optional witness's outage into a hard
+availability failure is the worse trade. No background thread does the cadence:
+a thread that publishes and swallows what it catches is precisely the shape this
+control exists to prevent, so the cadence is a method the caller drives and
+every failure reaches that caller.
+
+**The external-target trust boundary is §3.4's, unchanged.** The witness is
+worth what the medium's refusal to be rewritten is worth: an object-lock bucket
+in compliance mode, a WORM volume, a log run by another party. A `file://`
+target is **non-protecting** for exactly the ledger anchor's reason — whoever
+changes the running configuration rewrites the local record in the same breath —
+and the requirement refuses it at `Config` load and again at the runtime half.
+
+**Two honest limits, each a passing test rather than a caveat:**
+
+- **Binary integrity is NOT covered.** Nothing here measures the running code.
+  The same posture on a modified interpreter, library or on this very module
+  produces the same digest. That is full measured-boot attestation (PIH-4b),
+  deferred and platform-gated;
+  `test_honest_limit_binary_integrity_is_not_covered` pins both the behaviour
+  and the absence of any measurement-shaped field that could make the limit
+  drift silently.
+- **Configuration correctness is NOT covered.** A deliberately weak posture — no
+  isolation, no TLS requirement, a local key, a non-protecting witness — attests
+  exactly as well as a hardened one.
+  `test_honest_limit_a_deliberately_weak_posture_still_attests` is a passing
+  test so that nobody reads ATTESTED as "safe". ATTESTED means "this is the
+  posture that is running, signed by the key you pinned", and nothing more.
+
+**Residual: an insider who controls both is not detected.** Whoever can change
+the running configuration *and* write the published target re-attests the
+weakened posture; verification then says ATTESTED and MISMATCH never fires. This
+is the PIH-1 attacker-controls-the-anchor residual restated, and it is a passing
+test (`test_residual_an_insider_who_controls_both_is_not_detected`), not a
+footnote. The control is worth exactly what the separation between the
+configuration host and the witness is worth. Nothing here is uncrackable.
+
 ---
 
 ## Attacker 5 — misconfiguration
@@ -1067,7 +1160,7 @@ only on a filesystem identified as local (`allow_unverified_substrate` off).
 Asserted by `test_defaults_are_the_hardened_posture` and
 `test_an_unknown_substrate_is_refused_by_default`.
 
-**Three defaults are not the hardened posture, stated rather than hidden:**
+**Four defaults are not the hardened posture, stated rather than hidden:**
 
 - **`require_digest_pin=False`.** Digest pinning is a property of a container
   image, and the shipped default image is a floating tag by design so the code
@@ -1088,15 +1181,26 @@ Asserted by `test_defaults_are_the_hardened_posture` and
   to point at, and the in-memory KMS is a test double, not a place for a
   production key; the local key is warned about at build as non-protecting.
   Production sets `PROM_REQUIRE_EXTERNAL_SIGNER=1`, which refuses it.
+- **`require_config_attestation=False`** (§4.6). Same reason as the anchor and
+  the signer, and the same remedy: a development install has no external witness
+  to publish a posture digest to, and the local `file://` target is
+  non-protecting by construction. Left off, a failed or absent attestation is a
+  loud `ERROR` saying the running posture is on no external record. Production
+  sets `PROM_REQUIRE_CONFIG_ATTESTATION=1` with a `worm://` or `https://`
+  target, which refuses a local-only target, refuses no target at all, and makes
+  a failure to publish fail closed.
 
 ### 5.5 Residual — what is not covered
 
-- **Three of the defaults above are permissive**, for the stated reasons. An
+- **Four of the defaults above are permissive**, for the stated reasons. An
   operator who forgets `require_digest_pin` on a container-only host runs an
   unpinned image, with a warning; one who forgets `require_ledger_anchor` runs
   an unwitnessed ledger, with a warning on every open; one who forgets
   `require_external_signer` signs with a key root can read, with a warning at
-  build.
+  build; one who forgets `require_config_attestation` runs a posture no external
+  record holds, so a later downgrade of it is not detectable — with an `ERROR`
+  whenever an attestation was attempted and failed, and nothing at all when none
+  was configured.
 - **The dead-flag mechanism sees attribute reads, not enforcement.** It proves
   a field is *consumed* somewhere; whether the consumer honours it correctly is
   what the per-flag tests in §5.3 are for. A field read only to be logged would

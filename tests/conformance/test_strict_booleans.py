@@ -61,9 +61,15 @@ CONFIG_ENV = {
     "require_external_signer": "PROM_REQUIRE_EXTERNAL_SIGNER",
     "require_verified_substrate": "PROM_REQUIRE_VERIFIED_SUBSTRATE",
     "allow_unverified_substrate": "PROM_ALLOW_UNVERIFIED_SUBSTRATE",
+    "require_config_attestation": "PROM_REQUIRE_CONFIG_ATTESTATION",
 }
 # Coherence rules refuse some true values unless a companion is set; supply it.
-COMPANION = {"PROM_REQUIRE_LEDGER_ANCHOR": {"PROM_LEDGER_ANCHOR": "https://log.example.invalid/v1"}}
+COMPANION = {
+    "PROM_REQUIRE_LEDGER_ANCHOR": {"PROM_LEDGER_ANCHOR": "https://log.example.invalid/v1"},
+    "PROM_REQUIRE_CONFIG_ATTESTATION": {
+        "PROM_CONFIG_ATTESTATION_TARGET": "https://witness.example.invalid/attestations"
+    },
+}
 
 
 def runner_config(**flags):
@@ -139,10 +145,17 @@ def test_config_refuses_a_non_bool_for_every_boolean_field(field, value):
 @pytest.mark.parametrize("field", BOOLEAN_FIELDS)
 def test_config_accepts_real_booleans_for_every_boolean_field(field):
     assert getattr(Config(**{field: False}), field) is False
-    if field == "require_ledger_anchor":
-        assert Config(require_ledger_anchor=True, ledger_anchor="https://log.example.invalid/v1").require_ledger_anchor is True
-    else:
-        assert getattr(Config(**{field: True}), field) is True
+    # Two requirements refuse at load unless the target they require is
+    # configured; supply it so this test is about the boolean, not the
+    # coherence rule (which has its own tests).
+    companions = {
+        "require_ledger_anchor": {"ledger_anchor": "https://log.example.invalid/v1"},
+        "require_config_attestation": {
+            "config_attestation_target": "https://witness.example.invalid/attestations"
+        },
+    }
+    extra = companions.get(field, {})
+    assert getattr(Config(**{field: True}, **extra), field) is True
 
 
 @pytest.mark.parametrize("field,var", sorted(CONFIG_ENV.items()))

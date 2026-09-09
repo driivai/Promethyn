@@ -22,6 +22,7 @@ full traceback of a handled error.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import sys
@@ -448,6 +449,98 @@ def _cmd_sweep(args: argparse.Namespace) -> int:
     return 0
 
 
+def _attestation_signer(config: Config, args: argparse.Namespace):
+    """The signer the attestation is sealed with: PIH-2's port and its resolver.
+
+    A production deployment wires a ``KmsSigner`` programmatically (no cloud SDK
+    is bundled, deliberately). This command's own path is the development one: a
+    local HMAC key read from a file, resolved through the same
+    ``resolve_signer`` that refuses it under ``require_external_signer``.
+    """
+
+    from prometheus_protocol.attestation.runtime import resolve_attestation_signer
+
+    key = None
+    if getattr(args, "signing_key", None):
+        text = Path(args.signing_key).read_text(encoding="ascii").strip()
+        key = bytes.fromhex(text)
+    return resolve_attestation_signer(config, signing_key=key)
+
+
+def _cmd_attest_config(args: argparse.Namespace) -> int:
+    """Compute, sign and publish the digest of the RESOLVED security posture."""
+
+    from prometheus_protocol.attestation import build_config_attestor, resolve_posture
+
+    config = Config.from_env()
+    signer = _attestation_signer(config, args)
+    posture = resolve_posture(config, signer=signer)
+    attestor = build_config_attestor(config, signer=signer)
+    if attestor is None:
+        print(
+            "error: no config attestation target is configured; set "
+            "PROM_CONFIG_ATTESTATION_TARGET to worm:///directory or https://host/path",
+            file=sys.stderr,
+        )
+        return 2
+    record = attestor.attest()
+    if record is None:
+        return 2  # the failure was already reported at ERROR
+    if getattr(args, "json", False):
+        print(json.dumps(
+            {"digest": record.digest, "created_at": record.created_at,
+             "key_id": record.key_id, "scheme": record.scheme,
+             "posture": posture.projection()},
+            sort_keys=True,
+        ))
+    else:
+        print(f"posture digest: {record.digest}")
+        print(f"signed by:      {record.key_id} ({record.scheme})")
+        for name, value in sorted(posture.projection().items()):
+            print(f"  {name}: {value}")
+    return 0
+
+
+def _cmd_verify_config(args: argparse.Namespace) -> int:
+    """Does the running posture match the signed external record?"""
+
+    from prometheus_protocol.attestation import (
+        ATTESTED,
+        attestation_target_for,
+        resolve_posture,
+        verify_attestation,
+    )
+    from prometheus_protocol.chokepoint.signer import PublicKeyVerifier
+
+    config = Config.from_env()
+    target = attestation_target_for(config)
+    if target is None:
+        print("error: no config attestation target is configured", file=sys.stderr)
+        return 2
+    if args.public_key:
+        verifier = PublicKeyVerifier(
+            Path(args.public_key).read_text(encoding="ascii"), key_id=args.key_id or "pinned"
+        )
+    else:
+        # No pinned public key: the development path, where verification uses
+        # the same local key that signed. Stated, not hidden — it proves the
+        # posture matches, not that a host without the key could check it.
+        verifier = _attestation_signer(config, args)
+    signer = _attestation_signer(config, args)
+    result = verify_attestation(
+        target=target,
+        verifier=verifier,
+        resolve=lambda: resolve_posture(config, signer=signer),
+    )
+    if getattr(args, "json", False):
+        print(json.dumps(result.projection(), sort_keys=True))
+    else:
+        print(f"{result.status}: {result.detail}")
+        print(f"  published: {result.published_digest}")
+        print(f"  live:      {result.live_digest}")
+    return 0 if result.status == ATTESTED else 2
+
+
 def _existing_dir(path: Path | str) -> bool:
     return str(path) != ":memory:" and Path(path).is_dir()
 
@@ -565,6 +658,38 @@ def build_parser() -> argparse.ArgumentParser:
     retry.add_argument("id", type=int, help="the pending action id (see 'audit --human-log')")
     retry.add_argument("--by", required=True, help="who requested the retry (recorded)")
     retry.add_argument("--reason", default="", help="optional note recorded with the retry")
+    attest = sub.add_parser(
+        "attest-config",
+        help=(
+            "sign and publish the digest of the RESOLVED security posture to the "
+            "external target (PROM_CONFIG_ATTESTATION_TARGET)"
+        ),
+    )
+    attest.add_argument("--json", action="store_true", help="machine-readable output")
+    attest.add_argument(
+        "--signing-key", metavar="PATH",
+        help=(
+            "path to a hex-encoded local HMAC key (development; NON-PROTECTING "
+            "against a host insider, and refused under require_external_signer)"
+        ),
+    )
+    verify_config = sub.add_parser(
+        "verify-config",
+        help=(
+            "check the running posture against the published signed digest; "
+            "exit 2 unless ATTESTED"
+        ),
+    )
+    verify_config.add_argument("--json", action="store_true", help="machine-readable output")
+    verify_config.add_argument(
+        "--public-key", metavar="PEM",
+        help="path to the pinned public key; verification then holds no secret",
+    )
+    verify_config.add_argument("--key-id", default=None, help="identifier for the pinned key")
+    verify_config.add_argument(
+        "--signing-key", metavar="PATH",
+        help="development only: the local key that signed, when no public key is pinned",
+    )
     return parser
 
 
@@ -580,6 +705,8 @@ _COMMANDS = {
     "approve": _cmd_approve,
     "reject": _cmd_reject,
     "retry-execution": _cmd_retry_execution,
+    "attest-config": _cmd_attest_config,
+    "verify-config": _cmd_verify_config,
 }
 
 
