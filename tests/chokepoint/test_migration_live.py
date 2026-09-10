@@ -25,6 +25,8 @@ from prometheus_protocol.core.booleans import parse_env_bool
 from prometheus_protocol.chokepoint import (
     AUDIT_OUTCOME_UNAVAILABLE,
     EXECUTION_BUSY,
+    EXECUTION_COMMITTED,
+    EXECUTION_NOT_ATTEMPTED,
     EXECUTION_UNKNOWN,
     RECEIPT_COMMITTED,
     RECEIPT_IN_PROGRESS,
@@ -43,6 +45,7 @@ from prometheus_protocol.chokepoint import (
     postgres_executor,
     postgres_receipt_lookup,
 )
+from prometheus_protocol.chokepoint.admission import ExecutionDeadline
 from prometheus_protocol.chokepoint.runner import _receipt_text
 from prometheus_protocol.core.models import Judgment, Verdict
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
@@ -628,3 +631,95 @@ def test_live_dead_client_with_active_transaction_stays_pending(tmp_path):
             ledger.close()
         _execute(target, f"DROP TABLE IF EXISTS {table}")
         _delete_receipt(target, execution_id)
+
+
+# ===========================================================================
+# F7 boundary 2 — against a REAL PostgreSQL, not an injected driver
+# ===========================================================================
+
+
+def test_live_an_expired_approval_makes_no_privileged_database_contact(tmp_path):
+    """POLICY (1), RULED: no privileged database contact after expiry.
+
+    The unit tests for boundary 2a inject a fake driver. This one runs the real
+    ``postgres_executor`` against the real server with a deadline that has
+    already passed, and proves what the policy actually claims: no credential is
+    resolved, no connection is opened, no lock is taken, no bootstrap DDL is
+    written and no migration statement is sent.
+
+    It FAILS rather than skips wherever PROM_REQUIRE_PG is set — ``_require_db``
+    enforces that — because a security proof that skips is a void guard.
+    """
+
+    target = _require_db()
+    resolved: list[str] = []
+
+    class _Watched(DbTarget):
+        def resolve_password(self) -> str:
+            resolved.append("password")
+            return super().resolve_password()
+
+    watched = _Watched(
+        target.host, target.port, target.dbname, target.user,
+        target.password, schema=target.schema,
+    )
+
+    # A deadline that expired a minute ago, on the real clock.
+    deadline = ExecutionDeadline.open(
+        issued_at=time.time() - 120.0,
+        expires_at=time.time() - 60.0,
+        clock=time.time,
+        uncertainty_s=0.0,
+    )
+    assert deadline.admit().admitted is False
+
+    table = f"f7_must_not_exist_{int(time.time() * 1000)}"
+    result = postgres_executor(
+        f"CREATE TABLE {table} (id int);",
+        watched,
+        "a" * 64,
+        "b" * 64,
+        deadline=deadline,
+    )
+
+    assert result.state == EXECUTION_NOT_ATTEMPTED, result
+    assert resolved == [], "a credential was resolved for an expired approval"
+
+    # And the server agrees: the table does not exist.
+    import psycopg
+
+    with psycopg.connect(
+        host=target.host, port=target.port, dbname=target.dbname,
+        user=target.user, password=target.resolve_password(), connect_timeout=10,
+    ) as connection, connection.cursor() as cursor:
+        cursor.execute("SELECT pg_catalog.to_regclass(%s)", (table,))
+        assert cursor.fetchone()[0] is None, "the migration ran after expiry"
+
+
+def test_live_a_current_approval_still_executes(tmp_path):
+    """The positive control for the test above: an executor that refused
+    everything would pass it vacuously."""
+
+    target = _require_db()
+    table = f"f7_control_{int(time.time() * 1000)}"
+    deadline = ExecutionDeadline.open(
+        issued_at=time.time(),
+        expires_at=time.time() + 90.0,
+        clock=time.time,
+    )
+    result = postgres_executor(
+        f"CREATE TABLE {table} (id int);", target, "c" * 64, "d" * 64,
+        deadline=deadline,
+    )
+    assert result.state == EXECUTION_COMMITTED, result
+
+    import psycopg
+
+    with psycopg.connect(
+        host=target.host, port=target.port, dbname=target.dbname,
+        user=target.user, password=target.resolve_password(), connect_timeout=10,
+    ) as connection, connection.cursor() as cursor:
+        cursor.execute("SELECT pg_catalog.to_regclass(%s)", (table,))
+        assert cursor.fetchone()[0] is not None
+        cursor.execute(f"DROP TABLE {table}")
+        connection.commit()

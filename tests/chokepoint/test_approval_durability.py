@@ -55,6 +55,8 @@ class _SpyExecutor:
         target: DbTarget,
         execution_id: str,
         artifact_sha256: str,
+        *,
+        deadline: object = None,
     ) -> tuple[bool, str]:
         self.calls.append((sql, target.user))
         return True, "ok"
@@ -125,7 +127,8 @@ def _process_execute(
             authority=ApprovalAuthority(key=_KEY),
             target=target,
             consumed=store,
-            executor=lambda sql, bound, execution_id, artifact_sha256: (True, "ok"),
+            executor=lambda sql, bound, execution_id, artifact_sha256, *,
+            deadline=None: (True, "ok"),
             receipt_lookup=_no_receipt,
             audit=_Audit(),
             clock=lambda: 1_001.0,

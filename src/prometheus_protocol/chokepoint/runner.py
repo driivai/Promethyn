@@ -76,7 +76,18 @@ except ImportError:  # pragma: no cover - Windows has no flock; the guard refuse
 else:
     fcntl = _fcntl
 
+from prometheus_protocol.chokepoint.admission import (
+    CLOCK_MARGIN,
+    CLOCK_UNTRUSTED,
+    DEFAULT_CLOCK_UNCERTAINTY_S,
+    ClockUntrusted,
+    ExecutionDeadline,
+    InvalidApprovalInterval,
+    connect_timeout_s,
+    timeout_ms,
+)
 from prometheus_protocol.chokepoint.approval import (
+    INVALID_TIME,
     Approval,
     ApprovalAuthority,
     MigrationArtifact,
@@ -131,6 +142,12 @@ RECONCILIATION_REQUIRED = "reconciliation_required"
 RECONCILED_COMMITTED = "reconciled_committed"
 RECONCILED_NOT_COMMITTED = "reconciled_not_committed"
 EXECUTION_UNKNOWN = "execution_unknown"
+#: The migration was never sent. Distinct from ``not_committed`` on purpose:
+#: "no statement reached the database" and "a statement ran and was rolled
+#: back" are different facts, and F7's phase table requires the terminal
+#: outcome to state which one happened. Both are non-commits; only this one
+#: also establishes that nothing was attempted.
+EXECUTION_NOT_ATTEMPTED = "not_attempted"
 EXECUTION_NOT_COMMITTED = "not_committed"
 EXECUTION_COMMITTED = "committed"
 EXECUTION_BUSY = "execution_busy"
@@ -146,6 +163,66 @@ RECEIPT_CONFLICT = "conflict"
 
 _RECEIPT_SCHEMA = "promethyn_internal"
 _RECEIPT_TABLE = "migration_receipts"
+
+#: Ceilings, not budgets. The value actually installed is the smaller of the
+#: cap and the approval validity remaining at that moment (F7): a fixed 60s
+#: statement timeout under ten seconds of remaining authorization is a
+#: statement that outlives the approval permitting it.
+_STATEMENT_TIMEOUT_CAP_MS = 60_000
+_LOCK_TIMEOUT_CAP_MS = 30_000
+
+
+class _Cancellable(Protocol):
+    """What the watchdog needs of a connection: the ability to cancel it.
+
+    Named as a Protocol rather than typed ``object`` with an ignore. psycopg's
+    ``Connection.cancel`` is documented as safe to call from another thread,
+    which is the whole reason the watchdog can exist; stating the requirement
+    here says what the watchdog depends on instead of silencing the checker.
+    """
+
+    def cancel(self) -> None: ...
+
+
+def _cancel_at_deadline(
+    connection: _Cancellable, budget: float | None
+) -> threading.Timer | None:
+    """Arm a one-shot cancel of ``connection`` when the remaining budget runs out.
+
+    This is what bounds a MULTI-STATEMENT artifact. ``statement_timeout`` is per
+    statement, so an artifact of N statements bounded only by it can run for N
+    times the budget; this bounds the artifact as a whole.
+
+    It is a cancellation, and a cancellation is NOT proof of rollback — the
+    caller keeps the tri-state and requires an acknowledged rollback or a
+    receipt-based reconciliation, exactly as it does for any other error.
+    """
+
+    if budget is None or budget <= 0:
+        return None
+
+    def cancel() -> None:
+        try:
+            connection.cancel()
+        except Exception:  # noqa: BLE001 - a cancel that cannot fire must not
+            pass          # raise inside a timer thread; the wall-clock arm and
+            #               statement_timeout both still apply.
+
+    timer = threading.Timer(budget, cancel)
+    timer.daemon = True
+    timer.start()
+    return timer
+
+
+def _stop_watchdog(watchdog: threading.Timer | None) -> None:
+    """Disarm and JOIN. Ownership is released on the promise that no detached
+    work continues after the executor returns; an un-joined timer would be
+    exactly such work, and would reintroduce the F3 recovery race."""
+
+    if watchdog is None:
+        return
+    watchdog.cancel()
+    watchdog.join(timeout=5.0)
 
 
 class _OwnershipUnavailable(RuntimeError):
@@ -201,6 +278,7 @@ class ExecutorResult:
         if self.state not in {
             EXECUTION_COMMITTED,
             EXECUTION_NOT_COMMITTED,
+            EXECUTION_NOT_ATTEMPTED,
             EXECUTION_UNKNOWN,
         }:
             raise ValueError("invalid executor outcome state")
@@ -393,6 +471,8 @@ class MigrationExecutor(Protocol):
         target: DbTarget,
         execution_id: str,
         artifact_sha256: str,
+        *,
+        deadline: ExecutionDeadline | None = None,
     ) -> ExecutorResult | tuple[bool, str]: ...
 
 
@@ -566,6 +646,8 @@ def postgres_executor(
     target: DbTarget,
     execution_id: str,
     artifact_sha256: str,
+    *,
+    deadline: ExecutionDeadline | None = None,
 ) -> ExecutorResult:
     """Apply approved SQL and its receipt in one PostgreSQL transaction.
 
@@ -582,6 +664,31 @@ def postgres_executor(
     the artifact succeeds; PostgreSQL commits the migration and receipt together
     or rolls both back. A pre-existing matching receipt makes a retry idempotent,
     while a conflicting receipt fails closed.
+
+    F7, THE SECOND ADMISSION BOUNDARY. A runner-side check alone does not
+    establish "migration SQL cannot begin after expiry", because everything
+    above happens BEFORE the migration statement: credential resolution,
+    connect and authentication, a BLOCKING session advisory lock and a BLOCKING
+    bootstrap transaction advisory lock, schema and relation checks, a bootstrap
+    commit, a receipt lookup and search-path setup. The ruled policy is
+    **NO PRIVILEGED DATABASE CONTACT AFTER EXPIRY**, so ``deadline`` is checked
+
+      * **2a** before the credentialed connection exists — an expired approval
+        opens no connection, resolves no password, takes no lock; and
+      * **2b** after the two blocking locks and before any bootstrap WRITE, so
+        a lock that blocked past the deadline is caught where it happened
+        rather than being allowed to author DDL under a lapsed authorization.
+
+    Both blocking locks additionally carry a ``lock_timeout`` derived from the
+    remaining validity, so neither can block past the deadline in the first
+    place, and ``connect_timeout`` is derived the same way.
+
+    BOUNDING A MULTI-STATEMENT ARTIFACT. ``statement_timeout`` is PER STATEMENT:
+    an artifact of N statements bounded only by it can run for N times the
+    budget. So the whole artifact is additionally bounded client-side — a
+    watchdog cancels the session when the deadline passes. Neither mechanism is
+    proof of rollback: a cancelled statement is UNKNOWN unless an explicit
+    rollback is acknowledged, which is exactly how the handler below treats it.
     """
 
     if not _is_lower_hex_digest(execution_id) or not _is_lower_hex_digest(
@@ -598,6 +705,21 @@ def postgres_executor(
                 "must commit atomically"
             ),
         )
+
+    # BOUNDARY 2a — before ANY privileged database contact. Past this point the
+    # password provider is called and a credentialed connection is opened, so an
+    # expired approval must not reach it. Policy (1), ruled for this sprint.
+    if deadline is not None:
+        admission = deadline.admit()
+        if not admission.admitted:
+            return ExecutorResult(
+                EXECUTION_NOT_ATTEMPTED,
+                f"approval not admissible ({admission.reason}); no credential "
+                f"was resolved and no connection was opened: {admission.detail}",
+            )
+        budget = admission.remaining_s
+    else:
+        budget = None
 
     try:
         psycopg = import_module("psycopg")
@@ -616,11 +738,22 @@ def postgres_executor(
                 dbname=target.dbname,
                 user=target.user,
                 password=target.resolve_password(),
-                connect_timeout=10,
+                connect_timeout=(
+                    10 if budget is None else connect_timeout_s(budget, cap_s=10)
+                ),
                 autocommit=False,
             ) as connection,
             connection.cursor() as cursor,
         ):
+            if budget is not None:
+                # Both locks below BLOCK. Without this a lock held by another
+                # session outlasts the approval while this one waits, and the
+                # boundary check at 2b would be reached long after the deadline
+                # instead of at it.
+                cursor.execute(
+                    "SELECT pg_catalog.set_config('lock_timeout', %s, false)",
+                    (str(timeout_ms(budget, cap_ms=_LOCK_TIMEOUT_CAP_MS)),),
+                )
             cursor.execute(
                 "SELECT pg_catalog.pg_advisory_lock("
                 "pg_catalog.hashtextextended(%s, 0))",
@@ -631,6 +764,19 @@ def postgres_executor(
                 "pg_catalog.hashtextextended("
                 "'promethyn-receipt-bootstrap-v1', 0))"
             )
+            # BOUNDARY 2b — the two locks above blocked for an unbounded time
+            # from this approval's point of view. Re-check BEFORE the bootstrap
+            # DDL below, which is the first WRITE this path performs.
+            if deadline is not None:
+                admission = deadline.admit()
+                if not admission.admitted:
+                    return ExecutorResult(
+                        EXECUTION_NOT_ATTEMPTED,
+                        f"approval not admissible after acquiring the execution "
+                        f"locks ({admission.reason}); nothing was written and no "
+                        f"migration statement was sent: {admission.detail}",
+                    )
+                budget = admission.remaining_s
             cursor.execute("SELECT pg_catalog.to_regnamespace(%s)", (_RECEIPT_SCHEMA,))
             namespace = cursor.fetchone()
             if namespace is None or namespace[0] is None:
@@ -679,9 +825,26 @@ def postgres_executor(
                 "'search_path', pg_catalog.quote_ident(%s), true)",
                 (target.schema,),
             )
+            # Derived from what is LEFT, not a fixed 60s: a 60-second statement
+            # under ten seconds of remaining validity is a statement that
+            # outlives its authorization. ``timeout_ms`` never rounds a positive
+            # budget down to 0, because 0 DISABLES the timeout.
             cursor.execute(
-                "SELECT pg_catalog.set_config('statement_timeout', '60000', true)"
+                "SELECT pg_catalog.set_config('statement_timeout', %s, true)",
+                (
+                    str(
+                        _STATEMENT_TIMEOUT_CAP_MS
+                        if budget is None
+                        else timeout_ms(budget, cap_ms=_STATEMENT_TIMEOUT_CAP_MS)
+                    ),
+                ),
             )
+            # And the WHOLE artifact, which statement_timeout cannot bound: it
+            # is per statement, so N statements get N budgets. The watchdog
+            # cancels the session once, at the deadline, and is always joined
+            # before this function returns — the executor protocol promises no
+            # detached work continues, and ownership is released on that promise.
+            watchdog = _cancel_at_deadline(connection, budget)
             try:
                 cursor.execute(sql, prepare=False)
                 cursor.execute(
@@ -691,13 +854,16 @@ def postgres_executor(
                     (execution_id, artifact_sha256, target.identity.canonical),
                 )
             except psycopg.Error as exc:
-                # An exception does not establish rollback. Require an explicit
-                # successful rollback while still holding the receipt lock.
+                # An exception does not establish rollback — and a CANCELLED
+                # statement least of all. Require an explicit successful
+                # rollback while still holding the receipt lock.
                 connection.rollback()
                 confirmed = ExecutorResult(
                     EXECUTION_NOT_COMMITTED, str(exc).strip()[:500]
                 )
                 return confirmed
+            finally:
+                _stop_watchdog(watchdog)
             # Keep this outside the rollback handler: COMMIT may have succeeded
             # even if its response is lost. A later rollback cannot undo it.
             connection.commit()
@@ -1137,6 +1303,28 @@ class ConsumedApprovals:
                 self._guard_fd = None
 
 
+def _accepts_deadline(executor: Callable[..., object]) -> bool:
+    """Does this executor take the F7 ``deadline`` keyword?
+
+    Read from the signature ONCE at construction, never per call, and the answer
+    is recorded in the audit payload rather than being allowed to decide
+    something silently. An executor with ``**kwargs`` counts: it can forward the
+    deadline, and a bespoke executor written to that shape has taken the
+    obligation on deliberately.
+    """
+
+    import inspect
+
+    try:
+        parameters = inspect.signature(executor).parameters
+    except (TypeError, ValueError):
+        return False
+    return any(
+        name == "deadline" or parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for name, parameter in parameters.items()
+    )
+
+
 class BrokeredMigrationRunner:
     """Executes migrations only on a valid, current, bound, unspent approval."""
 
@@ -1151,6 +1339,9 @@ class BrokeredMigrationRunner:
         audit: AuditSink,
         clock: Callable[[], float],
         identity: OwnerIdentity | None = None,
+        clock_uncertainty_s: float = DEFAULT_CLOCK_UNCERTAINTY_S,
+        trust_utc: bool = True,
+        elapsed: Callable[[], float] | None = None,
     ) -> None:
         if audit is None:
             raise ValueError("migration runner audit sink is required")
@@ -1173,6 +1364,17 @@ class BrokeredMigrationRunner:
         self._identity = identity if identity is not None else local_identity()
         self._execution_lock = threading.RLock()
         self._reconcile_lock = threading.RLock()
+        self._clock_uncertainty_s = clock_uncertainty_s
+        self._trust_utc = trust_utc
+        self._elapsed = elapsed
+        # F7 boundary 2 lives INSIDE the executor, so it can only be enforced by
+        # an executor that receives the deadline. Decided once, here, rather
+        # than guessed at each call — and RECORDED in the execution intent, so a
+        # ledger reader can see which boundaries were in force for that run
+        # instead of assuming both were. ``postgres_executor`` declares it; a
+        # bespoke executor that does not is still covered by boundary 1, and its
+        # own privileged contact is its own obligation.
+        self._executor_enforces_deadline = _accepts_deadline(executor)
 
     @property
     def identity(self) -> OwnerIdentity:
@@ -1536,6 +1738,60 @@ class BrokeredMigrationRunner:
                 audit_recorded=audit.recorded,
             )
 
+        # F7 — FIX THE INVOCATION DEADLINE HERE, once, from the validity
+        # remaining right now. Everything below this line can consume a TTL: the
+        # ownership substrate checks, the reconciliation lock, audit chain
+        # verification, the per-intent receipt lookup, approval consumption
+        # under a 30s busy timeout, the ledger append, and intent anchor
+        # publication (four HTTP exchanges against an https anchor). The old
+        # code sampled the clock once, at STEP 1, and never looked again — which
+        # is how an approval that expired at t=1001 executed at t=5000.
+        try:
+            deadline = ExecutionDeadline.open(
+                issued_at=approval.issued_at,
+                expires_at=approval.expires_at,
+                clock=self._clock,
+                uncertainty_s=self._clock_uncertainty_s,
+                trust_utc=self._trust_utc,
+                elapsed=self._elapsed,
+            )
+        except ClockUntrusted as exc:
+            audit = self._record(
+                "refuse",
+                self._target.identity.canonical,
+                {
+                    "phase": "clock_trust",
+                    **execution_evidence(approval),
+                    "reason": CLOCK_UNTRUSTED,
+                    "detail": str(exc),
+                },
+            )
+            return MigrationResult(
+                executed=False,
+                refused=True,
+                reason=CLOCK_UNTRUSTED,
+                detail=f"{exc} Approval unspent; DB not touched.",
+                audit_recorded=audit.recorded,
+            )
+        except InvalidApprovalInterval as exc:
+            audit = self._record(
+                "refuse",
+                self._target.identity.canonical,
+                {
+                    "phase": "verify",
+                    **execution_evidence(approval),
+                    "reason": INVALID_TIME,
+                    "detail": str(exc),
+                },
+            )
+            return MigrationResult(
+                executed=False,
+                refused=True,
+                reason=INVALID_TIME,
+                detail=f"approval interval unusable: {exc}; DB not touched",
+                audit_recorded=audit.recorded,
+            )
+
         try:
             with self._consumed.execution_guard() as owned:
                 if not owned:
@@ -1550,7 +1806,9 @@ class BrokeredMigrationRunner:
                         "another runner owns execution/recovery; approval remains unspent",
                         audit_recorded=audit.recorded,
                     )
-                return self._execute_owned(approval=approval, artifact=artifact)
+                return self._execute_owned(
+                    approval=approval, artifact=artifact, deadline=deadline
+                )
         except _OwnershipUnavailable as exc:
             audit = self._record(
                 "refuse",
@@ -1571,7 +1829,11 @@ class BrokeredMigrationRunner:
             )
 
     def _execute_owned(
-        self, *, approval: Approval, artifact: MigrationArtifact
+        self,
+        *,
+        approval: Approval,
+        artifact: MigrationArtifact,
+        deadline: ExecutionDeadline,
     ) -> MigrationResult:
         # STEP 2 — a valid approval cannot proceed while an earlier intent for
         # this target remains ambiguous. Do not spend it: the caller may retry
@@ -1597,6 +1859,37 @@ class BrokeredMigrationRunner:
                 detail=(
                     "an earlier execution intent could not be reconciled; "
                     "current approval remains unspent; DB not touched for it"
+                ),
+                audit_recorded=audit.recorded,
+            )
+
+        # F7 PHASE 1 — BEFORE THE NONCE CLAIM. Reconciliation above is the
+        # single largest TTL consumer in the whole path (a remote anchor history
+        # read, a full chain recompute, and a receipt lookup per unresolved
+        # intent). If it ate the window, refuse with the approval UNSPENT: the
+        # caller may legitimately obtain a fresh approval and retry.
+        admission = deadline.admit()
+        if not admission.admitted:
+            audit = self._record(
+                "refuse",
+                self._target.identity.canonical,
+                {
+                    "phase": "expiry_before_spend",
+                    **execution_evidence(approval),
+                    "reason": admission.reason,
+                    "detail": admission.detail,
+                    "nonce_spent": False,
+                    **deadline.as_payload(),
+                },
+            )
+            return MigrationResult(
+                executed=False,
+                refused=True,
+                reason=admission.reason,
+                detail=(
+                    f"approval no longer admissible before it was spent "
+                    f"({admission.detail}); the approval remains UNSPENT and "
+                    "the database was not touched"
                 ),
                 audit_recorded=audit.recorded,
             )
@@ -1649,6 +1942,42 @@ class BrokeredMigrationRunner:
             target=self._target.identity,
         )
 
+        # F7 PHASE 2 — AFTER THE CLAIM, BEFORE THE INTENT. The claim itself runs
+        # BEGIN IMMEDIATE under a 30-second busy timeout, which alone exceeds
+        # many TTLs. The nonce STAYS SPENT: an approval that reached the store
+        # has been used, and making it retryable would turn every slow claim
+        # into a replay window. Nothing durable names this execution yet, so
+        # there is no intent to reconcile and no outcome to link.
+        admission = deadline.admit()
+        if not admission.admitted:
+            audit = self._record(
+                "refuse",
+                self._target.identity.canonical,
+                {
+                    "phase": "expiry_after_spend",
+                    **execution_evidence(approval),
+                    "reason": admission.reason,
+                    "detail": admission.detail,
+                    "nonce_spent": True,
+                    "execution_id": execution_id,
+                    **deadline.as_payload(),
+                },
+            )
+            return MigrationResult(
+                executed=False,
+                refused=True,
+                reason=admission.reason,
+                detail=(
+                    f"approval no longer admissible after the nonce was spent "
+                    f"({admission.detail}); the nonce REMAINS SPENT and must not "
+                    "be reused; no execution intent was recorded and the "
+                    "database was not touched"
+                ),
+                audit_recorded=audit.recorded,
+                execution_id=execution_id,
+                execution_state=EXECUTION_NOT_ATTEMPTED,
+            )
+
         # STEP 4 — persist a durable execution intent BEFORE touching the DB.
         # If the required audit sink cannot commit the intent, fail closed. The
         # nonce remains spent: an ambiguous audit write must never be made
@@ -1665,6 +1994,12 @@ class BrokeredMigrationRunner:
                 "artifact_sha256": artifact.sha256,
                 "target": self._target.identity.canonical,
                 **self._identity.as_payload(),
+                # Which F7 admission boundaries were in force for this run.
+                # Boundary 1 (this runner) always is; boundary 2 lives inside
+                # the executor and only an executor that takes the deadline can
+                # enforce it. Recorded rather than assumed.
+                "executor_enforces_deadline": self._executor_enforces_deadline,
+                **deadline.as_payload(),
                 # The lock this owner holds: a recovering runner on the same
                 # kernel may treat its own exclusive lock as proof the owner
                 # is gone only if it is provably this same object.
@@ -1684,14 +2019,83 @@ class BrokeredMigrationRunner:
                 execution_id=execution_id,
             )
 
+        # F7 PHASE 3 — AFTER THE DURABLE INTENT, BEFORE THE EXECUTOR. Recording
+        # the intent publishes an anchor; against an https anchor that is FOUR
+        # HTTP exchanges, each with its own deadline, so four individually
+        # successful slow exchanges at the factory's 30s default outlast the 90s
+        # default TTL on their own.
+        #
+        # The intent is durable, so this cannot simply return: an unresolved
+        # intent is what makes the NEXT execution refuse for reconciliation. A
+        # linked terminal outcome is appended saying exactly what happened —
+        # nothing was attempted, nothing committed — which resolves the intent
+        # truthfully rather than leaving a phantom for recovery to puzzle over.
+        admission = deadline.admit()
+        if not admission.admitted:
+            outcome = self._record(
+                "execute_outcome",
+                self._target.identity.canonical,
+                {
+                    "phase": "expiry_before_executor",
+                    **execution_evidence(approval),
+                    "execution_id": execution_id,
+                    "intent_seq": intent.seq,
+                    "reason": admission.reason,
+                    "detail": admission.detail,
+                    "executed": False,
+                    "execution_state": EXECUTION_NOT_ATTEMPTED,
+                    "nonce_spent": True,
+                    **deadline.as_payload(),
+                },
+            )
+            if not outcome.recorded:
+                # The terminal append failed. The nonce stays spent AND the
+                # durable intent stays unresolved — both are true, and both must
+                # remain visible. Reporting this as settled would tell an
+                # operator the ledger says something it does not say.
+                return MigrationResult(
+                    executed=False,
+                    refused=True,
+                    reason=AUDIT_UNAVAILABLE,
+                    detail=(
+                        "the approval expired before the executor was called, "
+                        "and the terminal outcome could NOT be recorded. No "
+                        "migration was attempted and the database was not "
+                        "touched, but the execution intent remains UNRESOLVED "
+                        "in the ledger and the nonce remains spent; this "
+                        "outcome is not durably settled and reconciliation must "
+                        "resolve the intent"
+                    ),
+                    audit_recorded=False,
+                    execution_id=execution_id,
+                    execution_state=EXECUTION_NOT_ATTEMPTED,
+                )
+            return MigrationResult(
+                executed=False,
+                refused=True,
+                reason=admission.reason,
+                detail=(
+                    f"approval no longer admissible after the execution intent "
+                    f"was made durable ({admission.detail}); the executor was "
+                    "NOT called, no migration statement was sent, nothing "
+                    "committed, and a linked terminal outcome records that"
+                ),
+                audit_recorded=True,
+                execution_id=execution_id,
+                execution_state=EXECUTION_NOT_ATTEMPTED,
+            )
+
         # STEP 5 — authorized, current, bound, first use, durable intent present:
-        # run the migration.
+        # run the migration. From here on expiry is NOT proof of rollback: the
+        # executor may have started, the tri-state is preserved, and only an
+        # acknowledged rollback or a receipt-based reconciliation settles it.
         try:
             response = self._executor(
                 artifact.sql,
                 self._target,
                 execution_id,
                 artifact.sha256,
+                **({"deadline": deadline} if self._executor_enforces_deadline else {}),
             )
             if isinstance(response, ExecutorResult):
                 execution = response

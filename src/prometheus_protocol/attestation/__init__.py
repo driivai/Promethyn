@@ -24,6 +24,7 @@ from prometheus_protocol.attestation.attest import (
     build_attestation_target,
     decode_record,
     signed_message,
+    newest_record,
     verify_attestation,
 )
 from prometheus_protocol.attestation.posture import (
@@ -74,5 +75,6 @@ __all__ = [
     "posture_preimage",
     "resolve_posture",
     "signed_message",
+    "newest_record",
     "verify_attestation",
 ]

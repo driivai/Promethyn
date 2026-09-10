@@ -7,6 +7,84 @@ in `spec/invariants.md` is a major version bump.
 
 ## [Unreleased]
 
+### Fixed
+- **PROD-FIX-1 — F7: an approval could execute long after it expired.** The
+  runner sampled the wall clock ONCE, at STEP 1, then did an unbounded amount of
+  preparation before calling the executor: ownership substrate checks,
+  reconciliation (a remote anchor history read, a full chain recompute, a
+  receipt lookup per unresolved intent), the nonce claim under a 30-second busy
+  timeout, the ledger append, and intent anchor publication — four HTTP
+  exchanges against an https anchor, which at the factory's 30s default outlast
+  the 90s default TTL on their own. An independent review reproduced an approval
+  expiring at t=1001 executing at t=5000, `executed=True`, `state=committed`,
+  nonce spent, intent and outcome both durably appended.
+  - **The ruled policy is (1): NO PRIVILEGED DATABASE CONTACT AFTER EXPIRY**,
+    enforced at BOTH admission boundaries — in the runner before the nonce
+    claim, before the durable intent and before the executor; and inside
+    `postgres_executor` before any credentialed connection exists (2a) and again
+    after its two BLOCKING advisory locks, before any bootstrap write (2b).
+    Both locks now carry a `lock_timeout` derived from the remaining validity,
+    and `connect_timeout` is derived the same way.
+  - **The clock model** (`chokepoint/admission.py`): ONE fixed deadline per
+    invocation, never refreshed on retry; the elapsed clock sampled BEFORE the
+    wall clock so a pause between the samples shortens the budget instead of
+    enlarging it; refusal when EITHER the signed wall-clock expiry or the fixed
+    elapsed deadline is reached; `CLOCK_BOOTTIME` where the platform has it, so
+    suspend consumes validity, with the source recorded by name; no elapsed
+    reading ever serialized, because a monotonic epoch is not portable across a
+    restart; a declared clock uncertainty, with refusal when what remains is
+    inside it; and an explicit refusal when the deployment declares UTC
+    untrusted, because two local clocks do not repair that.
+  - **`statement_timeout` is derived from what remains and never rounds to
+    zero** — zero DISABLES it. Because it is PER STATEMENT, a multi-statement
+    artifact is additionally bounded client-side by a watchdog that cancels the
+    session at the deadline and is always joined before the executor returns.
+  - **The phase table is implemented and tested per phase**: refuse unspent
+    before the claim; refuse with the nonce STILL SPENT after it; append a
+    linked terminal outcome stating no attempt when the intent is already
+    durable; preserve the spent nonce AND the unresolved intent when that
+    terminal append fails, and do not report it settled. Once the executor has
+    been entered, expiry is NOT proof of rollback: the tri-state is preserved
+    and a lost COMMIT reply stays UNKNOWN.
+  - **What this does not claim: atomicity.** A Python clock check can be
+    followed by descheduling. A strict database-side admission guarantee needs a
+    database-side mechanism with its own clock and trust model. The true
+    statement is narrower and is the one now written down.
+- **P-1: equal-time attestations were ordered by digest.** `created_at` is
+  `int(clock() * 1e9)` and repeats under a frozen or injected clock, a coarse
+  wall clock, a clock that steps back, or two publications inside `time.time()`'s
+  resolution. `DirectoryObjectStore.list_keys()` then sorts lexically, so the
+  tiebreaker was the first 16 hex of the DIGEST, and `verify_attestation` took
+  `records[-1]` as newest. Reproduced both ways: a MISMATCH reported against the
+  genuinely current posture, and — worse — a rollback to a superseded posture
+  reported as ATTESTED. **Option (b): verification REFUSES the ambiguity**
+  rather than resolving it by an order the data does not carry. Scoped by a
+  declared `ordered` property, so the log-backed target, whose append index is
+  assigned by the medium, is unaffected.
+- **P-2: a hostname could escape the transport error taxonomy.** Hostnames are
+  now normalised ONCE at endpoint construction to their IDNA A-label form, under
+  a stated policy, with malformed names refused there; the normalised host is
+  what `validate_endpoint` RETURNS, so DNS and TLS cannot disagree about it.
+  The review's cited line is corrected in the same change: `json.dumps` defaults
+  to `ensure_ascii=True`, so `_deadline.py`'s `encode("ascii")` does not raise,
+  and the DNS worker contains its own `ValueError` in a subprocess. The real
+  escape is `ssl.wrap_socket`, which IDNA-encodes `server_hostname` in-process
+  and raises `UnicodeError` — a `ValueError`, not an `OSError` — which
+  `classify_open_error` returns `None` for. Same hole, one layer over.
+
+### Changed
+- **"Periodic posture attestation on a cadence" is reworded as an INTEGRATION
+  OBLIGATION.** `attest_if_due()` publishes when the interval has elapsed at the
+  moment it is called, and nothing in this repository calls it on a timer —
+  there is no product-level scheduler. Written that way deliberately (a
+  self-driving thread that swallowed its own failures would be the void-guard
+  shape), but it must not read as a guarantee the runtime upholds by itself.
+- **Three contradicted claims corrected.**
+  `chokepoint-threat-model.md` P6 ("past the TTL they are refused") and P8 ("any
+  ambiguity … results in the migration not running"), and
+  `authorization-record.md` ("caller may execute only before expiry under all
+  existing runner checks").
+
 ### Added
 - **TYPE-GATE-HARDEN-3: the allowlists that allowlisted the wrong thing.** A
   fourth independent review found the doctrine applied in three places and

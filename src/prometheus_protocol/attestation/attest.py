@@ -27,10 +27,17 @@ optional witness, and turning an optional witness's outage into a hard
 availability failure would be a worse trade than saying so at ERROR. Which of
 the two applies is decided by the requirement alone, never by the error.
 
-No background thread does this. A thread that publishes on a cadence and
-swallows what it catches is precisely the void-guard shape — the control would
-appear present and report nothing — so the cadence is a method the caller drives
-(:meth:`ConfigAttestor.attest_if_due`) and every failure reaches that caller.
+No background thread does this, and there is no product-level scheduler. A
+thread that published on a cadence and swallowed what it caught would be
+precisely the void-guard shape — the control would appear present and report
+nothing — so :meth:`ConfigAttestor.attest_if_due` publishes when the interval
+has elapsed AT THE MOMENT IT IS CALLED, and every failure reaches that caller.
+
+**Periodic re-attestation is therefore an INTEGRATION OBLIGATION, not a
+guarantee.** An integrator who never calls ``attest_if_due`` gets the startup
+attestation and nothing further, and the published record ages silently while
+the runtime keeps running. "On a cadence" describes what the method supports,
+never something the runtime does by itself.
 """
 
 from __future__ import annotations
@@ -188,26 +195,78 @@ class AttestationTarget(Protocol):
 
     kind: str
     external: bool
+    #: Does ``records()`` come back in PUBLICATION order?
+    #:
+    #: True only where the MEDIUM assigns the position — an append-only log's
+    #: index does; a key built out of a clock reading does not. A target that
+    #: does not declare it is treated as unordered, which is the safe default:
+    #: verification then refuses an equal-time ambiguity instead of resolving it
+    #: by whatever the listing happened to return (P-1).
+    ordered: bool
 
     def publish(self, record: AttestationRecord) -> None:
         """Write one record. Raises on any failure; never silently drops one."""
 
     def records(self) -> list[AttestationRecord]:
-        """Every published record this target holds, oldest first."""
+        """Every published record this target holds.
+
+        ORDER IS NOT GUARANTEED TO BE CHRONOLOGICAL, and this docstring used to
+        say "oldest first" as though it were. It is chronological only where the
+        target itself preserves publication order — :class:`LogAttestationTarget`
+        does, because an append-only log assigns the position. On
+        :class:`ObjectStoreAttestationTarget` the position comes from a key
+        built out of ``created_at``, so two records made at the same instant
+        order by DIGEST, which has no relation to when they were published.
+
+        Callers must therefore not take ``records()[-1]`` as "the newest". Use
+        :func:`newest_record`, which refuses the ambiguity instead of resolving
+        it by an ordering the data does not carry.
+        """
 
 
 class ObjectStoreAttestationTarget:
     """One immutable object per attestation, on PIH-1's :class:`ObjectStore`.
 
-    Keyed by a zero-padded creation time so lexical order is chronological, and
-    written with ``put_if_absent`` under retention: this code never overwrites
-    or deletes a record, and on a compliance-mode bucket or a WORM mount the
-    medium refuses it to everyone else too. Re-publishing an identical record
-    (a restart with an unchanged posture in the same instant) is idempotent.
+    Keyed by a zero-padded creation time, and written with ``put_if_absent``
+    under retention: this code never overwrites or deletes a record, and on a
+    compliance-mode bucket or a WORM mount the medium refuses it to everyone
+    else too. Re-publishing an identical record (a restart with an unchanged
+    posture in the same instant) is idempotent.
+
+    ORDERING, CORRECTED. This class used to claim that "lexical order is
+    chronological". That is true only while ``created_at`` is UNIQUE. The key is
+    ``<prefix><stamp>-<digest[:16]>.json`` and ``DirectoryObjectStore.list_keys``
+    sorts lexicographically, so when two records share a stamp the tiebreaker
+    is the first sixteen hex characters of the DIGEST — a value with no relation
+    to publication order.
+
+    Equal stamps are not exotic. ``created_at`` is ``int(clock() * 1e9)``, and
+    it repeats under a frozen or injected clock, under a wall clock whose real
+    resolution is coarser than a nanosecond, across a clock that steps back, and
+    for two publications inside ``time.time()``'s effective resolution.
+
+    An independent review reproduced both consequences: publish a high-digest
+    record first and a low-digest record second at the same stamp and the
+    listing returns them low-then-high, so a verifier taking the last element
+    compares against the OLDER record and reports MISMATCH against the posture
+    that is genuinely current. The rollback case is worse — publish A then B at
+    the same stamp, and if A sorts after B the verifier always picks A, so
+    returning the runtime to A later reports ATTESTED while the newest
+    publication was B.
+
+    THE FIX IS NOT HERE, deliberately. Widening ``_KEY_WIDTH`` or keeping the
+    whole digest does not help: the collision is in ``created_at`` and the digest
+    is still not chronological. A finer clock, or reading it twice, does not
+    establish uniqueness across processes, restarts, regressions or an injected
+    clock. The fix is that VERIFICATION REFUSES the ambiguity — see
+    :func:`newest_record`.
     """
 
     kind = TARGET_WORM
     external = True
+    #: The key is ``<stamp>-<digest[:16]>`` and the store lists lexically, so
+    #: position is derived from a CLOCK READING, not assigned by the medium.
+    ordered = False
 
     def __init__(
         self,
@@ -260,6 +319,10 @@ class LogAttestationTarget:
 
     kind = TARGET_LOG
     external = True
+    #: The log assigns the append index, so ``entries()`` IS publication order —
+    #: equal ``created_at`` values cannot reorder it. This is why P-1 is scoped
+    #: to the WORM/object-store target and not to this one.
+    ordered = True
 
     def __init__(self, log: AppendOnlyLog) -> None:
         self._log = log
@@ -295,6 +358,10 @@ class LocalFileAttestationTarget:
 
     kind = TARGET_FILE
     external = False
+    #: One file, rewritten in place: it holds at most one record, so "newest"
+    #: is not a question. Declared rather than inherited so a future multi-record
+    #: local target has to make the choice deliberately.
+    ordered = True
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
@@ -352,7 +419,7 @@ def build_attestation_target(
 
 
 # ---------------------------------------------------------------------------
-# Attesting, at startup and on a cadence
+# Attesting: once at startup, and whenever the INTEGRATOR drives the cadence
 # ---------------------------------------------------------------------------
 
 
@@ -509,6 +576,55 @@ class AttestationVerification:
         }
 
 
+def newest_record(
+    records: list[AttestationRecord],
+) -> tuple[AttestationRecord | None, str]:
+    """The unambiguously newest record, or ``(None, why not)``.
+
+    P-1. ``verify_attestation`` used to take ``records[-1]`` and call it the
+    newest. On the WORM/object-store target that is a claim about list ORDER,
+    and list order is only chronological while ``created_at`` is unique — see
+    :class:`ObjectStoreAttestationTarget`. Where it is not, the record chosen is
+    whichever DIGEST happens to sort last, and a rollback to an older posture
+    can read as ATTESTED while a newer contradicting attestation sits beside it.
+
+    OPTION (b) OF THE TWO OFFERED, and the reason for choosing it: **equal-time
+    records are an ambiguity that verification REFUSES rather than resolves.**
+    Option (a) — a monotonic sequence assigned by the target — is stronger where
+    the target can assign one atomically, and the log-backed target effectively
+    already has it, since its append index comes from the log. But the
+    object-store target cannot assign an index without a compare-and-set probe
+    loop, and inventing an ordering that the medium does not provide is the
+    shape this repository refuses everywhere else: an ambiguity is reported, not
+    resolved by a rule that looks decisive and is arbitrary. Refusing is also
+    simpler, and simpler is a security property in a verifier.
+
+    WHAT IS AND IS NOT REFUSED. Only the ambiguity that changes the answer: two
+    or more DISTINCT records sharing the MAXIMUM ``created_at``. Duplicate
+    stamps further back do not decide which posture is current, and refusing on
+    them would make the verifier brittle for no gain. Byte-identical duplicates
+    of the newest record are not an ambiguity either — republication is
+    idempotent by design, and they name one posture.
+    """
+
+    newest_stamp = max(record.created_at for record in records)
+    contenders = [record for record in records if record.created_at == newest_stamp]
+    distinct = {record.encode() for record in contenders}
+    if len(distinct) > 1:
+        digests = sorted({record.digest[:16] for record in contenders})
+        return None, (
+            f"{len(distinct)} different attestations share the newest timestamp "
+            f"{newest_stamp!r} (digests {digests}), so which one describes the "
+            "posture in force cannot be established. The store's order is "
+            "lexical, and with equal timestamps the tiebreaker is the digest — "
+            "which says nothing about publication order. This is refused rather "
+            "than resolved: picking one would report ATTESTED or MISMATCH on a "
+            "coin toss. Publish a fresh attestation, from a clock that "
+            "distinguishes it, to establish the current posture."
+        )
+    return contenders[0], ""
+
+
 def verify_attestation(
     *,
     target: AttestationTarget,
@@ -537,7 +653,16 @@ def verify_attestation(
         )
     if not records:
         return AttestationVerification(NOT_VERIFIABLE, "no attestation has been published")
-    record = records[-1]
+    if getattr(target, "ordered", False):
+        # The medium assigned the position, so the last entry IS the newest.
+        record = records[-1]
+    else:
+        # The position came from a clock reading. Equal readings make "newest"
+        # undecidable, and it is refused rather than guessed (P-1).
+        selected, ambiguity = newest_record(records)
+        if selected is None:
+            return AttestationVerification(NOT_VERIFIABLE, ambiguity)
+        record = selected
     if not verifier.verify(record.message, record.signature):
         return AttestationVerification(
             NOT_VERIFIABLE,

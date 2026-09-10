@@ -267,7 +267,15 @@ def test_exact_expiry_is_refused(tmp_path):
 
 
 def test_valid_within_ttl_but_expired_one_second_later(tmp_path):
-    # Boundary: usable at t+89, refused at t+91 — the window is real.
+    # Boundary: usable at t+88, refused at t+91 — the window is real.
+    #
+    # This used to check t+89, one second before expiry. F7 added a declared
+    # clock uncertainty (``admission.DEFAULT_CLOCK_UNCERTAINTY_S``, one second)
+    # and refuses when what remains is INSIDE it: with a second of validity left
+    # and a second of doubt about the clock, the approval may already be
+    # expired, and racing it is exactly what F7 is about. So the usable point
+    # moved by the size of that margin, deliberately. The margin boundary itself
+    # is asserted in test_approval_expiry_across_preparation.py.
     t, clock = _clock()
     auth = ApprovalAuthority()
     target = _target()
@@ -277,7 +285,7 @@ def test_valid_within_ttl_but_expired_one_second_later(tmp_path):
 
     spy_ok = _SpyExecutor()
     r_ok = _runner(auth, target, spy_ok, clock, tmp_path / "ok.db")
-    t[0] += 89.0
+    t[0] += 88.0
     assert r_ok.execute(approval=approval, artifact=art).executed
 
     # A fresh approval, checked just past expiry, is refused.
