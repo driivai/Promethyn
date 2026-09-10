@@ -616,7 +616,9 @@ def test_driver_executor_treats_psql_meta_commands_only_as_sql(
         "port": target.port,
         "dbname": target.dbname,
         "user": target.user,
-        "password": target.password,
+        # ``resolve_password`` is what the executor passes; ``target.password``
+        # is now a Secret, which is the point (F8) — asdict/repr cannot render it.
+        "password": target.resolve_password(),
         "connect_timeout": 10,
         "autocommit": False,
     }

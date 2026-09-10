@@ -189,6 +189,10 @@ class JudgeMetrics:
 # --------------------------------------------------------------------------
 
 
+#: The explicit field a bounded judge classification carries.
+_BOUNDED_CONFIDENCE = re.compile(r"(?:^|\s)confidence=([0-9]*\.?[0-9]+)(?:\s|$)")
+
+
 def parse_confidence(detail: str) -> float | None:
     """Read the stated confidence from a judge reply, if any.
 
@@ -201,6 +205,25 @@ def parse_confidence(detail: str) -> float | None:
 
     if not detail:
         return None
+
+    # F8/A4 — the judge no longer puts the raw model reply in Evidence.detail; a
+    # reflecting endpoint made that a credential channel on the SUCCESS path. It
+    # writes a bounded classification instead, and the confidence is parsed at
+    # the judge (where the reply is in hand) and carried as an explicit field.
+    # Read that field first; a float this side already parsed and range-checked
+    # is exactly what this function was extracting.
+    stated = _BOUNDED_CONFIDENCE.search(detail)
+    if stated is not None:
+        value = float(stated.group(1))
+        return value if 0.0 <= value <= 1.0 else None
+    if detail.startswith("judge_verdict "):
+        # A bounded classification with no confidence field means the reply
+        # stated none — "unstated", never coerced.
+        return None
+
+    # The legacy form: a verdict word followed by a number, on the first
+    # non-empty line. Still read, because a custom verifier may write a reply in
+    # ``detail`` and this function is public.
     for line in detail.strip().splitlines():
         if not line.strip():
             continue

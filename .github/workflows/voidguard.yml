@@ -36,6 +36,15 @@ on:
       - "scripts/pih4a_revert_proofs.py"
       - "src/prometheus_protocol/attestation/**"
       - "tests/conformance/test_config_attestation.py"
+      - "scripts/prod_fix_1_revert_proofs.py"
+      # F8. The scan looks for guards that cannot fail; a secret sweep that
+      # discovers nothing, or a reason-code allowlist that refuses nothing, is
+      # exactly that shape, and both are new here.
+      - "scripts/prod_fix_2_revert_proofs.py"
+      - "src/prometheus_protocol/core/secrets.py"
+      - "src/prometheus_protocol/core/diagnostics.py"
+      - "tests/conformance/test_secret_canary_sweep.py"
+      - "tests/conformance/test_secret_sink_regressions.py"
       - ".github/workflows/ci.yml"
 
 permissions:

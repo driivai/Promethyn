@@ -398,7 +398,7 @@ naming.
 | Setting | Environment | Default | Effect |
 |---|---|---|---|
 | `ledger_anchor` | `PROM_LEDGER_ANCHOR` | unset | the target; parsed and refused at load if malformed (`http://` to a remote host, a credential in the URL, a relative path, an unknown scheme) |
-| `ledger_anchor_token` | `PROM_LEDGER_ANCHOR_TOKEN` | unset | bearer credential for the log; never logged |
+| `ledger_anchor_token` | `PROM_LEDGER_ANCHOR_TOKEN` | unset | bearer credential for the log; held as a `Secret`, so no rendering path emits it and no anchor diagnostic can carry upstream bytes (`docs/security-model.md`, "a secret reaching a diagnostic"). It is revealed into the `Authorization` header at the point of use, and it pickles |
 | `ledger_anchor_retention_days` | `PROM_LEDGER_ANCHOR_RETENTION_DAYS` | `3650` | retention requested per object-lock record; `1`–`36500` |
 | `require_ledger_anchor` | `PROM_REQUIRE_LEDGER_ANCHOR` | off | refuse to build any ledger without an append-only external anchor. The OR of its sources: the environment variable alone raises it, a programmatic `Config(False)` does not lower it. With no anchor, or a `file://` one, construction fails with a `ConfigError` naming the reason. |
 

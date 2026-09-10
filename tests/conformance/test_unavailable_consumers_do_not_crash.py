@@ -153,7 +153,11 @@ def test_confidence_threshold_lever_propagates_the_could_not_run():
 
     assert isinstance(result, Unavailable)
     assert not isinstance(result, Evidence)
-    assert "timed out" in (result.detail or "")
+    # F8: the detail is bounded now — it carries the exception TYPE, not the
+    # provider's message text. The property under test is unchanged (a timeout
+    # propagates as a could-not-run) and the operator distinction survives:
+    # TimeoutError is still named, distinguishably from any other fault.
+    assert "error_type=TimeoutError" in (result.detail or "")
 
 
 def test_ensemble_lever_reports_how_many_judges_could_not_run():

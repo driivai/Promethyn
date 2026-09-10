@@ -174,9 +174,20 @@ def test_incomplete_error_body_is_refused_and_closed(endpoint, monkeypatch, clie
 
     monkeypatch.setattr(urllib.error.HTTPError, "close", close)
     error = AnchorUnavailable if client == "anchor" else ProviderHTTPError
-    with pytest.raises(error, match="error body not read"):
+    with pytest.raises(error) as caught:
         _read(client, endpoint(_wire(mode), status=500))
     assert closed and all(closed)
+
+    # F8: the message is a bounded diagnostic now, not a quoted body. The
+    # distinction the old "error body not read" text carried is preserved
+    # structurally: an error body that COULD NOT be read reports no
+    # ``bytes_read`` at all, while one that was read reports its length. An
+    # operator can still tell the two apart, and neither carries upstream bytes.
+    message = str(caught.value)
+    assert "status=500" in message
+    assert "bytes_read" not in message, (
+        "an unreadable error body must not report a byte count: " + message
+    )
 
 
 @pytest.mark.parametrize("mode", ["short_length", "missing_final_crlf", "invalid_chunk_crlf"])

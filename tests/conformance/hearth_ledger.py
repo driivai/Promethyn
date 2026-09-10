@@ -164,6 +164,23 @@ EXPECTED_PROTECTED_FILES = 21
 #:   — the fused verdict, the confidence arithmetic and the calibration writes
 #:   unchanged).
 #:
+#: * **PROD-FIX-2 (F8)** — ``verifier/model_judge.py``. Two changes, both about
+#:   what reaches a PERSISTED record. On the SUCCESS path the judge wrote the
+#:   RAW MODEL RESPONSE into ``Evidence.detail``, so an endpoint reflecting the
+#:   Authorization header put a bearer token into the ledger with a PASS beside
+#:   it; it now writes a bounded classification (the parsed verdict and the
+#:   response length). On the failure path the ``Unavailable.detail`` quoted the
+#:   provider exception's text; it now names a reason code and the exception
+#:   TYPE. The judge's decision logic — the prompt, ``_parse_verdict``, the
+#:   Evidence fields the bank reads — is untouched.
+#:
+#:   ``benchmarks/judge_eval.py`` changed with it, and had to: ``parse_confidence``
+#:   read the confidence back OUT of the raw reply, so the calibration metrics
+#:   depended on the remote text this sprint removes. The confidence is now
+#:   parsed at the judge and carried as an explicit field; this function reads
+#:   that field, and still reads the legacy first-line form for any custom
+#:   verifier that writes a reply into ``detail``. No metric changed.
+#:
 #: Those sprints are why these bytes are what they are. They do NOT license the
 #: next edit to the same files: updating a digest below is a fresh decision, and
 #: the reason for it belongs beside it.
@@ -171,7 +188,7 @@ DIGESTS: dict[str, str] = {
     "src/prometheus_protocol/benchmarks/grounding_eval.py":
         "c60d17487aabd916fa79d57f5ddcdf301813186e704a937081d92db191143d01",
     "src/prometheus_protocol/benchmarks/judge_eval.py":
-        "e8542d0e825eb7d76565dcd704a2a9655fc7b02fa768d9e53aa1e8777b457c39",
+        "25430b5645aff6f655cfaccf33edd9e1cea3e5b4d0c62ef7f23183d9da9f3866",
     "src/prometheus_protocol/core/interfaces.py":
         "ae8009021b8f604d69646f1097d6f47900a2305b765b5e8e12ffa73ac7968d15",
     "src/prometheus_protocol/core/models.py":
@@ -203,7 +220,7 @@ DIGESTS: dict[str, str] = {
     "src/prometheus_protocol/verifier/grounding.py":
         "edb44c93c371cbf4a5099e607f4de0332d1bb902d47913bdd3708d5be1b4da3f",
     "src/prometheus_protocol/verifier/model_judge.py":
-        "d8bec4aef5cfc8e98f6546d1ae58493586293b21a3cb49ea566d5198de569789",
+        "bd0c73eea1f36e81bd5fdff7d2734b6c8d9b11580f700e08ce52f40ba3600937",
     "src/prometheus_protocol/verifier/runner.py":
         "4d7f810f2cc019593ef388792a992903de75b89525130723d8fb72e2ec234e96",
     "src/prometheus_protocol/verifier/sql.py":

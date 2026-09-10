@@ -40,6 +40,7 @@ from prometheus_protocol.core.anchor_spec import parse_anchor_spec
 from prometheus_protocol.core.booleans import parse_env_bool
 from prometheus_protocol.core.config import Config
 from prometheus_protocol.core.errors import ConfigError
+from prometheus_protocol.core.secrets import Secret, secret_or_none
 from prometheus_protocol.runtime.factory import (
     build_sandbox_for,
     build_tip_anchor_for,
@@ -96,6 +97,7 @@ def attestation_target_for(
     )
     target = build_attestation_target(
         spec,
+        # The Secret itself; the client reveals it into the header.
         token=config.config_attestation_token,
         retain_for_s=config.ledger_anchor_retention_days * 86_400.0,
         timeout_s=config.request_timeout_s,
@@ -128,8 +130,17 @@ class _SignerRequest:
     under it — stays in ``chokepoint.runner.resolve_signer``."""
 
     signer: ApprovalSigner | None = None
-    signing_key: bytes | None = None
+    #: A ``Secret`` (F8): this carrier is a dataclass, so a raw ``bytes`` key
+    #: here would render through repr, asdict and vars.
+    signing_key: Secret | bytes | None = None
     require_external_signer: bool = False
+
+    def __post_init__(self) -> None:
+        # Normalised HERE, not only at the one call site that happens to wrap.
+        # Every caller wrapping correctly is a property of today's callers; a
+        # carrier that accepts raw bytes and stores them is a property of the
+        # type, and the type is what the next caller meets.
+        object.__setattr__(self, "signing_key", secret_or_none(self.signing_key))
 
 
 def resolve_attestation_signer(
@@ -161,7 +172,7 @@ def resolve_attestation_signer(
             "unverifiable by the next one."
         )
     return resolve_signer(
-        _SignerRequest(signer=signer, signing_key=signing_key),
+        _SignerRequest(signer=signer, signing_key=secret_or_none(signing_key)),
         settings=config,
         env=env,
     )

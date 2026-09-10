@@ -87,7 +87,7 @@ def _connect(target: DbTarget):
         port=target.port,
         dbname=target.dbname,
         user=target.user,
-        password=target.password,
+        password=target.resolve_password(),
         connect_timeout=10,
     )
 

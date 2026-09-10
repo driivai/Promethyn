@@ -695,7 +695,7 @@ def test_anchor_rejects_unexpected_success_status(log_server, method, status):
     log = HttpAppendOnlyLog(log_server.url, allow_insecure_loopback=True)
     log_server.post_status = status if method == "POST" else 201
     log_server.get_status = status if method == "GET" else 200
-    with pytest.raises(AnchorUnavailable, match="unexpected HTTP"):
+    with pytest.raises(AnchorUnavailable, match=rf"unexpected_status .*status={status}"):
         log.append(encode_tip(ChainTip(seq=1, entry_hash="a" * 64)).encode())
 
 
@@ -1137,7 +1137,10 @@ def test_config_reads_the_anchor_settings_from_the_environment():
         "PROM_REQUIRE_LEDGER_ANCHOR": "1",
     })
     assert config.ledger_anchor == "worm:///mnt/worm/anchors"
-    assert config.ledger_anchor_token == "t0k3n"
+    # A Secret since F8: compare through the audited exit, and assert that the
+    # configured credential cannot render out of the Config by any path.
+    assert config.ledger_anchor_token.reveal() == "t0k3n"
+    assert "t0k3n" not in repr(config)
     assert config.ledger_anchor_retention_days == 400
     assert config.require_ledger_anchor is True
     assert Config.from_env({}).ledger_anchor is None
@@ -1234,7 +1237,7 @@ def test_a_wrong_token_is_refused_by_the_log_and_surfaced(tmp_path, log_server):
         HttpAppendOnlyLog(log_server.url, token="wrong", allow_insecure_loopback=True, timeout_s=5.0)
     )
     ledger = _ledger(tmp_path, anchor)
-    with pytest.raises(AnchorUnavailable, match="HTTP 401"):
+    with pytest.raises(AnchorUnavailable, match="http_unauthorized"):
         _append(ledger, 1)
     ledger.close()
 

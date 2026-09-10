@@ -53,7 +53,9 @@ def test_judge_knobs_resolve_from_env():
     })
     assert config.judge_model == "judge-1"
     assert config.judge_api_base == "https://other.example/v1"
-    assert config.judge_api_key == "k2"
+    # A Secret since F8 — compare through the audited exit, and assert redaction.
+    assert config.judge_api_key.reveal() == "k2"
+    assert "k2" not in repr(config)
     empty = Config.from_env({})
     assert empty.judge_model is None
     assert empty.judge_api_base is None and empty.judge_api_key is None
@@ -72,7 +74,11 @@ def test_remote_judge_routes_to_the_judge_model():
     assert provider.model == "judge-1"
     # Endpoint and key inherit the actor's when no judge override is set.
     assert provider.api_base == "https://gw.example/v1"
-    assert provider.api_key == "k"
+    # A Secret (F8), so the credential is compared through reveal() and the
+    # redaction is asserted rather than assumed.
+    assert provider.api_key is not None
+    assert provider.api_key.reveal() == "k"
+    assert "Secret(<redacted>)" in repr(vars(provider))
 
 
 def test_remote_judge_endpoint_override():
@@ -82,7 +88,10 @@ def test_remote_judge_endpoint_override():
         judge_api_key="k2",
     ))
     assert provider.api_base == "https://other.example/v1"
-    assert provider.api_key == "k2"
+    assert provider.api_key is not None
+    assert provider.api_key.reveal() == "k2"
+    assert "k2" not in repr(vars(provider))
+    assert "Secret(<redacted>)" in repr(vars(provider))
 
 
 def test_mock_judge_gets_a_distinct_identity():

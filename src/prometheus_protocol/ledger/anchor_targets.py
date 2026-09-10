@@ -62,6 +62,7 @@ from typing import Callable, Protocol
 
 from prometheus_protocol.core.anchor_spec import ANCHOR_FILE, ANCHOR_LOG, ANCHOR_WORM, AnchorSpec
 from prometheus_protocol.core.errors import ConfigError
+from prometheus_protocol.core.secrets import Secret
 from prometheus_protocol.core.validation import require_positive
 from prometheus_protocol.ledger.audit_chain import ChainTip
 from prometheus_protocol.ledger.tip_anchor import (
@@ -476,7 +477,7 @@ class LogTipAnchor:
 def build_tip_anchor(
     spec: AnchorSpec,
     *,
-    token: str | None = None,
+    token: str | Secret | None = None,
     retain_for_s: float = DEFAULT_RETENTION_S,
     timeout_s: float = 10.0,
     max_response_bytes: int | None = None,

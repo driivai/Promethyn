@@ -653,7 +653,13 @@ def test_a_transport_failure_is_unavailable_not_a_verdict(endpoint, mode):
     assert result.reason == Unavailability.INFRA_FAULT
     assert result.tier == Tier.SOFT
     assert not hasattr(result, "verdict"), "an Unavailable must carry no verdict"
-    assert "could not run" in result.detail
+    # F8: the detail is a bounded diagnostic now — a reason code, the operation,
+    # and the exception TYPE. The property the old "could not run" phrase carried
+    # is unchanged and is asserted more precisely: this is a could-not-run, it
+    # names WHICH operation could not run, and it says what went wrong by type.
+    assert result.detail.startswith("unavailable ")
+    assert "operation=judge.assess" in result.detail
+    assert "error_type=Provider" in result.detail
 
 
 def test_a_transport_failure_never_becomes_pass_through_the_bank(endpoint):

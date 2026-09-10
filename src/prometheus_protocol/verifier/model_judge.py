@@ -20,6 +20,7 @@ from __future__ import annotations
 import re
 import time
 
+from prometheus_protocol.core.diagnostics import Diagnostic
 from prometheus_protocol.core.interfaces import Provider, Verifier
 from prometheus_protocol.core.models import Evidence, Task, Tier, Unavailability, Unavailable, Verdict
 
@@ -80,11 +81,29 @@ class ModelJudgeVerifier(Verifier):
                 verifier_id=self.verifier_id,
                 tier=self.tier,
                 reason=Unavailability.INFRA_FAULT,
-                detail=_clip(f"judge could not run: {type(exc).__name__}: {exc}"),
+                # F8/A1 — the exception's TEXT is not quoted. The provider now
+                # raises bounded diagnostics, but "the provider is careful" is
+                # not a property this line can rely on: a future provider, or a
+                # bug, would put upstream bytes here and they would land in a
+                # persisted Unavailable. The TYPE is local; the reason code is
+                # ours; neither can carry a body.
+                detail=Diagnostic(
+                    "unavailable", {"operation": "judge.assess"}
+                ).message() + f" error_type={type(exc).__name__}",
             )
         duration = time.monotonic() - started
         verdict = _parse_verdict(response)
-        return self._evidence(verdict, duration, detail=response)
+        # F8/A4 — SUCCESS IS ALSO A CHANNEL, and this was the proof of it. This
+        # line used to be ``detail=response``: the RAW MODEL TEXT, verbatim, into
+        # a persisted Evidence record. A 200 from an endpoint that reflects the
+        # Authorization header therefore wrote "PASS <bearer token>" into the
+        # ledger, on the SUCCESS path, where nobody was looking for a leak.
+        #
+        # THE DECISION: model output does NOT belong in the evidence record.
+        # Only a bounded classification of it does — the verdict this side
+        # parsed, and the length this side measured. See the module docstring
+        # for the reasoning and the cost.
+        return self._evidence(verdict, duration, detail=_judgement_detail(verdict, response))
 
     def _evidence(self, verdict: Verdict, duration_s: float, *, detail: str) -> Evidence:
         return Evidence(
@@ -130,6 +149,45 @@ def _parse_verdict(response: str) -> Verdict:
             return Verdict.ABSTAIN
         return _VERDICT_BY_WORD.get(match.group(1).lower(), Verdict.ABSTAIN)
     return Verdict.ABSTAIN
+
+
+def _judgement_detail(verdict: Verdict, response: str) -> str:
+    """A bounded classification of a model response — never the response.
+
+    WHAT IS KEPT: the verdict this side parsed, the CONFIDENCE this side parsed,
+    and the response's length in characters. All three are computed here; none
+    is a substring of what the model sent.
+
+    The confidence is here because it has to be. ``benchmarks/judge_eval.py``
+    read it back out of ``Evidence.detail`` with ``parse_confidence`` — the raw
+    model text was load-bearing for calibration, which is exactly the trap A4
+    warns about: remote text that some downstream feature depends on. Parsing it
+    at the boundary keeps the feature and drops the text. A float in [0, 1] that
+    this process parsed and range-checked is a local value; the sentence it came
+    from is not.
+
+    WHAT IS NOT KEPT, AND WHY NOT A DIGEST EITHER. A truncated SHA-256 of the
+    response was considered — it would let an operator prove that two judgements
+    saw the same text, and that a response captured out-of-band is the one that
+    was judged. It is rejected because a hash of attacker-chosen content is
+    still DERIVED from that content: for a short or low-entropy response (an
+    endpoint that answers with nothing but a secret) the digest is brute-forcible,
+    and a covert channel that is only usable sometimes is still a covert channel.
+    The doctrine says the diagnostic is built from local values, and a digest of
+    remote bytes is not one.
+    """
+
+    from prometheus_protocol.benchmarks.judge_eval import parse_confidence
+
+    confidence = parse_confidence(response)
+    parts = [
+        "judge_verdict",
+        f"verdict={verdict.name}",
+        f"response_chars={len(response)}",
+    ]
+    if confidence is not None:
+        parts.append(f"confidence={confidence}")
+    return " ".join(parts)
 
 
 def _clip(text: str | None, limit: int = 1000) -> str:

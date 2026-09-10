@@ -8,6 +8,100 @@ in `spec/invariants.md` is a major version bump.
 ## [Unreleased]
 
 ### Fixed
+- **PROD-FIX-2 — F8: secrets propagated into diagnostics.** An independent
+  review put one canary token in the configured API key and found it in roughly
+  twenty-five distinct public strings: `repr(Config)`, `asdict(Config)`
+  serialised to JSON, `vars(DbTarget)` **despite `repr=False`**, a provider
+  exception reading `endpoint returned HTTP 401: Bearer <CANARY>`, that
+  exception's `__cause__`, a judge `Unavailable.detail`, a **successful** judge
+  result's `Evidence.detail`, a redirect diagnostic naming an attacker-chosen
+  hostname, `JSONDecodeError.doc` retaining the whole document, and the ledger
+  rows written from all of the above. This is not twenty-five bugs; it is one
+  permission — raw upstream text and unredacted configuration in public strings
+  — exercised in twenty-five places. Patching the enumerated list is the
+  denylist trap, so the deliverable is a bounded vocabulary plus a sweep that
+  proves absence.
+  - **A2 — secrets cannot render, by any path.** `core/secrets.py` adds
+    `Secret`: redacted `__repr__`/`__str__`/`__format__`, `__deepcopy__`
+    returning `self` so `dataclasses.asdict` keeps the wrapper, not
+    JSON-serialisable so `json.dumps` fails closed, and `reveal()` as the single
+    audited exit. **`repr=False` was tried and is insufficient — measured, not
+    argued:** `DbTarget.password` carried it *and* a credential-free `__str__`,
+    and `asdict` still returned the password, because `asdict` never consults
+    `field.repr`. A per-field opt-out also fails in the direction that matters
+    most: a field added later is unprotected by default.
+  - **A1 — no raw upstream text in a public diagnostic.** `core/diagnostics.py`
+    adds a closed set of reason codes and an **allowlist** of context keys with
+    types; a `Diagnostic` refuses an unknown reason, an unlisted key, a wrong
+    type, an `endpoint` that is not a bare configured origin, or an unlisted
+    `operation`. Error bodies are still read under a byte ceiling and drained,
+    but only the count survives. **There is no location where full upstream text
+    is retained instead.**
+  - **A3 — exception chaining.** `raise ... from None` clears `__cause__` and
+    sets `__suppress_context__` but leaves `__context__` live; measured,
+    `traceback.format_exception` *honours* the flag, so the default rendering is
+    clean and the review's "still rendered by traceback machinery" is a
+    correction — what remains is the live reference, which anything walking the
+    chain reaches. Call sites now translate inside the handler and raise
+    outside it, so Python never populates `__context__`. **The field clearing in
+    `raise_bounded` is not the load-bearing part** and is not claimed as one:
+    removing it changes no test, because the call shape already prevents the
+    link. The revert runner pins the call-shape mutation instead.
+  - **A4 — success is also a channel.** A passing judgement wrote the model's
+    reply verbatim into a permanent, signed, replicated record. It now records a
+    bounded classification only: `judge_verdict verdict=PASS response_chars=412
+    confidence=0.9`. A digest of the reply was considered and rejected — for
+    short or templated replies it is brute-forcible, so it is still derived from
+    attacker-choosable content. Calibration keeps working because the confidence
+    is parsed at the boundary and carried as a number, not re-read out of raw
+    text downstream.
+  - **A5 — redirects.** The attacker chooses the HOSTNAME, so stripping path and
+    query is not enough. A refusal reports the status and the *configured*
+    endpoint (`redirect_refused status=302 endpoint=https://api.example`) and
+    the target in no form at all. An operator diagnoses it by curling the known
+    endpoint themselves.
+  - **A6 — decoder errors.** The decoder object never surfaces; a failure
+    becomes `body_not_json position=… document_bytes=…`, both integers computed
+    on this side.
+  - **Diagnostics stay useful.** A rejected credential, a timeout, an oversized
+    response, an upstream 5xx and a malformed body remain distinguishable from
+    the diagnostic alone, and `LOCAL_REASONS` answers "ours or theirs"
+    structurally. Asserted in `test_secret_sink_regressions.py`.
+  - **The TLS branch nearly lost that, and the loss is recorded rather than
+    shipped.** The first version of the A1 fix returned a bare `tls_failure` for
+    every TLS error — a different failure mode, not a fix, since an expired
+    certificate, a hostname mismatch, a self-signed chain and a plaintext server
+    answering `https` demand different actions. It now carries OpenSSL's
+    symbolic reason and X509 verify code (`tls_failure
+    tls_reason=CERTIFICATE_VERIFY_FAILED verify_code=18`), both from OpenSSL's
+    own closed tables, shape-checked so the key cannot become a text channel.
+    `str(exc)` and `verify_message` are dropped: they are prose, and for a
+    hostname mismatch the message names the identities the *peer* presented —
+    attacker-chosen content of exactly the kind A5 refuses for redirect targets.
+    Proven against a real handshake with a real self-signed certificate.
+  - **Three credentials outside the original finding were found by the sweep
+    and fixed:** `RemoteModelProvider.api_key`, `HttpAppendOnlyLog._token` and
+    `LocalHmacSigner._key` were plain attributes on plain classes — the
+    `DbTarget` shape again, a careful `__repr__` and a raw value that `vars()`
+    prints. `_SignerRequest.signing_key` accepted raw bytes without
+    normalising. The sweep now discovers credential-shaped *assignments* from
+    the source, not only dataclass fields.
+  - **Claims corrected** rather than narrowed: "never logged" at
+    `docs/ledger-integrity.md`, `provider/remote.py` and `ledger/anchor_http.py`
+    was true of the log statement and false of the module — the credential
+    reached diagnostics through the failure path, not the logger. "Secrets do
+    not render — `repr=False`" in `docs/threat-model.md` is the claim F8
+    falsified outright. Each now states what the code enforces **and its
+    residuals**: `reveal()` at the point of use puts the plaintext in the frame
+    and the outbound header; a `Secret` still pickles, deliberately, so a
+    pickled config on disk is a credential at rest; process memory is not
+    scrubbed; and discovery matches credential-shaped *names*.
+  - **Named residual, pinned by a test:** a `psycopg` error object keeps the
+    finished connection on its `__dict__`, and that object's `repr` dumps the
+    conninfo including the password. `str(exc)` is clean and every diagnostic
+    built from a database failure is built from `str`, so nothing this codebase
+    emits carries it — but the object is not safe to render, and anything
+    reaching for `vars(exc)` sees the credential.
 - **PROD-FIX-1 — F7: an approval could execute long after it expired.** The
   runner sampled the wall clock ONCE, at STEP 1, then did an unbounded amount of
   preparation before calling the executor: ownership substrate checks,

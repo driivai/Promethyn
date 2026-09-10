@@ -33,6 +33,11 @@ from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 from prometheus_protocol.core._deadline import DeadlineSocket, connect, remaining
+from prometheus_protocol.core.diagnostics import (
+    Diagnostic,
+    redirect_diagnostic,
+    tls_diagnostic,
+)
 from prometheus_protocol.core.validation import require_positive
 
 #: One receive per read call (``read1``); the deadline is checked between them.
@@ -110,9 +115,21 @@ class RefuseRedirects(urllib.request.HTTPRedirectHandler):
         self._errors = errors
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D401
+        # F8/A5 — THE TARGET IS NOT REPORTED, IN ANY FORM. This used to say
+        # "redirecting to {origin_only(newurl)}", on the reasoning that stripping
+        # the path and query made the target safe to print. It does not: the
+        # ATTACKER CHOOSES THE HOSTNAME, so `origin_only` publishes an
+        # attacker-controlled string into an exception message that reaches logs,
+        # Evidence.detail and the ledger. A host is not less attacker-supplied
+        # than a query string.
+        #
+        # What an operator gets instead: the reason code, the status (301 vs 302
+        # vs 307 distinguishes a permanent misconfiguration from a transient
+        # one), and the CONFIGURED origin that did it. Curling that origin shows
+        # the Location header directly, from a context where it is not being
+        # written into this process's records.
         raise self._errors.redirect(
-            f"endpoint answered HTTP {code} redirecting to {origin_only(newurl)}; "
-            "redirects are refused because the request carries a credential"
+            redirect_diagnostic(code, endpoint=origin_only(req.full_url)).message()
         )
 
 
@@ -438,12 +455,22 @@ def classify_url_error(
 ) -> Exception:
     """The distinct exception for a ``URLError``: TLS, timeout, or transport."""
 
+    # F8/A1 — the reason OBJECT is never interpolated. ``URLError.reason`` is
+    # usually an OSError whose text is the platform's, but that is not
+    # guaranteed: a handler in the opener chain can put anything there, and for
+    # a refused redirect it carried the target.
+    #
+    # It is not replaced with a bare code either. An operator has to be able to
+    # tell an expired certificate from a hostname mismatch from a plaintext
+    # server, so the TLS branch keeps OpenSSL's SYMBOLIC reason and its X509
+    # verify code — closed tables, not composed text — and drops the message,
+    # which is prose and can name the identities the peer presented.
     reason = getattr(exc, "reason", None)
     if isinstance(reason, ssl.SSLError):
-        return errors.tls(f"TLS failure: {reason}")
+        return errors.tls(tls_diagnostic(reason).message())
     if isinstance(reason, (socket.timeout, TimeoutError)):
-        return errors.timeout("endpoint did not answer within the deadline")
-    return errors.transport(f"could not reach endpoint: {reason}")
+        return errors.timeout(Diagnostic("timeout").message())
+    return errors.transport(Diagnostic("connect_failure").message())
 
 
 def classify_open_error(

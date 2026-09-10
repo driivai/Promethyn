@@ -50,6 +50,8 @@ import hmac
 import os
 from typing import Protocol
 
+from prometheus_protocol.core.secrets import Secret
+
 HMAC_SHA256 = "hmac-sha256"
 ECDSA_P256_SHA256 = "ecdsa-p256-sha256"
 SCHEMES = (HMAC_SHA256, ECDSA_P256_SHA256)
@@ -146,14 +148,25 @@ class LocalHmacSigner:
     scheme = HMAC_SHA256
     external = False
 
-    def __init__(self, key: bytes | None = None) -> None:
-        self._key = key if key is not None else os.urandom(32)
-        if not isinstance(self._key, bytes) or len(self._key) < 32:
+    def __init__(self, key: bytes | Secret | None = None) -> None:
+        # F8/A2 — a `Secret`, not a raw attribute with a redacted __repr__.
+        # __repr__ below WAS redacted and the key still rendered through
+        # `vars(signer)`, which is the DbTarget defect exactly: one path
+        # covered by hand, another not. Found by the canary sweep, not by
+        # reading the class. Redaction belongs in the value.
+        if isinstance(key, Secret):
+            raw: bytes | None = key.reveal()
+        else:
+            raw = key
+        if raw is None:
+            raw = os.urandom(32)
+        if not isinstance(raw, bytes) or len(raw) < 32:
             raise ValueError("approval signing key must be at least 32 bytes")
-        self.key_id = key_fingerprint(self._key)
+        self._key = Secret(raw)
+        self.key_id = key_fingerprint(raw)
 
     def sign(self, message: bytes) -> bytes:
-        return hmac.new(self._key, message, hashlib.sha256).digest()
+        return hmac.new(self._key.reveal(), message, hashlib.sha256).digest()
 
     def verify(self, message: bytes, signature: bytes) -> bool:
         if not isinstance(signature, (bytes, bytearray)) or len(signature) != 32:
