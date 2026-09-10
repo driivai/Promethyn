@@ -40,7 +40,7 @@ ENCODE = "tests/conformance/test_bound_requirements_encoding.py"
 #: Observed first, then pinned — never predicted. Both a shortfall and an excess
 #: are refused.
 EXPECTED_REVERTS = 11
-EXPECTED_CALL_FAILURES = 23
+EXPECTED_CALL_FAILURES = 25
 
 
 def enforce_expected(caught: int, failures: int) -> None:
@@ -111,7 +111,7 @@ def mutations():
                 "    if False:",
             )],
             REGRESS,
-            "structural_pass_cannot_stand_in or eight_state_matrix",
+            "structural_pass_cannot_stand_in or swarm_matrix",
         ),
         (
             "coverage-treats-an-abstention-as-satisfactory",
@@ -121,7 +121,12 @@ def mutations():
                 "    return outcome.decided != Verdict.FAIL",
             )],
             ENFORCE,
-            "row_abstain or eight_state",
+            # This read "row_abstain or eight_state" and the second term was DEAD
+            # from the start: the matrix lives in the regression file, not this
+            # one, so pytest deselected it silently and the proof was half what
+            # it claimed. Found by the term-level check in the pin test, not by
+            # the count — which is the whole argument for checking terms.
+            "row_abstain",
         ),
         (
             "coverage-stops-refusing-a-failed-required-check",
@@ -185,7 +190,7 @@ def mutations():
                 "                    self.verifier_id,",
             )],
             REGRESS,
-            "eight_state_matrix or positive_control",
+            "swarm_matrix or positive_control",
         ),
     ]
 

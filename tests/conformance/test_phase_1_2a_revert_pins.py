@@ -41,7 +41,7 @@ def runner():
 
 
 def test_the_runner_is_pinned_and_every_target_still_exists(runner):
-    assert (runner.EXPECTED_REVERTS, runner.EXPECTED_CALL_FAILURES) == (11, 23)
+    assert (runner.EXPECTED_REVERTS, runner.EXPECTED_CALL_FAILURES) == (11, 25)
     plan = runner.mutations()
     assert len(plan) == runner.EXPECTED_REVERTS
     assert len({name for name, *_ in plan}) == len(plan), "duplicate mutation names"
@@ -53,6 +53,44 @@ def test_the_runner_is_pinned_and_every_target_still_exists(runner):
             assert old in text, (
                 f"{name}: revert target vanished from {function.__qualname__}: "
                 f"{old!r} — this proof would no longer execute"
+            )
+
+
+def test_every_TERM_of_every_selection_actually_selects_tests(runner):
+    """Every ``-k`` term must match at least one test — not merely the whole
+    expression.
+
+    The weaker check is the one I wrote first, and it is VACUOUS. Selections here
+    are disjunctions, so a dead branch of ``"a or b"`` still collects ``b``: the
+    proof silently narrows to half of what it names, "no tests ran" never
+    appears, and only the aggregate failure count would notice — a count a
+    second drifted selection could rebalance. Measured: renaming
+    ``eight_state_matrix`` to ``swarm_matrix`` left three selections stale and the
+    whole-expression check stayed GREEN on all three.
+
+    This is the allowlist doctrine's own failure, recorded in the threat model:
+    a ``-k`` expression is a filter over test NAMES, and a rename is exactly what
+    can vary that the filter does not constrain. So the unit checked is the TERM,
+    which is the thing that can go stale on its own.
+    """
+
+    import re
+    import subprocess
+
+    keywords = {"or", "and", "not"}
+    for name, _function, _edits, test_file, selection in runner.mutations():
+        terms = [t for t in re.findall(r"[\w]+", selection) if t not in keywords]
+        assert terms, f"{name}: -k {selection!r} has no selectable term"
+        for term in terms:
+            proc = subprocess.run(
+                [sys.executable, "-m", "pytest", "--collect-only", "-q",
+                 test_file, "-k", term],
+                cwd=REPO, capture_output=True, text=True,
+            )
+            assert proc.returncode == 0 and "no tests ran" not in proc.stdout, (
+                f"{name}: the term {term!r} in -k {selection!r} matches NOTHING in "
+                f"{test_file}. The other terms may still collect, so this proof "
+                "would run a NARROWER set than it claims and still look green."
             )
 
 

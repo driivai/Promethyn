@@ -1,4 +1,4 @@
-"""THE ESSENTIAL REGRESSION, and the eight-state swarm matrix.
+"""THE ESSENTIAL REGRESSION, and the swarm fault matrix.
 
 Required executable verification MISSING + a structural HARD PASS →
 bank REFUSAL, NO approval issued, ZERO executor calls — through every
@@ -6,9 +6,12 @@ production authorization entry point.
 
 The reproductions here are the review's, not simplified versions: the swarm
 matrix drives the real runtime with the real bank, the real gate and the real
-executor, and each of the eight fault shapes is produced by an actual fault (a
-verifier that is absent, that raises, that times out, that refuses) rather than
-by a stubbed return value standing in for one.
+executor, and each fault shape is produced by an actual fault (a verifier that
+is absent, that raises, that times out before its candidate started, that times
+out after, that refuses) rather than by a stubbed return value standing in for
+one. The two SubprocessVerifier TIMEOUT rows go through the real
+``SubprocessVerifier.verify`` and its real ``candidate_started`` branch, which
+is the only way they are two rows rather than one written twice.
 """
 
 from __future__ import annotations
@@ -16,6 +19,7 @@ from __future__ import annotations
 import pytest
 
 from prometheus_protocol.core.models import (
+    SPLIT_TRAIN,
     Case,
     Evidence,
     Judgment,
@@ -36,6 +40,7 @@ from prometheus_protocol.policy.profile import (
 )
 from prometheus_protocol.policy.resolver import resolve
 from prometheus_protocol.policy.snapshot import snapshot_digest
+from prometheus_protocol.sandbox.base import Limits, Sandbox, SandboxResult
 from prometheus_protocol.sandbox.unsafe import NullSandbox, UnsafeLocalSandbox
 from prometheus_protocol.swarm.debate import DebateLayer
 from prometheus_protocol.swarm.executor import RecordingExecutor
@@ -174,7 +179,7 @@ def test_the_migration_action_class_is_covered_by_the_shipped_policy():
 
 
 # ===========================================================================
-# 3. The eight-state swarm matrix, driven through the real runtime
+# 3. The swarm fault matrix, driven through the real runtime
 # ===========================================================================
 
 
@@ -290,8 +295,44 @@ class _ReturnsVerdict:
         )
 
 
-#: The eight fault shapes from the review. ``None`` for the first is a genuinely
-#: absent verifier, not a stub that returns nothing.
+class _TimedOutSandbox(Sandbox):
+    """A sandbox that reports a wall-clock timeout with the candidate-start
+    signal set either way.
+
+    This drives the REAL :meth:`SubprocessVerifier.verify` through its real
+    timeout branches rather than stubbing its return value, which is the whole
+    difference between the last two rows of the matrix: a timeout *before* the
+    candidate was confirmed to start is a harness fault the verifier reports as
+    ``Unavailable(INFRA_FAULT)``, and a timeout *after* confirmed start is the
+    candidate's own hang, reported as ``Evidence(ABSTAIN)``. Two different
+    outcomes from one fault shape, and the coverage layer must refuse both — via
+    different refusal reasons, which is why they are separate rows.
+    """
+
+    name = "timed-out"
+
+    def __init__(self, *, candidate_started: bool) -> None:
+        self._candidate_started = candidate_started
+
+    def run(self, *, argv, workspace, limits=Limits(), stdin=""):
+        return SandboxResult(
+            timed_out=True,
+            started_ok=True,
+            candidate_started=self._candidate_started,
+            detail="wall clock exceeded",
+        )
+
+
+#: The eight fault shapes from the review, plus two of this sprint's own. The
+#: review's eight are rows 1-6 and the two SubprocessVerifier TIMEOUT rows —
+#: before and after confirmed candidate start, which the real verifier maps to
+#: two different outcomes. ``None`` for the first is a genuinely absent verifier,
+#: not a stub that returns nothing.
+#:
+#: Added here: the no-isolation refusal (a POLICY_REFUSAL rather than an
+#: INFRA_FAULT, the fourth distinct way the executable check can fail to answer)
+#: and the positive control, without which "nothing is authorized" would pass
+#: vacuously.
 _MATRIX = [
     ("missing verifier", None),
     ("raises", _Raises()),
@@ -299,6 +340,10 @@ _MATRIX = [
     ("returns Unavailable", _ReturnsUnavailable()),
     ("returns ABSTAIN", _ReturnsVerdict(Verdict.ABSTAIN)),
     ("returns FAIL", _ReturnsVerdict(Verdict.FAIL)),
+    ("SubprocessVerifier timeout BEFORE confirmed candidate start",
+     SubprocessVerifier(memory_mb=0, sandbox=_TimedOutSandbox(candidate_started=False))),
+    ("SubprocessVerifier timeout AFTER confirmed candidate start",
+     SubprocessVerifier(memory_mb=0, sandbox=_TimedOutSandbox(candidate_started=True))),
     ("SubprocessVerifier refuses (no isolation)",
      SubprocessVerifier(memory_mb=0, sandbox=NullSandbox())),
     ("SubprocessVerifier runs (positive control)",
@@ -306,11 +351,69 @@ _MATRIX = [
 ]
 
 
+def test_the_two_timeout_rows_really_are_two_different_outcomes():
+    """If both timeout rows produced the same verifier outcome, running them
+    both would be theatre: one row twice, reported as two.
+
+    The distinction is the one ``runner.py`` draws and EX-1 depends on — an
+    unconfirmed start is the harness's fault (could-not-run), a confirmed one is
+    the candidate's (ran, no opinion) — and it must survive into two DIFFERENT
+    coverage refusals, not collapse into one.
+    """
+
+    task = Task(
+        id="t/add", entry_point="add", prompt="add two integers",
+        split=SPLIT_TRAIN, cases=(Case((2, 3), 5),),
+    )
+    before = SubprocessVerifier(
+        memory_mb=0, sandbox=_TimedOutSandbox(candidate_started=False)
+    ).verify(code=_CODE, task=task)
+    after = SubprocessVerifier(
+        memory_mb=0, sandbox=_TimedOutSandbox(candidate_started=True)
+    ).verify(code=_CODE, task=task)
+
+    assert isinstance(before, Unavailable)
+    assert before.reason is Unavailability.INFRA_FAULT
+    assert isinstance(after, Evidence)
+    assert after.decided == Verdict.ABSTAIN
+
+    # And they refuse for DIFFERENT recorded reasons at the coverage layer: one
+    # has no result to weigh, the other has one that declines to answer.
+    policy = load_profile("baseline")
+    snapshot = resolve(
+        policy, artifact_sha256=ARTIFACT, target_canonical=TARGET,
+        action_class="sandbox.execute", attempt_id="t-1",
+    )
+    digest = snapshot_digest(snapshot)
+    structural = BoundResult(
+        check_id=CHECK_STRUCTURAL, snapshot_digest=digest,
+        implementation="swarm-checks",
+        outcome=Evidence(
+            passed=True, total=1, passed_count=1, failures=(),
+            verifier_id="swarm-checks", verdict=Verdict.PASS, tier=Tier.HARD,
+        ),
+    )
+    reasons = set()
+    for outcome in (before, after):
+        refusal = validate_coverage(
+            snapshot,
+            (structural, BoundResult(
+                check_id=CHECK_EXECUTABLE_CASES, snapshot_digest=digest,
+                implementation=IMPL_SUBPROCESS, outcome=outcome,
+            )),
+        )
+        reasons.add(refusal.reason)
+    assert len(reasons) == 2, f"both timeout rows refused identically: {reasons}"
+
+
 @pytest.mark.parametrize("label,verifier", _MATRIX, ids=[m[0] for m in _MATRIX])
-def test_the_eight_state_matrix_authorizes_only_where_policy_is_satisfied(label, verifier):
-    """BEFORE this sprint, five of these eight produced an approved action and an
-    executor call, and the two that did NOT execute did so by CRASHING — so the
-    honest Unavailable was more fragile than the wrong answer.
+def test_the_swarm_matrix_authorizes_only_where_policy_is_satisfied(label, verifier):
+    """MEASURED at 68d80df, the commit before enforcement: SIX of these ten
+    produced an approved action and an executor call. The two rows that refused
+    without this sprint did so only because the verifier happened to return
+    ``Unavailable``, which the old ``_verify`` propagated — an accident of that
+    one return shape, not a rule. Every other way of failing to answer (absent,
+    raising, abstaining, hanging after start) was approved.
 
     Now: an approval happens only where a policy requirement is genuinely
     satisfied, which is the last row alone.
@@ -330,7 +433,7 @@ def test_the_eight_state_matrix_authorizes_only_where_policy_is_satisfied(label,
         # refuses as unsatisfactory, the bank reports an authoritative FAIL, and
         # the gate sees it and blocks. Every other row refuses before any verdict
         # exists, so the gate is not reached at all; asserting the stronger shape
-        # for all eight would have been asserting an implementation detail rather
+        # for every row would have been asserting an implementation detail rather
         # than the guarantee.
         approved = action.decision is not None and action.decision.approved
         assert not approved, f"{label}: an approval was issued"

@@ -13,9 +13,12 @@ in `spec/invariants.md` is a major version bump.
   caused by a broken verifier. The swarm's aggregation substituted *everything
   that ran passed* for *everything REQUIRED passed*: a missing, raising or
   abstaining verifier was discarded, a passing structural check then yielded a
-  synthetic HARD PASS, and the gate approved — **five of eight verifier states
-  produced an approved action and an executor call** (measured, before and
-  after). Separately the bank accepted a HARD PASS beside a HARD Unavailable and
+  synthetic HARD PASS, and the gate approved — **six of ten verifier states
+  produced an approved action and an executor call** (measured at the commit
+  before enforcement, and again after: one of ten, the positive control). Among
+  the six was a candidate that HUNG after confirmed start: the real
+  `SubprocessVerifier` reports that honestly as an ABSTAIN, and the aggregate
+  approved it. Separately the bank accepted a HARD PASS beside a HARD Unavailable and
   returned an authoritative PASS. The second is INTENTIONAL for two redundant
   HARD verifiers where either suffices; the bank could not tell redundant from
   required because nothing told it. The missing thing was not a fix to either
@@ -61,6 +64,15 @@ in `spec/invariants.md` is a major version bump.
     its reason and driven by a test**, because closing it is the next sprint's
     breaking interface change. **Until then an old call path can bypass the
     policy layer entirely** — stated in the docs, not only here.
+  - **A dead `-k` term found in this sprint's own revert runner.** One mutation
+    selected `"row_abstain or eight_state"` against a file the matrix does not
+    live in, so pytest deselected the second term silently and the proof ran
+    half of what it named. The pin test now checks **every TERM** of every
+    selection, because a whole-expression check is vacuous over a disjunction:
+    a dead branch of `"a or b"` still collects `b`. Measured — the
+    whole-expression version stayed green on all three stale selections. Same
+    shape as the recorded allowlist failures: a `-k` expression constrains test
+    NAMES, and a rename is exactly what can vary that it does not constrain.
 - **PROD-FIX-2 — F8: secrets propagated into diagnostics.** An independent
   review put one canary token in the configured API key and found it in roughly
   twenty-five distinct public strings: `repr(Config)`, `asdict(Config)`

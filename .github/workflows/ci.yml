@@ -231,14 +231,18 @@ jobs:
         # essential regression: a required executable check MISSING plus a
         # structural HARD PASS must refuse, with no approval and zero executor
         # calls, driven through the real swarm runtime with the real bank, gate
-        # and executor. The eight-state matrix is beside it.
+        # and executor. The ten-row fault matrix is beside it.
         #
         # Pinned by exact collection per module and zero skips. Every test here
-        # runs in-process on SQLite and an in-memory trust store; the one
-        # sandboxed row uses UnsafeLocalSandbox deliberately (its "candidate" is
-        # a four-character arithmetic fixture this repository authored), so it is
-        # deterministic on every host and a skip would mean a proof stopped
-        # running rather than an environment lacking something.
+        # runs in-process on SQLite and an in-memory trust store. No matrix row
+        # needs a container: the two timeout rows drive the real
+        # SubprocessVerifier through a sandbox stub that reports a wall-clock
+        # timeout with candidate_started set either way, the no-isolation row
+        # uses NullSandbox, and the positive control uses UnsafeLocalSandbox
+        # deliberately (its "candidate" is a four-character arithmetic fixture
+        # this repository authored). So every row is deterministic on every host,
+        # and a skip here would mean a proof stopped running rather than an
+        # environment lacking something.
         run: |
           python -m pytest -q \
             tests/conformance/test_bound_requirements_encoding.py \
@@ -252,9 +256,9 @@ jobs:
           cases = list(ET.parse("phase-1-2a.xml").iter("testcase"))
           expected = {"test_bound_requirements_encoding": 21,
                       "test_coverage_enforcement": 33,
-                      "test_policy_enforcement_regression": 16,
+                      "test_policy_enforcement_regression": 19,
                       "test_no_second_aggregator": 9,
-                      "test_phase_1_2a_revert_pins": 6}
+                      "test_phase_1_2a_revert_pins": 7}
           for module, count in expected.items():
               actual = sum(c.get("classname", "").endswith(module) for c in cases)
               assert actual == count, (module, actual, count)
