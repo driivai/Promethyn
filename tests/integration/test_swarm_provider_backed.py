@@ -87,18 +87,36 @@ def test_run_is_deterministic():
     ]
 
 
-def test_malformed_skeptic_cases_do_not_block_a_valid_candidate():
-    # The skeptic gets a task whose entry point has no scripted cases, so it
-    # produces no runnable executable check (it ABSTAINs). The action is still
-    # verified by its structural checks and is not spuriously blocked.
+def test_missing_executable_cases_now_BLOCK_a_structurally_valid_candidate():
+    """PHASE-1.2a INVERTED THIS TEST, and the inversion is the sprint.
+
+    It previously read *"no executable case ran (ABSTAIN), but structural checks
+    pass -> not blocked"* and asserted an approved, executed action. That is the
+    reproduced fail-open written down as intended behaviour: a candidate whose
+    executable verification never ran was authorized on predicates alone.
+
+    Under the trusted policy the requirement does not come from the plan, so a
+    skeptic that produces no cases cannot erase it. The candidate here is
+    genuinely correct — that is the point. Being correct is not the same as
+    having been verified, and only the second authorizes.
+    """
+
     task = correct_code_task()
-    # A code book that has the correct code but no scripted skeptic cases.
     from prometheus_protocol._examples.swarm_tasks import CodeTask
 
     nocase = CodeTask(entry_point="add", goal=task.goal, code=task.code, cases=())
     runtime = _runtime(nocase)
     run = runtime.run(nocase.packet())
     action = _action(run)
-    # No executable case ran (ABSTAIN), but structural checks pass -> not blocked.
-    assert action.verified.judgment.verdict == Verdict.PASS
+
+    assert action.verified is None, "no judgment may be carried without coverage"
+    assert action.decision is None, "the gate must not be consulted"
+    assert action.execution is None
+    assert runtime.executor.executed == []
+
+    # And the control that keeps this from passing for the wrong reason: the
+    # SAME candidate, with the skeptic's cases present, is authorized.
+    covered = _runtime(task)
+    action = _action(covered.run(task.packet()))
     assert action.decision is not None and action.decision.approved
+    assert covered.executor.executed

@@ -17,6 +17,7 @@ from prometheus_protocol.core.models import (
     Judgment,
     Task,
     Tier,
+    Unavailability,
     Unavailable,
     Verdict,
     assert_never,
@@ -37,8 +38,23 @@ from prometheus_protocol.swarm.models import (
     VerifiedProposal,
     content_hash,
 )
+from prometheus_protocol.policy.coverage import BoundResult
+from prometheus_protocol.policy.profile import (
+    CHECK_EXECUTABLE_CASES,
+    CHECK_STRUCTURAL,
+    DEFAULT_PROFILE_ID,
+    PolicyError,
+    VerificationPolicy,
+    load_profile,
+)
+from prometheus_protocol.policy.resolver import resolve
+from prometheus_protocol.policy.snapshot import BoundRequirements, snapshot_digest
 from prometheus_protocol.swarm.synthesis import RoleSynthesisEngine, SwarmConfig
 from prometheus_protocol.verifier.bank import VerifierBank
+
+#: The action class every swarm proposal falls under: candidate code runs in the
+#: isolated executor, with no privileged target.
+ACTION_SANDBOX_EXECUTE = "sandbox.execute"
 
 # The deterministic check runner reports under this stable id, at the hard tier
 # (surviving concrete falsification checks is an authoritative basis to act, for
@@ -87,6 +103,8 @@ class SwarmRuntime:
         code_verifier: Verifier | None = None,
         verifier_id: str = CHECK_VERIFIER_ID,
         tier: Tier = Tier.HARD,
+        policy: VerificationPolicy | None = None,
+        target_canonical: str = "sandbox://swarm",
     ) -> None:
         self.synthesis = synthesis
         self.debate = debate
@@ -102,8 +120,25 @@ class SwarmRuntime:
         self.code_verifier = code_verifier
         self.verifier_id = verifier_id
         self.tier = tier
+        # R1 — a policy VALUE, never a module-level constant reached for at the
+        # point of use. ``load_profile`` is one supplier of that value; a
+        # customer-supplied digest-pinned supplier is a later addition beside it
+        # rather than a rewrite of this class.
+        self.policy = policy if policy is not None else load_profile(DEFAULT_PROFILE_ID)
+        #: The principal this runtime acts against. The swarm executes inside the
+        #: sandbox and touches no privileged target, so the canonical form names
+        #: the sandbox rather than pretending to a principal it does not have.
+        self.target_canonical = target_canonical
+        #: Set per entry by ``run`` before ``_verify`` binds anything to it.
+        self._snapshot: BoundRequirements | None = None
         # Register the check runner so its hard-tier prior applies.
         self.bank.register(verifier_id, tier)
+        if code_verifier is not None:
+            # Read straight off the port: ``Verifier`` declares both, so a
+            # getattr default here would stand in for an attribute the protocol
+            # guarantees — and the type gate refuses a default for exactly that
+            # reason.
+            self.bank.register(code_verifier.verifier_id, code_verifier.tier)
 
     def run(self, packet: TaskPacket, config: SwarmConfig | None = None) -> SwarmRun:
         swarm = self.synthesis.assemble(packet, config)
@@ -113,8 +148,69 @@ class SwarmRuntime:
         packet_id = content_hash(packet.goal)[:12]
         records: list[ChainRecord] = []
         for entry in plan.entries:
-            evidence = self._verify(entry)
-            judgment = self.bank.judge([evidence])
+            # PHASE-1.2a — the requirements come from the POLICY and this
+            # action, resolved BEFORE anything runs. Resolving first is what
+            # makes omission powerless: the requirement set cannot depend on
+            # what the plan turned out to contain.
+            # ONLY AN ACTION IS AUTHORIZED, so only an action is enforced.
+            # A hypothesis or a critique is judged and recorded; it never
+            # reaches the gate or the executor, so there is no authorization for
+            # a policy to gate. Enforcing an action policy on it would demand
+            # executable verification of something that executes nothing —
+            # requirements for a consequence that cannot occur.
+            if entry.proposal.kind != KIND_PROPOSED_ACTION:
+                evidence, _ = self._verify_unenforced(entry)
+                judgment = self.bank.judge([evidence])
+                verified = None
+                if isinstance(judgment, Judgment):
+                    verified = VerifiedProposal.from_judgment(entry.proposal, judgment)
+                self._record(packet_id, entry, evidence, judgment, None, None)
+                records.append(
+                    ChainRecord(
+                        proposal=entry.proposal,
+                        verification_requests=entry.verification_requests,
+                        evidence=evidence,
+                        verified=verified,
+                        decision=None,
+                        execution=None,
+                    )
+                )
+                continue
+
+            attempt_id = f"{packet_id}/{entry.proposal.id}"
+            try:
+                self._snapshot = resolve(
+                    self.policy,
+                    artifact_sha256=content_hash(entry.proposal.content),
+                    target_canonical=self.target_canonical,
+                    action_class=ACTION_SANDBOX_EXECUTE,
+                    attempt_id=attempt_id,
+                )
+            except PolicyError as exc:
+                # No policy for this action means it cannot be authorized —
+                # silence is not permission. Recorded, nothing executed.
+                self._snapshot = None
+                unresolved = Unavailable(
+                    verifier_id="policy-resolver",
+                    tier=self.tier,
+                    reason=Unavailability.POLICY_REFUSAL,
+                    detail=f"verification cannot proceed: {exc}",
+                )
+                self._record(packet_id, entry, unresolved, unresolved, None, None)
+                records.append(
+                    ChainRecord(
+                        proposal=entry.proposal,
+                        verification_requests=entry.verification_requests,
+                        evidence=unresolved,
+                        verified=None,
+                        decision=None,
+                        execution=None,
+                    )
+                )
+                continue
+
+            evidence, results = self._verify(entry)
+            judgment = self.bank.judge_covered(self._snapshot, results)
 
             decision = None
             execution = None
@@ -167,58 +263,130 @@ class SwarmRuntime:
             )
         return SwarmRun(packet=packet, plan=plan, records=tuple(records))
 
-    def _verify(self, entry: TestPlanEntry) -> Evidence | Unavailable:
-        requests = entry.verification_requests
-        if not requests:
-            # Nothing to verify -> no opinion. An unverified proposal can never
-            # be authorized.
-            return self._abstain("no verification requested")
+    def _verify(self, entry: TestPlanEntry) -> tuple[Evidence | Unavailable, list[BoundResult]]:
+        """Run the checks and report them SEPARATELY, bound to the snapshot.
 
-        # Two check kinds: structural predicates (evaluated in-process) and
-        # executable cases (run by the HARD code verifier). Aggregation is a
-        # conjunction: the proposal passes only if every check that *could run*
-        # passed, so any failing check is a hard veto; if nothing could run the
-        # result ABSTAINs (never a silent pass).
+        PHASE-1.2a — THE SWARM NO LONGER COMPUTES AN AGGREGATE.
+
+        What this used to do was the reproduced fail-open: it folded structural
+        predicates and executable cases into ONE Evidence by counting "checks
+        that could run", so a plan whose executable cases never ran was judged on
+        predicates alone and a passing predicate became a synthetic HARD PASS.
+        The three ways ``_run_executable_checks`` returns ``None`` — no code
+        verifier wired, no entry point or cases, an exception swallowed — were
+        all indistinguishable from "there was nothing executable to do".
+
+        Now each check kind is reported under its own CHECK IDENTITY, bound to
+        the resolved snapshot, and the bank decides coverage. A missing
+        executable result is missing: the policy requires ``executable.cases``
+        for this action class, and nothing here can shrink that requirement,
+        because the requirement never came from the plan.
+
+        The first element of the returned pair is the structural summary kept
+        for the CHAIN RECORD — it is what the ledger has always recorded and
+        callers still read. It is NOT what authorizes anything.
+        """
+
+        requests = entry.verification_requests
+        results: list[BoundResult] = []
+        if not requests:
+            # Nothing requested. This is NOT "nothing required": the policy's
+            # requirements exist regardless, so this returns no results and the
+            # bank refuses for want of coverage.
+            return self._abstain("no verification requested"), results
+
         executable = [r.check for r in requests if r.check.cases]
         structural = [r for r in requests if not r.check.cases]
 
-        ran = 0
         failures: list[str] = []
-
         for request in structural:
-            ran += 1
             if not predicate_holds(request.check, entry.proposal):
                 failures.append(f"{request.check.id}: {request.check.description}")
 
+        structural_evidence: Evidence | None = None
+        if structural:
+            verdict = Verdict.PASS if not failures else Verdict.FAIL
+            structural_evidence = Evidence(
+                passed=(verdict == Verdict.PASS),
+                total=len(structural),
+                passed_count=len(structural) - len(failures),
+                failures=tuple(failures),
+                verifier_id=self.verifier_id,
+                verdict=verdict,
+                tier=self.tier,
+                detail="; ".join(failures),
+            )
+            if self._snapshot is not None:
+                results.append(
+                    self._bind(
+                        self._snapshot,
+                        CHECK_STRUCTURAL,
+                        self.verifier_id,
+                        structural_evidence,
+                    )
+                )
+
+        reported_unavailable: Unavailable | None = None
         if executable:
-            evidence = self._run_executable_checks(entry.proposal, executable)
-            if isinstance(evidence, Unavailable):
-                # The HARD code verifier could not run the executable cases.
-                # FAIL CLOSED: propagate the unavailability rather than letting
-                # the structural checks alone decide. Counting it as "did not
-                # run" would let a proposal whose executable cases never
-                # executed be judged on predicates alone, and the aggregation
-                # policy for a partially-unavailable check set is Phase 1.2 —
-                # not something to guess here.
-                return evidence
-            if evidence is not None and evidence.decided != Verdict.ABSTAIN:
-                ran += 1
-                if evidence.decided != Verdict.PASS:
-                    failures.append(f"executable: {evidence.detail or 'cases failed'}")
+            outcome = self._run_executable_checks(entry.proposal, executable)
+            if isinstance(outcome, Unavailable):
+                # Kept as the CHAIN's reported outcome. Authorization is decided
+                # by coverage below, but the record's job is to say what the
+                # checks produced, and "the HARD verifier could not run" is the
+                # most informative thing that happened.
+                reported_unavailable = outcome
+            if outcome is not None and self._snapshot is not None and self.code_verifier is not None:
+                # Reported under the CODE VERIFIER's own id, not the swarm's: the
+                # policy names which implementations may answer ``executable.cases``,
+                # and the swarm is not one of them. Claiming otherwise would be the
+                # mislabelling the binding check refuses.
+                results.append(
+                    self._bind(
+                        self._snapshot,
+                        CHECK_EXECUTABLE_CASES,
+                        self.code_verifier.verifier_id,
+                        outcome,
+                    )
+                )
+            # ``None`` deliberately produces NO result. A swallowed exception, an
+            # unwired verifier and an empty entry point are the same thing from
+            # here — the required check has no answer — and the bank refuses on
+            # that row rather than this method guessing which it was.
 
-        if ran == 0:
-            return self._abstain("no runnable check (executable checks abstained)")
+        if reported_unavailable is not None:
+            return reported_unavailable, results
+        if structural_evidence is not None:
+            return structural_evidence, results
+        return self._abstain("no structural check ran"), results
 
-        verdict = Verdict.PASS if not failures else Verdict.FAIL
-        return Evidence(
-            passed=(verdict == Verdict.PASS),
-            total=ran,
-            passed_count=ran - len(failures),
-            failures=tuple(failures),
-            verifier_id=self.verifier_id,
-            verdict=verdict,
-            tier=self.tier,
-            detail="; ".join(failures),
+    def _verify_unenforced(
+        self, entry: TestPlanEntry
+    ) -> tuple[Evidence | Unavailable, list[BoundResult]]:
+        """``_verify`` for a proposal that authorizes nothing.
+
+        Same checks, no snapshot, no bound results — there is no action to bind
+        them to. Kept as a separate entry point rather than a flag so that a
+        caller cannot reach the unenforced path for something that IS an action.
+        """
+
+        previous, self._snapshot = self._snapshot, None
+        try:
+            return self._verify(entry)
+        finally:
+            self._snapshot = previous
+
+    def _bind(
+        self,
+        snapshot: BoundRequirements,
+        check_id: str,
+        implementation: str,
+        outcome: Evidence | Unavailable,
+    ) -> BoundResult:
+        return BoundResult(
+            check_id=check_id,
+            snapshot_digest=snapshot_digest(snapshot),
+            implementation=implementation,
+            outcome=outcome,
         )
 
     def _abstain(self, detail: str) -> Evidence:

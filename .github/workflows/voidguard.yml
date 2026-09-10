@@ -45,6 +45,15 @@ on:
       - "src/prometheus_protocol/core/diagnostics.py"
       - "tests/conformance/test_secret_canary_sweep.py"
       - "tests/conformance/test_secret_sink_regressions.py"
+      - "scripts/phase_1_2a_revert_proofs.py"
+      # PHASE-1.2a. The scan looks for guards that cannot fail; a coverage
+      # validator that refuses nothing, or a no-second-aggregator sweep that
+      # finds nothing, is exactly that shape, and both are new here.
+      - "src/prometheus_protocol/policy/**"
+      - "src/prometheus_protocol/verifier/bank.py"
+      - "src/prometheus_protocol/swarm/runtime.py"
+      - "tests/conformance/test_coverage_enforcement.py"
+      - "tests/conformance/test_no_second_aggregator.py"
       - ".github/workflows/ci.yml"
 
 permissions:

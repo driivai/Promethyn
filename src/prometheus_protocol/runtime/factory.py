@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Mapping
+from typing import TYPE_CHECKING, Mapping
 
 from prometheus_protocol.core.anchor_spec import parse_anchor_spec
 from prometheus_protocol.core.booleans import parse_env_bool
@@ -45,6 +45,9 @@ from prometheus_protocol.verifier.store import (
     SqliteTrustStore,
     TrustStore,
 )
+
+if TYPE_CHECKING:  # pragma: no cover
+    from prometheus_protocol.policy.profile import VerificationPolicy
 
 _LOG = logging.getLogger(__name__)
 
@@ -249,6 +252,25 @@ def build_ledger(
             config.ledger_anchor,
         )
     return SqliteLedger(location, tip_anchor=anchor)
+
+
+def build_verification_policy(config: Config | None = None) -> "VerificationPolicy":
+    """The policy VALUE this configuration selects (PHASE-1.2a, R1).
+
+    The single consumption site for ``Config.verification_profile``, and
+    deliberately a function returning a VALUE rather than a constant anyone can
+    reach for: a customer-supplied digest-pinned policy becomes another supplier
+    of this value, not a rewrite of the resolver, the bank or the swarm.
+
+    An unknown profile raises rather than falling back to a default. A typo in
+    the selected profile must never silently authorize under a policy nobody
+    chose — that is the omission attack wearing a configuration error.
+    """
+
+    from prometheus_protocol.policy.profile import load_profile
+
+    config = config or Config()
+    return load_profile(config.verification_profile)
 
 
 def build_orchestrator(

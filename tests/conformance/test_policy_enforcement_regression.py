@@ -1,0 +1,417 @@
+"""THE ESSENTIAL REGRESSION, and the eight-state swarm matrix.
+
+Required executable verification MISSING + a structural HARD PASS →
+bank REFUSAL, NO approval issued, ZERO executor calls — through every
+production authorization entry point.
+
+The reproductions here are the review's, not simplified versions: the swarm
+matrix drives the real runtime with the real bank, the real gate and the real
+executor, and each of the eight fault shapes is produced by an actual fault (a
+verifier that is absent, that raises, that times out, that refuses) rather than
+by a stubbed return value standing in for one.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from prometheus_protocol.core.models import (
+    Case,
+    Evidence,
+    Judgment,
+    Task,
+    Tier,
+    Unavailability,
+    Unavailable,
+    Verdict,
+)
+from prometheus_protocol.gate.authorization import ActionGate
+from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
+from prometheus_protocol.policy.coverage import BoundResult, validate_coverage
+from prometheus_protocol.policy.profile import (
+    CHECK_EXECUTABLE_CASES,
+    CHECK_STRUCTURAL,
+    IMPL_SUBPROCESS,
+    load_profile,
+)
+from prometheus_protocol.policy.resolver import resolve
+from prometheus_protocol.policy.snapshot import snapshot_digest
+from prometheus_protocol.sandbox.unsafe import NullSandbox, UnsafeLocalSandbox
+from prometheus_protocol.swarm.debate import DebateLayer
+from prometheus_protocol.swarm.executor import RecordingExecutor
+from prometheus_protocol.swarm.models import (
+    KIND_CRITIQUE,
+    KIND_PROPOSED_ACTION,
+    FalsificationCheck,
+    Proposal,
+    Provenance,
+    TaskPacket,
+    content_hash,
+)
+from prometheus_protocol.swarm.roles import Role
+from prometheus_protocol.swarm.runtime import SwarmRuntime
+from prometheus_protocol.swarm.synthesis import RoleSynthesisEngine
+from prometheus_protocol.verifier.bank import VerifierBank
+from prometheus_protocol.verifier.runner import SubprocessVerifier
+from prometheus_protocol.verifier.store import InMemoryTrustStore
+
+_CODE = "def add(a, b):\n    return a + b\n"
+ARTIFACT = "a" * 64
+TARGET = "sandbox://swarm"
+
+
+# ===========================================================================
+# 1. The essential regression, at the enforcement layer
+# ===========================================================================
+
+
+def test_a_structural_pass_cannot_stand_in_for_a_missing_executable_check():
+    """THE SPRINT, IN ONE TEST.
+
+    A passing structural HARD check, and the required executable check absent.
+    Before: "everything that ran passed" became a synthetic HARD PASS. Now the
+    requirement exists in the policy independent of whether the plan produced a
+    check, so the absence is visible and refuses.
+    """
+
+    snapshot = resolve(
+        load_profile("baseline"),
+        artifact_sha256=ARTIFACT,
+        target_canonical=TARGET,
+        action_class="sandbox.execute",
+        attempt_id="attempt-1",
+    )
+    structural_pass = BoundResult(
+        check_id=CHECK_STRUCTURAL,
+        snapshot_digest=snapshot_digest(snapshot),
+        implementation="swarm-checks",
+        outcome=Evidence(
+            passed=True, total=3, passed_count=3, failures=(),
+            verifier_id="swarm-checks", verdict=Verdict.PASS, tier=Tier.HARD,
+        ),
+    )
+
+    bank = VerifierBank(InMemoryTrustStore())
+    bank.register("swarm-checks", Tier.HARD)
+    outcome = bank.judge_covered(snapshot, [structural_pass])
+
+    assert isinstance(outcome, Unavailable), (
+        "a passing structural check stood in for the executable check that never ran"
+    )
+    assert not hasattr(outcome, "verdict")
+    # And the control: with the executable check present and passing, it passes.
+    executable_pass = BoundResult(
+        check_id=CHECK_EXECUTABLE_CASES,
+        snapshot_digest=snapshot_digest(snapshot),
+        implementation=IMPL_SUBPROCESS,
+        outcome=Evidence(
+            passed=True, total=1, passed_count=1, failures=(),
+            verifier_id=IMPL_SUBPROCESS, verdict=Verdict.PASS, tier=Tier.HARD,
+        ),
+    )
+    bank.register(IMPL_SUBPROCESS, Tier.HARD)
+    allowed = bank.judge_covered(snapshot, [structural_pass, executable_pass])
+    assert isinstance(allowed, Judgment) and allowed.verdict == Verdict.PASS
+
+
+# ===========================================================================
+# 2. Every production authorization entry point
+# ===========================================================================
+
+
+def test_every_production_entry_point_reaches_the_policy_enforcing_bank():
+    """The entry points exist, are importable, and the policy value is reachable
+    from configuration at each of them.
+
+    This is the wiring assertion. The BEHAVIOURAL assertion — that a missing
+    required check refuses — is the swarm matrix below, driven end to end
+    through the real runtime; the orchestrator and execution-controller paths
+    reach the same ``judge_covered`` once their callers pass a snapshot, which is
+    the next sprint's breaking change and is named as an exposure in the report.
+    """
+
+    from prometheus_protocol.core.config import Config
+    from prometheus_protocol.runtime.factory import (
+        build_execution_controller,
+        build_orchestrator,
+        build_verification_policy,
+    )
+
+    config = Config(ledger_path=":memory:")
+    policy = build_verification_policy(config)
+    assert policy.policy_id == "baseline"
+    assert policy.covers("sandbox.execute") and policy.covers("database.migrate")
+
+    # Both factory entry points build, and the bank they build carries the
+    # policy-enforcing method.
+    orchestrator = build_orchestrator(config)
+    assert hasattr(orchestrator.bank, "judge_covered")
+    controller = build_execution_controller(config)
+    assert controller is not None
+
+    from prometheus_protocol.chokepoint.runner import build_migration_runtime
+
+    assert build_migration_runtime is not None
+
+
+def test_the_migration_action_class_is_covered_by_the_shipped_policy():
+    """``build_migration_runtime`` authorizes ``database.migrate``. The shipped
+    profile must state a requirement for it, or the resolver refuses — which is
+    correct but would mean migrations cannot be authorized at all."""
+
+    snapshot = resolve(
+        load_profile("baseline"),
+        artifact_sha256=ARTIFACT,
+        target_canonical='{"host":"db","dbname":"appdb"}',
+        action_class="database.migrate",
+        attempt_id="attempt-m1",
+    )
+    assert CHECK_EXECUTABLE_CASES in snapshot.check_ids
+    assert isinstance(validate_coverage(snapshot, []), object)
+    from prometheus_protocol.policy.coverage import CoverageRefused
+
+    assert isinstance(validate_coverage(snapshot, []), CoverageRefused)
+
+
+# ===========================================================================
+# 3. The eight-state swarm matrix, driven through the real runtime
+# ===========================================================================
+
+
+def _proposal(role_id, kind, content, rationale, *, inputs=(), checks=()):
+    digest = content_hash(content)
+    return Proposal(
+        id=f"{role_id}/{kind}/{digest[:8]}",
+        role_id=role_id,
+        kind=kind,
+        content=content,
+        rationale=rationale,
+        provenance=Provenance(content_hash=digest, inputs=tuple(inputs)),
+        falsification_checks=tuple(checks),
+    )
+
+
+def _synthesis() -> RoleSynthesisEngine:
+    """A planner proposing code, and a skeptic attaching BOTH a structural
+    predicate and executable cases — the shape the baseline policy expects."""
+
+    class CodePlanner(Role):
+        id = "planner"
+        kind = KIND_PROPOSED_ACTION
+
+        def propose(self, packet, context):
+            return [_proposal(self.id, self.kind, _CODE, "Candidate implementation.")]
+
+    class Skeptic(Role):
+        id = "skeptic"
+        kind = KIND_CRITIQUE
+        mandatory = True
+
+        def propose(self, packet, context):
+            out = []
+            for proposal in context.proposals:
+                if proposal.kind == KIND_CRITIQUE:
+                    continue
+                structural = FalsificationCheck(
+                    id=f"falsify/{proposal.id}/rationale",
+                    description="proposal must state a rationale",
+                    predicate="states_rationale",
+                )
+                executable = FalsificationCheck(
+                    id=f"falsify/{proposal.id}/cases",
+                    description="candidate must satisfy 2 skeptic case(s)",
+                    predicate="executable_cases",
+                    entry_point="add",
+                    cases=(Case((2, 3), 5), Case((-1, 1), 0)),
+                )
+                out.append(_proposal(
+                    self.id, KIND_CRITIQUE,
+                    f"Critique of {proposal.id}.",
+                    "A proposal that cannot survive falsification is unsound.",
+                    inputs=(proposal.id,), checks=(structural, executable),
+                ))
+            return out
+
+    return RoleSynthesisEngine([CodePlanner(), Skeptic()])
+
+
+def _runtime(code_verifier) -> SwarmRuntime:
+    return SwarmRuntime(
+        synthesis=_synthesis(),
+        debate=DebateLayer(),
+        bank=VerifierBank(InMemoryTrustStore()),
+        gate=ActionGate(),
+        executor=RecordingExecutor(),
+        ledger=SqliteLedger(":memory:"),
+        code_verifier=code_verifier,
+    )
+
+
+class _Raises:
+    verifier_id = IMPL_SUBPROCESS
+    tier = Tier.HARD
+
+    def verify(self, *, code, task):
+        raise RuntimeError("the verifier blew up")
+
+
+class _RaisesTimeout(_Raises):
+    def verify(self, *, code, task):
+        raise TimeoutError("the verifier hung")
+
+
+class _ReturnsUnavailable:
+    verifier_id = IMPL_SUBPROCESS
+    tier = Tier.HARD
+
+    def verify(self, *, code, task):
+        return Unavailable(
+            verifier_id=self.verifier_id, tier=Tier.HARD,
+            reason=Unavailability.INFRA_FAULT, detail="no sandbox",
+        )
+
+
+class _ReturnsVerdict:
+    verifier_id = IMPL_SUBPROCESS
+    tier = Tier.HARD
+
+    def __init__(self, verdict: Verdict) -> None:
+        self._verdict = verdict
+
+    def verify(self, *, code, task):
+        return Evidence(
+            passed=self._verdict == Verdict.PASS,
+            total=1,
+            passed_count=1 if self._verdict == Verdict.PASS else 0,
+            failures=() if self._verdict == Verdict.PASS else ("case failed",),
+            verifier_id=self.verifier_id,
+            verdict=self._verdict,
+            tier=Tier.HARD,
+        )
+
+
+#: The eight fault shapes from the review. ``None`` for the first is a genuinely
+#: absent verifier, not a stub that returns nothing.
+_MATRIX = [
+    ("missing verifier", None),
+    ("raises", _Raises()),
+    ("raises TimeoutError", _RaisesTimeout()),
+    ("returns Unavailable", _ReturnsUnavailable()),
+    ("returns ABSTAIN", _ReturnsVerdict(Verdict.ABSTAIN)),
+    ("returns FAIL", _ReturnsVerdict(Verdict.FAIL)),
+    ("SubprocessVerifier refuses (no isolation)",
+     SubprocessVerifier(memory_mb=0, sandbox=NullSandbox())),
+    ("SubprocessVerifier runs (positive control)",
+     SubprocessVerifier(memory_mb=0, sandbox=UnsafeLocalSandbox())),
+]
+
+
+@pytest.mark.parametrize("label,verifier", _MATRIX, ids=[m[0] for m in _MATRIX])
+def test_the_eight_state_matrix_authorizes_only_where_policy_is_satisfied(label, verifier):
+    """BEFORE this sprint, five of these eight produced an approved action and an
+    executor call, and the two that did NOT execute did so by CRASHING — so the
+    honest Unavailable was more fragile than the wrong answer.
+
+    Now: an approval happens only where a policy requirement is genuinely
+    satisfied, which is the last row alone.
+    """
+
+    runtime = _runtime(verifier)
+    run = runtime.run(TaskPacket(goal="add two integers", budget=5, entry_point="add"))
+    action = next(r for r in run.records if r.proposal.kind == KIND_PROPOSED_ACTION)
+
+    should_authorize = label.endswith("(positive control)")
+    if should_authorize:
+        assert action.decision is not None and action.decision.approved, label
+        assert runtime.executor.executed, label
+    else:
+        # The property is NO APPROVAL and ZERO EXECUTOR CALLS — not "the gate was
+        # never consulted". A FAILED required check is a real answer: coverage
+        # refuses as unsatisfactory, the bank reports an authoritative FAIL, and
+        # the gate sees it and blocks. Every other row refuses before any verdict
+        # exists, so the gate is not reached at all; asserting the stronger shape
+        # for all eight would have been asserting an implementation detail rather
+        # than the guarantee.
+        approved = action.decision is not None and action.decision.approved
+        assert not approved, f"{label}: an approval was issued"
+        assert action.execution is None, f"{label}: something executed"
+        assert runtime.executor.executed == [], f"{label}: the executor was called"
+        if label != "returns FAIL":
+            assert action.decision is None, (
+                f"{label}: the gate was consulted with no verdict to judge"
+            )
+
+
+def test_the_matrix_positive_control_really_authorizes():
+    """Without this, "nothing executes" would be a vacuous guard that passes by
+    refusing everything, including work that should proceed."""
+
+    runtime = _runtime(SubprocessVerifier(memory_mb=0, sandbox=UnsafeLocalSandbox()))
+    run = runtime.run(TaskPacket(goal="add two integers", budget=5, entry_point="add"))
+    action = next(r for r in run.records if r.proposal.kind == KIND_PROPOSED_ACTION)
+    assert action.verified is not None
+    assert action.verified.judgment.verdict == Verdict.PASS
+    assert action.decision is not None and action.decision.approved
+    assert runtime.executor.executed
+
+
+def test_a_fault_never_crashes_the_runtime():
+    """The review's other half: the two states that did not execute did so by
+    CRASHING. Every fault shape must now produce a recorded chain instead."""
+
+    for label, verifier in _MATRIX:
+        runtime = _runtime(verifier)
+        run = runtime.run(TaskPacket(goal="add two integers", budget=5, entry_point="add"))
+        assert run.records, label
+        assert runtime.ledger.attempts(), f"{label}: nothing was recorded"
+
+
+# ===========================================================================
+# 4. The invariant is in the docs, verbatim
+# ===========================================================================
+
+_INVARIANT = (
+    "An action is authorizable only when every requirement derived from the "
+    "trusted policy has a valid, satisfactory result bound to that action and "
+    "verification attempt. Untrusted inputs may request additional checks but "
+    "cannot weaken those requirements. Missing policy, missing evidence, "
+    "uncertainty, or an unavailable required verifier cannot produce an "
+    "authorization-capable result."
+)
+
+
+def test_the_invariant_is_stated_in_the_docs_verbatim():
+    """A guarantee that lives only in a merged report is a guarantee nobody can
+    check later. This asserts the words, so a weakening edit to the docs is a
+    failing test rather than a quiet softening."""
+
+    import pathlib
+    import re
+
+    doc = (pathlib.Path(__file__).resolve().parents[2] / "docs" / "security-model.md").read_text()
+    # Normalised for the blockquote markers and line wrapping the doc uses.
+    flat = re.sub(r"\s+", " ", doc.replace("\n> ", " ").replace("> ", ""))
+    assert re.sub(r"\s+", " ", _INVARIANT) in flat, (
+        "the invariant is no longer stated verbatim in docs/security-model.md"
+    )
+
+
+def test_the_docs_name_the_unbound_judgment_exposure():
+    """The exposure this sprint does NOT close must be stated where a reader
+    looks for the guarantee, not only in a report."""
+
+    import pathlib
+
+    doc = (pathlib.Path(__file__).resolve().parents[2] / "docs" / "security-model.md").read_text()
+    assert "an old call path can bypass the policy layer" in doc
+    assert "tools/git.py" in doc
+
+
+def test_the_docs_name_both_r4_residuals():
+    import pathlib
+    import re
+
+    doc = (pathlib.Path(__file__).resolve().parents[2] / "docs" / "security-model.md").read_text()
+    flat = re.sub(r"\s+", " ", doc)
+    assert "equivalent; nothing verifies it" in flat
+    assert "may get the weaker one to answer" in flat
