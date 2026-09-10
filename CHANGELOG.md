@@ -74,12 +74,17 @@ in `spec/invariants.md` is a major version bump.
     shape as the recorded allowlist failures: a `-k` expression constrains test
     NAMES, and a rename is exactly what can vary that it does not constrain.
     The check reads names from each file's AST. A first version spawned
-    `pytest --collect-only` per term and **hung** — once locally, then on all
-    three CI matrix builds, past 20 minutes against a 7-minute baseline — because
-    starting a pytest session from inside a pytest session is fragile in ways
-    this proof has no reason to depend on. In-process it takes 0.14s. The limit
-    is stated in the test: a term matching only a `parametrize` ID, a class name
-    or a path would be reported dead.
+    `pytest --collect-only` per term; it was replaced because a local full-suite
+    run hung on it once (25 minutes wall against 20 seconds of CPU — a deadlock
+    signature, observed once and never explained), and because starting a pytest
+    session from inside a pytest session is fragile in ways this proof has no
+    reason to depend on. In-process it takes 0.14s against 5.23s. **It did not
+    hang CI** — an earlier revision of this entry said it did, on the strength of
+    a check-runs API response still reporting `in_progress` long after the jobs
+    had finished; the job timings show the subprocess version completing normally
+    in 7–8 seconds. The limit the AST scan buys is stated in the test: a term
+    matching only a `parametrize` ID, a class name or a path would be reported
+    dead.
 - **PROD-FIX-2 — F8: secrets propagated into diagnostics.** An independent
   review put one canary token in the configured API key and found it in roughly
   twenty-five distinct public strings: `repr(Config)`, `asdict(Config)`
