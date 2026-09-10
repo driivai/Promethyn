@@ -193,6 +193,29 @@ EXPECTED_PROTECTED_FILES = 21
 #:   NAMED EXPOSURE rather than an oversight: closing it means a raw
 #:   ``Judgment(PASS, authoritative=True)`` must stop being sufficient for
 #:   authorization, a breaking interface change and the next sprint's subject.
+#:
+#:
+#: * **PHASE-1.2b (closing the downstream bypass)** — five files, one change.
+#:   Checkpoint 2 built coverage enforcement and named its own exposure: a raw
+#:   authoritative ``Judgment`` still authorized. Four surfaces took one and asked
+#:   it a question a ``Judgment`` can answer with no policy ever resolved, so the
+#:   system was policy-enforced on the migrated paths and unenforced everywhere
+#:   else. Each of these files loses the parameter an unbound verdict arrived
+#:   through, and gains one that takes a ``PolicyAssessment`` instead:
+#:
+#:   - ``verifier/bank.py`` — ADDS ``assess``, which wraps what ``judge_covered``
+#:     already returned in a snapshot-bound assessment. ``judge`` and
+#:     ``judge_covered`` are untouched; the 240-row decision surface does not move.
+#:   - ``gate/authorization.py`` — ``ActionGate.decide`` takes an assessment.
+#:   - ``execution/controller.py`` — ``submit`` takes ``assessment=``. The old
+#:     ``judgment=`` keyword is REMOVED rather than deprecated: leaving it would
+#:     leave the bypass reachable by a caller that never migrated.
+#:   - ``orchestration/gateway.py`` — ``route_action`` and the ``SubmitFn``
+#:     protocol carry an assessment. The gateway still authorizes nothing.
+#:   - ``orchestration/runtime.py`` — resolves a snapshot per action and binds the
+#:     grader's evidence, so a caller-chosen grader can no longer authorize a
+#:     sandbox execution by being present.
+#:
 #: Those sprints are why these bytes are what they are. They do NOT license the
 #: next edit to the same files: updating a digest below is a fresh decision, and
 #: the reason for it belongs beside it.
@@ -206,7 +229,7 @@ DIGESTS: dict[str, str] = {
     "src/prometheus_protocol/core/models.py":
         "1355a91dfdbc0cd1ad4e3f12c9d4bb02b0548858973e1b583a82daebbc61e48c",
     "src/prometheus_protocol/execution/controller.py":
-        "7d88b9a0552e93063db3d51f37430073941be5e2eda4935811e0f5dc4bd7e435",
+        "6812f2f1c15fd20d2b32dddc3b63f1930abc6dfba116e75118ba37e576f06b28",
     "src/prometheus_protocol/execution/executor.py":
         "41f01a1c4e08826fe81fb738de882bdfaa73a26184b1391ff4a016a9daba85a5",
     "src/prometheus_protocol/execution/pending.py":
@@ -214,21 +237,21 @@ DIGESTS: dict[str, str] = {
     "src/prometheus_protocol/forge/miner.py":
         "b0e2a53440df5b38a1031cc9648e19b3f9df20081ee34d4e035beda2b6973a29",
     "src/prometheus_protocol/gate/authorization.py":
-        "8884926bed3ce0bc5c6228a516206498a448137bdb3e5cb0508580775894971d",
+        "2dbeba5a50af40a99690e839c10acb234f43f28f10c5f0327bdcbf5f806d8fcf",
     "src/prometheus_protocol/gate/promotion.py":
         "4c66123b363dbfe663707442761717bae3a69a8e7b0192413170ed8dbebecb22",
     "src/prometheus_protocol/orchestration/gateway.py":
-        "25a1e82031b6fbfc24bac0fa2033a4984c7a9de89b2eeb750919d6c8a063cdf5",
+        "b59813d5b42bad12b83329b7b2e0d68db4591b465546bf9aab5ecb6863cbd4bc",
     "src/prometheus_protocol/orchestration/messages.py":
         "bf2d1ff2e986c97aa4bc9c832f0cc18c1950740213dae6c4dc061e84e1073e1e",
     "src/prometheus_protocol/orchestration/runtime.py":
-        "ad277b9380d2c25cf025804d8ffc0cd6a01e4065b02faa79087503ddaaf8d77c",
+        "c8b1daeef56c92a95a7d4ae6917362920f90dd254370c3b75aeb3b12ee552540",
     "src/prometheus_protocol/orchestration/workflow.py":
         "5192847972a44f58d52f838db294c3cdc801d97e1b4bb7bc144fc808fef30e3b",
     "src/prometheus_protocol/verifier/aggregate.py":
         "5963bb6b4047c0ec2c900b10187e861ad95541dca87c0b98bdb5db34dcd1c37c",
     "src/prometheus_protocol/verifier/bank.py":
-        "dd0c2a79c5516db85336fa960ae2e0c83e266674463491f785ff0e87dcc5862d",
+        "643d7394e0c8932f1598738365ac9f0539a0820f5c452326155ca5dcd42a6f2d",
     "src/prometheus_protocol/verifier/grounding.py":
         "edb44c93c371cbf4a5099e607f4de0332d1bb902d47913bdd3708d5be1b4da3f",
     "src/prometheus_protocol/verifier/model_judge.py":

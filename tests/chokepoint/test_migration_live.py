@@ -50,6 +50,8 @@ from prometheus_protocol.chokepoint.runner import _receipt_text
 from prometheus_protocol.core.models import Judgment, Verdict
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
 
+from tests.support.assessments import for_migration
+
 _REQUIRE = parse_env_bool("PROM_REQUIRE_PG", os.environ.get("PROM_REQUIRE_PG"), default=False)
 
 
@@ -186,7 +188,8 @@ def _runner_and_approval(target: DbTarget, store_path, sql: str):
         contributing=("hard-check",),
     )
     approval = authority.authorize(
-        judgment, artifact=artifact, target=target.identity, now=time.time()
+        for_migration(judgment, artifact=artifact, target=target.identity),
+        artifact=artifact, target=target.identity, now=time.time()
     )
     assert approval is not None
     return runner, artifact, approval, audit

@@ -40,6 +40,8 @@ from prometheus_protocol.ledger.audit_chain import (
 )
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
 
+from tests.support.assessments import authorize_migration
+
 
 def _ledger_with(n: int) -> SqliteLedger:
     led = SqliteLedger(":memory:")
@@ -358,7 +360,7 @@ def test_chokepoint_decisions_are_chained_and_tamper_is_detected(tmp_path):
         audit=led, clock=lambda: t[0],
     )
     judgment = Judgment(verdict=Verdict.PASS, confidence=1.0, authoritative=True)
-    approval = auth.authorize(judgment, artifact=art, target=target.identity, now=t[0])
+    approval = authorize_migration(auth, judgment, artifact=art, target=target.identity, now=t[0])
 
     # The gate records mint; the runner records durable intent, outcome, then refusal.
     led.record_chained(event="authorize", subject=target.identity.canonical,

@@ -50,6 +50,10 @@ import stat
 import string
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover - import cycle: policy imports core.models
+    from prometheus_protocol.policy.assessment import PolicyAssessment
 
 from prometheus_protocol.chokepoint.signer import (
     HMAC_SHA256,
@@ -58,6 +62,7 @@ from prometheus_protocol.chokepoint.signer import (
     LocalHmacSigner,
 )
 from prometheus_protocol.core.models import Judgment, Unavailable, Verdict
+from prometheus_protocol.policy.snapshot import ACTION_DATABASE_MIGRATE
 
 #: Default approval lifetime. The window clocks *mint → execute* — an automated
 #: hop once a migration has been authorized — NOT human deliberation, which
@@ -597,7 +602,7 @@ class ApprovalAuthority:
 
     def authorize(
         self,
-        judgment: Judgment | Unavailable,
+        assessment: "PolicyAssessment",
         *,
         artifact: MigrationArtifact,
         target: MigrationTarget,
@@ -612,11 +617,37 @@ class ApprovalAuthority:
         semantics for the migration action. A signer that cannot sign raises
         ``SignerUnavailable`` — distinct from ``None``, because "could not sign"
         must never be read as "not authorised" or as "signed".
+
+        PHASE-1.2b — THE FOURTH AUTHORIZATION SURFACE, and the one the sprint
+        brief did not name. This minted a signed, single-use capability to run a
+        migration against a privileged database principal from a raw
+        authoritative ``Judgment``: the most consequential action class in the
+        system was reachable without a policy ever being resolved. It now takes a
+        :class:`~prometheus_protocol.policy.assessment.PolicyAssessment`, and an
+        unbound judgment raises rather than minting.
+
+        The assessment must also be bound to THIS artifact and target. A
+        capability is minted for one artifact against one principal; an
+        assessment resolved for a different one is evidence about a different
+        action, and accepting it would let a policy evaluation of a harmless
+        migration authorize a destructive one.
         """
 
+        from prometheus_protocol.policy.assessment import require_assessment
+
+        checked = require_assessment(
+            assessment, surface="ApprovalAuthority.authorize"
+        )
+        judgment = checked.outcome
         if isinstance(judgment, Unavailable):
             return None
         if judgment.verdict != Verdict.PASS or not judgment.authoritative:
+            return None
+        if checked.action_class != ACTION_DATABASE_MIGRATE:
+            return None
+        if not hmac.compare_digest(checked.artifact_sha256, artifact.sha256):
+            return None
+        if not hmac.compare_digest(checked.target_canonical, target.canonical):
             return None
         return self.mint(
             artifact_sha256=artifact.sha256,

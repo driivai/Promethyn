@@ -37,6 +37,8 @@ from prometheus_protocol.core.models import (
     Verdict,
 )
 
+from tests.support.assessments import authorize_migration
+
 
 class _SpyExecutor:
     """Records every DB touch. A refusal must leave ``calls`` empty."""
@@ -104,7 +106,7 @@ def test_happy_path_executes_once(tmp_path):
     spy = _SpyExecutor()
     runner = _runner(auth, target, spy, clock, tmp_path / "consumed.db")
 
-    approval = auth.authorize(_pass_judgment(), artifact=art,
+    approval = authorize_migration(auth, _pass_judgment(), artifact=art,
                               target=target.identity, now=clock())
     assert approval is not None
     result = runner.execute(approval=approval, artifact=art)
@@ -121,7 +123,7 @@ def test_replay_fails(tmp_path):
     art = MigrationArtifact("DROP TABLE users;")
     spy = _SpyExecutor()
     runner = _runner(auth, target, spy, clock, tmp_path / "consumed.db")
-    approval = auth.authorize(_pass_judgment(), artifact=art,
+    approval = authorize_migration(auth, _pass_judgment(), artifact=art,
                               target=target.identity, now=clock())
 
     first = runner.execute(approval=approval, artifact=art)
@@ -142,7 +144,7 @@ def test_swap_fails(tmp_path):
     swapped = MigrationArtifact("DROP TABLE t;")  # a different, hostile artifact
     spy = _SpyExecutor()
     runner = _runner(auth, target, spy, clock, tmp_path / "consumed.db")
-    approval = auth.authorize(_pass_judgment(), artifact=approved,
+    approval = authorize_migration(auth, _pass_judgment(), artifact=approved,
                               target=target.identity, now=clock())
 
     result = runner.execute(approval=approval, artifact=swapped)
@@ -235,7 +237,7 @@ def test_expired_fails(tmp_path):
     art = MigrationArtifact("VACUUM FULL;")
     spy = _SpyExecutor()
     runner = _runner(auth, target, spy, clock, tmp_path / "consumed.db")
-    approval = auth.authorize(_pass_judgment(), artifact=art,
+    approval = authorize_migration(auth, _pass_judgment(), artifact=art,
                               target=target.identity, now=clock(), ttl_seconds=90.0)
 
     t[0] += 91.0  # advance past the 90s window
@@ -280,7 +282,7 @@ def test_valid_within_ttl_but_expired_one_second_later(tmp_path):
     auth = ApprovalAuthority()
     target = _target()
     art = MigrationArtifact("CREATE INDEX i ON t (id);")
-    approval = auth.authorize(_pass_judgment(), artifact=art,
+    approval = authorize_migration(auth, _pass_judgment(), artifact=art,
                               target=target.identity, now=clock(), ttl_seconds=90.0)
 
     spy_ok = _SpyExecutor()
@@ -289,7 +291,7 @@ def test_valid_within_ttl_but_expired_one_second_later(tmp_path):
     assert r_ok.execute(approval=approval, artifact=art).executed
 
     # A fresh approval, checked just past expiry, is refused.
-    approval2 = auth.authorize(_pass_judgment(), artifact=art,
+    approval2 = authorize_migration(auth, _pass_judgment(), artifact=art,
                                target=target.identity, now=1000.0, ttl_seconds=90.0)
     spy_no = _SpyExecutor()
     r_no = _runner(auth, target, spy_no, clock, tmp_path / "expired.db")
@@ -362,7 +364,7 @@ def test_unavailable_yields_no_approval():
     art = MigrationArtifact("CREATE TABLE t (id int);")
     unavailable = Unavailable(verifier_id="subprocess-tests", tier=Tier.HARD,
                               reason=Unavailability.INFRA_FAULT, detail="sandbox down")
-    approval = auth.authorize(
+    approval = authorize_migration(auth, 
         unavailable, artifact=art, target=_target().identity, now=1000.0
     )
     assert approval is None  # a check that could not run mints nothing
@@ -372,7 +374,7 @@ def test_fail_verdict_yields_no_approval():
     auth = ApprovalAuthority()
     art = MigrationArtifact("CREATE TABLE t (id int);")
     fail = Judgment(verdict=Verdict.FAIL, confidence=1.0, authoritative=True)
-    assert auth.authorize(
+    assert authorize_migration(auth, 
         fail, artifact=art, target=_target().identity, now=1000.0
     ) is None
 
@@ -381,7 +383,7 @@ def test_non_authoritative_pass_yields_no_approval():
     auth = ApprovalAuthority()
     art = MigrationArtifact("CREATE TABLE t (id int);")
     soft_pass = Judgment(verdict=Verdict.PASS, confidence=0.99, authoritative=False)
-    assert auth.authorize(
+    assert authorize_migration(auth, 
         soft_pass, artifact=art, target=_target().identity, now=1000.0
     ) is None
 
@@ -390,7 +392,7 @@ def test_abstain_yields_no_approval():
     auth = ApprovalAuthority()
     art = MigrationArtifact("CREATE TABLE t (id int);")
     abstain = Judgment(verdict=Verdict.ABSTAIN, confidence=0.0, authoritative=True)
-    assert auth.authorize(
+    assert authorize_migration(auth, 
         abstain, artifact=art, target=_target().identity, now=1000.0
     ) is None
 

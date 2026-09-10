@@ -114,18 +114,30 @@ _TAG_REQUIREMENT = b"R"
 #: guessed requirements in the profiles. Each future class arrives in the sprint
 #: that adds the action it names; the construction-time validation above makes
 #: that a deliberate, reviewable addition rather than a silent string.
+#: Untrusted code runs in the isolated verifier/executor. No privileged target:
+#: the consequence is bounded by the sandbox. Covers the ``SubprocessVerifier``
+#: path under ``build_orchestrator`` and the ``SandboxExecutor`` path under
+#: ``build_execution_controller`` — both run candidate ``code`` inside the
+#: configured isolating adapter, so they are one consequence class, not two.
+ACTION_SANDBOX_EXECUTE = "sandbox.execute"
+
+#: A schema or data change lands on a privileged database principal. The
+#: consequence is durable, outside any sandbox, and bound to a named principal.
+#: Covers ``build_migration_runtime``.
+ACTION_DATABASE_MIGRATE = "database.migrate"
+
+#: A git branch is deleted. PHASE-1.2b. Destructive and irreversible against a
+#: real repository, and — unlike the two above — the consequence is loss of work
+#: that may exist nowhere else. It earns a class because it has a real
+#: implementation (``tools.git.GitBranchDeleteExecutor``) reaching a real
+#: enforcement point (``ExecutionController``), which is the same test
+#: ``skill.promote`` failed and was dropped for.
+ACTION_BRANCH_DELETE = "branch.delete"
+
 ACTION_CLASSES: frozenset[str] = frozenset({
-    #: Untrusted code runs in the isolated verifier/executor. No privileged
-    #: target: the consequence is bounded by the sandbox. Covers the
-    #: ``SubprocessVerifier`` path under ``build_orchestrator`` and the
-    #: ``SandboxExecutor`` path under ``build_execution_controller`` — both run
-    #: candidate ``code`` inside the configured isolating adapter, so they are
-    #: one consequence class, not two.
-    "sandbox.execute",
-    #: A schema or data change lands on a privileged database principal. The
-    #: consequence is durable, outside any sandbox, and bound to a named
-    #: principal. Covers ``build_migration_runtime``.
-    "database.migrate",
+    ACTION_SANDBOX_EXECUTE,
+    ACTION_DATABASE_MIGRATE,
+    ACTION_BRANCH_DELETE,
 })
 
 

@@ -10,7 +10,7 @@ authorize an action — this is the judge side of the wall.
 
 from __future__ import annotations
 
-from typing import Mapping
+from typing import TYPE_CHECKING, Mapping
 
 from prometheus_protocol.core.models import (
     ExecutableAction,
@@ -18,6 +18,9 @@ from prometheus_protocol.core.models import (
     Unavailable,
     Verdict,
 )
+
+if TYPE_CHECKING:  # pragma: no cover - import cycle: policy imports core.models
+    from prometheus_protocol.policy.assessment import PolicyAssessment
 from prometheus_protocol.gate.promotion import (
     OUTCOME_APPROVE,
     OUTCOME_BLOCK,
@@ -72,12 +75,28 @@ class ActionGate:
 
     def decide(
         self,
-        judgment: Judgment | Unavailable,
+        assessment: "PolicyAssessment",
         *,
         risk_class: str = "low",
         subject_id: str = "",
         action: ExecutableAction | None = None,
     ) -> GateDecision:
+        """Authorize an action from a POLICY-EVALUATED, ACTION-BOUND assessment.
+
+        PHASE-1.2b — this parameter used to be a ``Judgment``. It is not one
+        anymore, and that is the whole change: a raw authoritative verdict says
+        what the evidence showed and can say nothing about whether a policy
+        required that evidence, so a gate that reads one is enforcing a policy it
+        never consulted. There is no longer a parameter through which an unbound
+        judgment can arrive; presenting one raises
+        :class:`~prometheus_protocol.policy.assessment.UnboundAuthorization`
+        rather than returning an unapproved decision, because a falsy return is
+        something a caller could read as a policy denial.
+        """
+
+        from prometheus_protocol.policy.assessment import require_assessment
+
+        judgment = require_assessment(assessment, surface="ActionGate.decide").outcome
         if isinstance(judgment, Unavailable):
             # An authoritative verifier could NOT execute: there is no verdict to
             # authorize on. Never approve; route to a human hold via the distinct

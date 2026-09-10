@@ -42,6 +42,8 @@ from prometheus_protocol.chokepoint.signer import LocalHmacSigner
 from prometheus_protocol.core.models import Judgment, Verdict
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
 
+from tests.support.assessments import for_migration
+
 _KEY = b"durability-test-key-is-32-bytes!!"
 
 
@@ -361,7 +363,10 @@ def test_production_runtime_uses_stable_key_store_and_required_audit(tmp_path):
         clock=lambda: 1_001.0,
     )
     approval = first.authority.authorize(
-        Judgment(verdict=Verdict.PASS, confidence=1, authoritative=True),
+        for_migration(
+            Judgment(verdict=Verdict.PASS, confidence=1, authoritative=True),
+            artifact=artifact, target=target.identity,
+        ),
         artifact=artifact, target=target.identity, now=1_000.0
     )
     assert first.runner.execute(approval=approval, artifact=artifact).executed

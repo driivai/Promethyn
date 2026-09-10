@@ -79,6 +79,8 @@ from prometheus_protocol.core.errors import ConfigError
 from prometheus_protocol.core.models import Judgment, Verdict
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
 
+from tests.support.assessments import authorize_migration
+
 REPO = Path(__file__).resolve().parents[2]
 KEY_ID = "prod/approvals"
 RUNNER = "runner"
@@ -220,7 +222,7 @@ def test_sign_and_verify_round_trip_through_the_kms(tmp_path):
     executor = _SpyExecutor()
     runtime = _runtime(tmp_path, KmsSigner(kms, key_id=KEY_ID), executor=executor)
     artifact = _artifact()
-    approval = runtime.authority.authorize(_pass(), artifact=artifact, target=_target(), now=NOW)
+    approval = authorize_migration(runtime.authority, _pass(), artifact=artifact, target=_target(), now=NOW)
     assert approval is not None
     assert approval.scheme == "ecdsa-p256-sha256" and approval.key_id == KEY_ID
     assert runtime.authority.verify(approval, artifact=artifact, target=_target(), now=NOW + 1).ok
@@ -241,19 +243,19 @@ def test_every_binding_still_blocks_with_the_external_signer(tmp_path, monkeypat
     artifact = _artifact()
 
     swapped = runner.execute(
-        approval=authority.authorize(_pass(), artifact=artifact, target=_target(), now=NOW),
+        approval=authorize_migration(authority, _pass(), artifact=artifact, target=_target(), now=NOW),
         artifact=_artifact("DROP TABLE users;"),
     )
     assert swapped.refused and swapped.reason == ARTIFACT_MISMATCH
 
     other = dataclasses.replace(_target(), dbname="otherdb")
     wrong_target = runner.execute(
-        approval=authority.authorize(_pass(), artifact=artifact, target=other, now=NOW),
+        approval=authorize_migration(authority, _pass(), artifact=artifact, target=other, now=NOW),
         artifact=artifact,
     )
     assert wrong_target.refused and wrong_target.reason == TARGET_MISMATCH
 
-    stale = authority.authorize(_pass(), artifact=artifact, target=_target(), now=NOW)
+    stale = authorize_migration(authority, _pass(), artifact=artifact, target=_target(), now=NOW)
     with monkeypatch.context() as m:
         m.setattr(runner, "_clock", lambda: NOW + 1000)
         expired = runner.execute(approval=stale, artifact=artifact)
@@ -261,7 +263,7 @@ def test_every_binding_still_blocks_with_the_external_signer(tmp_path, monkeypat
 
     assert executor.calls == [], "a refusal reached the database"
 
-    approval = authority.authorize(_pass(), artifact=artifact, target=_target(), now=NOW)
+    approval = authorize_migration(authority, _pass(), artifact=artifact, target=_target(), now=NOW)
     assert runner.execute(approval=approval, artifact=artifact).executed
     replay = runner.execute(approval=approval, artifact=artifact)
     assert replay.refused and replay.reason == REPLAY
@@ -476,13 +478,13 @@ def test_a_verify_only_host_cannot_mint_but_can_execute_what_the_gate_signed(tmp
     runtime = _runtime(tmp_path, verifier, executor=executor)
 
     with pytest.raises(SignerCapabilityAbsent):
-        runtime.authority.authorize(_pass(), artifact=_artifact(), target=_target(), now=NOW)
+        authorize_migration(runtime.authority, _pass(), artifact=_artifact(), target=_target(), now=NOW)
     with pytest.raises(SignerCapabilityAbsent):
         runtime.authority.mint(artifact_sha256="ab" * 32, target=_target(), now=NOW)
     assert executor.calls == []
 
     artifact = _artifact()
-    approval = gate.authorize(_pass(), artifact=artifact, target=_target(), now=NOW)
+    approval = authorize_migration(gate, _pass(), artifact=artifact, target=_target(), now=NOW)
     assert runtime.runner.execute(approval=approval, artifact=artifact).executed
     assert executor.calls == [artifact.sql]
     runtime.close()
@@ -562,7 +564,7 @@ def test_a_kms_failure_mints_nothing_and_the_db_is_untouched(tmp_path, fault, ex
 
     artifact = _artifact()
     with pytest.raises(expected) as raised:
-        runtime.authority.authorize(_pass(), artifact=artifact, target=_target(), now=NOW)
+        authorize_migration(runtime.authority, _pass(), artifact=artifact, target=_target(), now=NOW)
     assert isinstance(raised.value, SignerUnavailable) and raised.value.kind == expected.kind
     with pytest.raises(AuthorizationUnavailable, match="authorize"):
         runtime.authority.mint(artifact_sha256=artifact.sha256, target=_target(), now=NOW)
@@ -626,13 +628,13 @@ def test_end_to_end_a_forgery_under_a_kms_config_is_refused_and_the_path_recover
     # KMS down: nothing minted, nothing executed.
     kms.fault = "unreachable"
     with pytest.raises(SignerUnreachable):
-        runtime.authority.authorize(_pass(), artifact=_artifact(), target=_target(), now=NOW)
+        authorize_migration(runtime.authority, _pass(), artifact=_artifact(), target=_target(), now=NOW)
     assert executor.calls == []
 
     # KMS back: the path is live, so the refusals above were not a dead path.
     kms.fault = None
     good = _artifact()
-    approval = runtime.authority.authorize(_pass(), artifact=good, target=_target(), now=NOW)
+    approval = authorize_migration(runtime.authority, _pass(), artifact=good, target=_target(), now=NOW)
     assert runtime.runner.execute(approval=approval, artifact=good).executed
     assert executor.calls == [good.sql]
     runtime.close()
@@ -650,10 +652,10 @@ def test_no_silent_fallback_to_a_local_key(tmp_path, monkeypatch):
 
     kms = _kms()
     runtime = _runtime(tmp_path, KmsSigner(kms, key_id=KEY_ID))
-    runtime.authority.authorize(_pass(), artifact=_artifact(), target=_target(), now=NOW)
+    authorize_migration(runtime.authority, _pass(), artifact=_artifact(), target=_target(), now=NOW)
     kms.fault = "unreachable"
     with pytest.raises(SignerUnreachable):
-        runtime.authority.authorize(_pass(), artifact=_artifact(), target=_target(), now=NOW)
+        authorize_migration(runtime.authority, _pass(), artifact=_artifact(), target=_target(), now=NOW)
     assert calls == [], "a local HMAC signer was used under a KMS configuration"
     assert not [v for v in _walk(runtime.authority) if isinstance(v, LocalHmacSigner)]
     assert isinstance(runtime.authority.signer, KmsSigner)
@@ -690,7 +692,7 @@ def test_an_insider_with_sign_invoke_gets_a_valid_signature_AND_is_logged(tmp_pa
     executor = _SpyExecutor()
     runtime = _runtime(tmp_path, KmsSigner(kms, key_id=KEY_ID), executor=executor)
 
-    legitimate = runtime.authority.authorize(_pass(), artifact=_artifact(), target=_target(), now=NOW)
+    legitimate = authorize_migration(runtime.authority, _pass(), artifact=_artifact(), target=_target(), now=NOW)
     hostile = _artifact("DROP TABLE users;")
     insider = ApprovalAuthority(signer=KmsSigner(kms, key_id=KEY_ID, principal="insider"))
     forged = insider.mint(artifact_sha256=hostile.sha256, target=_target(), now=NOW)

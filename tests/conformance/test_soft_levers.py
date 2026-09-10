@@ -40,6 +40,8 @@ from prometheus_protocol.verifier.soft_levers import (
     parse_vote_fraction,
 )
 
+from tests.support.assessments import carrying
+
 
 # --------------------------------------------------------------------------
 # scripted stubs (no provider, no sandbox)
@@ -330,7 +332,7 @@ def test_soft_stays_soft_no_lever_grants_authority(make):
 
     gate = ActionGate(escalate_below=0.75, route_high_risk=True)
     decision = gate.decide(
-        judgment,
+        carrying(judgment),
         risk_class="low",
         action=ExecutableAction(kind=ACTION_PYTHON_CODE, code="print('x')"),
     )

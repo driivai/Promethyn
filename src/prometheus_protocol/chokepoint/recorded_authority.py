@@ -38,7 +38,13 @@ from prometheus_protocol.chokepoint.signer import (
     SignerMalformed,
     SignerUnavailable,
 )
+from typing import TYPE_CHECKING
+
 from prometheus_protocol.core.models import Judgment, Unavailable, Verdict
+from prometheus_protocol.policy.snapshot import ACTION_DATABASE_MIGRATE
+
+if TYPE_CHECKING:  # pragma: no cover - import cycle: policy imports core.models
+    from prometheus_protocol.policy.assessment import PolicyAssessment
 
 
 class RecordedApprovalAuthority(ApprovalAuthority):
@@ -132,13 +138,37 @@ class RecordedApprovalAuthority(ApprovalAuthority):
 
     def authorize(
         self,
-        judgment: Judgment | Unavailable,
+        assessment: "PolicyAssessment",
         *,
         artifact: MigrationArtifact,
         target: MigrationTarget,
         now: float,
         ttl_seconds: float = DEFAULT_TTL_SECONDS,
     ) -> Approval | None:
+        """PHASE-1.2b — the RECORDED authority, and the one production uses.
+
+        ``build_migration_runtime`` builds this class, not the base
+        ``ApprovalAuthority``, so this override is the migration path's real
+        authorization surface. It took a raw ``Judgment`` and minted a signed
+        single-use capability against a privileged database principal from it.
+
+        The refusal is RECORDED rather than raised, unlike the other three
+        surfaces. That is deliberate and is this class's whole contract: every
+        authorization attempt produces an authorization record, and an attempt
+        that arrived unbound is exactly the kind a reviewer needs to see. Raising
+        here would leave no record of the attempt at all.
+        """
+
+        from prometheus_protocol.policy.assessment import PolicyAssessment
+
+        # Statement form, not a ternary: the type gate refuses a union narrowed
+        # in expression position, and it is right to. ``judgment`` below is read
+        # for a verdict, and a narrowing that happens inside an expression is the
+        # shape that has silently dropped a member here before.
+        if isinstance(assessment, PolicyAssessment):
+            judgment: Judgment | Unavailable | object = assessment.outcome
+        else:
+            judgment = assessment
         # Snapshot before I/O; mutable caller inputs never become the bytes
         # signed after the journal/anchor round trip.
         context = self._context.snapshot()
@@ -188,7 +218,18 @@ class RecordedApprovalAuthority(ApprovalAuthority):
                 approval_preimage=preimage.hex(),
                 approval_digest=hashlib.sha256(preimage).hexdigest(),
             )
-            if isinstance(judgment, Unavailable):
+            if not isinstance(assessment, PolicyAssessment):
+                # An unbound judgment reached the migration authority. Refused
+                # and RECORDED under its own reason, so it is separable in the
+                # journal from a verdict that failed on its merits.
+                value["reason"] = "unbound_authorization"
+            elif assessment.action_class != ACTION_DATABASE_MIGRATE:
+                value["reason"] = "wrong_action_class"
+            elif assessment.artifact_sha256 != digest:
+                value["reason"] = "assessment_artifact_mismatch"
+            elif assessment.target_canonical != target.canonical:
+                value["reason"] = "assessment_target_mismatch"
+            elif isinstance(judgment, Unavailable):
                 value["reason"] = "verifier_unavailable"
             elif not isinstance(judgment, Judgment):
                 value["reason"] = "invalid_request"

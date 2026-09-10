@@ -8,6 +8,66 @@ in `spec/invariants.md` is a major version bump.
 ## [Unreleased]
 
 ### Fixed
+- **PHASE-1.2b — the downstream bypass is closed: a raw authoritative `Judgment`
+  no longer authorizes anything.** Checkpoint 2 built requirement coverage and
+  then named its own exposure rather than implying it away — `VerifierBank.judge`
+  and the `ExecutionController.submit` path predated the policy layer, so an old
+  call path bypassed it entirely. The system was "policy-enforced except where it
+  isn't", which is the shape of claim this repository keeps having to correct.
+  - **Four authorization surfaces, not the three the work started from.**
+    `ActionGate.decide`, `ExecutionController.submit`, `ActionGateway.route_action`
+    and — found while migrating — **`ApprovalAuthority.authorize` /
+    `RecordedApprovalAuthority.authorize`**, which minted a signed, single-use
+    capability against a privileged database principal from a raw `Judgment`. The
+    recorded one is what `build_migration_runtime` actually constructs, so
+    migrating only the base class would have left production on the old surface
+    with every test green.
+  - **The change is a TYPE, not a check.** None of those surfaces has a parameter
+    that accepts a `Judgment` any more; they take a `PolicyAssessment` carrying
+    the bound-requirements snapshot digest and the outcome `judge_covered`
+    produced. `VerifierBank.assess` is the only minter, and a new sweep in
+    `test_no_second_aggregator.py` keeps it that way — closing the route moved
+    the interesting capability from *constructing a verdict* to *minting an
+    assessment*, and a guard's permitted set has to follow the capability.
+  - **A forge found and closed, measured not assumed.** `dataclasses.replace`
+    copies every init field — the minting token included — and produced a
+    valid-looking assessment carrying an outcome coverage never validated.
+    `PolicyAssessment` now CONSUMES its token in `__post_init__`, so a copy
+    inherits a spent one and is refused. This is the stdlib version of the
+    "bespoke copy helper" the 2d guard names as unconstrained.
+  - **The sanction is gone, and two Checkpoint-2 tests flipped.**
+    `tools.git::judgment_for` came off the permitted-constructor list — removed,
+    not commented — and `test_the_exposure_is_real_and_not_theoretical` was
+    replaced by `test_the_unbound_judgment_route_is_closed`. The docs test
+    flipped the same way: it asserted the exposure was NAMED, and now asserts the
+    closure is RECORDED, because a reader who remembers the exposure needs to
+    find out what happened to it rather than find the sentence quietly gone.
+  - **`tools/git.py` migrated, not removed.** Its purpose was never to execute on
+    an unbound judgment — that was how it was built, not what it demonstrates.
+    `judgment_for` became `evidence_for`: the merge check reports Evidence and
+    the bank produces the verdict. A new `branch.delete` action class requires
+    `branch.merge_proof`, and **an unmerged branch now FAILS that check and is
+    BLOCKED** rather than routed to a human on an authoritative PASS at
+    confidence 0.0 — a verdict-shaped object saying "yes" while meaning "no".
+    Strictly safer, one decision earlier.
+  - **A Checkpoint-2 claim withdrawn.** It said all three factory entry points
+    "reach the same `judge_covered` once their callers pass a snapshot", asserted
+    as `assert build_migration_runtime is not None`. Two thirds was wrong:
+    `build_migration_runtime` never reaches `VerifierBank`, and
+    `build_orchestrator` has a `PromotionGate` and no executor, so it cannot
+    authorize an action at all. Both are now asserted behaviourally, the absence
+    included.
+  - **What still varies, named:** anything able to run arbitrary code in this
+    process. `object.__setattr__` reaches through `frozen=True` and
+    `policy.assessment._MINT` is an importable global. The mint guard makes an
+    accidental assessment impossible and a deliberate one greppable; it is not a
+    security boundary, and the control against arbitrary in-process code remains
+    the process boundary.
+  - **Unmoved:** `bank_decision_surface.json` is byte-identical
+    (`2ff59e45…`, 240 rows) and `bank.py` is purely additive — zero lines removed.
+    The ten-row swarm matrix still authorizes exactly one row, the positive
+    control. The R3 boundary and the omission rule are untouched.
+
 - **PHASE-1.2a — the trusted verification-policy model: requirement coverage
   enforced before fusion.** Two reproduced authorization fail-opens, neither
   caused by a broken verifier. The swarm's aggregation substituted *everything

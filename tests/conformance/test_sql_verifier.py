@@ -27,6 +27,8 @@ from prometheus_protocol.verifier.sql import SqlTask, SqlVerifier
 from prometheus_protocol.benchmarks.sql_items import run_reliability
 from prometheus_protocol.benchmarks.sql_loop_demo import run_loop
 
+from tests.support.assessments import carrying
+
 _REQUIRE = parse_env_bool("PROM_REQUIRE_SANDBOX", os.environ.get("PROM_REQUIRE_SANDBOX"), default=False)
 
 _TASK = SqlTask(
@@ -174,6 +176,6 @@ def test_unavailable_sql_verification_routes_to_human_never_authorizes(monkeypat
     from prometheus_protocol.gate.authorization import ActionGate, OUTCOME_UNAVAILABLE
 
     decision = ActionGate(escalate_below=0.75, route_high_risk=True).decide(
-        judgment, risk_class="medium", subject_id="sql/unavailable"
+        carrying(judgment), risk_class="medium", subject_id="sql/unavailable"
     )
     assert decision.outcome == OUTCOME_UNAVAILABLE and not decision.approved

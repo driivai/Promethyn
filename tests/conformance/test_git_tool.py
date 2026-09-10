@@ -22,15 +22,30 @@ from prometheus_protocol.core.models import ACTION_PYTHON_CODE, ExecutableAction
 from prometheus_protocol.execution.controller import ExecutionController
 from prometheus_protocol.execution.executor import SandboxExecutor
 from prometheus_protocol.gate.authorization import ActionGate
-from prometheus_protocol.gate.promotion import OUTCOME_APPROVE, OUTCOME_ROUTE
+from prometheus_protocol.gate.promotion import (
+    OUTCOME_APPROVE,
+    OUTCOME_BLOCK,
+    OUTCOME_ROUTE,
+)
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
 from prometheus_protocol.sandbox import NamespaceSandbox
 from prometheus_protocol.sandbox.unsafe import NullSandbox
 from prometheus_protocol.tools.git import (
     GitBranchDeleteExecutor,
     GitTool,
-    judgment_for,
+    evidence_for,
+    risk_class_for,
 )
+
+from prometheus_protocol.core.models import Tier
+from prometheus_protocol.policy.coverage import BoundResult
+from prometheus_protocol.policy.profile import CHECK_MERGE_PROOF, DEFAULT_PROFILE_ID, load_profile
+from prometheus_protocol.policy.resolver import resolve
+from prometheus_protocol.policy.snapshot import ACTION_BRANCH_DELETE, snapshot_digest
+from prometheus_protocol.swarm.models import content_hash
+from prometheus_protocol.tools.git import MERGE_CHECK_VERIFIER_ID
+from prometheus_protocol.verifier.bank import VerifierBank
+from prometheus_protocol.verifier.store import InMemoryTrustStore
 
 _REQUIRE = parse_env_bool("PROM_REQUIRE_SANDBOX", os.environ.get("PROM_REQUIRE_SANDBOX"), default=False)
 
@@ -98,12 +113,47 @@ def _controller(repo, sandbox) -> ExecutionController:
     )
 
 
-def _submit(controller, tool, branch):
-    judgment, risk = judgment_for(tool.classify(branch))
+
+
+def _assessment(tool, branch):
+    """The REAL path: policy -> snapshot -> bound merge-check result -> assess.
+
+    PHASE-1.2b. These tests used ``judgment_for``, which handed an unbound
+    authoritative Judgment straight to the gate. The git tool now reports
+    evidence and the bank produces the verdict, so the tests drive that.
+    """
+
+    snapshot = resolve(
+        load_profile(DEFAULT_PROFILE_ID),
+        artifact_sha256=content_hash(branch),
+        target_canonical=f"git://{tool.repo_path}",
+        action_class=ACTION_BRANCH_DELETE,
+        attempt_id=f"delete-branch:{branch}",
+    )
+    bank = VerifierBank(InMemoryTrustStore())
+    bank.register(MERGE_CHECK_VERIFIER_ID, Tier.HARD)
+    return bank.assess(snapshot, [BoundResult(
+        check_id=CHECK_MERGE_PROOF,
+        snapshot_digest=snapshot_digest(snapshot),
+        implementation=MERGE_CHECK_VERIFIER_ID,
+        outcome=evidence_for(tool.classify(branch)),
+    )])
+
+def _submit(controller, tool, branch, risk=None):
+    """``risk=None`` uses the tool's own classification.
+
+    PHASE-1.2b — the hold tests below pass ``risk="high"`` on a branch whose
+    merge proof SUCCEEDS. That is deliberate and it separates two controls that
+    used to be tangled: the policy decides whether the requirement is met, the
+    risk class decides how much confidence an allowed action needs. Holding a
+    fully-satisfied delete for a human is a real deployment choice; it is no
+    longer the only thing standing between an unproven delete and the executor.
+    """
+
     return controller.submit(
-        judgment=judgment,
+        assessment=_assessment(tool, branch),
         action=tool.delete_action(branch),
-        risk_class=risk,
+        risk_class=risk if risk is not None else risk_class_for(tool.classify(branch)),
         subject_id=f"delete-branch:{branch}",
     )
 
@@ -128,25 +178,38 @@ def test_unknown_or_unsafe_branch_is_never_provably_merged(tmp_path):
     assert tool.classify("does-not-exist").unmerged_commits is None
     assert tool.classify("-rf").unmerged_commits is None  # option-shaped: refused
     # Fail-closed classification: a check that cannot run is high risk.
-    _, risk = judgment_for(tool.classify("does-not-exist"))
-    assert risk == "high"
+    assert risk_class_for(tool.classify("does-not-exist")) == "high"
 
 
 # -- INV: a not-merged branch NEVER auto-deletes ------------------------------
 
 
-def test_inv_not_merged_branch_halts_for_a_human(tmp_path):
+def test_inv_not_merged_branch_is_refused_by_policy(tmp_path):
+    """PHASE-1.2b CHANGED THIS ROW, and the change is a tightening.
+
+    It used to HALT for a human: the merge check returned an authoritative PASS
+    at confidence 0.0 and the HIGH risk class routed it. That judgment was
+    unbound — no policy, no coverage — and a verdict-shaped object saying "pass"
+    while meaning "do not do this" is the substitution the coverage layer exists
+    to end.
+
+    Now the policy REQUIRES ``branch.merge_proof`` for a delete, an unmerged
+    branch FAILS that check, coverage refuses as unsatisfactory, and the gate
+    blocks. Nothing executes and nothing is held, one decision earlier. The
+    branch survives either way; what changed is that it survives because a
+    requirement was unmet rather than because a risk heuristic routed it.
+    """
+
     sandbox = _sandbox()
     _make_repo(tmp_path)
     tool = GitTool(repo_path=tmp_path, sandbox=sandbox)
     controller = _controller(tmp_path, sandbox)
 
     outcome = _submit(controller, tool, "merged-cleanup")
-    assert outcome.outcome == OUTCOME_ROUTE
-    assert outcome.execution is None and outcome.pending is not None
+    assert outcome.outcome == OUTCOME_BLOCK
+    assert outcome.execution is None and outcome.pending is None
     assert "merged-cleanup" in _branches(tmp_path)  # nothing happened
-    held = controller.list_pending()
-    assert [p.id for p in held] == [outcome.pending.id]
+    assert controller.list_pending() == []
 
 
 def test_inv_merged_branch_is_eligible_for_auto_approval(tmp_path):
@@ -170,13 +233,14 @@ def test_inv_denied_hold_never_deletes_and_the_decision_is_recorded(tmp_path):
         executor=GitBranchDeleteExecutor(repo_path=tmp_path, sandbox=sandbox),
         ledger=ledger,
     )
-    outcome = _submit(controller, tool, "merged-cleanup")
+    outcome = _submit(controller, tool, "risky-experiment", risk="high")
+    assert outcome.outcome == OUTCOME_ROUTE
     controller.reject(
         outcome.pending.id,
         identity="reviewer",
-        reason="carries unmerged work",
+        reason="not deleting this today",
     )
-    assert "merged-cleanup" in _branches(tmp_path)  # survived
+    assert "risky-experiment" in _branches(tmp_path)  # survived
     decisions = ledger.human_decisions()
     assert len(decisions) == 1
     assert decisions[0]["decided_by"] == "reviewer"
@@ -213,9 +277,10 @@ def test_wall_raw_actions_and_unapproved_decisions_cannot_execute(tmp_path):
     with pytest.raises(TypeError):
         executor.execute(ExecutableAction(kind=ACTION_PYTHON_CODE, code="pass"))
     tool = GitTool(repo_path=tmp_path, sandbox=sandbox)
-    judgment, risk = judgment_for(tool.classify("merged-cleanup"))
     routed = ActionGate(escalate_below=0.75, route_high_risk=True).decide(
-        judgment, risk_class=risk, action=tool.delete_action("merged-cleanup")
+        _assessment(tool, "merged-cleanup"),
+        risk_class=risk_class_for(tool.classify("merged-cleanup")),
+        action=tool.delete_action("merged-cleanup"),
     )
     assert not routed.approved
     with pytest.raises(ValueError):
@@ -229,8 +294,17 @@ def test_base_branch_is_refused_even_when_approved(tmp_path):
     gate = ActionGate()  # bare authorizer: approve a (mis)judged main-delete
     from prometheus_protocol.core.models import Judgment, Verdict
 
+    from tests.support.assessments import carrying
+
+    # A fully-satisfied assessment pointed at the BASE branch. The point of this
+    # test is that the executor refuses the base branch regardless of how good
+    # the authorization looks, so the authorization here is made deliberately
+    # perfect rather than deliberately unbound.
     approved = gate.decide(
-        Judgment(verdict=Verdict.PASS, confidence=1.0, authoritative=True),
+        carrying(
+            Judgment(verdict=Verdict.PASS, confidence=1.0, authoritative=True),
+            action_class=ACTION_BRANCH_DELETE,
+        ),
         risk_class="low",
         action=GitTool(repo_path=tmp_path, sandbox=sandbox).delete_action("main"),
     )
@@ -273,9 +347,9 @@ def test_denied_hold_never_deletes_even_with_deletes_enabled(tmp_path):
     tool = GitTool(repo_path=tmp_path, sandbox=sandbox)
     controller = _real_controller(tmp_path, sandbox)
 
-    outcome = _submit(controller, tool, "merged-cleanup")
+    outcome = _submit(controller, tool, "risky-experiment", risk="high")
     controller.reject(outcome.pending.id, identity="reviewer", reason="keep")
-    assert "merged-cleanup" in _branches(tmp_path)  # survived the real executor
+    assert "risky-experiment" in _branches(tmp_path)  # survived the real executor
 
 
 def test_human_approved_hold_executes_the_real_delete(tmp_path):
@@ -285,11 +359,11 @@ def test_human_approved_hold_executes_the_real_delete(tmp_path):
     ledger = SqliteLedger(":memory:")
     controller = _real_controller(tmp_path, sandbox, ledger)
 
-    outcome = _submit(controller, tool, "merged-cleanup")
+    outcome = _submit(controller, tool, "risky-experiment", risk="high")
     result = controller.approve(
-        outcome.pending.id, identity="reviewer", reason="loss accepted"
+        outcome.pending.id, identity="reviewer", reason="reviewed and accepted"
     )
-    assert result.executed and "merged-cleanup" not in _branches(tmp_path)
+    assert result.executed and "risky-experiment" not in _branches(tmp_path)
     decisions = ledger.human_decisions()
     assert decisions and decisions[0]["decided_by"] == "reviewer"
 
@@ -319,9 +393,9 @@ def test_sandbox_executor_still_refuses_the_git_kind(tmp_path):
     sandbox = _sandbox()
     _make_repo(tmp_path)
     tool = GitTool(repo_path=tmp_path, sandbox=sandbox)
-    judgment, _ = judgment_for(tool.classify("risky-experiment"))
+    assessment = _assessment(tool, "risky-experiment")
     decision = ActionGate().decide(
-        judgment, risk_class="low", action=tool.delete_action("risky-experiment")
+        assessment, risk_class="low", action=tool.delete_action("risky-experiment")
     )
     assert decision.approved
     result = SandboxExecutor(sandbox=sandbox).execute(decision)

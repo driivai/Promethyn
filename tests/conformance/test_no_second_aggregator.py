@@ -20,6 +20,16 @@ import bindings. That is deliberately not:
   ``models.Judgment`` and ``Judgment as J`` are three spellings of one symbol,
   and this sweep resolves all three to ``core.models.Judgment`` before deciding.
 
+WHAT PHASE-1.2b CHANGED ABOUT THE CONSEQUENCE. Constructing an authoritative
+``Judgment`` outside the bank is no longer, by itself, enough to authorize
+anything: every authorization surface now takes a
+:class:`~prometheus_protocol.policy.assessment.PolicyAssessment`, which only
+``VerifierBank.assess`` mints and only after coverage was validated. So a second
+constructor is now a second *verdict* producer rather than a second
+*authorizer* — still worth refusing, and refused here, but no longer a route to
+execution on its own. What it would need in addition is the ability to mint, and
+that is what the residuals below are really about.
+
 WHAT CAN VARY THAT THIS SET DOES NOT CONSTRAIN — named here rather than left to
 be found:
 
@@ -32,10 +42,23 @@ be found:
 2. **Mutation of an existing Judgment.** ``dataclasses.replace(j,
    authoritative=True)`` reaches the same end by a different call. It IS swept —
    ``replace`` is resolved the same way — but a bespoke copy helper that rebuilds
-   the dataclass field by field is not.
+   the dataclass field by field is not. STILL UNCONSTRAINED for ``Judgment``.
+   PHASE-1.2b did close the equivalent hole one layer up, and it is worth being
+   precise about which: ``PolicyAssessment`` consumes its minting token in
+   ``__post_init__``, so ``dataclasses.replace`` on an assessment inherits a
+   spent token and is refused. That was measured, not assumed — ``replace``
+   forged a valid-looking assessment before the token was consumed. It does
+   nothing about a copy helper for ``Judgment`` itself.
 3. **Passing an authoritative Judgment onward.** Not construction, and correctly
    not swept: the bank produces one and callers carry it. That is the system
    working.
+5. **Anything able to run arbitrary code in this process.**
+   ``object.__setattr__`` reaches through ``frozen=True``, and
+   ``policy.assessment._MINT`` is an importable module global. The mint guard
+   makes an accidental assessment impossible and a deliberate one a visible,
+   greppable act; it is not a security boundary, and the control against
+   arbitrary in-process code remains the process boundary. Stated here because
+   the alternative is a reader inferring a guarantee this does not give.
 4. **Adding an entry to the list below.** That is the point: it is a reviewable
    line in a diff with a reason beside it, not a silent capability.
 
@@ -67,19 +90,14 @@ _PERMITTED_CONSTRUCTORS: dict[str, str] = {
     "prometheus_protocol.verifier.bank::VerifierBank.judge_covered":
         "The coverage refusal for a FAILED required check. A failure is a real "
         "answer and is reported as one; it refuses authorization either way.",
-    # -------------------------------------------------------------------
-    # NOT the bank, and NOT closed by this sprint. Named as an EXPOSURE.
-    # -------------------------------------------------------------------
-    "prometheus_protocol.tools.git::judgment_for":
-        "A SECOND PRODUCER, and a real one: tools/stale_branch_demo.py passes "
-        "its Judgment straight into ExecutionController.submit, so a branch "
-        "classification authorizes a deletion without the bank or the policy "
-        "layer being consulted. It is on this list because removing it is the "
-        "NEXT sprint's breaking interface change (a raw authoritative Judgment "
-        "must stop being sufficient for authorization), not because it is "
-        "acceptable. test_the_exposure_is_real_and_not_theoretical below drives "
-        "it, so the entry cannot quietly become stale.",
 }
+# PHASE-1.2b — THE SANCTION IS GONE, not commented out. It read
+# ``prometheus_protocol.tools.git::judgment_for`` and excused a real second
+# producer: a branch classification that authorized a deletion with no policy
+# resolved and no coverage validated. ``judgment_for`` no longer exists;
+# ``tools.git.evidence_for`` reports Evidence and the bank produces the verdict.
+# The permitted set above is now exactly the bank, which is what "no module
+# outside the bank computes an authoritative verdict" was always supposed to say.
 
 
 def _source_files() -> list[pathlib.Path]:
@@ -231,29 +249,107 @@ def test_the_sweep_is_not_vacuous():
     )
 
 
-def test_the_exposure_is_real_and_not_theoretical():
-    """The sanctioned second producer, DRIVEN.
+def test_the_unbound_judgment_route_is_closed():
+    """THE FLIPPED TEST. Checkpoint 2 asserted the exposure was real; this
+    asserts it is gone, and it is the same fact from the other side.
 
-    An entry on a permitted list with nothing exercising it decays into a
-    sentence nobody rechecks. This asserts the exposure is exactly what the entry
-    says: ``judgment_for`` returns an authoritative Judgment that no policy
-    resolved and no coverage validated, and the execution controller accepts one.
+    Three properties, because "the function was renamed" is not the claim:
 
-    When the next sprint closes the unbound-judgment route, THIS test fails and
-    the entry above comes off the list. That is the intended way for it to end.
+    1. the second producer no longer produces a verdict — ``evidence_for``
+       returns Evidence or Unavailable, never a Judgment;
+    2. nothing outside the bank is on the permitted list at all;
+    3. a raw authoritative Judgment cannot reach the gate — not "is rejected
+       by it", cannot reach it.
     """
 
-    from prometheus_protocol.core.models import Judgment
-    from prometheus_protocol.tools.git import BranchClassification, judgment_for
+    import prometheus_protocol.tools.git as git_tool
+    from prometheus_protocol.core.models import (
+        Evidence, Judgment, Tier, Unavailable, Verdict,
+    )
+    from prometheus_protocol.gate.authorization import ActionGate
+    from prometheus_protocol.policy.assessment import UnboundAuthorization
 
-    judgment, _risk = judgment_for(
-        BranchClassification(branch="feature/x", unmerged_commits=0)
+    assert not hasattr(git_tool, "judgment_for"), (
+        "judgment_for is back. It produced an authoritative Judgment reached "
+        "without the bank; a second producer is a second aggregator."
     )
-    assert isinstance(judgment, Judgment)
-    assert judgment.authoritative is True, (
-        "if this is no longer authoritative the exposure is closed — remove the "
-        "tools.git entry from _PERMITTED_CONSTRUCTORS in the same change"
+    for classification in (
+        git_tool.BranchClassification(branch="feature/x", unmerged_commits=0),
+        git_tool.BranchClassification(branch="feature/y", unmerged_commits=3),
+        git_tool.BranchClassification(branch="feature/z", unmerged_commits=None),
+    ):
+        outcome = git_tool.evidence_for(classification)
+        assert isinstance(outcome, (Evidence, Unavailable))
+        assert not isinstance(outcome, Judgment)
+
+    assert set(_PERMITTED_CONSTRUCTORS) == {
+        "prometheus_protocol.verifier.bank::VerifierBank._authoritative_judgment",
+        "prometheus_protocol.verifier.bank::VerifierBank.judge_covered",
+    }, (
+        "the permitted set is no longer exactly the bank. Every entry here is a "
+        "module that can authorize an action without the policy layer."
     )
+
+    with pytest.raises(UnboundAuthorization):
+        ActionGate().decide(
+            Judgment(verdict=Verdict.PASS, confidence=1.0, authoritative=True),
+            risk_class="low",
+            subject_id="s",
+        )
+
+
+#: Where a PolicyAssessment may be MINTED, by resolved identity. PHASE-1.2b.
+#: Closing the unbound-judgment route moved the interesting capability: an
+#: authoritative Judgment no longer authorizes on its own, but anything that can
+#: mint an assessment around one does. Without this sweep the bypass reopens the
+#: moment a production module calls ``mint`` — the same second-aggregator shape,
+#: one layer up, and the reason a guard's permitted set has to follow the
+#: capability rather than the name it had last sprint.
+_PERMITTED_MINTERS: dict[str, str] = {
+    "prometheus_protocol.verifier.bank::VerifierBank.assess":
+        "THE minting site. It mints only what judge_covered returned, which is "
+        "coverage validated against the resolved snapshot.",
+}
+
+
+def _mint_calls() -> dict[str, int]:
+    """Every call to ``policy.assessment.mint`` in the source tree, by site."""
+
+    found: dict[str, int] = {}
+    for path in _source_files():
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        bindings = _resolve_bindings(tree)
+        module = _module_name(path)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            symbol = _callee_symbol(node, bindings)
+            if symbol != "prometheus_protocol.policy.assessment.mint":
+                continue
+            key = f"{module}::{_enclosing(tree, node)}"
+            found[key] = found.get(key, 0) + 1
+    return found
+
+
+def test_only_the_bank_mints_a_policy_assessment():
+    """An assessment is what authorizes. A module that can mint one can
+    authorize an action around any verdict it likes, with no coverage validated
+    — which is the closed route, reopened one layer up."""
+
+    found = _mint_calls()
+    assert found, "the mint sweep found no call at all; it is not reaching the bank"
+    unpermitted = sorted(set(found) - set(_PERMITTED_MINTERS))
+    assert unpermitted == [], (
+        f"PolicyAssessment minted outside the permitted set: {unpermitted}. "
+        "Mint only what coverage validated, via VerifierBank.assess, or add it "
+        "here WITH the reason it cannot authorize around an unvalidated verdict."
+    )
+
+
+def test_no_permitted_minter_outlives_the_call_it_excuses():
+    found = _mint_calls()
+    stale = sorted(set(_PERMITTED_MINTERS) - set(found))
+    assert stale == [], f"permitted minters with no call behind them: {stale}"
 
 
 def test_the_guard_names_what_it_does_not_constrain():

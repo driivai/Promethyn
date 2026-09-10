@@ -46,6 +46,61 @@ from prometheus_protocol.provider.mock import MockProvider
 from prometheus_protocol.verifier.bank import VerifierBank
 from prometheus_protocol.verifier.sql import SqlTask, SqlVerifier
 from prometheus_protocol.benchmarks.sql_items import build_sql_tasks
+from prometheus_protocol.policy.coverage import BoundResult
+from prometheus_protocol.policy.profile import PolicyRequirement, VerificationPolicy
+from prometheus_protocol.policy.resolver import resolve
+from prometheus_protocol.policy.snapshot import ACTION_SANDBOX_EXECUTE, snapshot_digest
+from prometheus_protocol.swarm.models import content_hash
+
+
+# ---------------------------------------------------------------------------
+# PHASE-1.2b — the demos go through the policy layer, like everything else.
+# ---------------------------------------------------------------------------
+
+def _demo_policy(check_id: str, *implementations: str) -> VerificationPolicy:
+    """A policy VALUE naming this demo's own verifiers (R1).
+
+    A demo is a deployment like any other: it decides which implementations may
+    satisfy its requirements. Naming them here is that decision made explicitly,
+    and it is what lets the demo authorize anything at all now that a raw
+    verdict cannot.
+    """
+
+    return VerificationPolicy(
+        policy_id="demo",
+        version=1,
+        requirements=(
+            PolicyRequirement(
+                check_id=check_id,
+                permitted=tuple(implementations),
+                applies_to=(ACTION_SANDBOX_EXECUTE,),
+            ),
+        ),
+        require_verification=(ACTION_SANDBOX_EXECUTE,),
+    )
+
+
+def _assess(bank, policy, check_id, outcomes, *, subject_id: str, artifact: str):
+    """Resolve, bind every outcome to the snapshot, and let the bank decide."""
+
+    snapshot = resolve(
+        policy,
+        artifact_sha256=content_hash(artifact),
+        target_canonical="sandbox://demo",
+        action_class=ACTION_SANDBOX_EXECUTE,
+        attempt_id=subject_id,
+    )
+    digest = snapshot_digest(snapshot)
+    return bank.assess(snapshot, [
+        BoundResult(
+            check_id=check_id,
+            snapshot_digest=digest,
+            implementation=outcome.verifier_id,
+            outcome=outcome,
+        )
+        for outcome in outcomes
+    ])
+
 
 #: The frozen model's scripted proposals, keyed by task id found in the prompt.
 #: Beat 2's proposal is deliberately the classic missing-join-condition bug.
@@ -93,6 +148,7 @@ def run_loop(*, out: Callable[[str], None] = print) -> dict:
     verifier = SqlVerifier()
     bank = VerifierBank()
     bank.register(verifier.verifier_id, Tier.HARD)
+    policy = _demo_policy("sql.query", verifier.verifier_id)
     ledger = SqliteLedger(":memory:")
     controller = ExecutionController(
         gate=ActionGate(escalate_below=0.75, route_high_risk=True),
@@ -111,7 +167,11 @@ def run_loop(*, out: Callable[[str], None] = print) -> dict:
         out(f"[loop]   proposed : {proposal}")
         evidence = verifier.verify(code=proposal, task=task)
         out(f"[loop]   verified : {render_outcome(evidence)}")
-        judgment = bank.judge([evidence])
+        assessment = _assess(
+            bank, policy, "sql.query", [evidence],
+            subject_id=task.id, artifact=proposal,
+        )
+        judgment = assessment.outcome
         out(f"[loop]   judged   : {render_judgment(judgment)}")
         if isinstance(judgment, Unavailable):
             # There is no judgment, so there is nothing to authorize on. The gate
@@ -123,7 +183,7 @@ def run_loop(*, out: Callable[[str], None] = print) -> dict:
             summary[task_id] = OUTCOME_UNAVAILABLE
             return
         outcome = controller.submit(
-            judgment=judgment,
+            assessment=assessment,
             action=_action_for(task, proposal),
             risk_class=risk_class,
             subject_id=task.id,

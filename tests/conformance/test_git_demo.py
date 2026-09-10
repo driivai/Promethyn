@@ -48,17 +48,26 @@ def test_fixture_split_is_deterministic_and_content_based(tmp_path):
     assert len(merged_sets[0]) == 8 and len(UNMERGED_BRANCHES) == 2
 
 
-def test_hero_run_deletes_eight_holds_two_loses_nothing(tmp_path):
+def test_hero_run_deletes_eight_refuses_two_loses_nothing(tmp_path):
     _require_runtime()
     repo = build_demo_repo(tmp_path / "hero")
     summary = run_hero(repo, out=lambda line: None)
-    assert sorted(summary["held"]) == sorted(UNMERGED_BRANCHES)
+    # PHASE-1.2b — the two unmerged branches are now REFUSED BY POLICY rather
+    # than held for a human. The merge proof the policy requires fails, coverage
+    # refuses as unsatisfactory, and the gate blocks. Same survivors, same zero
+    # data loss, one decision earlier and without a human in the loop.
+    assert sorted(summary["refused"]) == sorted(UNMERGED_BRANCHES)
+    assert summary["held"] == []
     assert sorted(summary["deleted"]) == sorted(
         set(ALL_BRANCHES) - set(UNMERGED_BRANCHES)
     )
     assert sorted(summary["survivors"]) == sorted(UNMERGED_BRANCHES)
-    assert len(summary["decisions"]) == 2
-    assert all(row["status"] == "rejected" for row in summary["decisions"])
+    # No human decisions: nothing was held, because nothing needed a human to
+    # decide. The requirement was unmet and that is a policy answer, not a
+    # judgement call. The human-hold path is still exercised — by
+    # test_git_tool.py, on a delete whose merge proof SUCCEEDS at high risk,
+    # which separates the two controls instead of conflating them.
+    assert summary["decisions"] == []
 
 
 def test_baseline_genuinely_destroys_the_risky_branches(tmp_path):

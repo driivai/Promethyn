@@ -33,10 +33,13 @@ holds today regardless.
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
-from prometheus_protocol.core.models import ExecutableAction, Judgment
+from prometheus_protocol.core.models import ExecutableAction
 from prometheus_protocol.execution.controller import SubmitOutcome
+
+if TYPE_CHECKING:  # pragma: no cover - import cycle: policy imports core.models
+    from prometheus_protocol.policy.assessment import PolicyAssessment
 
 
 class SubmitFn(Protocol):
@@ -45,7 +48,7 @@ class SubmitFn(Protocol):
     def __call__(
         self,
         *,
-        judgment: Judgment,
+        assessment: "PolicyAssessment",
         action: ExecutableAction,
         risk_class: str = "low",
         subject_id: str = "",
@@ -70,7 +73,7 @@ class ActionGateway:
     def route_action(
         self,
         *,
-        judgment: Judgment,
+        assessment: "PolicyAssessment",
         action: ExecutableAction,
         risk_class: str = "low",
         subject_id: str = "",
@@ -79,10 +82,15 @@ class ActionGateway:
 
         The gate — not this gateway and not the orchestrator — approves,
         routes to a human, or blocks. The gateway only carries the proposal in.
+
+        PHASE-1.2b — what it carries is a policy-evaluated, action-bound
+        assessment. The gateway still authorizes nothing and still reads
+        nothing off what it carries; the change is that there is no ``judgment=``
+        keyword left for an unbound verdict to enter through.
         """
 
         return self._submit(
-            judgment=judgment,
+            assessment=assessment,
             action=action,
             risk_class=risk_class,
             subject_id=subject_id,

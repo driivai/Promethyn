@@ -71,6 +71,15 @@ def two_permitted_policy() -> VerificationPolicy:
                 applies_to=("sandbox.execute", "database.migrate"),
             ),
         ),
+        # PHASE-1.2b — stated EXPLICITLY rather than left to the default, which
+        # is every action class. ``branch.delete`` arrived this sprint, and a
+        # policy that covers a class while requiring nothing for it is the
+        # emptiest fail-open; the floor refused this fixture until the coverage
+        # it actually makes claims about was named. That the default breaks every
+        # policy when a consequence class is added is the fail-closed direction
+        # and is intended: a new way to cause harm should force each policy to
+        # decide about it, not be silently covered by nothing.
+        require_verification=("sandbox.execute", "database.migrate"),
     )
 
 
@@ -693,15 +702,29 @@ def test_the_shipped_profile_names_implementations_that_really_exist():
     was omitted."""
 
     from prometheus_protocol.swarm.runtime import CHECK_VERIFIER_ID
+    from prometheus_protocol.tools.git import MERGE_CHECK_VERIFIER_ID
     from prometheus_protocol.verifier.runner import SubprocessVerifier
 
     assert IMPL_SUBPROCESS == SubprocessVerifier.VERIFIER_ID
-    from prometheus_protocol.policy.profile import IMPL_SWARM_STRUCTURAL
+    from prometheus_protocol.policy.profile import (
+        IMPL_GIT_MERGE_CHECK,
+        IMPL_SWARM_STRUCTURAL,
+    )
 
     assert IMPL_SWARM_STRUCTURAL == CHECK_VERIFIER_ID
+    # PHASE-1.2b — the merge check became a permitted implementation when
+    # ``branch.delete`` became an action class. Read off the implementation, not
+    # retyped here, so a rename there fails this rather than silently leaving the
+    # profile naming an id nothing reports.
+    assert IMPL_GIT_MERGE_CHECK == MERGE_CHECK_VERIFIER_ID
 
+    reporters = {
+        SubprocessVerifier.VERIFIER_ID,
+        CHECK_VERIFIER_ID,
+        MERGE_CHECK_VERIFIER_ID,
+    }
     for requirement in load_profile("baseline").requirements:
         for implementation in requirement.permitted:
-            assert implementation in {SubprocessVerifier.VERIFIER_ID, CHECK_VERIFIER_ID}, (
+            assert implementation in reporters, (
                 f"{implementation} is permitted but nothing reports under it"
             )

@@ -19,6 +19,7 @@ import pytest
 
 from prometheus_protocol.core.booleans import parse_env_bool
 from prometheus_protocol.core.models import (
+
     ACTION_PYTHON_CODE,
     ExecutableAction,
     Judgment,
@@ -36,10 +37,17 @@ from prometheus_protocol.sandbox.unsafe import NullSandbox
 from prometheus_protocol.swarm.executor import Executor
 from prometheus_protocol.swarm.models import ExecutionResult
 
+from tests.support.assessments import carrying
+
 _REQUIRE = parse_env_bool("PROM_REQUIRE_SANDBOX", os.environ.get("PROM_REQUIRE_SANDBOX"), default=False)
 _T0 = "2026-07-01T00:00:00Z"
 _T0_PLUS_200 = "2026-07-01T00:03:20Z"  # +200 seconds
-_LOW = Judgment(verdict=Verdict.PASS, confidence=0.60, authoritative=True)
+# PHASE-1.2b — these are ASSESSMENTS now. The gate reads a
+# policy-evaluated, action-bound assessment; a bare Judgment has no
+# parameter to arrive through. ``carrying`` mints one around an exact
+# verdict so these tests keep asserting what they always asserted (gate
+# thresholds, TTL, retry) instead of re-testing the policy layer.
+_LOW = carrying(Judgment(verdict=Verdict.PASS, confidence=0.60, authoritative=True))
 
 
 class _Clock:
@@ -99,7 +107,7 @@ def _isolating_sandbox() -> NamespaceSandbox:
 def test_sweep_expires_lapsed_pending_and_audits_the_transition():
     clock = _Clock(_T0)
     controller, ledger, spy = _harness(ttl=100, clock=clock)
-    held = controller.submit(judgment=_LOW, action=_action(), subject_id="s").pending
+    held = controller.submit(assessment=_LOW, action=_action(), subject_id="s").pending
 
     clock.now = _T0_PLUS_200  # time passes beyond the 100s TTL
     expired = controller.sweep()
@@ -118,7 +126,7 @@ def test_sweep_expires_lapsed_pending_and_audits_the_transition():
 def test_sweep_is_idempotent():
     clock = _Clock(_T0)
     controller, _ledger, _spy = _harness(ttl=100, clock=clock)
-    controller.submit(judgment=_LOW, action=_action(), subject_id="s").pending
+    controller.submit(assessment=_LOW, action=_action(), subject_id="s").pending
     clock.now = _T0_PLUS_200
     assert len(controller.sweep()) == 1
     assert controller.sweep() == []  # already expired: a no-op
@@ -127,7 +135,7 @@ def test_sweep_is_idempotent():
 def test_ttl_zero_disables_expiry():
     clock = _Clock("2020-01-01T00:00:00Z")
     controller, _ledger, spy = _harness(ttl=0, clock=clock)
-    held = controller.submit(judgment=_LOW, action=_action(), subject_id="s").pending
+    held = controller.submit(assessment=_LOW, action=_action(), subject_id="s").pending
     clock.now = "2030-01-01T00:00:00Z"  # ten years later
     assert controller.sweep() == []
     assert controller.pending.get(held.id).status == PendingStatus.PENDING
@@ -165,7 +173,7 @@ def test_controller_startup_sweeps_lapsed_pendings():
 def test_listing_sweeps_lapsed_pendings():
     clock = _Clock(_T0)
     controller, ledger, spy = _harness(ttl=100, clock=clock)
-    held = controller.submit(judgment=_LOW, action=_action(), subject_id="s").pending
+    held = controller.submit(assessment=_LOW, action=_action(), subject_id="s").pending
 
     clock.now = _T0_PLUS_200
     assert controller.list_pending() == []  # never shown as approvable
@@ -176,9 +184,9 @@ def test_listing_sweeps_lapsed_pendings():
 def test_approving_sweeps_other_lapsed_pendings():
     clock = _Clock(_T0)
     controller, ledger, spy = _harness(ttl=100, clock=clock)
-    old = controller.submit(judgment=_LOW, action=_action(), subject_id="s/old").pending
+    old = controller.submit(assessment=_LOW, action=_action(), subject_id="s/old").pending
     clock.now = "2026-07-01T00:01:20Z"  # +80s: old not yet lapsed
-    fresh = controller.submit(judgment=_LOW, action=_action(), subject_id="s/new").pending
+    fresh = controller.submit(assessment=_LOW, action=_action(), subject_id="s/new").pending
 
     clock.now = "2026-07-01T00:02:30Z"  # +150s: old lapsed (150 > 100), fresh not (70 < 100)
     controller.approve(fresh.id, identity="will@driivai.com")
@@ -193,7 +201,7 @@ def test_service_level_stale_guard_remains_authoritative():
 
     clock = _Clock(_T0)
     controller, ledger, spy = _harness(ttl=100, clock=clock)
-    held = controller.submit(judgment=_LOW, action=_action(), subject_id="s").pending
+    held = controller.submit(assessment=_LOW, action=_action(), subject_id="s").pending
 
     clock.now = _T0_PLUS_200
     # Straight at the service — no controller sweep runs on this path.
@@ -224,7 +232,7 @@ def test_cli_pending_expires_lapsed_holds(tmp_path, monkeypatch, capsys):
 def test_expired_action_cannot_be_approved_or_executed():
     clock = _Clock(_T0)
     controller, _ledger, spy = _harness(ttl=100, clock=clock)
-    held = controller.submit(judgment=_LOW, action=_action(), subject_id="s").pending
+    held = controller.submit(assessment=_LOW, action=_action(), subject_id="s").pending
     clock.now = _T0_PLUS_200
     controller.sweep()  # -> EXPIRED
 
@@ -238,7 +246,7 @@ def test_stale_approval_is_refused_even_without_a_sweep():
 
     clock = _Clock(_T0)
     controller, _ledger, spy = _harness(ttl=100, clock=clock)
-    held = controller.submit(judgment=_LOW, action=_action(), subject_id="s").pending
+    held = controller.submit(assessment=_LOW, action=_action(), subject_id="s").pending
 
     clock.now = _T0_PLUS_200  # past TTL; sweep has NOT run
     with pytest.raises(ValueError, match="expired"):
@@ -252,7 +260,7 @@ def test_stale_approval_is_refused_even_without_a_sweep():
 def test_already_resolved_action_cannot_be_re_approved():
     clock = _Clock(_T0)
     controller, _ledger, spy = _harness(ttl=0, clock=clock)
-    held = controller.submit(judgment=_LOW, action=_action(), subject_id="s").pending
+    held = controller.submit(assessment=_LOW, action=_action(), subject_id="s").pending
     controller.approve(held.id, identity="will@driivai.com")
     with pytest.raises(ValueError):
         controller.approve(held.id, identity="someone-else")
@@ -268,7 +276,7 @@ def test_expiry_does_not_create_an_auto_execution_path():
     clock = _Clock(_T0)
     controller, _ledger, spy = _harness(ttl=100, clock=clock)
     # A low-confidence action still routes and holds — never auto-executes.
-    outcome = controller.submit(judgment=_LOW, action=_action(), subject_id="s")
+    outcome = controller.submit(assessment=_LOW, action=_action(), subject_id="s")
     assert outcome.pending is not None and outcome.execution is None
     assert spy.calls == []
 
@@ -283,7 +291,7 @@ def test_approve_executes_through_the_sandbox():
         ttl=0, clock=clock, executor=SandboxExecutor(sandbox=sandbox)
     )
     held = controller.submit(
-        judgment=_LOW, action=_action("print('APPROVED-AND-RAN')"), subject_id="s"
+        assessment=_LOW, action=_action("print('APPROVED-AND-RAN')"), subject_id="s"
     ).pending
 
     result = controller.approve(held.id, identity="will@driivai.com", reason="ok")
@@ -301,7 +309,7 @@ def test_approve_fails_closed_without_an_isolating_sandbox():
     controller, ledger, _ = _harness(
         ttl=0, clock=clock, executor=SandboxExecutor(sandbox=NullSandbox())
     )
-    held = controller.submit(judgment=_LOW, action=_action(), subject_id="s").pending
+    held = controller.submit(assessment=_LOW, action=_action(), subject_id="s").pending
 
     result = controller.approve(held.id, identity="will@driivai.com")
     assert result.refused and not result.executed  # fail-closed, not degraded

@@ -18,6 +18,8 @@ from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
 from prometheus_protocol.core.models import ExecutableAction
 from prometheus_protocol.swarm.executor import RecordingExecutor
 
+from tests.support.assessments import carrying
+
 
 def _attempt(judgment: Judgment | None) -> Attempt:
     return Attempt(
@@ -155,7 +157,7 @@ def test_controller_execution_is_queryable_by_confidence():
         executor=RecordingExecutor(), ledger=ledger, clock=lambda: "t",
     )
     controller.submit(
-        judgment=Judgment(Verdict.PASS, 0.44, authoritative=True),
+        assessment=carrying(Judgment(Verdict.PASS, 0.44, authoritative=True)),
         action=ExecutableAction(kind="python_code", code="print(1)"),
         subject_id="live",
     )

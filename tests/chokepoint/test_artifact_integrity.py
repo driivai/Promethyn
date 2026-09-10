@@ -35,6 +35,8 @@ from prometheus_protocol.chokepoint import (
 )
 from prometheus_protocol.core.models import Judgment, Verdict
 
+from tests.support.assessments import authorize_migration
+
 BENIGN = "ALTER TABLE accounts ADD COLUMN note text;\n"
 HOSTILE = "DROP TABLE accounts;\n"
 
@@ -104,7 +106,7 @@ def test_rewriting_the_file_after_approval_does_not_change_what_executes(
     artifact = MigrationArtifact.from_path(migration_file)
     authority = ApprovalAuthority()
     target = _target()
-    approval = authority.authorize(
+    approval = authorize_migration(authority, 
         _pass_judgment(), artifact=artifact, target=target.identity, now=1000.0
     )
     assert approval is not None
@@ -154,7 +156,7 @@ def test_the_attack_lands_against_a_path_carrying_design(migration_file, tmp_pat
     artifact = MigrationArtifact.from_path(migration_file)
     authority = ApprovalAuthority()
     target = _target()
-    approval = authority.authorize(
+    approval = authorize_migration(authority, 
         _pass_judgment(), artifact=artifact, target=target.identity, now=1000.0
     )
     assert approval is not None
@@ -185,7 +187,7 @@ def test_the_approval_would_still_verify_against_the_swapped_file(migration_file
     artifact = MigrationArtifact.from_path(migration_file)
     authority = ApprovalAuthority()
     target = _target()
-    approval = authority.authorize(
+    approval = authorize_migration(authority, 
         _pass_judgment(), artifact=artifact, target=target.identity, now=1000.0
     )
     migration_file.write_text(HOSTILE, encoding="utf-8")

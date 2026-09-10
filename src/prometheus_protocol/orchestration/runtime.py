@@ -34,8 +34,28 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable, Protocol
 
-from prometheus_protocol.core.models import Tier, Unavailable, Verdict
+from prometheus_protocol.core.models import (
+    ACTION_GIT_DELETE_BRANCH,
+    ACTION_PYTHON_CODE,
+    Tier,
+    Unavailable,
+    Verdict,
+)
+from prometheus_protocol.swarm.models import content_hash
 from prometheus_protocol.gate.authorization import OUTCOME_UNAVAILABLE
+from prometheus_protocol.policy.coverage import BoundResult
+from prometheus_protocol.policy.profile import (
+    CHECK_WORKFLOW_GRADE,
+    DEFAULT_PROFILE_ID,
+    VerificationPolicy,
+    load_profile,
+)
+from prometheus_protocol.policy.resolver import PolicyError, resolve
+from prometheus_protocol.policy.snapshot import (
+    ACTION_BRANCH_DELETE,
+    ACTION_SANDBOX_EXECUTE,
+    snapshot_digest,
+)
 from prometheus_protocol.gate.promotion import (
     OUTCOME_APPROVE,
     OUTCOME_BLOCK,
@@ -137,6 +157,8 @@ class WorkflowRuntime:
         gateway: ActionGateway,
         ledger: WorkflowLedgerPort,
         clock: Callable[[], str] | None = None,
+        policy: VerificationPolicy | None = None,
+        target_canonical: str = "sandbox://workflow",
     ) -> None:
         # Grade (bank), the one door to action (gateway), record (ledger).
         # Deliberately NO executor, NO gate, NO controller reference.
@@ -144,6 +166,15 @@ class WorkflowRuntime:
         self._gateway = gateway
         self._ledger = ledger
         self._clock = clock or _utc_now_iso
+        # PHASE-1.2b — a policy VALUE (R1), exactly as the swarm takes one. A
+        # workflow's grader is chosen by whoever wrote the workflow, so under the
+        # shipped baseline an arbitrary grader satisfies no requirement and this
+        # runtime authorizes nothing. That is the point rather than a regression:
+        # a caller-supplied grader must not be able to authorize a sandbox
+        # execution unless a policy says that implementation may. A deployment
+        # whose graders SHOULD authorize supplies a policy naming them.
+        self._policy = policy if policy is not None else load_profile(DEFAULT_PROFILE_ID)
+        self._target_canonical = target_canonical
 
     def run(self, workflow: Workflow) -> WorkflowRun:
         messages: dict[str, AgentMessage] = {}
@@ -201,15 +232,29 @@ class WorkflowRuntime:
             outcome = _OUTCOME_NONE
             pending_id: int | None = None
             if proposal.action is not None:
-                submit = self._gateway.route_action(
-                    judgment=judgment,
-                    action=proposal.action,
-                    risk_class=proposal.risk_class,
-                    subject_id=subject_id,
+                # PHASE-1.2b — resolve requirements for THIS action from the
+                # policy, bind the grader's evidence to the snapshot, and let the
+                # bank decide coverage. The gateway carries an assessment; there
+                # is no keyword left through which the bare ``judgment`` above
+                # could reach the gate.
+                assessment = self._assess_action(
+                    proposal=proposal, evidence=evidence, attempt_id=subject_id
                 )
-                outcome = submit.outcome
-                if submit.pending is not None:
-                    pending_id = submit.pending.id
+                if assessment is None:
+                    # No policy covers this action class, so it cannot be
+                    # authorized — silence is not permission. Recorded as
+                    # unavailable; nothing is routed and nothing executes.
+                    outcome = OUTCOME_UNAVAILABLE
+                else:
+                    submit = self._gateway.route_action(
+                        assessment=assessment,
+                        action=proposal.action,
+                        risk_class=proposal.risk_class,
+                        subject_id=subject_id,
+                    )
+                    outcome = submit.outcome
+                    if submit.pending is not None:
+                        pending_id = submit.pending.id
 
             # (4) wrap the output as a tier-tagged message for dependents.
             message = AgentMessage.graded(
@@ -257,6 +302,50 @@ class WorkflowRuntime:
             chain_confidence_placeholder=chain,
             messages=messages,
         )
+
+    #: Which consequence class each executable action kind falls under. A kind
+    #: with no entry is refused rather than defaulted: guessing a class for an
+    #: unknown action is guessing its requirements, which is the shape the
+    #: taxonomy shrink exists to prevent.
+    _ACTION_CLASS_FOR_KIND = {
+        ACTION_PYTHON_CODE: ACTION_SANDBOX_EXECUTE,
+        ACTION_GIT_DELETE_BRANCH: ACTION_BRANCH_DELETE,
+    }
+
+    def _assess_action(self, *, proposal, evidence, attempt_id):
+        """Resolve requirements for this action and let the bank decide coverage.
+
+        Returns ``None`` when no policy covers the action class — an outcome the
+        caller records as unavailable. It never returns something the gate would
+        read as an approval.
+        """
+
+        action_class = self._ACTION_CLASS_FOR_KIND.get(proposal.action.kind)
+        if action_class is None:
+            return None
+        try:
+            snapshot = resolve(
+                self._policy,
+                artifact_sha256=content_hash(proposal.action.code),
+                target_canonical=self._target_canonical,
+                action_class=action_class,
+                attempt_id=attempt_id,
+            )
+        except PolicyError:
+            return None
+        # The grader's evidence, bound to the snapshot under the identity the
+        # grader actually reports. A grader the policy does not permit produces
+        # invalid evidence and coverage refuses — which is the whole point: a
+        # caller-chosen grader cannot authorize by being present.
+        results = [
+            BoundResult(
+                check_id=CHECK_WORKFLOW_GRADE,
+                snapshot_digest=snapshot_digest(snapshot),
+                implementation=evidence.verifier_id,
+                outcome=evidence,
+            )
+        ]
+        return self._bank.assess(snapshot, results)
 
     def _halt_record(
         self,

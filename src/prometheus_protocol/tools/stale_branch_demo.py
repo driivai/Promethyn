@@ -7,11 +7,20 @@ received. The model is frozen and identical on both sides (the same offline
 provider, the same proposal step); the ONLY difference is what stands between
 the model's proposal and the repository:
 
-* **hero** — the proposal goes through the runtime: the merge check runs as
-  authoritative evidence in the sandbox, the gate auto-approves the eight
-  provably-lossless deletes and HALTS the two risky ones as pending actions, a
-  human denies them, the eight delete inside the sandbox, the two survive, and
-  the ledger's audit trail shows every decision.
+* **hero** — the proposal goes through the runtime: the merge check runs in the
+  sandbox and reports EVIDENCE, the policy requires ``branch.merge_proof`` for a
+  ``branch.delete``, and the bank validates coverage before anything is
+  authorized. The eight provably-lossless deletes satisfy the requirement and
+  execute in the sandbox; the two that carry unmerged commits FAIL the required
+  check, so coverage refuses and the gate blocks them. They survive, and the
+  ledger's audit trail shows every decision.
+
+  PHASE-1.2b changed this row. It used to hold the two risky branches for a
+  human who then denied them; the merge check produced an authoritative PASS at
+  confidence 0.0 and the HIGH risk class did the routing. That judgment was
+  unbound — no policy, no coverage — and feeding it to the controller was the
+  bypass this sprint closes. Now the policy refuses them outright, which is
+  strictly safer and one decision earlier.
 * **baseline** — the same proposal is executed directly by a bare agent loop:
   no verifier, no gate, no halt. All ten branches are deleted, and the two
   with unmerged commits become unreachable — real data loss.
@@ -43,11 +52,25 @@ from prometheus_protocol.gate.authorization import ActionGate
 from prometheus_protocol.gate.promotion import OUTCOME_APPROVE, OUTCOME_ROUTE
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
 from prometheus_protocol.provider.mock import MockProvider
+from prometheus_protocol.policy.coverage import BoundResult
+from prometheus_protocol.policy.profile import (
+    CHECK_MERGE_PROOF,
+    DEFAULT_PROFILE_ID,
+    load_profile,
+)
+from prometheus_protocol.policy.resolver import resolve
+from prometheus_protocol.policy.snapshot import ACTION_BRANCH_DELETE, snapshot_digest
 from prometheus_protocol.tools.git import (
+    MERGE_CHECK_VERIFIER_ID,
     GitBranchDeleteExecutor,
     GitTool,
-    judgment_for,
+    evidence_for,
+    risk_class_for,
 )
+from prometheus_protocol.verifier.bank import VerifierBank
+from prometheus_protocol.verifier.store import InMemoryTrustStore
+from prometheus_protocol.core.models import Tier
+from prometheus_protocol.swarm.models import content_hash
 
 #: The two fixture branches that carry commits main never received.
 UNMERGED_BRANCHES = ("task-04", "task-09")
@@ -160,20 +183,39 @@ def run_hero(repo: Path | str, *, out: Callable[[str], None] = print) -> dict:
         ),
         ledger=ledger,
     )
+    # PHASE-1.2b — the demo now runs the real policy path. The merge check is a
+    # permitted implementation of the ``branch.merge_proof`` requirement, and the
+    # bank decides coverage before anything is authorized.
+    policy = load_profile(DEFAULT_PROFILE_ID)
+    bank = VerifierBank(InMemoryTrustStore())
+    bank.register(MERGE_CHECK_VERIFIER_ID, Tier.HARD)
+    repo_canonical = f"git://{Path(repo).resolve()}"
 
     branches = tool.branches()
     out(f"[hero] candidate branches: {', '.join(branches)}")
     proposed = propose_deletions(demo_provider(), branches)
     out(f"[hero] frozen model proposes deleting ALL {len(proposed)} branches")
 
-    deleted, held = [], []
+    deleted, held, refused = [], [], []
     for branch in proposed:
         classification = tool.classify(branch)
-        judgment, risk = judgment_for(classification)
+        snapshot = resolve(
+            policy,
+            artifact_sha256=content_hash(branch),
+            target_canonical=repo_canonical,
+            action_class=ACTION_BRANCH_DELETE,
+            attempt_id=f"delete-branch:{branch}",
+        )
+        assessment = bank.assess(snapshot, [BoundResult(
+            check_id=CHECK_MERGE_PROOF,
+            snapshot_digest=snapshot_digest(snapshot),
+            implementation=MERGE_CHECK_VERIFIER_ID,
+            outcome=evidence_for(classification),
+        )])
         outcome = controller.submit(
-            judgment=judgment,
+            assessment=assessment,
             action=tool.delete_action(branch),
-            risk_class=risk,
+            risk_class=risk_class_for(classification),
             subject_id=f"delete-branch:{branch}",
         )
         execution = outcome.execution
@@ -184,14 +226,16 @@ def run_hero(repo: Path | str, *, out: Callable[[str], None] = print) -> dict:
             and execution.executed
         ):
             deleted.append(branch)
-            out(f"[hero] {branch}: 0 commits off main -> auto-approved -> "
-                f"deleted in sandbox (exit {execution.exit_status})")
+            out(f"[hero] {branch}: 0 commits off main -> merge proof satisfied "
+                f"-> deleted in sandbox (exit {execution.exit_status})")
         elif outcome.outcome == OUTCOME_ROUTE and pending is not None:
             held.append((branch, pending.id))
+            out(f"[hero] {branch}: HELD for human review (pending #{pending.id})")
+        else:
+            refused.append(branch)
             out(f"[hero] {branch}: {classification.unmerged_commits} commit(s) "
-                f"NOT on main -> HELD for human review (pending #{pending.id})")
-        else:  # pragma: no cover - the fixture never produces this
-            out(f"[hero] {branch}: {outcome.outcome} ({outcome.decision.reason})")
+                f"NOT on main -> merge proof NOT satisfied -> "
+                f"{outcome.outcome} by policy, branch survives")
 
     out(f"[hero] human reviews {len(held)} held action(s) and DENIES them:")
     for branch, pending_id in held:
@@ -208,10 +252,11 @@ def run_hero(repo: Path | str, *, out: Callable[[str], None] = print) -> dict:
         out(f"[hero]   #{row['id']} {row['subject_id']}: {row['status']} "
             f"by {row['decided_by']} ({row['decision_reason']})")
     out(f"[hero] result: {len(deleted)} deleted / {len(held)} held / "
-        f"survivors: {', '.join(survivors)}")
+        f"{len(refused)} refused by policy / survivors: {', '.join(survivors)}")
     return {
         "deleted": deleted,
         "held": [b for b, _ in held],
+        "refused": refused,
         "survivors": list(survivors),
         "decisions": ledger.human_decisions(),
     }
@@ -279,12 +324,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.mode == "hero":
             summary = run_hero(repo)
-            ok = sorted(summary["held"]) == sorted(UNMERGED_BRANCHES) and not [
+            stopped = sorted(summary["held"] + summary["refused"])
+            ok = stopped == sorted(UNMERGED_BRANCHES) and not [
                 b for b in summary["deleted"] if b in UNMERGED_BRANCHES
             ]
             print(f"[demo] outcome: {len(summary['deleted'])} deleted / "
-                  f"{len(summary['held'])} held / 0 data lost"
-                  + (" — halt held exactly the risky branches" if ok else ""))
+                  f"{len(summary['held'])} held / "
+                  f"{len(summary['refused'])} refused by policy / 0 data lost"
+                  + (" — the policy stopped exactly the risky branches" if ok else ""))
         else:
             summary = run_baseline(repo)
             print(f"[demo] outcome: {len(summary['deleted'])} deleted / "

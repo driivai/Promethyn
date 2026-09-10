@@ -22,6 +22,7 @@ from prometheus_protocol.core.models import (
     SPLIT_TRAIN,
     Case,
     Evidence,
+    ExecutableAction,
     Judgment,
     Task,
     Tier,
@@ -124,18 +125,30 @@ def test_a_structural_pass_cannot_stand_in_for_a_missing_executable_check():
 # ===========================================================================
 
 
-def test_every_production_entry_point_reaches_the_policy_enforcing_bank():
-    """The entry points exist, are importable, and the policy value is reachable
-    from configuration at each of them.
+def test_every_production_entry_point_is_driven_behaviourally():
+    """PHASE-1.2b — and a CHECKPOINT-2 CLAIM WITHDRAWN.
 
-    This is the wiring assertion. The BEHAVIOURAL assertion — that a missing
-    required check refuses — is the swarm matrix below, driven end to end
-    through the real runtime; the orchestrator and execution-controller paths
-    reach the same ``judge_covered`` once their callers pass a snapshot, which is
-    the next sprint's breaking change and is named as an exposure in the report.
+    Checkpoint 2 asserted this as wiring (``assert build_migration_runtime is not
+    None``) under a docstring saying all three entry points "reach the same
+    ``judge_covered`` once their callers pass a snapshot". Two thirds of that was
+    wrong, and asserting a function is not ``None`` is why nobody noticed:
+
+    * ``build_migration_runtime`` never reaches ``VerifierBank`` at all. Its
+      authorization surface is ``RecordedApprovalAuthority.authorize``, which
+      minted a signed capability from a raw ``Judgment``. It was a FOURTH bypass
+      surface, not a caller waiting for a snapshot, and PHASE-1.2b migrated it.
+    * ``build_orchestrator`` has a ``PromotionGate`` and NO executor. It decides
+      what skill to keep; it cannot authorize an action, so there was nothing for
+      it to reach. Measured below rather than asserted.
+
+    What is proven here is what is actually true, behaviourally.
     """
 
     from prometheus_protocol.core.config import Config
+    from prometheus_protocol.execution.controller import ExecutionController
+    from prometheus_protocol.gate.authorization import ActionGate
+    from prometheus_protocol.gate.promotion import PromotionGate
+    from prometheus_protocol.policy.assessment import UnboundAuthorization
     from prometheus_protocol.runtime.factory import (
         build_execution_controller,
         build_orchestrator,
@@ -145,18 +158,44 @@ def test_every_production_entry_point_reaches_the_policy_enforcing_bank():
     config = Config(ledger_path=":memory:")
     policy = build_verification_policy(config)
     assert policy.policy_id == "baseline"
-    assert policy.covers("sandbox.execute") and policy.covers("database.migrate")
+    for action_class in ("sandbox.execute", "database.migrate", "branch.delete"):
+        assert policy.covers(action_class), action_class
 
-    # Both factory entry points build, and the bank they build carries the
-    # policy-enforcing method.
-    orchestrator = build_orchestrator(config)
-    assert hasattr(orchestrator.bank, "judge_covered")
+    # 1. build_execution_controller — a real ActionGate over a real executor.
+    #    An unbound verdict cannot be submitted to it.
     controller = build_execution_controller(config)
-    assert controller is not None
+    assert isinstance(controller, ExecutionController)
+    assert isinstance(controller._gate, ActionGate)
+    with pytest.raises(UnboundAuthorization):
+        controller.submit(
+            assessment=Judgment(
+                verdict=Verdict.PASS, confidence=1.0, authoritative=True
+            ),
+            action=ExecutableAction(kind="python_code", code="print(1)"),
+            subject_id="unbound",
+        )
 
-    from prometheus_protocol.chokepoint.runner import build_migration_runtime
+    # 2. build_orchestrator — no action-authorization path exists. Asserted as
+    #    the ABSENCE it is, so a future sprint that gives it one has to notice.
+    orchestrator = build_orchestrator(config)
+    assert isinstance(orchestrator.gate, PromotionGate)
+    assert not hasattr(orchestrator, "executor")
+    assert not isinstance(orchestrator.gate, ActionGate)
+    assert hasattr(orchestrator.bank, "assess")
 
-    assert build_migration_runtime is not None
+    # 3. build_migration_runtime — its authority refuses an unbound judgment and
+    #    RECORDS the refusal (it never raises; every attempt leaves a record).
+    from prometheus_protocol.chokepoint.recorded_authority import (
+        RecordedApprovalAuthority,
+    )
+
+    import inspect
+
+    params = inspect.signature(RecordedApprovalAuthority.authorize).parameters
+    assert "judgment" not in params and "assessment" in params
+
+    # 4. the swarm runtime — the eight-plus-two row matrix below drives it end to
+    #    end with the real bank, gate and executor.
 
 
 def test_the_migration_action_class_is_covered_by_the_shipped_policy():
@@ -499,15 +538,33 @@ def test_the_invariant_is_stated_in_the_docs_verbatim():
     )
 
 
-def test_the_docs_name_the_unbound_judgment_exposure():
-    """The exposure this sprint does NOT close must be stated where a reader
-    looks for the guarantee, not only in a report."""
+def test_the_docs_record_that_the_unbound_judgment_route_IS_CLOSED():
+    """A SECOND FLIPPED TEST. Checkpoint 2 asserted the docs NAMED the
+    unbound-judgment exposure; PHASE-1.2b closed it, so this asserts the docs
+    record the closure and the narrower residual that replaced it.
+
+    Deleting the old assertion would have been the easy move and the wrong one:
+    a reader who remembers the exposure needs to find out from the docs what
+    happened to it, not to find the sentence quietly gone.
+    """
 
     import pathlib
+    import re
 
     doc = (pathlib.Path(__file__).resolve().parents[2] / "docs" / "security-model.md").read_text()
-    assert "an old call path can bypass the policy layer" in doc
-    assert "tools/git.py" in doc
+    flat = re.sub(r"\s+", " ", doc)
+    assert "CLOSED in PHASE-1.2b" in flat
+    # The four surfaces, named — including the one the brief did not name.
+    for surface in (
+        "ActionGate.decide",
+        "ExecutionController.submit",
+        "ActionGateway.route_action",
+        "ApprovalAuthority.authorize",
+    ):
+        assert surface in flat, surface
+    # And the residual that replaced it, stated rather than implied.
+    assert "not a security boundary" in flat
+    assert "the control against arbitrary in-process code remains the process boundary" in flat
 
 
 def test_the_docs_name_both_r4_residuals():
