@@ -255,6 +255,54 @@ ours. The resolver therefore takes a policy VALUE and nothing downstream reaches
 for the profile table, so a customer-supplied supplier is a later addition
 beside `load_profile`, not a rewrite.
 
+
+### The unbound-judgment route, and how it was closed (PHASE-1.2b)
+
+Checkpoint 2 enforced requirement coverage and then named its own exposure: a raw
+authoritative `Judgment` still authorized. Four surfaces took one and asked it a
+single question — is this an authoritative PASS — which a `Judgment` can answer
+with no policy ever resolved:
+
+| surface | what it authorized |
+|---|---|
+| `ActionGate.decide` | any executable action |
+| `ExecutionController.submit` | the same, plus the human-hold path |
+| `ActionGateway.route_action` | a workflow step's action |
+| `ApprovalAuthority.authorize` / `RecordedApprovalAuthority.authorize` | a signed, single-use capability against a privileged database principal |
+
+The fourth was not named in the sprint brief and was found while migrating. It is
+the most consequential of them, and `RecordedApprovalAuthority` — not the base
+class — is what `build_migration_runtime` constructs.
+
+**The change is a type, not a check.** None of those surfaces has a parameter
+that accepts a `Judgment` any more. They accept a `PolicyAssessment`, which
+carries the resolved snapshot digest the decision is bound to and the outcome
+coverage validation produced. `VerifierBank.assess` is the only thing that mints
+one, and it mints only what `judge_covered` returned.
+
+**How structural that is, precisely.** At the INTERFACE it is a construction: no
+caller can hand over a verdict, and no amount of forgetting a check reopens the
+route. At the CONSTRUCTOR it is a guard: `PolicyAssessment` refuses to be built
+except by minting, and it CONSUMES its minting token, so `dataclasses.replace`
+inherits a spent one and is refused. That last part was measured — `replace`
+forged a valid-looking assessment before the token was consumed.
+
+**What still varies.** Anything able to run arbitrary code in this process:
+`object.__setattr__` reaches through `frozen=True`, and
+`policy.assessment._MINT` is an importable module global. The mint guard makes an
+accidental assessment impossible and a deliberate one a visible, greppable act
+that `test_no_second_aggregator.py` sweeps for. It is not a security boundary,
+and the control against arbitrary in-process code remains the process boundary.
+
+**A Checkpoint-2 claim withdrawn.** Checkpoint 2 said `build_orchestrator`,
+`build_execution_controller` and `build_migration_runtime` "reach the same
+`judge_covered` once their callers pass a snapshot", asserted as
+`assert build_migration_runtime is not None`. Two thirds of that was wrong:
+`build_migration_runtime` never reaches `VerifierBank` at all, and
+`build_orchestrator` has a `PromotionGate` and no executor, so it cannot
+authorize an action and had nothing to reach. Both are now asserted
+behaviourally, including the absence.
+
 ### The residuals, named
 
 - **The operator asserts that permitted implementations are equivalent; nothing
@@ -264,11 +312,9 @@ beside `load_profile`, not a rewrite.
   may get the weaker one to answer.** Inherent to permitting more than one; the
   policy naming them is the auditable control. It does not extend to satisfying
   a requirement with no answer.
-- **A raw authoritative `Judgment` still authorizes.** `VerifierBank.judge` and
-  the `ExecutionController.submit` path predate this layer and do not consult it;
-  `tools/git.py` produces one today and `tools/stale_branch_demo.py` executes on
-  it. Until the unbound-judgment route is closed — a breaking interface change,
-  the next sprint — **an old call path can bypass the policy layer entirely.**
+- **~~A raw authoritative `Judgment` still authorizes.~~ CLOSED in PHASE-1.2b.**
+  See *The unbound-judgment route, and how it was closed* below. The residual
+  that replaces it is narrower and is stated there.
 - **`frozen=True` is not protection against hostile Python in the process.**
   `object.__setattr__` reaches through it. It prevents accidental mutation and
   guarantees a policy value cannot drift between being digested and being

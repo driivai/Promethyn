@@ -282,6 +282,19 @@ def policy_digest(policy: VerificationPolicy) -> str:
 CHECK_EXECUTABLE_CASES = "executable.cases"
 CHECK_STRUCTURAL = "structural.predicates"
 
+#: PHASE-1.2b. What a workflow step's grader answers. The shipped baseline does
+#: NOT require it anywhere, deliberately: a workflow's grader is chosen by
+#: whoever wrote the workflow, so requiring it under the baseline would let any
+#: caller-supplied grader satisfy a requirement by existing. A deployment whose
+#: graders are trusted to authorize supplies a policy that names them.
+CHECK_WORKFLOW_GRADE = "workflow.grade"
+
+#: PHASE-1.2b. The proof a branch delete is lossless: zero commits reachable
+#: from the branch and absent from the base. Named as its own check because it
+#: is not "did some code run" — it is a content claim about the repository, and
+#: the only thing that makes an irreversible delete safe.
+CHECK_MERGE_PROOF = "branch.merge_proof"
+
 #: The verifier implementation identities permitted to answer them. These are
 #: the REAL ``verifier_id`` values the implementations report — read off
 #: ``SubprocessVerifier.VERIFIER_ID`` and ``swarm.runtime.CHECK_VERIFIER_ID``,
@@ -291,6 +304,8 @@ CHECK_STRUCTURAL = "structural.predicates"
 #: implementations.
 IMPL_SUBPROCESS = "subprocess-tests"
 IMPL_SWARM_STRUCTURAL = "swarm-checks"
+#: Read off ``tools.git.MERGE_CHECK_VERIFIER_ID``, not invented here.
+IMPL_GIT_MERGE_CHECK = "git-merge-check"
 
 
 _BASELINE = VerificationPolicy(
@@ -305,6 +320,16 @@ _BASELINE = VerificationPolicy(
             check_id=CHECK_EXECUTABLE_CASES,
             permitted=(IMPL_SUBPROCESS,),
             applies_to=("sandbox.execute", "database.migrate"),
+        ),
+        # PHASE-1.2b. A branch delete is irreversible, so the policy requires
+        # the proof that makes it lossless rather than a risk heuristic about
+        # it. Deliberately NOT applied to the other two classes: neither runs a
+        # merge check, and a requirement nothing can satisfy is indistinguishable
+        # at the bank from a check that was omitted.
+        PolicyRequirement(
+            check_id=CHECK_MERGE_PROOF,
+            permitted=(IMPL_GIT_MERGE_CHECK,),
+            applies_to=("branch.delete",),
         ),
     ),
 )

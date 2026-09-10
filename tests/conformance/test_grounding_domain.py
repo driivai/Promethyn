@@ -60,6 +60,8 @@ from prometheus_protocol.sandbox import NamespaceSandbox
 from prometheus_protocol.verifier.bank import VerifierBank
 from prometheus_protocol.verifier.grounding import GroundingTask, GroundingVerifier
 
+from tests.support.assessments import carrying
+
 _REQUIRE = parse_env_bool("PROM_REQUIRE_SANDBOX", os.environ.get("PROM_REQUIRE_SANDBOX"), default=False)
 
 
@@ -175,7 +177,7 @@ def test_soft_only_judgment_never_authorizes_routes_or_executes():
 
     gate = ActionGate(escalate_below=0.75, route_high_risk=True)
     for risk in ("low", "medium", "high"):
-        decision = gate.decide(judgment, risk_class=risk, subject_id="publish:x")
+        decision = gate.decide(carrying(judgment), risk_class=risk, subject_id="publish:x")
         assert decision.outcome == OUTCOME_BLOCK, risk
         assert decision.approved is False
 
@@ -184,7 +186,7 @@ def test_soft_only_judgment_never_authorizes_routes_or_executes():
         gate=gate, executor=executor, ledger=SqliteLedger(":memory:")
     )
     outcome = controller.submit(
-        judgment=judgment,
+        assessment=carrying(judgment),
         action=ExecutableAction(kind=ACTION_PYTHON_CODE, code="print('claim')"),
         risk_class="medium",
         subject_id="publish:x",
@@ -218,7 +220,7 @@ def test_human_review_unlocks_and_calibrates():
     assert fused_fail.verdict == Verdict.FAIL
     assert fused_fail.authoritative is True
     gate = ActionGate(escalate_below=0.75, route_high_risk=True)
-    assert gate.decide(fused_fail, risk_class="medium").outcome == OUTCOME_BLOCK
+    assert gate.decide(carrying(fused_fail), risk_class="medium").outcome == OUTCOME_BLOCK
 
 
 # --------------------------------------------------------------------------
@@ -316,5 +318,11 @@ def test_grounding_loop_demo_blocks_all_but_the_human_approved_publish():
     assert summary["soft_only"] == {"outcome": "block", "executed": False}
     assert summary["human_unlocked"]["executed"] is True
     assert summary["ungrounded"] == {"outcome": "block", "executed": False}
-    assert summary["abstain"] == {"outcome": "block", "executed": False}
-    assert (summary["executions"], summary["executed_total"]) == (4, 1)
+    # PHASE-1.2b — an abstention refuses at COVERAGE now, before the gate:
+    # the required check produced no satisfactory result. Nothing published
+    # either way; recorded as a could-not-verify rather than a policy denial.
+    assert summary["abstain"] == {"outcome": "unavailable", "executed": False}
+    # PHASE-1.2b — three ledger rows, not four. The abstain beat now refuses at
+    # coverage, so the gate is never consulted for it and no execution row is
+    # written. The number of things that EXECUTED is unchanged.
+    assert (summary["executions"], summary["executed_total"]) == (3, 1)

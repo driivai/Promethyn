@@ -20,10 +20,13 @@ same executor path — it can approve nothing.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 from prometheus_protocol.core.interfaces import Ledger
 from prometheus_protocol.core.models import ExecutableAction, Judgment, Unavailable
+
+if TYPE_CHECKING:  # pragma: no cover - import cycle: policy imports core.models
+    from prometheus_protocol.policy.assessment import PolicyAssessment
 from prometheus_protocol.execution.models import PendingAction
 from prometheus_protocol.execution.pending import (
     _DEFAULT_TTL_SECONDS,
@@ -102,7 +105,7 @@ class ExecutionController:
     def submit(
         self,
         *,
-        judgment: Judgment | Unavailable,
+        assessment: "PolicyAssessment",
         action: ExecutableAction,
         risk_class: str = "low",
         subject_id: str = "",
@@ -113,10 +116,16 @@ class ExecutionController:
         record and never execute; unavailable -> record distinctly and halt, when
         an authoritative check could not run (never executes, and never an
         approvable hold — a human must not rubber-stamp an unverified action).
+
+        PHASE-1.2b — the keyword is ``assessment`` and it is a
+        :class:`~prometheus_protocol.policy.assessment.PolicyAssessment`. The old
+        ``judgment=`` keyword is gone rather than deprecated: leaving it would
+        leave the bypass reachable by a caller that never updated, and a
+        migration that keeps the unsafe door open is not a migration.
         """
 
         decision = self._gate.decide(
-            judgment, risk_class=risk_class, subject_id=subject_id, action=action
+            assessment, risk_class=risk_class, subject_id=subject_id, action=action
         )
         outcome = decision.effective_outcome
         if outcome == OUTCOME_APPROVE:

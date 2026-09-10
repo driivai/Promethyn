@@ -50,6 +50,8 @@ from prometheus_protocol.cli.reconcile import (
 )
 from prometheus_protocol.ledger.anchor_targets import LogTipAnchor, MemoryAppendOnlyLog
 
+from tests.support.assessments import for_migration
+
 NS = 1_000_000_000
 POLICY = SettlingPolicy(1, 5, 300)
 REQUEST = Interval(1000 * NS, 1001 * NS)
@@ -101,8 +103,9 @@ class Case:
         )
 
     def issue(self, judgment=PASS):
+        # PHASE-1.2b — bound to the same artifact and target passed alongside.
         return self.runtime.authority.authorize(
-            judgment,
+            for_migration(judgment, artifact=ARTIFACT, target=TARGET.identity),
             artifact=ARTIFACT,
             target=TARGET.identity,
             now=self.clock.now_ns() / NS,

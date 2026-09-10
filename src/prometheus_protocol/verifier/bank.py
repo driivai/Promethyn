@@ -57,6 +57,7 @@ from prometheus_protocol.verifier.trust import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle: policy imports core.models
+    from prometheus_protocol.policy.assessment import PolicyAssessment
     from prometheus_protocol.policy.coverage import BoundResult
     from prometheus_protocol.policy.snapshot import BoundRequirements
 
@@ -159,6 +160,31 @@ class VerifierBank:
             self._latency_n[vid] = self._latency_n.get(vid, 0) + 1
 
     # -- judging -----------------------------------------------------------
+
+    def assess(
+        self,
+        snapshot: "BoundRequirements",
+        results: "Sequence[BoundResult]",
+    ) -> "PolicyAssessment":
+        """The ONLY way to obtain something an authorization surface will read.
+
+        PHASE-1.2b. ``judge_covered`` answers "what is the verdict, given the
+        policy" and returns a ``Judgment | Unavailable`` — which is exactly what
+        a caller with no policy at all could also produce, and that
+        indistinguishability was the bypass. This wraps the same validated
+        outcome in a :class:`~prometheus_protocol.policy.assessment.PolicyAssessment`
+        bound to the snapshot, and the gate, the execution controller, the action
+        gateway and the migration approval authority now accept nothing else.
+
+        Nothing about the decision changes here. ``judge_covered`` does the
+        work; this attaches the binding that proves the work happened, so a raw
+        verdict is not merely rejected downstream but has no parameter to arrive
+        through.
+        """
+
+        from prometheus_protocol.policy.assessment import mint
+
+        return mint(snapshot, self.judge_covered(snapshot, results))
 
     def judge_covered(
         self,

@@ -17,6 +17,7 @@ from prometheus_protocol.core.models import ExecutableAction, Judgment, Verdict
 from prometheus_protocol.execution import ExecutionController, PendingStatus
 from prometheus_protocol.gate.authorization import ActionGate
 from prometheus_protocol.gate.promotion import (
+
     OUTCOME_APPROVE,
     OUTCOME_BLOCK,
     OUTCOME_ROUTE,
@@ -24,11 +25,18 @@ from prometheus_protocol.gate.promotion import (
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
 from prometheus_protocol.swarm.executor import RecordingExecutor
 
+from tests.support.assessments import carrying
+
 _CLOCK = "2026-07-01T00:00:00Z"
 _ACTION = ExecutableAction(kind="python_code", code="print('act')", entry_point="")
-_PASS_HIGH = Judgment(verdict=Verdict.PASS, confidence=0.99, authoritative=True)
-_PASS_LOW = Judgment(verdict=Verdict.PASS, confidence=0.60, authoritative=True)
-_FAIL = Judgment(verdict=Verdict.FAIL, confidence=0.99, authoritative=True)
+# PHASE-1.2b — these are ASSESSMENTS now. The gate reads a
+# policy-evaluated, action-bound assessment; a bare Judgment has no
+# parameter to arrive through. ``carrying`` mints one around an exact
+# verdict so these tests keep asserting what they always asserted (gate
+# thresholds, TTL, retry) instead of re-testing the policy layer.
+_PASS_HIGH = carrying(Judgment(verdict=Verdict.PASS, confidence=0.99, authoritative=True))
+_PASS_LOW = carrying(Judgment(verdict=Verdict.PASS, confidence=0.60, authoritative=True))
+_FAIL = carrying(Judgment(verdict=Verdict.FAIL, confidence=0.99, authoritative=True))
 
 
 def _controller() -> tuple[ExecutionController, RecordingExecutor, SqliteLedger]:
@@ -46,7 +54,7 @@ def _controller() -> tuple[ExecutionController, RecordingExecutor, SqliteLedger]
 def test_exec_low_confidence_action_halts_as_pending():
     controller, executor, ledger = _controller()
     outcome = controller.submit(
-        judgment=_PASS_LOW, action=_ACTION, risk_class="low", subject_id="a/low"
+        assessment=_PASS_LOW, action=_ACTION, risk_class="low", subject_id="a/low"
     )
     assert outcome.outcome == OUTCOME_ROUTE
     assert outcome.pending is not None and outcome.execution is None
@@ -59,7 +67,7 @@ def test_exec_low_confidence_action_halts_as_pending():
 def test_exec_high_risk_action_halts_even_when_confident():
     controller, executor, _ = _controller()
     outcome = controller.submit(
-        judgment=_PASS_HIGH, action=_ACTION, risk_class="high", subject_id="a/high"
+        assessment=_PASS_HIGH, action=_ACTION, risk_class="high", subject_id="a/high"
     )
     assert outcome.outcome == OUTCOME_ROUTE
     assert executor.executed == []  # high-risk halts despite high confidence
@@ -68,7 +76,7 @@ def test_exec_high_risk_action_halts_even_when_confident():
 def test_exec_recorded_human_approval_flips_pending_to_executed():
     controller, executor, ledger = _controller()
     held = controller.submit(
-        judgment=_PASS_LOW, action=_ACTION, subject_id="a/appr"
+        assessment=_PASS_LOW, action=_ACTION, subject_id="a/appr"
     ).pending
     assert executor.executed == []  # still not executed while pending
 
@@ -86,7 +94,7 @@ def test_exec_recorded_human_approval_flips_pending_to_executed():
 def test_exec_rejected_pending_never_executes():
     controller, executor, ledger = _controller()
     held = controller.submit(
-        judgment=_PASS_LOW, action=_ACTION, subject_id="a/rej"
+        assessment=_PASS_LOW, action=_ACTION, subject_id="a/rej"
     ).pending
     controller.reject(held.id, identity="will@driivai.com", reason="not now")
     assert executor.executed == []  # a rejected action is never executed
@@ -97,7 +105,7 @@ def test_exec_rejected_pending_never_executes():
 
 def test_exec_blocked_action_never_executes():
     controller, executor, ledger = _controller()
-    outcome = controller.submit(judgment=_FAIL, action=_ACTION, subject_id="a/block")
+    outcome = controller.submit(assessment=_FAIL, action=_ACTION, subject_id="a/block")
     assert outcome.outcome == OUTCOME_BLOCK
     assert outcome.execution is None and executor.executed == []
     blocked = ledger.executions()
@@ -108,7 +116,7 @@ def test_exec_blocked_action_never_executes():
 def test_exec_auto_approved_high_confidence_executes():
     controller, executor, _ = _controller()
     outcome = controller.submit(
-        judgment=_PASS_HIGH, action=_ACTION, risk_class="low", subject_id="a/auto"
+        assessment=_PASS_HIGH, action=_ACTION, risk_class="low", subject_id="a/auto"
     )
     assert outcome.outcome == OUTCOME_APPROVE
     assert outcome.execution is not None and outcome.execution.executed
@@ -117,7 +125,7 @@ def test_exec_auto_approved_high_confidence_executes():
 
 def test_exec_full_human_cycle_is_in_the_audit_chain():
     controller, _executor, ledger = _controller()
-    held = controller.submit(judgment=_PASS_LOW, action=_ACTION, subject_id="a/audit").pending
+    held = controller.submit(assessment=_PASS_LOW, action=_ACTION, subject_id="a/audit").pending
     controller.approve(held.id, identity="will@driivai.com", reason="reviewed")
 
     # The pending row carries the human decision, re-readable end to end.
@@ -134,7 +142,7 @@ def test_exec_full_human_cycle_is_in_the_audit_chain():
 
 def test_exec_a_decided_action_cannot_be_re_decided():
     controller, _executor, _ledger = _controller()
-    held = controller.submit(judgment=_PASS_LOW, action=_ACTION, subject_id="a/twice").pending
+    held = controller.submit(assessment=_PASS_LOW, action=_ACTION, subject_id="a/twice").pending
     controller.approve(held.id, identity="will@driivai.com")
     # A human decision is never silently overwritten.
     import pytest

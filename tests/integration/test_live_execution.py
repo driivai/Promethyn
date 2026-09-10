@@ -43,6 +43,8 @@ from prometheus_protocol.verifier.bank import VerifierBank
 from prometheus_protocol.verifier.runner import SubprocessVerifier
 from prometheus_protocol.verifier.store import InMemoryTrustStore
 
+from tests.support.assessments import carrying
+
 _REQUIRE = parse_env_bool("PROM_REQUIRE_SANDBOX", os.environ.get("PROM_REQUIRE_SANDBOX"), default=False)
 
 _TASK = Task(
@@ -92,7 +94,7 @@ def test_milestone_live_execution_end_to_end():
 
     # 1. APPROVED, high-confidence, low-risk -> EXECUTES inside the sandbox.
     approved = controller.submit(
-        judgment=good, action=action, risk_class="low", subject_id="live/ok"
+        assessment=carrying(good), action=action, risk_class="low", subject_id="live/ok"
     )
     assert approved.outcome == OUTCOME_APPROVE
     assert approved.execution.executed and approved.execution.sandbox_name == "namespace"
@@ -101,7 +103,7 @@ def test_milestone_live_execution_end_to_end():
 
     # 2. The SAME action at HIGH risk HALTS for a human, then executes on approval.
     held = controller.submit(
-        judgment=good, action=action, risk_class="high", subject_id="live/hold"
+        assessment=carrying(good), action=action, risk_class="high", subject_id="live/hold"
     )
     assert held.outcome == OUTCOME_ROUTE and held.execution is None
     result = controller.approve(
@@ -113,7 +115,7 @@ def test_milestone_live_execution_end_to_end():
     bad = _judge(_BAD)
     assert bad.verdict == Verdict.FAIL
     blocked = controller.submit(
-        judgment=bad, action=action, risk_class="low", subject_id="live/bad"
+        assessment=carrying(bad), action=action, risk_class="low", subject_id="live/bad"
     )
     assert blocked.outcome == OUTCOME_BLOCK and blocked.execution is None
 

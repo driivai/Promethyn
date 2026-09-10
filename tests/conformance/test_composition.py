@@ -60,6 +60,8 @@ from prometheus_protocol.benchmarks.chain_eval import (
     false_confidence,
 )
 
+from tests.support.assessments import workflow_policy
+
 _REQUIRE = parse_env_bool("PROM_REQUIRE_SANDBOX", os.environ.get("PROM_REQUIRE_SANDBOX"), default=False)
 
 
@@ -190,6 +192,10 @@ def test_high_composed_confidence_cannot_execute_a_soft_action():
     )
     runtime = WorkflowRuntime(
         bank=VerifierBank(), gateway=ActionGateway(controller.submit), ledger=ledger,
+        # Every grader in this workflow is permitted, so coverage holds and the
+        # assertion stays about COMPOSITION: three high-confidence HARD steps
+        # cannot lend authority to a SOFT one. The gate is what refuses.
+        policy=workflow_policy("hg1", "hg2", "hg3", "soft-grader"),
     )
     action = ExecutableAction(kind=ACTION_PYTHON_CODE, code="print('should not run')")
     wf = Workflow(workflow_id="authz-wf", steps=(

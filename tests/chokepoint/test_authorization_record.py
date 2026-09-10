@@ -50,6 +50,8 @@ from prometheus_protocol.core.models import (
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
 from prometheus_protocol.ledger.tip_anchor import FileTipAnchor
 
+from tests.support.assessments import for_migration
+
 NOW = 1000.125
 ARTIFACT = MigrationArtifact("CREATE TABLE approved (id integer);")
 TARGET = DbTarget(
@@ -105,9 +107,15 @@ def live(tmp_path):
     ledger.close()
 
 
-def authorize(runtime, **kwargs):
+def authorize(runtime, outcome=None, **kwargs):
+    # PHASE-1.2b — the recorded authority takes a policy-evaluated,
+    # action-bound assessment. The binding is built from the same artifact and
+    # target passed alongside it, so these tests keep asserting recording,
+    # signing and durability rather than re-testing the binding.
     return runtime.authority.authorize(
-        PASS, artifact=ARTIFACT, target=TARGET.identity, now=NOW, **kwargs
+        for_migration(PASS if outcome is None else outcome,
+                      artifact=ARTIFACT, target=TARGET.identity),
+        artifact=ARTIFACT, target=TARGET.identity, now=NOW, **kwargs
     )
 
 
@@ -201,7 +209,9 @@ def test_runtime_persists_refusals(live, judgment, reason):
     runtime, ledger, kms, calls = live
     assert (
         runtime.authority.authorize(
-            judgment, artifact=ARTIFACT, target=TARGET.identity, now=NOW
+            judgment if judgment is None else for_migration(
+                judgment, artifact=ARTIFACT, target=TARGET.identity),
+            artifact=ARTIFACT, target=TARGET.identity, now=NOW
         )
         is None
     )
@@ -458,7 +468,8 @@ def test_unavailable_verifier_has_a_durable_refusal(live):
     )
     assert (
         runtime.authority.authorize(
-            judgment, artifact=ARTIFACT, target=TARGET.identity, now=NOW
+            for_migration(judgment, artifact=ARTIFACT, target=TARGET.identity),
+            artifact=ARTIFACT, target=TARGET.identity, now=NOW
         )
         is None
     )

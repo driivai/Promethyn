@@ -14,12 +14,26 @@ repository as the workspace — the same isolation the verifier and executor
 use, reused, not forked. Read ops run freely; the delete is a destructive,
 irreversible :class:`ExecutableAction` that exists only behind the gate:
 
+PHASE-1.2b — THE MERGE CHECK REPORTS EVIDENCE, NOT A VERDICT. It used to return
+``Judgment(authoritative=True)`` and the demo fed that straight to the execution
+controller, so a branch classification authorized a deletion with no policy
+resolved and no coverage validated. That was the sanctioned exposure Checkpoint 2
+named, and it is closed here. The policy requires ``branch.merge_proof`` for a
+``branch.delete``, the merge check is the permitted implementation, and only the
+bank turns the finding into a verdict:
+
 * a branch **provably fully merged** (zero commits absent from the base — the
-  delete is provably lossless) yields an authoritative PASS at confidence 1.0
-  and medium risk, which the gate may auto-approve;
-* anything else — unmerged commits, or a merge check that could not run —
-  yields an authoritative PASS at confidence 0.0 and HIGH risk, which ALWAYS
-  routes to a human (INV-EXEC-3). Doubt never auto-deletes.
+  delete is provably lossless) is a PASS from an authoritative check, which
+  satisfies the requirement; at medium risk the gate may auto-approve;
+* **unmerged commits** is a FAIL: the required proof was not obtained, coverage
+  refuses as unsatisfactory, and the delete is BLOCKED. This is stricter than
+  the old shape, which returned a PASS at confidence 0.0 and relied on the risk
+  class to route it to a human;
+* a merge check that **could not run** is an ``Unavailable`` — could-not-verify
+  is never verified-clean, and it is never a finding about the branch. Coverage
+  refuses as incomplete and nothing executes.
+
+Doubt never auto-deletes, and now it never reaches the executor at all.
 
 The delete executor is bound to one repository at construction: the action
 carries only a branch name, so no action can point the tool at another repo.
@@ -38,8 +52,11 @@ from pathlib import Path
 
 from prometheus_protocol.core.models import (
     ACTION_GIT_DELETE_BRANCH,
+    Evidence,
     ExecutableAction,
-    Judgment,
+    Tier,
+    Unavailability,
+    Unavailable,
     Verdict,
 )
 from prometheus_protocol.gate.promotion import GateDecision
@@ -144,50 +161,84 @@ class GitTool:
         return ExecutableAction(kind=ACTION_GIT_DELETE_BRANCH, code=branch)
 
 
-def judgment_for(classification: BranchClassification) -> tuple[Judgment, str]:
-    """Map the merge check's finding to a (judgment, risk_class) pair.
+def evidence_for(classification: BranchClassification) -> Evidence | Unavailable:
+    """The merge check's finding, as EVIDENCE — never as a verdict.
 
-    Deleting a branch is destructive and irreversible, so it is HIGH risk by
-    definition — with routing on, high risk always halts for a human. The ONE
-    thing that downgrades it is authoritative proof of full mergedness: with
-    zero commits absent from the base, the delete is provably lossless (every
-    commit stays reachable), so the action is judged at confidence 1.0 and
-    medium risk, which the gate may auto-approve. An unproven branch keeps
-    high risk at confidence 0.0: the same gate ROUTES it (an authoritative
-    PASS below the high-risk floor is held, not blocked), so a human decides.
+    PHASE-1.2b. This was ``judgment_for`` and it returned
+    ``Judgment(authoritative=True)``: a second producer of the thing that
+    authorizes, reached without the bank, without a policy, and without any
+    coverage validation. ``tools/stale_branch_demo.py`` fed it straight into
+    ``ExecutionController.submit``, so a branch classification authorized a
+    deletion on its own say-so. That was the sanctioned exposure Checkpoint 2
+    named, and this is it closed: a check reports what it found, and only the
+    bank turns findings into a verdict.
+
+    THE MAPPING, and why an unproven branch is a FAIL rather than a low
+    confidence. The policy requires ``branch.merge_proof`` for a delete, and the
+    requirement is proof the delete is LOSSLESS — not an opinion about how risky
+    it looks. A branch with commits absent from the base has not been proven
+    lossless, so the required check did not pass; coverage refuses as
+    unsatisfactory and the delete is blocked. The old shape returned a PASS at
+    confidence 0.0 and leaned on the risk class to route it, which is a
+    verdict-shaped object saying "yes" while meaning "no" — the exact
+    substitution the coverage layer exists to end.
+
+    A check that could not RUN is an ``Unavailable``, never a FAIL: doubt about
+    the harness is not a finding about the branch (EX-1).
     """
 
     if classification.provably_merged:
-        return (
-            Judgment(
-                verdict=Verdict.PASS,
-                confidence=1.0,
-                authoritative=True,
-                contributing=(MERGE_CHECK_VERIFIER_ID,),
-                detail=(
-                    f"branch {classification.branch!r} has 0 commits absent "
-                    "from the base branch: deleting it is provably lossless"
-                ),
+        return Evidence(
+            passed=True,
+            total=1,
+            passed_count=1,
+            failures=(),
+            verifier_id=MERGE_CHECK_VERIFIER_ID,
+            verdict=Verdict.PASS,
+            tier=Tier.HARD,
+            detail=(
+                f"branch {classification.branch!r} has 0 commits absent "
+                "from the base branch: deleting it is provably lossless"
             ),
-            "medium",
         )
     if classification.unmerged_commits is None:
-        why = "the merge check could not run"
-    else:
-        why = (
-            f"branch {classification.branch!r} carries "
-            f"{classification.unmerged_commits} commit(s) NOT on the base branch"
+        return Unavailable(
+            verifier_id=MERGE_CHECK_VERIFIER_ID,
+            tier=Tier.HARD,
+            reason=Unavailability.INFRA_FAULT,
+            detail=(
+                f"the merge check could not run for {classification.branch!r}; "
+                "mergedness is unknown, which is not the same as unmerged"
+            ),
         )
-    return (
-        Judgment(
-            verdict=Verdict.PASS,
-            confidence=0.0,
-            authoritative=True,
-            contributing=(MERGE_CHECK_VERIFIER_ID,),
-            detail=f"{why}: deletion would be irreversible data loss without review",
+    return Evidence(
+        passed=False,
+        total=1,
+        passed_count=0,
+        failures=(
+            f"{classification.unmerged_commits} commit(s) not on the base branch",
         ),
-        "high",
+        verifier_id=MERGE_CHECK_VERIFIER_ID,
+        verdict=Verdict.FAIL,
+        tier=Tier.HARD,
+        detail=(
+            f"branch {classification.branch!r} carries "
+            f"{classification.unmerged_commits} commit(s) NOT on the base branch: "
+            "deletion would be irreversible data loss"
+        ),
     )
+
+
+def risk_class_for(classification: BranchClassification) -> str:
+    """Deleting a branch is destructive, so it is HIGH risk by default.
+
+    Authoritative proof of full mergedness is the one thing that lowers it: with
+    zero commits absent from the base the delete is provably lossless. The risk
+    class no longer decides whether an unproven delete proceeds — the policy
+    does — so this is now only about how much confidence an ALLOWED delete needs.
+    """
+
+    return "medium" if classification.provably_merged else "high"
 
 
 class GitBranchDeleteExecutor(Executor):

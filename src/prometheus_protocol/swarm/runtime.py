@@ -48,13 +48,20 @@ from prometheus_protocol.policy.profile import (
     load_profile,
 )
 from prometheus_protocol.policy.resolver import resolve
-from prometheus_protocol.policy.snapshot import BoundRequirements, snapshot_digest
+from prometheus_protocol.policy.snapshot import (
+    ACTION_SANDBOX_EXECUTE as _ACTION_SANDBOX_EXECUTE,
+    BoundRequirements,
+    snapshot_digest,
+)
 from prometheus_protocol.swarm.synthesis import RoleSynthesisEngine, SwarmConfig
 from prometheus_protocol.verifier.bank import VerifierBank
 
 #: The action class every swarm proposal falls under: candidate code runs in the
 #: isolated executor, with no privileged target.
-ACTION_SANDBOX_EXECUTE = "sandbox.execute"
+#: PHASE-1.2b — re-exported from the policy package, where the closed set and
+#: the named classes live together. Kept as a module name here because callers
+#: and tests import it from the swarm.
+ACTION_SANDBOX_EXECUTE = _ACTION_SANDBOX_EXECUTE
 
 # The deterministic check runner reports under this stable id, at the hard tier
 # (surviving concrete falsification checks is an authoritative basis to act, for
@@ -210,7 +217,13 @@ class SwarmRuntime:
                 continue
 
             evidence, results = self._verify(entry)
-            judgment = self.bank.judge_covered(self._snapshot, results)
+            # PHASE-1.2b — ``assess`` runs the same coverage validation and
+            # binds the outcome to the snapshot. The gate takes the assessment;
+            # there is no longer a parameter it would accept a bare verdict
+            # through, so the swarm cannot reach authorization unbound even by
+            # mistake.
+            assessment = self.bank.assess(self._snapshot, results)
+            judgment = assessment.outcome
 
             decision = None
             execution = None
@@ -243,7 +256,7 @@ class SwarmRuntime:
             # Only actions are routed to the gate and the executor.
             if entry.proposal.kind == KIND_PROPOSED_ACTION:
                 decision = self.gate.decide(
-                    judgment,
+                    assessment,
                     risk_class=packet.risk_class,
                     subject_id=entry.proposal.id,
                 )

@@ -55,6 +55,8 @@ from prometheus_protocol.orchestration.demo import ScriptedAgent, ScriptedGrader
 from prometheus_protocol.sandbox import NamespaceSandbox
 from prometheus_protocol.verifier.bank import VerifierBank
 
+from tests.support.assessments import workflow_policy
+
 _REQUIRE = parse_env_bool("PROM_REQUIRE_SANDBOX", os.environ.get("PROM_REQUIRE_SANDBOX"), default=False)
 
 
@@ -95,7 +97,8 @@ def test_gateway_exposes_only_route_action():
 
 def test_runtime_has_no_executor_gate_or_execute_path():
     rt = WorkflowRuntime(bank=VerifierBank(), gateway=ActionGateway(lambda **kw: None),
-                         ledger=SqliteLedger(":memory:"))
+                         ledger=SqliteLedger(":memory:"),
+                         policy=workflow_policy("plan-review", "impl-check"))
     for forbidden in ("execute", "_execute", "approve", "_executor", "executor",
                       "_gate", "gate", "_controller", "controller"):
         assert not hasattr(rt, forbidden), forbidden
@@ -112,6 +115,11 @@ def test_soft_only_claim_cannot_execute():
     bank.register("soft-grader", Tier.SOFT)
     runtime = WorkflowRuntime(
         bank=bank, gateway=ActionGateway(_controller(ledger).submit), ledger=ledger,
+        # The soft grader is PERMITTED here on purpose. Without that, coverage
+        # refuses first and the test would stop exercising what it is named for:
+        # that an authoritative-looking SOFT verdict never authorizes AT THE
+        # GATE. Letting the policy layer mask the gate would be a weaker test.
+        policy=workflow_policy("soft-grader"),
     )
     wf = Workflow(workflow_id="soft-wf", steps=(
         AgentStep(
@@ -167,6 +175,7 @@ def test_downstream_agent_receives_tier_tagged_messages_not_facts():
     ledger = SqliteLedger(":memory:")
     runtime = WorkflowRuntime(
         bank=VerifierBank(), gateway=ActionGateway(_controller(ledger).submit), ledger=ledger,
+        policy=workflow_policy("plan-review", "impl-check"),
     )
     wf = Workflow(workflow_id="msg-wf", steps=(
         AgentStep("up", ScriptedAgent("up-agent", "upstream claim"),
@@ -199,6 +208,7 @@ def test_human_backstop_holds_in_a_workflow():
     controller = _controller(ledger)
     runtime = WorkflowRuntime(
         bank=VerifierBank(), gateway=ActionGateway(controller.submit), ledger=ledger,
+        policy=workflow_policy("plan-review", "impl-check"),
     )
     run = runtime.run(build_workflow())
 
@@ -224,6 +234,7 @@ def test_workflow_run_is_auditable_per_step():
     ledger = SqliteLedger(":memory:")
     runtime = WorkflowRuntime(
         bank=VerifierBank(), gateway=ActionGateway(_controller(ledger).submit), ledger=ledger,
+        policy=workflow_policy("plan-review", "impl-check"),
     )
     wf = Workflow(workflow_id="audit-wf", steps=(
         AgentStep("a", ScriptedAgent("agent-a", "claim a"),

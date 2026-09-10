@@ -357,7 +357,11 @@ def test_an_unknown_action_class_is_refused():
     for gone in ("code.execute", "migration.execute", "skill.promote", "proposal.advance"):
         with pytest.raises(SnapshotError, match="not a known action class"):
             a_snapshot(action_class=gone)
-    assert ACTION_CLASSES == {"sandbox.execute", "database.migrate"}
+    # PHASE-1.2b added ``branch.delete``: a real implementation
+    # (tools.git.GitBranchDeleteExecutor) reaching a real enforcement point, which
+    # is the test skill.promote failed. Re-pinned here in the same change that
+    # added it, so the set stays a reviewable line rather than drifting.
+    assert ACTION_CLASSES == {"sandbox.execute", "database.migrate", "branch.delete"}
 
 
 # ---------------------------------------------------------------------------

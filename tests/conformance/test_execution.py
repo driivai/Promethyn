@@ -18,6 +18,7 @@ import pytest
 
 from prometheus_protocol.core.booleans import parse_env_bool
 from prometheus_protocol.core.models import (
+
     ACTION_PYTHON_CODE,
     ExecutableAction,
     Judgment,
@@ -39,11 +40,18 @@ from prometheus_protocol.swarm.models import (
     content_hash,
 )
 
+from tests.support.assessments import carrying
+
 _REQUIRE = parse_env_bool("PROM_REQUIRE_SANDBOX", os.environ.get("PROM_REQUIRE_SANDBOX"), default=False)
 _CLOCK = "2026-07-01T00:00:00Z"
-_PASS_HIGH = Judgment(verdict=Verdict.PASS, confidence=0.99, authoritative=True)
-_PASS_LOW = Judgment(verdict=Verdict.PASS, confidence=0.60, authoritative=True)
-_FAIL = Judgment(verdict=Verdict.FAIL, confidence=0.99, authoritative=True)
+# PHASE-1.2b — these are ASSESSMENTS now. The gate reads a
+# policy-evaluated, action-bound assessment; a bare Judgment has no
+# parameter to arrive through. ``carrying`` mints one around an exact
+# verdict so these tests keep asserting what they always asserted (gate
+# thresholds, TTL, retry) instead of re-testing the policy layer.
+_PASS_HIGH = carrying(Judgment(verdict=Verdict.PASS, confidence=0.99, authoritative=True))
+_PASS_LOW = carrying(Judgment(verdict=Verdict.PASS, confidence=0.60, authoritative=True))
+_FAIL = carrying(Judgment(verdict=Verdict.FAIL, confidence=0.99, authoritative=True))
 
 
 def _isolating_sandbox() -> NamespaceSandbox:
@@ -170,7 +178,7 @@ def test_inv_exec_2_a_pending_action_cannot_reach_the_executor():
     spy = _SpyExecutor()
     controller = _controller(spy)
     outcome = controller.submit(
-        judgment=_PASS_LOW, action=_action(), risk_class="low", subject_id="s"
+        assessment=_PASS_LOW, action=_action(), risk_class="low", subject_id="s"
     )
     assert outcome.outcome == OUTCOME_ROUTE
     assert spy.calls == []  # a held action never reached execution
@@ -182,7 +190,7 @@ def test_inv_exec_2_a_pending_action_cannot_reach_the_executor():
 def test_inv_exec_3_no_execution_without_a_recorded_human_approval():
     spy = _SpyExecutor()
     controller = _controller(spy)
-    held = controller.submit(judgment=_PASS_LOW, action=_action(), subject_id="s").pending
+    held = controller.submit(assessment=_PASS_LOW, action=_action(), subject_id="s").pending
     assert spy.calls == []  # routed: nothing executed
 
     controller.approve(held.id, identity="will@driivai.com", reason="ok")
@@ -196,7 +204,7 @@ def test_inv_exec_3_no_execution_without_a_recorded_human_approval():
 def test_inv_exec_3_a_rejected_action_never_executes():
     spy = _SpyExecutor()
     controller = _controller(spy)
-    held = controller.submit(judgment=_PASS_LOW, action=_action(), subject_id="s").pending
+    held = controller.submit(assessment=_PASS_LOW, action=_action(), subject_id="s").pending
     controller.reject(held.id, identity="will@driivai.com", reason="no")
     assert spy.calls == []
 
@@ -205,7 +213,7 @@ def test_inv_exec_3_high_risk_halts_even_at_high_confidence():
     spy = _SpyExecutor()
     controller = _controller(spy)
     outcome = controller.submit(
-        judgment=_PASS_HIGH, action=_action(), risk_class="high", subject_id="s"
+        assessment=_PASS_HIGH, action=_action(), risk_class="high", subject_id="s"
     )
     assert outcome.outcome == OUTCOME_ROUTE and spy.calls == []
 
@@ -221,10 +229,10 @@ def test_inv_exec_4_execution_chain_is_re_readable_from_the_ledger():
         ledger=ledger,
         clock=lambda: _CLOCK,
     )
-    controller.submit(judgment=_PASS_HIGH, action=_action(), subject_id="s/auto")
-    held = controller.submit(judgment=_PASS_LOW, action=_action(), subject_id="s/hold").pending
+    controller.submit(assessment=_PASS_HIGH, action=_action(), subject_id="s/auto")
+    held = controller.submit(assessment=_PASS_LOW, action=_action(), subject_id="s/hold").pending
     controller.approve(held.id, identity="will@driivai.com")
-    controller.submit(judgment=_FAIL, action=_action(), subject_id="s/block")
+    controller.submit(assessment=_FAIL, action=_action(), subject_id="s/block")
 
     execs = ledger.executions()
     assert [e["source"] for e in execs] == ["auto-approved", "human-approved", "blocked"]

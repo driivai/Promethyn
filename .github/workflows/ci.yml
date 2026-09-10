@@ -270,6 +270,38 @@ jobs:
       - name: PHASE-1.2a guard reverts (must be caught)
         run: python scripts/phase_1_2a_revert_proofs.py
 
+      - name: PHASE-1.2b proofs (the unbound-judgment route is closed)
+        # The load-bearing test is that a raw authoritative Judgment cannot be
+        # PRESENTED to any authorization surface — not that it is presented and
+        # rejected. Four surfaces, including the migration approval authority
+        # that mints a signed capability against a privileged database
+        # principal. Every refusal has a positive control beside it, so the
+        # sprint cannot pass by breaking everything.
+        #
+        # Pinned by exact collection per module and zero skips. Everything runs
+        # in-process on SQLite and an in-memory trust store.
+        run: |
+          python -m pytest -q \
+            tests/conformance/test_unbound_authorization_closed.py \
+            tests/conformance/test_phase_1_2b_revert_pins.py \
+            --junitxml=phase-1-2b.xml
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          cases = list(ET.parse("phase-1-2b.xml").iter("testcase"))
+          expected = {"test_unbound_authorization_closed": 18,
+                      "test_phase_1_2b_revert_pins": 6}
+          for module, count in expected.items():
+              actual = sum(c.get("classname", "").rsplit(".", 1)[0].endswith(module)
+                           or module in c.get("classname", "") for c in cases)
+              assert actual == count, (module, actual, count)
+          assert len(cases) == sum(expected.values())
+          assert all(c.find(t) is None for c in cases for t in ("skipped", "failure", "error"))
+          print(f"PHASE-1.2b: {len(cases)} proofs; zero skips/failures/errors")
+          PY
+
+      - name: PHASE-1.2b guard reverts (must be caught)
+        run: python scripts/phase_1_2b_revert_proofs.py
+
       - name: The bank decision surface has not moved
         # verifier/bank.py came out from under its net-diff-empty guard in this
         # sprint. judge() is UNCHANGED and this is what says so: 240 enumerated
