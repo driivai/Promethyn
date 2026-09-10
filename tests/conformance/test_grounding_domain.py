@@ -315,7 +315,10 @@ def test_grounding_loop_demo_blocks_all_but_the_human_approved_publish():
         pytest.skip(reason)
 
     summary = run_loop(out=lambda line: None)
-    assert summary["soft_only"] == {"outcome": "block", "executed": False}
+    # CHECKPOINT 3 — the soft-only beat is refused at COVERAGE. The requirement
+    # permits the HUMAN reviewer alone; PHASE-1.2b had wrongly permitted the
+    # soft judge alongside it, which under R3 made them interchangeable.
+    assert summary["soft_only"] == {"outcome": "unavailable", "executed": False}
     assert summary["human_unlocked"]["executed"] is True
     assert summary["ungrounded"] == {"outcome": "block", "executed": False}
     # PHASE-1.2b — an abstention refuses at COVERAGE now, before the gate:
@@ -325,4 +328,7 @@ def test_grounding_loop_demo_blocks_all_but_the_human_approved_publish():
     # PHASE-1.2b — three ledger rows, not four. The abstain beat now refuses at
     # coverage, so the gate is never consulted for it and no execution row is
     # written. The number of things that EXECUTED is unchanged.
-    assert (summary["executions"], summary["executed_total"]) == (3, 1)
+    # CHECKPOINT 3 — two ledger rows now: the soft-only beat is also refused
+    # before the gate, so it writes no execution row either. What EXECUTED is
+    # unchanged, which is the number that matters.
+    assert (summary["executions"], summary["executed_total"]) == (2, 1)

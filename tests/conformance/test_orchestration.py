@@ -39,7 +39,7 @@ from prometheus_protocol.core.models import (
 )
 from prometheus_protocol.execution.controller import ExecutionController
 from prometheus_protocol.execution.executor import SandboxExecutor
-from prometheus_protocol.gate.authorization import ActionGate
+from prometheus_protocol.gate.authorization import ActionGate, OUTCOME_UNAVAILABLE
 from prometheus_protocol.gate.promotion import OUTCOME_BLOCK, OUTCOME_ROUTE
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
 from prometheus_protocol.orchestration import (
@@ -107,18 +107,27 @@ def test_runtime_has_no_executor_gate_or_execute_path():
 
 
 def test_soft_only_claim_cannot_execute():
-    """A non-authoritative (soft-only) step that proposes an action is BLOCKED
-    by the gate — the orchestrator cannot turn a soft claim into an execution."""
+    """A soft-only step that proposes an action cannot execute.
+
+    CHECKPOINT 3 MOVED WHERE THIS IS REFUSED, and the comment this replaces was
+    wrong to arrange otherwise. PHASE-1.2b permitted the soft grader on purpose,
+    so that the GATE would be what refused and the test kept exercising "a SOFT
+    verdict never authorizes at the gate". But a policy naming an advisory
+    implementation as permitted is now itself the defect: under R3 permitted
+    implementations are interchangeable, so that policy asserted a soft grader
+    could satisfy a requirement. Coverage refuses it, one decision earlier.
+
+    The gate-level property is NOT lost — it is asserted directly, against the
+    gate, in ``test_soft_levers.py::test_soft_stays_soft_no_lever_grants_authority``.
+    Testing it through a workflow only worked by writing a policy the system now
+    correctly rejects.
+    """
 
     ledger = SqliteLedger(":memory:")
     bank = VerifierBank()
     bank.register("soft-grader", Tier.SOFT)
     runtime = WorkflowRuntime(
         bank=bank, gateway=ActionGateway(_controller(ledger).submit), ledger=ledger,
-        # The soft grader is PERMITTED here on purpose. Without that, coverage
-        # refuses first and the test would stop exercising what it is named for:
-        # that an authoritative-looking SOFT verdict never authorizes AT THE
-        # GATE. Letting the policy layer mask the gate would be a weaker test.
         policy=workflow_policy("soft-grader"),
     )
     wf = Workflow(workflow_id="soft-wf", steps=(
@@ -131,9 +140,9 @@ def test_soft_only_claim_cannot_execute():
         ),
     ))
     run = runtime.run(wf)
-    assert run.steps[0].outcome == OUTCOME_BLOCK
-    assert ledger.executions() and all(not e["executed"] for e in ledger.executions())
+    assert run.steps[0].outcome == OUTCOME_UNAVAILABLE
     assert run.executed_subject_ids == ()
+    assert all(not e["executed"] for e in ledger.executions())
 
 
 # --------------------------------------------------------------------------

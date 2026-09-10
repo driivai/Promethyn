@@ -66,6 +66,12 @@ from prometheus_protocol.swarm.models import content_hash
 # PHASE-1.2b — the demos go through the policy layer, like everything else.
 # ---------------------------------------------------------------------------
 
+#: What the SOFT judge's evidence is bound to. Deliberately NOT the required
+#: check: it is advisory, so it is validated and fused for calibration but never
+#: counted toward coverage. See ``_demo_policy``.
+ADVISORY_CHECK = "grounding.advisory"
+
+
 def _demo_policy(check_id: str, *implementations: str) -> VerificationPolicy:
     """A policy VALUE naming this demo's own verifiers (R1).
 
@@ -73,6 +79,21 @@ def _demo_policy(check_id: str, *implementations: str) -> VerificationPolicy:
     satisfy its requirements. Naming them here is that decision made explicitly,
     and it is what lets the demo authorize anything at all now that a raw
     verdict cannot.
+
+    A DEFECT THIS SPRINT FOUND AND FIXED, introduced by PHASE-1.2b. This used to
+    be called as ``_demo_policy("grounding.claim", judge.verifier_id,
+    HUMAN_REVIEWER_ID)`` — naming the SOFT grounding judge and the HUMAN
+    reviewer as permitted implementations of the SAME requirement. Under R3
+    permitted implementations are INTERCHANGEABLE, so that policy said a soft
+    judge alone satisfies a requirement whose entire purpose is that a human
+    looked. Measured: it did. The demo was fail-closed only because the gate
+    refuses a non-authoritative judgment — one control, and not the one the
+    policy was supposed to be providing.
+
+    The requirement now permits the human reviewer alone, and the soft judge's
+    evidence is bound to :data:`ADVISORY_CHECK`, which nothing requires. That is
+    what advisory evidence is for: fused for calibration, never counted toward
+    coverage.
     """
 
     return VerificationPolicy(
@@ -100,9 +121,13 @@ def _assess(bank, policy, check_id, outcomes, *, subject_id: str, artifact: str)
         attempt_id=subject_id,
     )
     digest = snapshot_digest(snapshot)
+    permitted = snapshot.permitted_for(check_id) or ()
     return bank.assess(snapshot, [
         BoundResult(
-            check_id=check_id,
+            # An outcome from an implementation the policy permits answers the
+            # REQUIRED check. Anything else is advisory: bound, validated and
+            # fused, but not counted toward coverage.
+            check_id=check_id if outcome.verifier_id in permitted else ADVISORY_CHECK,
             snapshot_digest=digest,
             implementation=outcome.verifier_id,
             outcome=outcome,
@@ -158,7 +183,7 @@ def run_loop(*, out: Callable[[str], None] = print) -> dict:
     bank = VerifierBank()
     bank.register(judge.verifier_id, judge.tier)
     bank.register(HUMAN_REVIEWER_ID, Tier.HUMAN)
-    policy = _demo_policy("grounding.claim", judge.verifier_id, HUMAN_REVIEWER_ID)
+    policy = _demo_policy("grounding.claim", HUMAN_REVIEWER_ID)
     ledger = SqliteLedger(":memory:")
     controller = ExecutionController(
         gate=ActionGate(escalate_below=0.75, route_high_risk=True),
@@ -277,8 +302,8 @@ def run_loop(*, out: Callable[[str], None] = print) -> dict:
         # The early return predated coverage, when this branch was unreachable
         # in the happy path; now it is the expected outcome for beat 4, and
         # returning would skip the ledger audit the demo exists to show.
-        out("[loop] gate    : NOT SUBMITTED — the required check abstained, so "
-            "there is no satisfactory result to authorize on")
+        out("[loop] gate    : NOT SUBMITTED — the required check has no "
+            "satisfactory result to authorize on")
         summary["abstain"] = {"outcome": "unavailable", "executed": False}
     else:
         outcome = controller.submit(
@@ -316,7 +341,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
     summary = run_loop()
     ok = (
-        summary["soft_only"] == {"outcome": "block", "executed": False}
+        # CHECKPOINT 3 — the soft-only beat is refused at COVERAGE now, not at
+        # the gate. The requirement permits the human reviewer alone, so a soft
+        # judge produces no result for it. "Confident, and still not enough" is
+        # now enforced by the policy rather than by the gate catching a
+        # non-authoritative verdict one step later.
+        summary["soft_only"] == {"outcome": "unavailable", "executed": False}
         and summary["human_unlocked"]["executed"] is True
         and summary["ungrounded"] == {"outcome": "block", "executed": False}
         # PHASE-1.2b — an abstention now refuses at COVERAGE rather than at the
@@ -329,7 +359,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     print("[demo] " + (
         "grounding loop demonstrated: soft-only blocked, human unlocked, "
-        "ungrounded blocked, abstain refused before the gate" if ok
+        "ungrounded blocked, unreviewed refused before the gate" if ok
         else "UNEXPECTED OUTCOME (see above)"
     ))
     return 0 if ok else 1

@@ -303,6 +303,55 @@ and the control against arbitrary in-process code remains the process boundary.
 authorize an action and had nothing to reach. Both are now asserted
 behaviourally, including the absence.
 
+
+### Advisory evidence cannot satisfy a requirement (CHECKPOINT 3)
+
+The sprint that produced this set out to migrate the three soft-lever wrappers
+(`ConfidenceThresholdJudge`, `EnsembleJudge`, `RepeatedSamplingJudge`) into the
+policy path. The pre-build check found they do not occupy it: no wrapper
+satisfies a requirement under any shipped policy, no production path reaches
+authorization with a wrapper's verdict, and no wrapper is a permitted
+implementation anywhere. Their only non-test importer is an offline benchmark.
+
+So they were not migrated. What was built is the structural non-participation —
+and it was not vacuous, because the measurement that justified it found a gap:
+
+> `validate_coverage` was TIER-BLIND. A policy naming any advisory
+> implementation as permitted made advisory evidence sufficient for coverage.
+
+That is correct for **R2** — what is REQUIRED is keyed by check identity, never
+by verifier or tier — but the same blindness was applied to the separate
+question of what COUNTS as satisfying a requirement, and there it was wrong. The
+system stayed fail-closed only because the gate refuses a non-authoritative
+judgment: one control, one layer later, and not the one the policy layer was
+supposed to provide.
+
+**The rule is over what the evidence IS, not what it is called.** Two of the
+three wrappers derive their identity at construction —
+`f"{base}:threshold@{x}"`, `f"{base}:k{k}-{require}"` — so a rule over identity
+strings would be a rule over spellings, the failure already recorded in the
+threat model. Reading `Evidence.tier` covers every wrapper, every derived
+identity, and every implementation this package has never seen, including a
+deployment's own, which R1 requires to keep working. A missing tier fails
+closed.
+
+**A defect this found, introduced by PHASE-1.2b.** The grounding demo's policy
+named the SOFT grounding judge and the HUMAN reviewer as permitted
+implementations of the *same* requirement. Under R3 permitted implementations
+are interchangeable, so that policy said a soft judge alone satisfies a
+requirement whose entire purpose is that a human looked. Measured: it did. The
+requirement now permits the human alone, and the judge's evidence is bound to a
+check nothing requires — which is what advisory evidence is for.
+
+**What still varies.** The rule reads the tier the evidence REPORTS, so it is
+only as good as the report. A REGISTERED verifier cannot lie —
+`VerifierBank._ensure_stats` refuses evidence contradicting the stored tier,
+loudly. An UNREGISTERED verifier's claim is believed. Both measured.
+**Registration is the control**, and it is a deployment's responsibility, like
+constructing a result for every check it ran. Coverage deliberately holds no
+trust store: reaching for one would make the coverage decision depend on mutable
+calibration state.
+
 ### The residuals, named
 
 - **The operator asserts that permitted implementations are equivalent; nothing

@@ -8,6 +8,45 @@ in `spec/invariants.md` is a major version bump.
 ## [Unreleased]
 
 ### Fixed
+- **PHASE-1.2 CHECKPOINT 3 — advisory evidence cannot satisfy a policy
+  requirement.** The checkpoint was briefed as migrating the three soft-lever
+  wrappers into the policy path. The pre-build check answered no to all three
+  gating questions — no wrapper satisfies a requirement under any shipped
+  policy, no production path reaches authorization with a wrapper's verdict, no
+  wrapper is a permitted implementation anywhere — so they were **not migrated**,
+  and the smaller correct sprint was built instead.
+  - **The gap the pre-build measurement found.** `validate_coverage` was
+    tier-blind: a policy naming any advisory implementation as permitted made
+    advisory evidence sufficient for coverage. Correct for R2 (what is REQUIRED
+    is keyed by check identity) and wrong for the separate question of what
+    COUNTS as satisfying one. The system was fail-closed only because the gate
+    refuses a non-authoritative judgment — one control, one layer later.
+  - **The rule is over what the evidence IS.** `Evidence.tier`, not the
+    implementation's name: two of the three wrappers derive their identity at
+    construction, so an identity rule would be a rule over spellings. A missing
+    tier fails closed. New refusal reason `coverage.advisory_only`, distinct
+    from every other row because the check RAN, REPORTED and PASSED.
+  - **A PHASE-1.2b defect this found and fixed.** The grounding demo's policy
+    named the SOFT judge and the HUMAN reviewer as permitted implementations of
+    the same requirement, which under R3 made them interchangeable — a soft judge
+    alone satisfied a requirement whose purpose is that a human looked. Measured.
+  - **The residual, named and tested.** The rule reads the tier the evidence
+    reports. A REGISTERED verifier cannot lie; an UNREGISTERED one's claim is
+    believed. Registration is the control, and coverage deliberately holds no
+    trust store.
+  - **The three-layer table re-measured, and a stronger-looking row rejected.**
+    `soft_levers.py` was not touched, and the table is unchanged: two-list
+    rewrite → mypy clean / AST guard RED / behavioural PASS; true survivor-only →
+    mypy clean / AST guard RED / behavioural RED. A first run showed mypy RED on
+    the survivor mutation; that was an artifact of spelling it `missing = []`
+    (a `var-annotated` error), not of the semantics. Written
+    `missing: list[Unavailable] = []` it is mypy-clean, exactly as recorded.
+    Reporting the artifact as "mypy now catches it" would have been a green row
+    hiding its reason.
+  - **Unmoved:** `bank_decision_surface.json` byte-identical (`2ff59e45…`, 240
+    rows); the ten-row swarm matrix still authorizes one row; the R3 boundary,
+    the omission rule and the five CHECKPOINT-2b surfaces all hold.
+
 - **PHASE-1.2b — the downstream bypass is closed: a raw authoritative `Judgment`
   no longer authorizes anything.** Checkpoint 2 built requirement coverage and
   then named its own exposure rather than implying it away — `VerifierBank.judge`
