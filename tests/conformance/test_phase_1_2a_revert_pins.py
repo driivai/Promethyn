@@ -72,22 +72,39 @@ def test_every_TERM_of_every_selection_actually_selects_tests(runner):
     a ``-k`` expression is a filter over test NAMES, and a rename is exactly what
     can vary that the filter does not constrain. So the unit checked is the TERM,
     which is the thing that can go stale on its own.
+
+    HOW IT CHECKS, and the limit of that. The names are read out of each file's
+    AST, and a term counts as live when it is a substring of a test function's
+    name — which is what ``-k`` does for a plain identifier. It does NOT spawn
+    pytest: an earlier version ran ``pytest --collect-only`` per term and hung,
+    once locally and again on all three CI matrix builds, because starting a
+    pytest session from inside a pytest session is fragile in ways this proof has
+    no reason to depend on. The limit that buys: a term matching only a
+    ``parametrize`` ID, a class name or a file path would be reported as dead.
+    None here is of that shape, and a future one should be rewritten rather than
+    have this relaxed — the point is that the term names a test.
     """
 
+    import ast
     import re
-    import subprocess
+
+    def test_names(path: Path) -> list[str]:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        return [
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name.startswith("test")
+        ]
 
     keywords = {"or", "and", "not"}
     for name, _function, _edits, test_file, selection in runner.mutations():
-        terms = [t for t in re.findall(r"[\w]+", selection) if t not in keywords]
+        terms = [t for t in re.findall(r"\w+", selection) if t not in keywords]
         assert terms, f"{name}: -k {selection!r} has no selectable term"
+        names = test_names(REPO / test_file)
+        assert names, f"{name}: {test_file} defines no tests at all"
         for term in terms:
-            proc = subprocess.run(
-                [sys.executable, "-m", "pytest", "--collect-only", "-q",
-                 test_file, "-k", term],
-                cwd=REPO, capture_output=True, text=True,
-            )
-            assert proc.returncode == 0 and "no tests ran" not in proc.stdout, (
+            assert any(term in candidate for candidate in names), (
                 f"{name}: the term {term!r} in -k {selection!r} matches NOTHING in "
                 f"{test_file}. The other terms may still collect, so this proof "
                 "would run a NARROWER set than it claims and still look green."
