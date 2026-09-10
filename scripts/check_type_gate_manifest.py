@@ -9,6 +9,22 @@ the exact set of test names per module. A removed proof, a renamed one, or an
 added one all fail here and have to be reconciled deliberately. Skips, failures
 and errors are refused outright: a proof that skipped did not run.
 
+THE LIMIT OF WHAT THIS PROVES, stated where the assurance is described rather
+than left for the next reviewer. **The manifest is an IDENTITY guard, not a
+QUALITY guard.** It proves that a test of each pinned NAME ran and passed. It
+proves nothing about what that test asserts. A manifest-named proof whose body
+was replaced with ``pass`` — or narrowed to a single trivial case — reports
+exactly the same green here as the real one, because the only thing compared is
+the name.
+
+What covers that gap is not this script. It is
+``scripts/type_gate_revert_proofs.py``, which mutates the code each proof guards
+and requires the proof to go RED: a gutted proof stops catching its mutation and
+the runner's pinned count drifts. The two are complementary and neither is
+sufficient — the manifest catches a proof that VANISHED, the revert runner
+catches a proof that stopped PROVING. Neither is externally anchored: both are
+editable in one change by whoever edits the code under test.
+
 Regenerate deliberately, in the same change that adds or renames a test:
     python scripts/check_type_gate_manifest.py <junit.xml> --update
 

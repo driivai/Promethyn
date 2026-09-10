@@ -8,6 +8,60 @@ in `spec/invariants.md` is a major version bump.
 ## [Unreleased]
 
 ### Added
+- **TYPE-GATE-HARDEN-3: the allowlists that allowlisted the wrong thing.** A
+  fourth independent review found the doctrine applied in three places and
+  reverted to enumeration in three others — and every one of the three *looked*
+  like an allowlist, because each had a permitted set. The set was over the
+  wrong thing. **An allowlist is only an allowlist if the permitted set covers
+  the thing that can vary.**
+  - **The inline-directive sweep has no exclusion at all.** It skipped any file
+    whose *basename* matched the guard's own, which is a set over filenames while
+    the filename is what an attacker picks. Measured: a real module at
+    `src/prometheus_protocol/core/test_type_gate.py` carrying
+    `# mypy: disable-error-code="union-attr"` over a live defect left mypy
+    reporting `Success: no issues found in 246 source files` and the sweep
+    reporting nothing. All three source sweeps now read TOKENS and AST nodes, so
+    a directive is distinguished from a mention of one by token type rather than
+    by which file it is in, and no file is excused.
+  - **The `pull_request` trigger's VALUE is pinned, not just its name.**
+    `"pull_request": None` meant "accept any value", so `paths: ["docs/**"]`,
+    `paths-ignore: ["src/**", ...]`, a branch filter naming a branch nobody uses,
+    and a bare `{}` each left the key set identical and the workflow firing on no
+    code PR at all. No entry in either allowlist may now mean "any value":
+    `_PinnedBy` names the test that pins it, and that test's existence is
+    asserted.
+  - **The expression-narrowing sweep restricts the PROPERTY, not the syntax.** It
+    matched three identifier *spellings*, so `models.Unavailable` (an
+    `ast.Attribute`) and `Unavailable as Missing` (a different id) both narrowed
+    correctly under mypy and walked straight past it. It now rejects
+    expression-position *type tests* in the shipped package whatever type they
+    name; the eleven that exist are sanctioned by their exact source, and a
+    separate test refuses any sanction that names a union member.
+  - **`getattr` defaults are constrained over every distinguishing attribute**,
+    derived from the dataclasses rather than from the single literal `"verdict"`.
+    `getattr(outcome, "passed", True)` was the same fail-open one word over.
+  - **The Hearth guards sanction CONTENT, not paths.**
+    `tests/conformance/hearth_ledger.py` holds a SHA-256 per frozen file. A path
+    sanctioned once was sanctioned forever — `gate/authorization.py` among them
+    since PR #52, so every later edit to the authorization gate was invisible to
+    all four guards — and on main `git diff origin/main` is empty, so after each
+    merge the guards asserted nothing. Both closed: any edit to any frozen file
+    fails until its digest is updated deliberately, and there is no branch to
+    resolve, so the guards hold identically on a branch, on main, in a worktree
+    and in a fresh clone. The `skipif origin/main is unresolvable` markers are
+    gone with the git dependency that required them.
+  - **Boolean security settings are constrained at the READ SITE.** The
+    repo-wide sweep was two regexes over one truth-set spelling; a reordered
+    tuple, a `frozenset`, a `casefold()` membership test or a new coercion
+    wrapper all passed it. Every read of a boolean setting — by wired-up name or
+    by the house naming convention — must now be lexically inside
+    `parse_env_bool`.
+  - **The bank's decision surface is committed as a differential.**
+    TYPE-GATE-HARDEN-2 reported a 1,155-combination differential that was a
+    report-time measurement and was not kept.
+    `tests/conformance/test_bank_decision_surface.py` enumerates 240 outcome
+    sequences and compares every decision against a checked-in table, so the
+    property survives Phase 1.2's own sprint.
 - **TYPE-GATE-HARDEN-2: the allowlist discipline, applied everywhere the last
   sprint enumerated shapes.** Three rounds of independent review produced one
   unambiguous result: *where a guard states what is permitted it survives attack;
@@ -45,6 +99,35 @@ in `spec/invariants.md` is a major version bump.
   `tests/conformance/type_gate_test_manifest.json` names all 51 proofs.
 
 ### Changed
+- **The three-layer demonstration in `docs/threat-model.md` is corrected.** It
+  cited the behavioural suite catching a survivor filter spelled
+  `[r for r in results if not isinstance(r, Unavailable)]`. Re-run, it does not:
+  that two-list rewrite still collects the absentees and still returns
+  `Unavailable`, so nothing observable changes and the ensemble tests pass. What
+  the suite catches is the *true* survivor-only mutation, which discards the
+  missing list. Measured: mypy clean, AST guard RED, behavioural RED
+  (`test_ensemble_lever_does_not_let_survivors_speak_for_the_quorum` and
+  `test_ensemble_lever_reports_how_many_judges_could_not_run`). The layered
+  argument holds; the evidence cited for it did not, and a claim about evidence
+  that does not survive re-running is worse than no claim.
+- **The floor job MEASURES its environment delta instead of asserting there is
+  none.** "The only variable between the two jobs is the checker" was too
+  strong: constraints constrain a resolution, they do not request packages, and
+  a different mypy resolves a different graph. The job now builds both
+  environments and requires every difference to lie inside mypy's own transitive
+  requirement closure, read from each environment's metadata — today
+  `ast-serialize`, `librt`, `mypy`, `pathspec` — and fails on anything outside it.
+- **The SBOM's model is stated once.** `docs/sbom.cdx.json` is a single-platform
+  installed snapshot (CPython 3.11, Linux x86-64); `constraints.txt` is a
+  resolution input spanning 3.10-3.12 and is deliberately a superset. Every
+  difference between the two — `colorama`, `exceptiongroup`, `tomli` on one
+  side, `pip` and `setuptools` on the other — follows from that.
+  `tests/conformance/test_dependency_closure.py` checks the direction that
+  matters: everything the snapshot installed is pinned.
+- **The proof manifest states the limit of what it proves.** It is an IDENTITY
+  guard, not a QUALITY guard: a manifest-named proof gutted to `pass` reports the
+  same green. What covers that is the revert runner, which requires each proof to
+  go red under a real mutation. Neither is externally anchored.
 - **The receipt's claim is corrected, and its binding strengthened as far as is
   honestly possible.** It said "a step that did not execute writes no receipt,
   and the build fails — no matter how the non-execution was spelled." That was

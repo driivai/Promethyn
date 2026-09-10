@@ -67,14 +67,46 @@ one of two forms:
   point; the `Unavailable` consumer suite drives each crash site with a real
   could-not-run.
 
-**The two layers are not redundant, and the evidence for that is specific.**
-Reverting `EnsembleJudge` to a survivor filter spelled `[r for r in results if
-not isinstance(r, Unavailable)]` makes two unreachable judges return
-`Evidence(PASS)` — a fail-open. mypy stays clean (the narrowing is correct for a
-two-member union) *and*, before this sprint, the AST guard passed too. The
-behavioural suite caught it. A static guard tells you a shape is absent; only
-running the thing tells you the property holds. Where they disagree, the
-behavioural layer is the one that is load-bearing.
+**An allowlist is only an allowlist if the permitted set covers the thing that
+can vary.** A fourth review round found the doctrine above applied in three
+places and reverted to enumeration in three others — and every one of the three
+*looked* like an allowlist, because each had a permitted set. The set was over
+the wrong thing:
+
+| guard | the set was over | what actually varied | consequence |
+|---|---|---|---|
+| the inline-`# mypy:` sweep's self-exclusion | file **basenames** | the file's **name**, chosen by whoever adds it | a real module at `src/prometheus_protocol/core/test_type_gate.py` was swept out of every check; measured: mypy `Success: no issues found in 246 source files` over a live `union-attr` defect |
+| the workflow trigger allowlist | trigger **names** | the **filter** under the name | `pull_request: {paths: ["docs/**"]}` leaves the key set identical and the workflow never fires on a code PR |
+| the expression-narrowing AST sweep | three identifier **spellings** | the **spelling of the symbol** | `models.Unavailable` and `Unavailable as Missing` both narrow correctly under mypy and neither is an `ast.Name` in the set |
+| the Hearth change guards | permitted **paths** | the **content** at those paths | a path sanctioned once was sanctioned forever, `gate/authorization.py` among them |
+
+So the question to ask of any guard here is not "is there a permitted set?" but
+**what can an attacker change that this set does not constrain?** Where the
+answer is "nothing", the guard says how it knows. Where something remains — the
+one case in this repository is a type test moved one function away behind a
+helper — it is named in the guard's own docstring rather than left to be found.
+
+**The two layers are not redundant. The evidence originally cited for that was
+of the wrong mutation, and is corrected here.** The earlier text claimed the
+behavioural suite caught a survivor filter spelled `[r for r in results if not
+isinstance(r, Unavailable)]`. Re-run, it does not — because that two-list
+rewrite still *collects* the absentees and still returns `Unavailable` for them,
+so it changes no observable behaviour. What the behavioural suite catches is the
+true survivor-only mutation, which **discards** the missing list. Measured on
+`EnsembleJudge.verify`:
+
+| mutation | mypy | AST guard | behavioural suite |
+|---|---|---|---|
+| two-list rewrite, absentees still returned (*the mutation previously cited*) | clean | **RED** | **passes** — no behaviour changed |
+| survivor-only, missing list discarded (*the real fail-open*) | clean | **RED** | **RED** — `test_ensemble_lever_does_not_let_survivors_speak_for_the_quorum` and `test_ensemble_lever_reports_how_many_judges_could_not_run` |
+
+The layered-defence argument holds, and the corrected evidence is stronger than
+the claim it replaces: mypy is clean under the real fail-open (the narrowing is
+correct for a two-member union — the checker has nothing to say), while the
+static guard and the behavioural suite each catch it independently. What the
+original sentence got wrong was which layer was load-bearing for which mutation,
+and a claim about evidence that does not survive re-running is worse than no
+claim: this repository's credibility rests on that distinction.
 
 **Execution recovery follow-up (F2/F3):** negative executor results and lost
 COMMIT responses no longer establish rollback. Unknown events leave an intent

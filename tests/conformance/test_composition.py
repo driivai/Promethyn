@@ -20,9 +20,14 @@ from __future__ import annotations
 
 import math
 import os
-import subprocess
 
 import pytest
+
+from hearth_ledger import (
+    COMPOSITION_FILES,
+    UNSANCTIONED_MESSAGE,
+    unsanctioned_changes,
+)
 
 from prometheus_protocol.core.booleans import parse_env_bool
 from prometheus_protocol.core.models import (
@@ -244,95 +249,36 @@ def test_chain_ground_truth_is_executed_not_labelled():
 
 
 # --------------------------------------------------------------------------
-# 4. the Hearth is byte-identical to main
+# 4. the Hearth is the sanctioned CONTENT (not a diff against a branch)
 # --------------------------------------------------------------------------
 
-_HEARTH_FILES = (
-    "src/prometheus_protocol/verifier/bank.py",
-    "src/prometheus_protocol/verifier/aggregate.py",
-    "src/prometheus_protocol/verifier/trust.py",
-    "src/prometheus_protocol/gate/promotion.py",
-    "src/prometheus_protocol/gate/authorization.py",
-    "src/prometheus_protocol/execution/executor.py",
-    "src/prometheus_protocol/execution/controller.py",
-    "src/prometheus_protocol/execution/pending.py",
-    "src/prometheus_protocol/forge/miner.py",
-    "src/prometheus_protocol/core/models.py",
-    "src/prometheus_protocol/core/interfaces.py",
-    # the orchestration skeleton (PR #46) is frozen too; this sprint only ADDS.
-    "src/prometheus_protocol/orchestration/runtime.py",
-    "src/prometheus_protocol/orchestration/gateway.py",
-    "src/prometheus_protocol/orchestration/messages.py",
-    "src/prometheus_protocol/orchestration/workflow.py",
-)
-
-# EX-1 (PR #52: a HARD verifier that cannot execute must not abstain) changed
-# exactly these ten frozen files, with explicit approval — the sanctioned delta.
-# The guard tolerates a change to one of THESE and still fails on ANY other
-# frozen-file change, so the Hearth stays protected against unsanctioned edits
-# while EX-1's approved surface lands. (Deleting them from the list instead would
-# leave them unguarded against a future unsanctioned change — a hole.)
-_EX1_CHANGED = frozenset({
-    "src/prometheus_protocol/core/models.py",
-    "src/prometheus_protocol/core/interfaces.py",
-    "src/prometheus_protocol/verifier/runner.py",
-    "src/prometheus_protocol/verifier/sql.py",
-    "src/prometheus_protocol/verifier/bank.py",
-    "src/prometheus_protocol/gate/authorization.py",
-    "src/prometheus_protocol/benchmarks/judge_eval.py",
-    "src/prometheus_protocol/orchestration/runtime.py",
-    "src/prometheus_protocol/execution/controller.py",
-    "src/prometheus_protocol/execution/pending.py",
-})
-
-# TYPE-GATE (whole-tree strict type checking, made CI-blocking) changed exactly
-# ONE further frozen file, with explicit approval — the second sanctioned delta.
-# In ``gate/promotion.py`` it:
-#   * corrected ``ScoreFn`` from ``Sequence[Task]`` to ``Sequence[LearnableTask]``.
-#     The gate ALREADY forwarded ``LearnableTask``s (``score_fn(list(heldout_tasks),
-#     ...)``, where ``heldout_tasks`` is a ``Sequence[LearnableTask]``); the old
-#     annotation named the code domain's concrete ``Task``, which the SQL and
-#     grounding domains do not use. The annotation was wrong about the code, and
-#     that mismatch was invisible while the file sat outside the checked set.
-#   * added ``OUTCOME_UNAVAILABLE``, a caller-side marker for "no judgment
-#     existed, so no authorization was ever requested". The gate never returns
-#     it and no ``GateDecision`` carries it.
-# Neither touches ``approved`` — the single load-bearing field the executor
-# checks — so the wall is unchanged. As with ``_EX1_CHANGED``, the file STAYS in
-# ``_HEARTH_FILES``: it is named here, not unguarded.
-#
-# TYPE-GATE also changed ``verifier/bank.py``, which is already inside
-# ``_EX1_CHANGED`` above and so needs no new entry — recorded here so an auditor
-# reading "what did TYPE-GATE touch in the Hearth" is not misled by the entry
-# list alone. The change: the four ratcheted ``# type: ignore[arg-type]`` there
-# are replaced by ``Evidence.decided``, which states the ``__post_init__``
-# guarantee that the ``Verdict | None`` field type could not. The fused verdict,
-# the confidence arithmetic and the calibration writes are unchanged.
-_TYPE_GATE_CHANGED = frozenset({
-    "src/prometheus_protocol/gate/promotion.py",
-})
-
-_SANCTIONED_HEARTH_CHANGES = _EX1_CHANGED | _TYPE_GATE_CHANGED
+_HEARTH_FILES = COMPOSITION_FILES
 
 
-def _git(*args: str) -> subprocess.CompletedProcess:
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    return subprocess.run(["git", *args], capture_output=True, text=True, cwd=root)
-
-
-@pytest.mark.skipif(
-    _git("rev-parse", "--verify", "origin/main").returncode != 0,
-    reason="origin/main not available in this checkout",
-)
-def test_hearth_and_orchestration_core_unchanged_versus_main():
+def test_hearth_and_orchestration_core_are_the_sanctioned_content():
     """This sprint adds composition.py + a benchmark; it changes no trusted-core
-    file and no orchestration-skeleton file, EXCEPT the files EX-1 (PR #52) and
-    TYPE-GATE changed with approval (``_SANCTIONED_HEARTH_CHANGES``). The ledger
-    is not in this set (it is unchanged here, but the study needs no ledger
-    change)."""
+    file and no orchestration-skeleton file. The ledger holds the sanctioned
+    content of each. (The SQLite ledger module is not in this set — it is
+    unchanged here, but the study needs no ledger change.)
 
-    diff = _git("diff", "--name-only", "origin/main", "--", *_HEARTH_FILES)
-    assert diff.returncode == 0, diff.stderr
-    changed = [line for line in diff.stdout.splitlines() if line.strip()]
-    unsanctioned = [f for f in changed if f not in _SANCTIONED_HEARTH_CHANGES]
-    assert unsanctioned == [], f"unsanctioned Hearth change vs origin/main: {unsanctioned}"
+    THE COMPARISON REFERENCE IS THE LEDGER, NOT A BRANCH. This used to run
+    ``git diff --name-only origin/main`` and reject changed paths outside a
+    permitted set. Two defects, both closed here:
+
+    * the permitted set was over PATHS, so a file sanctioned once — including
+      ``gate/authorization.py`` — was sanctioned FOREVER, and every later edit
+      to it was invisible rather than allowed;
+    * on main the diff against ``origin/main`` is empty, so after each merge the
+      guard asserted nothing at all.
+
+    Hashing the files on disk fixes both: any edit to any frozen file fails until
+    its digest is updated deliberately, and the assertion holds identically on a
+    branch, on main, in a worktree and in a fresh clone. The ``skipif origin/main
+    is unresolvable`` marker is gone with the git dependency — it was how these
+    guards silently stopped running under a shallow checkout.
+    """
+
+    unsanctioned = unsanctioned_changes(_HEARTH_FILES)
+    assert unsanctioned == [], (
+        UNSANCTIONED_MESSAGE + "\n" + "\n".join(unsanctioned)
+    )

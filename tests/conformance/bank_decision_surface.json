@@ -1,0 +1,2366 @@
+{
+ "E:ABSTAIN:HARD": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "ABSTAIN"
+ },
+ "E:ABSTAIN:HARD|E:ABSTAIN:HARD": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "ABSTAIN"
+ },
+ "E:ABSTAIN:HARD|E:ABSTAIN:HUMAN": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "ABSTAIN"
+ },
+ "E:ABSTAIN:HARD|E:ABSTAIN:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "ABSTAIN"
+ },
+ "E:ABSTAIN:HARD|E:FAIL:HARD": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "FAIL"
+ },
+ "E:ABSTAIN:HARD|E:FAIL:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "FAIL"
+ },
+ "E:ABSTAIN:HARD|E:FAIL:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:ABSTAIN:HARD|E:PASS:HARD": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:ABSTAIN:HARD|E:PASS:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:ABSTAIN:HARD|E:PASS:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:ABSTAIN:HARD|U:INFRA_FAULT:HARD": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HARD"
+ },
+ "E:ABSTAIN:HARD|U:INFRA_FAULT:HUMAN": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HUMAN"
+ },
+ "E:ABSTAIN:HARD|U:INFRA_FAULT:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "ABSTAIN"
+ },
+ "E:ABSTAIN:HARD|U:POLICY_REFUSAL:HARD": {
+  "outcome": "unavailable",
+  "reason": "POLICY_REFUSAL",
+  "tier": "HARD"
+ },
+ "E:ABSTAIN:HARD|U:POLICY_REFUSAL:HUMAN": {
+  "outcome": "unavailable",
+  "reason": "POLICY_REFUSAL",
+  "tier": "HUMAN"
+ },
+ "E:ABSTAIN:HARD|U:POLICY_REFUSAL:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "ABSTAIN"
+ },
+ "E:ABSTAIN:HUMAN": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "ABSTAIN"
+ },
+ "E:ABSTAIN:HUMAN|E:ABSTAIN:HARD": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "ABSTAIN"
+ },
+ "E:ABSTAIN:HUMAN|E:ABSTAIN:HUMAN": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "ABSTAIN"
+ },
+ "E:ABSTAIN:HUMAN|E:ABSTAIN:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "ABSTAIN"
+ },
+ "E:ABSTAIN:HUMAN|E:FAIL:HARD": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "FAIL"
+ },
+ "E:ABSTAIN:HUMAN|E:FAIL:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "FAIL"
+ },
+ "E:ABSTAIN:HUMAN|E:FAIL:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:ABSTAIN:HUMAN|E:PASS:HARD": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:ABSTAIN:HUMAN|E:PASS:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:ABSTAIN:HUMAN|E:PASS:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:ABSTAIN:HUMAN|U:INFRA_FAULT:HARD": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HARD"
+ },
+ "E:ABSTAIN:HUMAN|U:INFRA_FAULT:HUMAN": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HUMAN"
+ },
+ "E:ABSTAIN:HUMAN|U:INFRA_FAULT:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "ABSTAIN"
+ },
+ "E:ABSTAIN:HUMAN|U:POLICY_REFUSAL:HARD": {
+  "outcome": "unavailable",
+  "reason": "POLICY_REFUSAL",
+  "tier": "HARD"
+ },
+ "E:ABSTAIN:HUMAN|U:POLICY_REFUSAL:HUMAN": {
+  "outcome": "unavailable",
+  "reason": "POLICY_REFUSAL",
+  "tier": "HUMAN"
+ },
+ "E:ABSTAIN:HUMAN|U:POLICY_REFUSAL:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "ABSTAIN"
+ },
+ "E:ABSTAIN:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "ABSTAIN"
+ },
+ "E:ABSTAIN:SOFT|E:ABSTAIN:HARD": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "ABSTAIN"
+ },
+ "E:ABSTAIN:SOFT|E:ABSTAIN:HUMAN": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "ABSTAIN"
+ },
+ "E:ABSTAIN:SOFT|E:ABSTAIN:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "ABSTAIN"
+ },
+ "E:ABSTAIN:SOFT|E:FAIL:HARD": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "FAIL"
+ },
+ "E:ABSTAIN:SOFT|E:FAIL:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "FAIL"
+ },
+ "E:ABSTAIN:SOFT|E:FAIL:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:ABSTAIN:SOFT|E:PASS:HARD": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:ABSTAIN:SOFT|E:PASS:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:ABSTAIN:SOFT|E:PASS:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:ABSTAIN:SOFT|U:INFRA_FAULT:HARD": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HARD"
+ },
+ "E:ABSTAIN:SOFT|U:INFRA_FAULT:HUMAN": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HUMAN"
+ },
+ "E:ABSTAIN:SOFT|U:INFRA_FAULT:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "ABSTAIN"
+ },
+ "E:ABSTAIN:SOFT|U:POLICY_REFUSAL:HARD": {
+  "outcome": "unavailable",
+  "reason": "POLICY_REFUSAL",
+  "tier": "HARD"
+ },
+ "E:ABSTAIN:SOFT|U:POLICY_REFUSAL:HUMAN": {
+  "outcome": "unavailable",
+  "reason": "POLICY_REFUSAL",
+  "tier": "HUMAN"
+ },
+ "E:ABSTAIN:SOFT|U:POLICY_REFUSAL:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "ABSTAIN"
+ },
+ "E:FAIL:HARD": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "FAIL"
+ },
+ "E:FAIL:HARD|E:ABSTAIN:HARD": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "FAIL"
+ },
+ "E:FAIL:HARD|E:ABSTAIN:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "FAIL"
+ },
+ "E:FAIL:HARD|E:ABSTAIN:SOFT": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "FAIL"
+ },
+ "E:FAIL:HARD|E:FAIL:HARD": {
+  "authoritative": true,
+  "confidence": 0.997237569,
+  "conflict": false,
+  "contributing": [
+   "v0",
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "FAIL"
+ },
+ "E:FAIL:HARD|E:FAIL:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.998927039,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "FAIL"
+ },
+ "E:FAIL:HARD|E:FAIL:SOFT": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "FAIL"
+ },
+ "E:FAIL:HARD|E:PASS:HARD": {
+  "authoritative": true,
+  "confidence": 0.5,
+  "conflict": true,
+  "contributing": [
+   "v0",
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:FAIL:HARD|E:PASS:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.720588235,
+  "conflict": true,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:FAIL:HARD|E:PASS:SOFT": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "FAIL"
+ },
+ "E:FAIL:HARD|U:INFRA_FAULT:HARD": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [
+   "INFRA_FAULT:HARD"
+  ],
+  "verdict": "FAIL"
+ },
+ "E:FAIL:HARD|U:INFRA_FAULT:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [
+   "INFRA_FAULT:HUMAN"
+  ],
+  "verdict": "FAIL"
+ },
+ "E:FAIL:HARD|U:INFRA_FAULT:SOFT": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "FAIL"
+ },
+ "E:FAIL:HARD|U:POLICY_REFUSAL:HARD": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [
+   "POLICY_REFUSAL:HARD"
+  ],
+  "verdict": "FAIL"
+ },
+ "E:FAIL:HARD|U:POLICY_REFUSAL:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [
+   "POLICY_REFUSAL:HUMAN"
+  ],
+  "verdict": "FAIL"
+ },
+ "E:FAIL:HARD|U:POLICY_REFUSAL:SOFT": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "FAIL"
+ },
+ "E:FAIL:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "FAIL"
+ },
+ "E:FAIL:HUMAN|E:ABSTAIN:HARD": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "FAIL"
+ },
+ "E:FAIL:HUMAN|E:ABSTAIN:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "FAIL"
+ },
+ "E:FAIL:HUMAN|E:ABSTAIN:SOFT": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "FAIL"
+ },
+ "E:FAIL:HUMAN|E:FAIL:HARD": {
+  "authoritative": true,
+  "confidence": 0.998927039,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "FAIL"
+ },
+ "E:FAIL:HUMAN|E:FAIL:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.99958368,
+  "conflict": false,
+  "contributing": [
+   "v0",
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "FAIL"
+ },
+ "E:FAIL:HUMAN|E:FAIL:SOFT": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "FAIL"
+ },
+ "E:FAIL:HUMAN|E:PASS:HARD": {
+  "authoritative": true,
+  "confidence": 0.720588235,
+  "conflict": true,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "FAIL"
+ },
+ "E:FAIL:HUMAN|E:PASS:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.5,
+  "conflict": true,
+  "contributing": [
+   "v0",
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:FAIL:HUMAN|E:PASS:SOFT": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "FAIL"
+ },
+ "E:FAIL:HUMAN|U:INFRA_FAULT:HARD": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [
+   "INFRA_FAULT:HARD"
+  ],
+  "verdict": "FAIL"
+ },
+ "E:FAIL:HUMAN|U:INFRA_FAULT:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [
+   "INFRA_FAULT:HUMAN"
+  ],
+  "verdict": "FAIL"
+ },
+ "E:FAIL:HUMAN|U:INFRA_FAULT:SOFT": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "FAIL"
+ },
+ "E:FAIL:HUMAN|U:POLICY_REFUSAL:HARD": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [
+   "POLICY_REFUSAL:HARD"
+  ],
+  "verdict": "FAIL"
+ },
+ "E:FAIL:HUMAN|U:POLICY_REFUSAL:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [
+   "POLICY_REFUSAL:HUMAN"
+  ],
+  "verdict": "FAIL"
+ },
+ "E:FAIL:HUMAN|U:POLICY_REFUSAL:SOFT": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "FAIL"
+ },
+ "E:FAIL:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:FAIL:SOFT|E:ABSTAIN:HARD": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:FAIL:SOFT|E:ABSTAIN:HUMAN": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:FAIL:SOFT|E:ABSTAIN:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:FAIL:SOFT|E:FAIL:HARD": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "FAIL"
+ },
+ "E:FAIL:SOFT|E:FAIL:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "FAIL"
+ },
+ "E:FAIL:SOFT|E:FAIL:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [
+   "v0",
+   "v1"
+  ],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:FAIL:SOFT|E:PASS:HARD": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:FAIL:SOFT|E:PASS:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:FAIL:SOFT|E:PASS:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [
+   "v0",
+   "v1"
+  ],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:FAIL:SOFT|U:INFRA_FAULT:HARD": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HARD"
+ },
+ "E:FAIL:SOFT|U:INFRA_FAULT:HUMAN": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HUMAN"
+ },
+ "E:FAIL:SOFT|U:INFRA_FAULT:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:FAIL:SOFT|U:POLICY_REFUSAL:HARD": {
+  "outcome": "unavailable",
+  "reason": "POLICY_REFUSAL",
+  "tier": "HARD"
+ },
+ "E:FAIL:SOFT|U:POLICY_REFUSAL:HUMAN": {
+  "outcome": "unavailable",
+  "reason": "POLICY_REFUSAL",
+  "tier": "HUMAN"
+ },
+ "E:FAIL:SOFT|U:POLICY_REFUSAL:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:PASS:HARD": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:PASS:HARD|E:ABSTAIN:HARD": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:PASS:HARD|E:ABSTAIN:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:PASS:HARD|E:ABSTAIN:SOFT": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:PASS:HARD|E:FAIL:HARD": {
+  "authoritative": true,
+  "confidence": 0.5,
+  "conflict": true,
+  "contributing": [
+   "v0",
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:PASS:HARD|E:FAIL:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.720588235,
+  "conflict": true,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "FAIL"
+ },
+ "E:PASS:HARD|E:FAIL:SOFT": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:PASS:HARD|E:PASS:HARD": {
+  "authoritative": true,
+  "confidence": 0.997237569,
+  "conflict": false,
+  "contributing": [
+   "v0",
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:PASS:HARD|E:PASS:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.998927039,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:PASS:HARD|E:PASS:SOFT": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:PASS:HARD|U:INFRA_FAULT:HARD": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [
+   "INFRA_FAULT:HARD"
+  ],
+  "verdict": "PASS"
+ },
+ "E:PASS:HARD|U:INFRA_FAULT:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [
+   "INFRA_FAULT:HUMAN"
+  ],
+  "verdict": "PASS"
+ },
+ "E:PASS:HARD|U:INFRA_FAULT:SOFT": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:PASS:HARD|U:POLICY_REFUSAL:HARD": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [
+   "POLICY_REFUSAL:HARD"
+  ],
+  "verdict": "PASS"
+ },
+ "E:PASS:HARD|U:POLICY_REFUSAL:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [
+   "POLICY_REFUSAL:HUMAN"
+  ],
+  "verdict": "PASS"
+ },
+ "E:PASS:HARD|U:POLICY_REFUSAL:SOFT": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:PASS:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:PASS:HUMAN|E:ABSTAIN:HARD": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:PASS:HUMAN|E:ABSTAIN:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:PASS:HUMAN|E:ABSTAIN:SOFT": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:PASS:HUMAN|E:FAIL:HARD": {
+  "authoritative": true,
+  "confidence": 0.720588235,
+  "conflict": true,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:PASS:HUMAN|E:FAIL:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.5,
+  "conflict": true,
+  "contributing": [
+   "v0",
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:PASS:HUMAN|E:FAIL:SOFT": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:PASS:HUMAN|E:PASS:HARD": {
+  "authoritative": true,
+  "confidence": 0.998927039,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:PASS:HUMAN|E:PASS:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.99958368,
+  "conflict": false,
+  "contributing": [
+   "v0",
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:PASS:HUMAN|E:PASS:SOFT": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:PASS:HUMAN|U:INFRA_FAULT:HARD": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [
+   "INFRA_FAULT:HARD"
+  ],
+  "verdict": "PASS"
+ },
+ "E:PASS:HUMAN|U:INFRA_FAULT:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [
+   "INFRA_FAULT:HUMAN"
+  ],
+  "verdict": "PASS"
+ },
+ "E:PASS:HUMAN|U:INFRA_FAULT:SOFT": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:PASS:HUMAN|U:POLICY_REFUSAL:HARD": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [
+   "POLICY_REFUSAL:HARD"
+  ],
+  "verdict": "PASS"
+ },
+ "E:PASS:HUMAN|U:POLICY_REFUSAL:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [
+   "POLICY_REFUSAL:HUMAN"
+  ],
+  "verdict": "PASS"
+ },
+ "E:PASS:HUMAN|U:POLICY_REFUSAL:SOFT": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:PASS:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:PASS:SOFT|E:ABSTAIN:HARD": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:PASS:SOFT|E:ABSTAIN:HUMAN": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:PASS:SOFT|E:ABSTAIN:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:PASS:SOFT|E:FAIL:HARD": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "FAIL"
+ },
+ "E:PASS:SOFT|E:FAIL:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "FAIL"
+ },
+ "E:PASS:SOFT|E:FAIL:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [
+   "v0",
+   "v1"
+  ],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:PASS:SOFT|E:PASS:HARD": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:PASS:SOFT|E:PASS:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:PASS:SOFT|E:PASS:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [
+   "v0",
+   "v1"
+  ],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:PASS:SOFT|U:INFRA_FAULT:HARD": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HARD"
+ },
+ "E:PASS:SOFT|U:INFRA_FAULT:HUMAN": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HUMAN"
+ },
+ "E:PASS:SOFT|U:INFRA_FAULT:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "E:PASS:SOFT|U:POLICY_REFUSAL:HARD": {
+  "outcome": "unavailable",
+  "reason": "POLICY_REFUSAL",
+  "tier": "HARD"
+ },
+ "E:PASS:SOFT|U:POLICY_REFUSAL:HUMAN": {
+  "outcome": "unavailable",
+  "reason": "POLICY_REFUSAL",
+  "tier": "HUMAN"
+ },
+ "E:PASS:SOFT|U:POLICY_REFUSAL:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [
+   "v0"
+  ],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "U:INFRA_FAULT:HARD": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HARD"
+ },
+ "U:INFRA_FAULT:HARD|E:ABSTAIN:HARD": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HARD"
+ },
+ "U:INFRA_FAULT:HARD|E:ABSTAIN:HUMAN": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HARD"
+ },
+ "U:INFRA_FAULT:HARD|E:ABSTAIN:SOFT": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HARD"
+ },
+ "U:INFRA_FAULT:HARD|E:FAIL:HARD": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [
+   "INFRA_FAULT:HARD"
+  ],
+  "verdict": "FAIL"
+ },
+ "U:INFRA_FAULT:HARD|E:FAIL:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [
+   "INFRA_FAULT:HARD"
+  ],
+  "verdict": "FAIL"
+ },
+ "U:INFRA_FAULT:HARD|E:FAIL:SOFT": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HARD"
+ },
+ "U:INFRA_FAULT:HARD|E:PASS:HARD": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [
+   "INFRA_FAULT:HARD"
+  ],
+  "verdict": "PASS"
+ },
+ "U:INFRA_FAULT:HARD|E:PASS:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [
+   "INFRA_FAULT:HARD"
+  ],
+  "verdict": "PASS"
+ },
+ "U:INFRA_FAULT:HARD|E:PASS:SOFT": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HARD"
+ },
+ "U:INFRA_FAULT:HARD|U:INFRA_FAULT:HARD": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HARD"
+ },
+ "U:INFRA_FAULT:HARD|U:INFRA_FAULT:HUMAN": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HARD"
+ },
+ "U:INFRA_FAULT:HARD|U:INFRA_FAULT:SOFT": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HARD"
+ },
+ "U:INFRA_FAULT:HARD|U:POLICY_REFUSAL:HARD": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HARD"
+ },
+ "U:INFRA_FAULT:HARD|U:POLICY_REFUSAL:HUMAN": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HARD"
+ },
+ "U:INFRA_FAULT:HARD|U:POLICY_REFUSAL:SOFT": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HARD"
+ },
+ "U:INFRA_FAULT:HUMAN": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HUMAN"
+ },
+ "U:INFRA_FAULT:HUMAN|E:ABSTAIN:HARD": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HUMAN"
+ },
+ "U:INFRA_FAULT:HUMAN|E:ABSTAIN:HUMAN": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HUMAN"
+ },
+ "U:INFRA_FAULT:HUMAN|E:ABSTAIN:SOFT": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HUMAN"
+ },
+ "U:INFRA_FAULT:HUMAN|E:FAIL:HARD": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [
+   "INFRA_FAULT:HUMAN"
+  ],
+  "verdict": "FAIL"
+ },
+ "U:INFRA_FAULT:HUMAN|E:FAIL:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [
+   "INFRA_FAULT:HUMAN"
+  ],
+  "verdict": "FAIL"
+ },
+ "U:INFRA_FAULT:HUMAN|E:FAIL:SOFT": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HUMAN"
+ },
+ "U:INFRA_FAULT:HUMAN|E:PASS:HARD": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [
+   "INFRA_FAULT:HUMAN"
+  ],
+  "verdict": "PASS"
+ },
+ "U:INFRA_FAULT:HUMAN|E:PASS:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [
+   "INFRA_FAULT:HUMAN"
+  ],
+  "verdict": "PASS"
+ },
+ "U:INFRA_FAULT:HUMAN|E:PASS:SOFT": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HUMAN"
+ },
+ "U:INFRA_FAULT:HUMAN|U:INFRA_FAULT:HARD": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HUMAN"
+ },
+ "U:INFRA_FAULT:HUMAN|U:INFRA_FAULT:HUMAN": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HUMAN"
+ },
+ "U:INFRA_FAULT:HUMAN|U:INFRA_FAULT:SOFT": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HUMAN"
+ },
+ "U:INFRA_FAULT:HUMAN|U:POLICY_REFUSAL:HARD": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HUMAN"
+ },
+ "U:INFRA_FAULT:HUMAN|U:POLICY_REFUSAL:HUMAN": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HUMAN"
+ },
+ "U:INFRA_FAULT:HUMAN|U:POLICY_REFUSAL:SOFT": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HUMAN"
+ },
+ "U:INFRA_FAULT:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "ABSTAIN"
+ },
+ "U:INFRA_FAULT:SOFT|E:ABSTAIN:HARD": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "ABSTAIN"
+ },
+ "U:INFRA_FAULT:SOFT|E:ABSTAIN:HUMAN": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "ABSTAIN"
+ },
+ "U:INFRA_FAULT:SOFT|E:ABSTAIN:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "ABSTAIN"
+ },
+ "U:INFRA_FAULT:SOFT|E:FAIL:HARD": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "FAIL"
+ },
+ "U:INFRA_FAULT:SOFT|E:FAIL:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "FAIL"
+ },
+ "U:INFRA_FAULT:SOFT|E:FAIL:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "U:INFRA_FAULT:SOFT|E:PASS:HARD": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "U:INFRA_FAULT:SOFT|E:PASS:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "U:INFRA_FAULT:SOFT|E:PASS:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "U:INFRA_FAULT:SOFT|U:INFRA_FAULT:HARD": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HARD"
+ },
+ "U:INFRA_FAULT:SOFT|U:INFRA_FAULT:HUMAN": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HUMAN"
+ },
+ "U:INFRA_FAULT:SOFT|U:INFRA_FAULT:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "ABSTAIN"
+ },
+ "U:INFRA_FAULT:SOFT|U:POLICY_REFUSAL:HARD": {
+  "outcome": "unavailable",
+  "reason": "POLICY_REFUSAL",
+  "tier": "HARD"
+ },
+ "U:INFRA_FAULT:SOFT|U:POLICY_REFUSAL:HUMAN": {
+  "outcome": "unavailable",
+  "reason": "POLICY_REFUSAL",
+  "tier": "HUMAN"
+ },
+ "U:INFRA_FAULT:SOFT|U:POLICY_REFUSAL:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "ABSTAIN"
+ },
+ "U:POLICY_REFUSAL:HARD": {
+  "outcome": "unavailable",
+  "reason": "POLICY_REFUSAL",
+  "tier": "HARD"
+ },
+ "U:POLICY_REFUSAL:HARD|E:ABSTAIN:HARD": {
+  "outcome": "unavailable",
+  "reason": "POLICY_REFUSAL",
+  "tier": "HARD"
+ },
+ "U:POLICY_REFUSAL:HARD|E:ABSTAIN:HUMAN": {
+  "outcome": "unavailable",
+  "reason": "POLICY_REFUSAL",
+  "tier": "HARD"
+ },
+ "U:POLICY_REFUSAL:HARD|E:ABSTAIN:SOFT": {
+  "outcome": "unavailable",
+  "reason": "POLICY_REFUSAL",
+  "tier": "HARD"
+ },
+ "U:POLICY_REFUSAL:HARD|E:FAIL:HARD": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [
+   "POLICY_REFUSAL:HARD"
+  ],
+  "verdict": "FAIL"
+ },
+ "U:POLICY_REFUSAL:HARD|E:FAIL:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [
+   "POLICY_REFUSAL:HARD"
+  ],
+  "verdict": "FAIL"
+ },
+ "U:POLICY_REFUSAL:HARD|E:FAIL:SOFT": {
+  "outcome": "unavailable",
+  "reason": "POLICY_REFUSAL",
+  "tier": "HARD"
+ },
+ "U:POLICY_REFUSAL:HARD|E:PASS:HARD": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [
+   "POLICY_REFUSAL:HARD"
+  ],
+  "verdict": "PASS"
+ },
+ "U:POLICY_REFUSAL:HARD|E:PASS:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [
+   "POLICY_REFUSAL:HARD"
+  ],
+  "verdict": "PASS"
+ },
+ "U:POLICY_REFUSAL:HARD|E:PASS:SOFT": {
+  "outcome": "unavailable",
+  "reason": "POLICY_REFUSAL",
+  "tier": "HARD"
+ },
+ "U:POLICY_REFUSAL:HARD|U:INFRA_FAULT:HARD": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HARD"
+ },
+ "U:POLICY_REFUSAL:HARD|U:INFRA_FAULT:HUMAN": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HARD"
+ },
+ "U:POLICY_REFUSAL:HARD|U:INFRA_FAULT:SOFT": {
+  "outcome": "unavailable",
+  "reason": "POLICY_REFUSAL",
+  "tier": "HARD"
+ },
+ "U:POLICY_REFUSAL:HARD|U:POLICY_REFUSAL:HARD": {
+  "outcome": "unavailable",
+  "reason": "POLICY_REFUSAL",
+  "tier": "HARD"
+ },
+ "U:POLICY_REFUSAL:HARD|U:POLICY_REFUSAL:HUMAN": {
+  "outcome": "unavailable",
+  "reason": "POLICY_REFUSAL",
+  "tier": "HARD"
+ },
+ "U:POLICY_REFUSAL:HARD|U:POLICY_REFUSAL:SOFT": {
+  "outcome": "unavailable",
+  "reason": "POLICY_REFUSAL",
+  "tier": "HARD"
+ },
+ "U:POLICY_REFUSAL:HUMAN": {
+  "outcome": "unavailable",
+  "reason": "POLICY_REFUSAL",
+  "tier": "HUMAN"
+ },
+ "U:POLICY_REFUSAL:HUMAN|E:ABSTAIN:HARD": {
+  "outcome": "unavailable",
+  "reason": "POLICY_REFUSAL",
+  "tier": "HUMAN"
+ },
+ "U:POLICY_REFUSAL:HUMAN|E:ABSTAIN:HUMAN": {
+  "outcome": "unavailable",
+  "reason": "POLICY_REFUSAL",
+  "tier": "HUMAN"
+ },
+ "U:POLICY_REFUSAL:HUMAN|E:ABSTAIN:SOFT": {
+  "outcome": "unavailable",
+  "reason": "POLICY_REFUSAL",
+  "tier": "HUMAN"
+ },
+ "U:POLICY_REFUSAL:HUMAN|E:FAIL:HARD": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [
+   "POLICY_REFUSAL:HUMAN"
+  ],
+  "verdict": "FAIL"
+ },
+ "U:POLICY_REFUSAL:HUMAN|E:FAIL:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [
+   "POLICY_REFUSAL:HUMAN"
+  ],
+  "verdict": "FAIL"
+ },
+ "U:POLICY_REFUSAL:HUMAN|E:FAIL:SOFT": {
+  "outcome": "unavailable",
+  "reason": "POLICY_REFUSAL",
+  "tier": "HUMAN"
+ },
+ "U:POLICY_REFUSAL:HUMAN|E:PASS:HARD": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [
+   "POLICY_REFUSAL:HUMAN"
+  ],
+  "verdict": "PASS"
+ },
+ "U:POLICY_REFUSAL:HUMAN|E:PASS:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [
+   "POLICY_REFUSAL:HUMAN"
+  ],
+  "verdict": "PASS"
+ },
+ "U:POLICY_REFUSAL:HUMAN|E:PASS:SOFT": {
+  "outcome": "unavailable",
+  "reason": "POLICY_REFUSAL",
+  "tier": "HUMAN"
+ },
+ "U:POLICY_REFUSAL:HUMAN|U:INFRA_FAULT:HARD": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HUMAN"
+ },
+ "U:POLICY_REFUSAL:HUMAN|U:INFRA_FAULT:HUMAN": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HUMAN"
+ },
+ "U:POLICY_REFUSAL:HUMAN|U:INFRA_FAULT:SOFT": {
+  "outcome": "unavailable",
+  "reason": "POLICY_REFUSAL",
+  "tier": "HUMAN"
+ },
+ "U:POLICY_REFUSAL:HUMAN|U:POLICY_REFUSAL:HARD": {
+  "outcome": "unavailable",
+  "reason": "POLICY_REFUSAL",
+  "tier": "HUMAN"
+ },
+ "U:POLICY_REFUSAL:HUMAN|U:POLICY_REFUSAL:HUMAN": {
+  "outcome": "unavailable",
+  "reason": "POLICY_REFUSAL",
+  "tier": "HUMAN"
+ },
+ "U:POLICY_REFUSAL:HUMAN|U:POLICY_REFUSAL:SOFT": {
+  "outcome": "unavailable",
+  "reason": "POLICY_REFUSAL",
+  "tier": "HUMAN"
+ },
+ "U:POLICY_REFUSAL:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "ABSTAIN"
+ },
+ "U:POLICY_REFUSAL:SOFT|E:ABSTAIN:HARD": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "ABSTAIN"
+ },
+ "U:POLICY_REFUSAL:SOFT|E:ABSTAIN:HUMAN": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "ABSTAIN"
+ },
+ "U:POLICY_REFUSAL:SOFT|E:ABSTAIN:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "ABSTAIN"
+ },
+ "U:POLICY_REFUSAL:SOFT|E:FAIL:HARD": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "FAIL"
+ },
+ "U:POLICY_REFUSAL:SOFT|E:FAIL:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "FAIL"
+ },
+ "U:POLICY_REFUSAL:SOFT|E:FAIL:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "U:POLICY_REFUSAL:SOFT|E:PASS:HARD": {
+  "authoritative": true,
+  "confidence": 0.95,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "U:POLICY_REFUSAL:SOFT|E:PASS:HUMAN": {
+  "authoritative": true,
+  "confidence": 0.98,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": false,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "U:POLICY_REFUSAL:SOFT|E:PASS:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [
+   "v1"
+  ],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "PASS"
+ },
+ "U:POLICY_REFUSAL:SOFT|U:INFRA_FAULT:HARD": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HARD"
+ },
+ "U:POLICY_REFUSAL:SOFT|U:INFRA_FAULT:HUMAN": {
+  "outcome": "unavailable",
+  "reason": "INFRA_FAULT",
+  "tier": "HUMAN"
+ },
+ "U:POLICY_REFUSAL:SOFT|U:INFRA_FAULT:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "ABSTAIN"
+ },
+ "U:POLICY_REFUSAL:SOFT|U:POLICY_REFUSAL:HARD": {
+  "outcome": "unavailable",
+  "reason": "POLICY_REFUSAL",
+  "tier": "HARD"
+ },
+ "U:POLICY_REFUSAL:SOFT|U:POLICY_REFUSAL:HUMAN": {
+  "outcome": "unavailable",
+  "reason": "POLICY_REFUSAL",
+  "tier": "HUMAN"
+ },
+ "U:POLICY_REFUSAL:SOFT|U:POLICY_REFUSAL:SOFT": {
+  "authoritative": false,
+  "confidence": 0.5,
+  "conflict": false,
+  "contributing": [],
+  "escalates": true,
+  "outcome": "judgment",
+  "unavailable": [],
+  "verdict": "ABSTAIN"
+ }
+}
