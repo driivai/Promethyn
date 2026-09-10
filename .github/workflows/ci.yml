@@ -190,6 +190,42 @@ jobs:
       - name: PROD-FIX-1 guard reverts (must be caught)
         run: python scripts/prod_fix_1_revert_proofs.py
 
+      - name: PROD-FIX-2 proofs (F8 — no secret reaches a public string)
+        # The canary sweep is the load-bearing half: one token through the
+        # credential fields and a reflecting endpoint that echoes it in a 4xx
+        # body, a 5xx body, a 200 body, a response header and a redirect
+        # hostname, asserted absent from every discovered surface. The sink
+        # regressions are the diagnostic half — a sweep failure says "the canary
+        # is in the ledger file", these say which fix came back.
+        #
+        # Pinned by exact collection per module and zero skips. Every test here
+        # runs on a loopback HTTP server and SQLite: nothing needs a database, a
+        # network or a privileged host, so a skip would mean a proof stopped
+        # running rather than an environment lacking something. The one
+        # importorskip is on psycopg, which is a hard dependency of this job.
+        run: |
+          python -m pytest -q \
+            tests/conformance/test_secret_canary_sweep.py \
+            tests/conformance/test_secret_sink_regressions.py \
+            tests/conformance/test_prod_fix_2_revert_pins.py \
+            --junitxml=prod-fix-2.xml
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          cases = list(ET.parse("prod-fix-2.xml").iter("testcase"))
+          expected = {"test_secret_canary_sweep": 35,
+                      "test_secret_sink_regressions": 16,
+                      "test_prod_fix_2_revert_pins": 6}
+          for module, count in expected.items():
+              actual = sum(c.get("classname", "").endswith(module) for c in cases)
+              assert actual == count, (module, actual, count)
+          assert len(cases) == sum(expected.values())
+          assert all(c.find(t) is None for c in cases for t in ("skipped", "failure", "error"))
+          print(f"PROD-FIX-2: {len(cases)} proofs; zero skips/failures/errors")
+          PY
+
+      - name: PROD-FIX-2 guard reverts (must be caught)
+        run: python scripts/prod_fix_2_revert_proofs.py
+
       - name: Union-handling proofs (exact test NAMES, zero skips)
         # A type fix that satisfies mypy but still crashes at runtime is a void
         # guard: mypy proves the Unavailable branch is WRITTEN, not that it is

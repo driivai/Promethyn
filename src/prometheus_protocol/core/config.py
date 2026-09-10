@@ -17,6 +17,7 @@ from prometheus_protocol.core.anchor_spec import ANCHOR_FILE, parse_anchor_spec
 from prometheus_protocol.core.booleans import parse_env_bool, require_bool
 from prometheus_protocol.core.endpoint import validate_endpoint
 from prometheus_protocol.core.errors import ConfigError
+from prometheus_protocol.core.secrets import Secret, secret_or_none
 from prometheus_protocol.core.validation import (
     require_int_in_range,
     require_non_negative_int,
@@ -32,6 +33,20 @@ PROVIDER_REMOTE = "remote"
 #: The sandbox adapters ``build_sandbox`` knows. Validated at load so an unknown
 #: name fails here, not at the first run.
 SANDBOX_NAMES = ("auto", "namespace", "container", "unsafe")
+
+#: Every field on ``Config`` that holds a credential. Normalised to ``Secret``
+#: in ``__post_init__`` so that construction by ANY route — ``from_env``, a
+#: direct call, ``dataclasses.replace`` — stores the wrapper and therefore
+#: cannot render. A field added to this tuple is redacted by that alone;
+#: ``test_secret_canary_sweep`` discovers credential-shaped fields from the
+#: dataclass itself and fails if one is missing from here, so the tuple cannot
+#: quietly fall behind the class.
+SECRET_FIELDS = (
+    "api_key",
+    "judge_api_key",
+    "ledger_anchor_token",
+    "config_attestation_token",
+)
 
 #: Every Config field that expresses a security requirement or a security bound.
 #:
@@ -109,7 +124,18 @@ class Config:
     provider: str = PROVIDER_MOCK
     api_base: str | None = None
     model: str | None = None
-    api_key: str | None = None
+    #: The actor provider's bearer credential. A ``Secret``, not a ``str``:
+    #: see ``core/secrets.py``. ``repr=False`` would govern one rendering path
+    #: out of five, and ``asdict``/``vars`` ignore it entirely.
+    #:
+    #: ``str`` is ACCEPTED and immediately normalised in ``__post_init__``,
+    #: like ``DbTarget.password``: a caller writing ``Config(api_key=os.
+    #: environ[...])`` should not have to know about the wrapper, and a
+    #: constructor that refused would just move the wrapping outward to
+    #: every call site. What is guaranteed is that the value STORED is a
+    #: ``Secret`` — the annotation names the accepted input, the invariant
+    #: is enforced after it.
+    api_key: Secret | str | None = None
 
     # Soft model-judge advisor. Off by default: it issues model calls and the
     # offline default provider cannot meaningfully judge. ``judge_model``, when
@@ -122,7 +148,7 @@ class Config:
     enable_model_judge: bool = False
     judge_model: str | None = None
     judge_api_base: str | None = None
-    judge_api_key: str | None = None
+    judge_api_key: Secret | str | None = None
     # Judge sampling temperature. Default 0.0 keeps the judge deterministic
     # (unchanged behaviour). It exists so the self-consistency / repeated-
     # sampling calibration lever can draw genuinely varied samples: at
@@ -194,8 +220,9 @@ class Config:
     # (a remote append-only log run by another party). Unset means unanchored,
     # which the runtime warns about on every file-backed ledger it opens.
     ledger_anchor: str | None = None
-    # Bearer credential for the https:// log. Never logged.
-    ledger_anchor_token: str | None = None
+    # Bearer credential for the https:// log. A ``Secret``: it cannot render
+    # through repr, str, an f-string, asdict, vars or json.
+    ledger_anchor_token: Secret | str | None = None
     # Retention requested per record on an object-lock medium. The window is
     # exactly the period over which a rewrite stays detectable; ten years.
     ledger_anchor_retention_days: int = 3650
@@ -235,8 +262,9 @@ class Config:
     # NON-PROTECTING because whoever changes the configuration rewrites it in
     # the same breath, and which the requirement refuses.
     config_attestation_target: str | None = None
-    # Bearer credential for the https:// target. Never logged.
-    config_attestation_token: str | None = None
+    # Bearer credential for the https:// target. A ``Secret``: it cannot render
+    # through repr, str, an f-string, asdict, vars or json.
+    config_attestation_token: Secret | str | None = None
     # Production gate: refuse to run a posture that is not on an external
     # record. Off by default — a development install has no external witness to
     # publish to, exactly as with require_ledger_anchor (§5.4).
@@ -253,7 +281,13 @@ class Config:
         is the failure this project exists to name.
         """
 
-        # Booleans first: a security flag given as "false" is a non-empty
+        # Credentials first: whatever route built this object, the credential
+        # is STORED as a Secret. A plain string here would render through repr,
+        # str, f-strings, asdict and vars alike (F8).
+        for name in SECRET_FIELDS:
+            object.__setattr__(self, name, secret_or_none(getattr(self, name)))
+
+        # Booleans next: a security flag given as "false" is a non-empty
         # string, and bool("false") is True. Refused, not coerced.
         for field_name in BOOLEAN_FIELDS:
             require_bool(getattr(self, field_name), name=field_name)
@@ -386,12 +420,12 @@ class Config:
             provider=env.get("PROM_PROVIDER", PROVIDER_MOCK),
             api_base=env.get("PROM_API_BASE"),
             model=env.get("PROM_MODEL"),
-            api_key=env.get("PROM_API_KEY"),
+            api_key=secret_or_none(env.get("PROM_API_KEY")),
             enable_model_judge=_env_bool(env, "PROM_ENABLE_MODEL_JUDGE"),
             judge_model=env.get("PROM_JUDGE_MODEL"),
             # Empty means unset for both: they then inherit the actor's endpoint.
             judge_api_base=env.get("PROM_JUDGE_API_BASE") or None,
-            judge_api_key=env.get("PROM_JUDGE_API_KEY") or None,
+            judge_api_key=secret_or_none(env.get("PROM_JUDGE_API_KEY")),
             judge_temperature=_as_float(env.get("PROM_JUDGE_TEMPERATURE"), 0.0),
             registry_dir=Path(env.get("PROM_REGISTRY_DIR", ".prometheus/skills")),
             ledger_path=Path(env.get("PROM_LEDGER_PATH", ".prometheus/ledger.db")),
@@ -416,7 +450,7 @@ class Config:
             ),
             # Empty means unanchored, and an empty token means none.
             ledger_anchor=env.get("PROM_LEDGER_ANCHOR") or None,
-            ledger_anchor_token=env.get("PROM_LEDGER_ANCHOR_TOKEN") or None,
+            ledger_anchor_token=secret_or_none(env.get("PROM_LEDGER_ANCHOR_TOKEN")),
             ledger_anchor_retention_days=_as_int(
                 env.get("PROM_LEDGER_ANCHOR_RETENTION_DAYS"), 3650
             ),
@@ -425,6 +459,6 @@ class Config:
             require_verified_substrate=_env_bool(env, "PROM_REQUIRE_VERIFIED_SUBSTRATE"),
             allow_unverified_substrate=_env_bool(env, "PROM_ALLOW_UNVERIFIED_SUBSTRATE"),
             config_attestation_target=env.get("PROM_CONFIG_ATTESTATION_TARGET") or None,
-            config_attestation_token=env.get("PROM_CONFIG_ATTESTATION_TOKEN") or None,
+            config_attestation_token=secret_or_none(env.get("PROM_CONFIG_ATTESTATION_TOKEN")),
             require_config_attestation=_env_bool(env, "PROM_REQUIRE_CONFIG_ATTESTATION"),
         )

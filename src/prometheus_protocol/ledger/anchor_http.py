@@ -47,7 +47,14 @@ import time
 import urllib.error
 import urllib.request
 
+from prometheus_protocol.core.diagnostics import (
+    Diagnostic,
+    http_reason,
+    origin_of,
+    raise_bounded,
+)
 from prometheus_protocol.core.endpoint import validate_endpoint
+from prometheus_protocol.core.secrets import Secret, secret_or_none
 from prometheus_protocol.core.transport import (
     DeadlineRequest,
     TransportErrors,
@@ -120,7 +127,7 @@ class HttpAppendOnlyLog:
         self,
         url: str,
         *,
-        token: str | None = None,
+        token: str | Secret | None = None,
         timeout_s: float = 10.0,
         max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
         allow_insecure_loopback: bool = False,
@@ -130,7 +137,9 @@ class HttpAppendOnlyLog:
         self.url = validate_endpoint(
             url, name="ledger_anchor", allow_insecure_loopback=allow_insecure_loopback
         ).rstrip("/")
-        self._token = token
+        # F8/A2 — STORED as a Secret, whatever it arrived as. A raw attribute
+        # renders through `vars(log)` however careful __repr__ is.
+        self._token = secret_or_none(token)
         self.timeout_s = require_positive(timeout_s, name="timeout_s")
         self.max_response_bytes = require_int_in_range(
             max_response_bytes, name="max_response_bytes", minimum=1024, maximum=1 << 30
@@ -178,13 +187,20 @@ class HttpAppendOnlyLog:
     # -- transport -----------------------------------------------------------
 
     def _exchange(self, method: str, url: str, *, body: bytes | None = None) -> dict:
-        # The URL only — the token is never logged.
+        # F8/C — this line used to claim "the token is never logged". True of
+        # this line, false of the module: the token reached diagnostics through
+        # the failure path, which quoted the anchor's response body, not through
+        # the logger. What holds now is that `self._token` is a `Secret` (no
+        # rendering path emits it) and that every failure below is built from a
+        # bounded Diagnostic, so no upstream byte becomes a message. The
+        # residual is `reveal()` below: the plaintext is in this frame and in
+        # the request headers, in use.
         _LOG.debug("%s %s", method, url)
         headers = {"Accept": "application/json"}
         if body is not None:
             headers["Content-Type"] = "application/json"
-        if self._token:
-            headers["Authorization"] = f"Bearer {self._token}"
+        if self._token is not None:
+            headers["Authorization"] = f"Bearer {self._token.reveal()}"
         request = DeadlineRequest(url, data=body, headers=headers, method=method)
 
         # One monotonic deadline for DNS, TCP/TLS, writes, headers and body.
@@ -193,35 +209,75 @@ class HttpAppendOnlyLog:
         request.prom_deadline = deadline
         try:
             response = self._opener.open(request, timeout=self.timeout_s)
+        # F8/A1+A3 — same two rules as ``provider/remote.py``: a bounded
+        # diagnostic instead of a quoted body, and a raise OUTSIDE the except
+        # block so ``raise_bounded`` can sever __context__. The old message
+        # pasted 500 characters of the anchor's error body into an
+        # AnchorUnavailable that reaches chain-verification diagnostics — "the
+        # configured tip anchor could not be read: ... Bearer <token>".
         except AnchorUnavailable:
             raise
         except urllib.error.HTTPError as exc:
-            try:
-                quoted = read_bounded(
-                    exc, deadline, limit=_ERROR_BODY_BYTES, timeout_s=self.timeout_s,
-                    errors=_ERRORS,
-                )
-                detail = quoted.decode("utf-8", "replace")[:500]
-            except AnchorUnavailable as inner:
-                detail = f"<error body not read: {inner}>"
-            finally:
-                exc.close()
-            raise AnchorUnavailable(
-                f"anchor log returned HTTP {exc.code} to {method}: {detail}"
-            ) from exc
+            translated: Exception | None = self._http_failure(exc, deadline)
         except Exception as exc:
             classified = classify_open_error(exc, timeout_s=self.timeout_s, errors=_ERRORS)
             if classified is None:
                 raise
-            raise classified from exc
+            translated = classified
+        else:
+            translated = None
+        if translated is not None:
+            raise_bounded(translated)
 
         with response:
             if response.status not in ({200, 201} if method == "POST" else {200}):
+                # Not ``http_reason``: a 202 is a well-formed answer that this
+                # protocol does not accept, which is a different thing from a
+                # malformed one and an operator needs to tell them apart.
                 raise AnchorUnavailable(
-                    f"anchor log returned unexpected HTTP {response.status} to {method}"
+                    Diagnostic(
+                        "unexpected_status",
+                        {"status": int(response.status), **self._where(method)},
+                    ).message()
                 )
             raw = read_bounded(
                 response, deadline, limit=self.max_response_bytes,
                 timeout_s=self.timeout_s, errors=_ERRORS,
             )
         return _json_object(raw)
+
+    def _where(self, method: str) -> dict[str, object]:
+        """Bounded context: the CONFIGURED anchor origin and what we were doing."""
+
+        return {
+            "endpoint": origin_of(self.url),
+            "operation": "anchor.write" if method == "POST" else "anchor.read",
+        }
+
+    def _http_failure(self, exc: "urllib.error.HTTPError", deadline: float) -> Exception:
+        """An HTTP status from the anchor, as a bounded diagnostic.
+
+        The body is still drained under bounds — an error page can be a bomb,
+        and an undrained one leaks a connection — and none of it is kept. An
+        unreadable body reports no ``bytes_read``, which is how an operator
+        tells "the anchor answered 500 with a page" from "the anchor answered
+        500 and the body was malformed too".
+        """
+
+        body_bytes = -1
+        try:
+            body_bytes = len(read_bounded(
+                exc, deadline, limit=_ERROR_BODY_BYTES, timeout_s=self.timeout_s,
+                errors=_ERRORS,
+            ))
+        except AnchorUnavailable:
+            body_bytes = -1
+        finally:
+            exc.close()
+
+        context: dict[str, object] = {"status": int(exc.code)}
+        if body_bytes >= 0:
+            context["bytes_read"] = body_bytes
+        return AnchorUnavailable(
+            Diagnostic(http_reason(exc.code), context).message()
+        )

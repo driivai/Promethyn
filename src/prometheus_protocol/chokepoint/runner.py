@@ -117,6 +117,7 @@ from prometheus_protocol.chokepoint.substrate import (
 )
 from prometheus_protocol.core.booleans import parse_env_bool, require_bool
 from prometheus_protocol.core.errors import ConfigError
+from prometheus_protocol.core.secrets import Secret
 
 _LOG = logging.getLogger(__name__)
 
@@ -319,25 +320,40 @@ class DbTarget:
     """Connection coordinates for the target DB. The password is the credential
     the runner exclusively holds; ``identity`` is what an approval binds to.
 
-    ``password`` is excluded from ``repr``. A dataclass renders every field by
-    default, so the credential appeared verbatim in any log line, f-string,
-    traceback frame or crash report that touched a target — turning "someone can
-    read a log" into "someone has the production database credential". Redaction
-    is not defence in depth here so much as not handing the blast radius away for
-    free; the credential is reached only through the field itself, which the two
-    connect sites use and nothing else does.
+    ``password`` is held as a :class:`~prometheus_protocol.core.secrets.Secret`,
+    not as a ``str``, and F8 is why. This class already carried
+    ``field(repr=False)`` and a ``__str__`` returning the identity — both worked,
+    and the credential still came out::
+
+        CANARY in repr(target)                          # False
+        CANARY in str(target)                           # False
+        CANARY in json.dumps(asdict(target), default=str)   # True   <-- leaked
+
+    ``dataclasses.asdict`` does not consult ``field.repr``; it reads the value.
+    So does ``vars``. Redaction that lives in the CONTAINER governs one path at a
+    time and has to be remembered on each; redaction that lives in the VALUE
+    governs all of them, and keeps governing them for a field somebody adds next
+    year. ``__post_init__`` accepts a plain string and normalises it, so every
+    existing construction site is unchanged.
     """
 
     host: str
     port: int
     dbname: str
     user: str
-    password: str = field(repr=False)
+    #: Accepted as ``str`` for convenience, always STORED as ``Secret``.
+    password: Secret | str = field(repr=False)
     schema: str = "public"
     #: Optional: fetch the credential per use instead of holding one.
     password_provider: Callable[[], str] | None = field(
         default=None, repr=False, compare=False
     )
+
+    def __post_init__(self) -> None:
+        # Normalise at the boundary so no caller has to remember. Frozen
+        # dataclass, hence object.__setattr__.
+        if not isinstance(self.password, Secret):
+            object.__setattr__(self, "password", Secret(self.password))
 
     def __str__(self) -> str:
         return self.identity.canonical
@@ -361,7 +377,15 @@ class DbTarget:
 
         if self.password_provider is not None:
             return self.password_provider()
-        return self.password
+        # Narrowed, not asserted. `__post_init__` guarantees the Secret, but an
+        # `assert` is stripped under `python -O` — a production invariant must
+        # not depend on assertions being enabled. Either branch returns the
+        # right value; the invariant itself is proven behaviourally by the
+        # canary sweep, which constructs this class and checks what is STORED.
+        password = self.password
+        if isinstance(password, Secret):
+            return password.reveal()
+        return password
 
     @property
     def identity(self) -> MigrationTarget:
@@ -405,7 +429,9 @@ class MigrationRunnerConfig:
 
     target: DbTarget
     approval_store_path: str | Path
-    signing_key: bytes | None = field(default=None, repr=False)
+    #: Accepted as ``bytes`` for convenience, always STORED as a ``Secret``
+    #: (F8). ``repr=False`` governed repr alone; asdict and vars read the value.
+    signing_key: Secret | bytes | None = field(default=None, repr=False)
     signer: ApprovalSigner | None = field(default=None, repr=False)
     require_external_signer: bool = False
     require_verified_substrate: bool = False
@@ -414,6 +440,8 @@ class MigrationRunnerConfig:
     def __post_init__(self) -> None:
         if not isinstance(self.target, DbTarget):
             raise TypeError("migration runner target must be a DbTarget")
+        if self.signing_key is not None and not isinstance(self.signing_key, Secret):
+            object.__setattr__(self, "signing_key", Secret(self.signing_key))
         for flag in (
             "require_external_signer",
             "require_verified_substrate",
@@ -426,7 +454,9 @@ class MigrationRunnerConfig:
                 "non-protecting) or signer (external)"
             )
         if self.signing_key is not None and (
-            not isinstance(self.signing_key, bytes) or len(self.signing_key) < 32
+            not isinstance(self.signing_key, Secret)
+            or not isinstance(self.signing_key.reveal(), bytes)
+            or len(self.signing_key) < 32
         ):
             raise ValueError("migration runner signing key must be at least 32 bytes")
         if self.signer is not None and not (
@@ -2222,7 +2252,7 @@ class SignerRequest(Protocol):
     def signer(self) -> ApprovalSigner | None: ...
 
     @property
-    def signing_key(self) -> bytes | None: ...
+    def signing_key(self) -> Secret | bytes | None: ...
 
     @property
     def require_external_signer(self) -> bool: ...
@@ -2251,8 +2281,19 @@ def resolve_signer(
     )
     if config.signer is not None:
         signer = config.signer
+    elif config.signing_key is not None:
+        # Normalised to a Secret by MigrationRunnerConfig.__post_init__; a
+        # bespoke SignerRequest may still hand over raw bytes.
+        key = config.signing_key
+        # Narrowed in STATEMENT form, not a ternary: the type gate refuses
+        # expression-position isinstance because a union narrowed inside an
+        # expression is invisible to the reader and to assert_never.
+        if isinstance(key, Secret):
+            signer = LocalHmacSigner(key.reveal())
+        else:
+            signer = LocalHmacSigner(key)
     else:
-        signer = LocalHmacSigner(config.signing_key)
+        raise ConfigError("a signer or a signing key is required")
     if required and not getattr(signer, "external", False):
         raise ConfigError(
             "an external approval signer is required "

@@ -45,10 +45,18 @@ import urllib.request
 from typing import Sequence
 
 from prometheus_protocol.core.config import Config
+from prometheus_protocol.core.diagnostics import (
+    Diagnostic,
+    decoder_diagnostic,
+    http_reason,
+    origin_of,
+    raise_bounded,
+)
 from prometheus_protocol.core.endpoint import validate_endpoint
 from prometheus_protocol.core.errors import ConfigError
 from prometheus_protocol.core.interfaces import Provider
 from prometheus_protocol.core.models import Skill
+from prometheus_protocol.core.secrets import Secret, secret_or_none
 from prometheus_protocol.core.transport import (
     DeadlineRequest,
     TransportErrors,
@@ -153,7 +161,7 @@ class RemoteModelProvider(Provider):
         *,
         api_base: str,
         model: str,
-        api_key: str | None = None,
+        api_key: str | Secret | None = None,
         timeout_s: float = 30.0,
         system_prompt: str = _DEFAULT_SYSTEM_PROMPT,
         assess_temperature: float = 0.0,
@@ -170,7 +178,12 @@ class RemoteModelProvider(Provider):
             api_base, name="api_base", allow_insecure_loopback=allow_insecure_loopback
         ).rstrip("/")
         self.model = model
-        self.api_key = api_key
+        # F8/A2 — STORED as a Secret, whatever it arrived as. This class has no
+        # custom __repr__ to defeat, so before this the key rendered through
+        # `vars(provider)` and any json.dumps of it. A plain class is not
+        # covered by the dataclass-field discovery sweep, which is why the
+        # sweep now also reads assignments (test_secret_canary_sweep.py).
+        self.api_key = secret_or_none(api_key)
         self.timeout_s = require_positive(timeout_s, name="timeout_s")
         self.max_response_bytes = require_int_in_range(
             max_response_bytes,
@@ -195,6 +208,8 @@ class RemoteModelProvider(Provider):
         return cls(
             api_base=config.api_base or "",
             model=config.model or "",
+            # Passed as the Secret it already is; no unwrap-and-rewrap, so
+            # there is one fewer frame holding the plaintext.
             api_key=config.api_key,
             timeout_s=config.request_timeout_s,
             allow_insecure_loopback=config.allow_insecure_loopback,
@@ -219,8 +234,17 @@ class RemoteModelProvider(Provider):
         data = self._post("/chat/completions", payload)
         try:
             content = data["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError) as exc:
-            raise ProviderMalformedResponse(f"unexpected response shape: {exc}") from exc
+        except (KeyError, IndexError, TypeError):
+            # The exception text is not quoted: a KeyError's str is the missing
+            # key, which is ours, but an IndexError's or TypeError's can quote a
+            # value the endpoint chose.
+            shape_failure: ProviderMalformedResponse | None = ProviderMalformedResponse(
+                Diagnostic("response_shape", self._where()).message()
+            )
+        else:
+            shape_failure = None
+        if shape_failure is not None:
+            raise_bounded(shape_failure)
         return _extract_code(content)
 
     def assess(self, *, prompt: str, system: str | None = None) -> str:
@@ -243,66 +267,161 @@ class RemoteModelProvider(Provider):
         data = self._post("/chat/completions", payload)
         try:
             content = data["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError) as exc:
-            raise ProviderMalformedResponse(f"unexpected response shape: {exc}") from exc
+        except (KeyError, IndexError, TypeError):
+            shape_failure: ProviderMalformedResponse | None = ProviderMalformedResponse(
+                Diagnostic("response_shape", self._where()).message()
+            )
+        else:
+            shape_failure = None
+        if shape_failure is not None:
+            raise_bounded(shape_failure)
         if not isinstance(content, str):
-            raise ProviderMalformedResponse("response content is not a string")
+            raise ProviderMalformedResponse(
+                Diagnostic("content_not_string", self._where()).message()
+            )
         return content
 
     # -- transport ---------------------------------------------------------
 
     def _post(self, path: str, payload: dict) -> dict:
         url = self.api_base + path
-        # Endpoint and model only — the API key is never logged.
+        # F8/C — this line used to claim "the API key is never logged", which
+        # was true of THIS line and false of the module. The log statement was
+        # never where the credential went; the exception path was, because the
+        # failure message quoted the endpoint's response body and an endpoint
+        # that echoes Authorization put the bearer token straight into it.
+        #
+        # What holds now, and what does not:
+        #   * this line names the endpoint and the model, and nothing else;
+        #   * `self.api_key` is a `Secret`, so no rendering of it — repr, str,
+        #     f-string, asdict, vars, json.dumps — can emit the value, and a
+        #     credential-shaped field added to this class later that is NOT a
+        #     Secret fails the discovery sweep in test_secret_canary_sweep.py;
+        #   * the failure paths below build messages from a bounded Diagnostic,
+        #     so no upstream byte reaches a log record, an exception message or
+        #     an evidence record at all.
+        # The residual is `reveal()` on the next lines: the plaintext exists in
+        # this frame and in the request headers, and travels under TLS to the
+        # configured endpoint. That is the credential being USED, and no
+        # redaction discipline removes it.
         _LOG.debug("POST %s (model=%s)", url, self.model)
         body = json.dumps(payload).encode("utf-8")
         headers = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
+        if self.api_key is not None:
+            headers["Authorization"] = f"Bearer {self.api_key.reveal()}"
         request = DeadlineRequest(url, data=body, headers=headers, method="POST")
 
         # One monotonic deadline for DNS, TCP/TLS, writes, headers and body.
         # Pass it to the transport before opener.open begins network work.
         deadline = time.monotonic() + self.timeout_s
         request.prom_deadline = deadline
+        # F8/A1+A3 — TRANSLATE INSIDE the handler, RAISE OUTSIDE it. Two rules
+        # are at work and both are load-bearing:
+        #
+        #   * the message is built from a bounded Diagnostic, never from bytes
+        #     the endpoint sent. The old code quoted 500 characters of the error
+        #     body, so an endpoint that echoes the Authorization header put the
+        #     bearer token into the exception message — and from there into logs,
+        #     Unavailable.detail and the ledger;
+        #   * the raise happens after the except block has ended, so
+        #     ``raise_bounded`` can sever __context__. ``raise ... from exc`` kept
+        #     the HTTPError — with its headers object and its url — reachable on
+        #     the chain, and ``from None`` would not have severed it either.
+        translated: Exception | None = None
         try:
             response = self._opener.open(request, timeout=self.timeout_s)
         except ProviderError:
+            # Already bounded by this layer on the way up.
             raise
         except urllib.error.HTTPError as exc:
-            # The error body is quoted in the message, so it is read under the
-            # same bounds as a success body: an error page can be a bomb too.
-            try:
-                quoted = self._read_bounded(exc, deadline, limit=_ERROR_BODY_BYTES)
-                detail = quoted.decode("utf-8", "replace")[:500]
-            except ProviderTimeout:
-                raise
-            except ProviderError as inner:
-                detail = f"<error body not read: {type(inner).__name__}>"
-            finally:
-                exc.close()
-            raise ProviderHTTPError(
-                exc.code, f"endpoint returned HTTP {exc.code}: {detail}"
-            ) from exc
+            translated = self._http_failure(exc, deadline)
         except Exception as exc:
             classified = classify_open_error(exc, timeout_s=self.timeout_s, errors=_ERRORS)
             if classified is None:
                 raise
-            raise classified from exc
+            translated = classified
+        if translated is not None:
+            raise_bounded(translated)
 
         with response:
             raw = self._read_bounded(response, deadline, limit=self.max_response_bytes)
+
+        failure: Exception | None = None
+        text = ""
         try:
             text = raw.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise ProviderMalformedResponse("endpoint returned a non-UTF-8 body") from exc
+        except UnicodeDecodeError:
+            # The undecodable bytes are NOT quoted: a length is enough to tell
+            # "the endpoint sent binary" from "the endpoint sent nothing".
+            failure = ProviderMalformedResponse(
+                Diagnostic("body_not_utf8", {"bytes_read": len(raw), **self._where()})
+                .message()
+            )
+        if failure is not None:
+            raise_bounded(failure)
+
+        data: object = None
         try:
             data = json.loads(text)
         except ValueError as exc:
-            raise ProviderMalformedResponse(f"endpoint returned non-JSON body: {exc}") from exc
+            # F8/A6 — the DECODER OBJECT never surfaces. json.JSONDecodeError
+            # carries ``.doc``, the entire document; ``str(exc)`` happens to show
+            # only a position, which is why chaining it looked harmless. The
+            # position and the length are integers this side computed.
+            failure = ProviderMalformedResponse(
+                decoder_diagnostic(exc, document_bytes=len(raw)).message()
+            )
+        if failure is not None:
+            raise_bounded(failure)
+
         if not isinstance(data, dict):
-            raise ProviderMalformedResponse("endpoint returned JSON that is not an object")
+            raise ProviderMalformedResponse(
+                Diagnostic("body_not_object", {"bytes_read": len(raw), **self._where()})
+                .message()
+            )
         return data
+
+    def _where(self) -> dict[str, object]:
+        """The bounded context every diagnostic from this provider carries.
+
+        The CONFIGURED origin — set by the operator, never a host that arrived in
+        a response — plus a literal operation label. Together they let an
+        operator say WHICH provider failed and doing WHAT, which is most of what
+        the quoted body used to be doing.
+        """
+
+        return {"endpoint": origin_of(self.api_base), "operation": "chat.completions"}
+
+    def _http_failure(self, exc: "urllib.error.HTTPError", deadline: float) -> Exception:
+        """Translate an HTTP error status into a bounded diagnostic.
+
+        The error body is still READ under the same bounds as a success body —
+        an error page can be a bomb too, and leaving it undrained would leak a
+        connection — but NONE of it is kept. Only the count survives, and the
+        count is a number this process incremented.
+        """
+
+        body_bytes = -1
+        timed_out = False
+        try:
+            body_bytes = len(self._read_bounded(exc, deadline, limit=_ERROR_BODY_BYTES))
+        except ProviderTimeout:
+            timed_out = True
+        except ProviderError:
+            body_bytes = -1
+        finally:
+            exc.close()
+
+        if timed_out:
+            # A deadline that passed while draining an error body is a timeout,
+            # and it is reported as one rather than as the status.
+            return ProviderTimeout(
+                Diagnostic("timeout", {"status": int(exc.code), **self._where()}).message()
+            )
+        context: dict[str, object] = {"status": int(exc.code), **self._where()}
+        if body_bytes >= 0:
+            context["bytes_read"] = body_bytes
+        return ProviderHTTPError(exc.code, Diagnostic(http_reason(exc.code), context).message())
 
     def _read_bounded(self, stream, deadline: float, *, limit: int) -> bytes:
         """Read a body under ``limit`` bytes and before ``deadline``; refused,

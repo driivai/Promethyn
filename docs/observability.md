@@ -33,6 +33,37 @@ never executed" answerable from the ledger alone (`executions_for_pending`),
 which the `retry-execution` verb's eligibility check relies on; `NULL` for
 auto-approved/blocked rows and for rows written before the link existed.
 
+## What `detail` contains, and what it deliberately does not (F8)
+
+A judge result's `Evidence.detail` used to be the model's reply, verbatim. It is
+now a bounded classification:
+
+```
+judge_verdict verdict=PASS response_chars=412 confidence=0.9
+```
+
+and a failure is a reason code plus non-attacker-influenced context
+(`unavailable operation=judge.assess error_type=ProviderTimeout`, `timeout
+elapsed_ms=30000`, `http_unauthorized status=401 endpoint=https://api.example`).
+The reason: the judge feeds candidate text to a remote endpoint and its reply
+was being written into a permanent, signed, replicated record — an endpoint that
+echoed the `Authorization` header put the bearer token into the ledger. See
+`docs/security-model.md`, "Threat: a secret reaching a diagnostic".
+
+**For queries this is a gain, not a loss.** The parts an operator filtered on —
+the verdict and the confidence — are first-class columns as described above, and
+the `detail` string is now a stable, greppable, closed vocabulary rather than
+free prose. `verdict=` and `confidence=` are parsed at the boundary, so
+calibration reads a number this process range-checked rather than re-parsing
+remote text.
+
+**What is gone: the model's actual words.** If you were reading `detail` to see
+*why* a judge said FAIL, that is no longer there and is not recoverable from the
+ledger. Diagnosing a specific judgement means reproducing the call against the
+endpoint, where the reply is not being written into a permanent record. Rows
+written before this change still hold raw text; the format change is not
+retroactive, and a ledger with history from both sides of it contains both.
+
 ## Migration and backfill
 
 Opening the ledger ensures the columns and indexes exist (an additive, idempotent

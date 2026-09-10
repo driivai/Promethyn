@@ -102,6 +102,8 @@ def build_judge_provider(
             return RemoteModelProvider(
                 api_base=config.judge_api_base or config.api_base or "",
                 model=config.judge_model or "",
+                # Passed as the Secret it already is: no unwrap-and-rewrap,
+                # so there is one fewer frame holding the plaintext (F8).
                 api_key=(
                     config.judge_api_key
                     if config.judge_api_key is not None

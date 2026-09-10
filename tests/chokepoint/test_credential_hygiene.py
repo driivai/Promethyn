@@ -137,7 +137,10 @@ def test_a_provider_is_consulted_instead_of_a_stored_credential():
 
 def test_a_provider_backed_target_stores_no_credential():
     target = _target(password="", password_provider=lambda: PASSWORD)
-    assert target.password == ""
+    # Stored as a Secret since F8, so compare through the audited exit rather
+    # than against a raw string — and assert the redaction while we are here.
+    assert target.password.reveal() == ""
+    assert "Secret(<redacted>)" == repr(target.password)
     assert PASSWORD not in repr(target)
     # An idle runner configured this way holds nothing worth stealing in the
     # object graph; the secret exists only for the length of a connect call.

@@ -439,9 +439,20 @@ same shell, which is precisely what `demo/README.md` tells an operator to do.
 - **Shared directories are refused, not re-permissioned.** The sticky bit is the
   kernel's own marker for a communal drop-box, so a sticky directory is rejected
   as a workspace outright.
-- **Secrets do not render.** `password` and `signing_key` are `repr=False`;
-  `DbTarget.__str__` returns the credential-free canonical identity, so logging a
-  target still tells an operator which database was touched.
+- **Secrets do not render.** `password` and `signing_key` are `Secret` values,
+  so no rendering path emits them — `repr`, `str`, f-string, `asdict`, `vars`,
+  and `json.dumps`, which fails closed rather than emitting. `DbTarget.__str__`
+  still returns the credential-free canonical identity, so logging a target
+  tells an operator which database was touched.
+
+  *This bullet previously read "`password` and `signing_key` are `repr=False`",
+  and that was an overclaim of the kind F8 exists to remove.* `repr=False` was
+  in place and `asdict(DbTarget)` returned the password in clear anyway, because
+  `asdict` does not consult `field.repr`. A per-path opt-out closes the paths
+  someone enumerated; the wrapper type closes the ones nobody did, and protects
+  a field added later by default. See `docs/security-model.md`, "Threat: a
+  secret reaching a diagnostic", for the full statement and its residuals —
+  which include that `reveal()` at the point of use, and pickling, are real.
 - **No adapter inherits the runner environment.** `candidate_env` moved to the
   sandbox port (`base.py`) and every spawning adapter uses it, so the fix is not
   one adapter away from being wrong again.

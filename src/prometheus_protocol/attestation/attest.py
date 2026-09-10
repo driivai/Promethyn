@@ -66,6 +66,7 @@ from prometheus_protocol.core.anchor_spec import (
     AnchorSpec,
 )
 from prometheus_protocol.core.errors import ConfigError
+from prometheus_protocol.core.secrets import Secret
 from prometheus_protocol.ledger.anchor_targets import (
     DEFAULT_RETENTION_S,
     AppendOnlyLog,
@@ -386,7 +387,7 @@ class LocalFileAttestationTarget:
 def build_attestation_target(
     spec: AnchorSpec,
     *,
-    token: str | None = None,
+    token: str | Secret | None = None,
     retain_for_s: float = DEFAULT_RETENTION_S,
     timeout_s: float = 10.0,
     allow_insecure_loopback: bool = False,
