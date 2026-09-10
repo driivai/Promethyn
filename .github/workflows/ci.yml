@@ -157,6 +157,39 @@ jobs:
       - name: Config attestation guard reverts (must be caught)
         run: python scripts/pih4a_revert_proofs.py
 
+      - name: PROD-FIX-1 proofs (approval expiry, attestation chronology, hostname taxonomy)
+        # F7's phase table, P-1's equal-time and rollback cases, and P-2's
+        # hostname normalisation. Pinned by exact collection per module and zero
+        # skips: none of these needs a database or a privileged host, so a skip
+        # here would mean a proof stopped running, not that the environment
+        # lacked something. (The PostgreSQL-backed half of F7's second admission
+        # boundary lives in the live step below, where PROM_REQUIRE_PG=1 turns a
+        # skip into a failure.)
+        run: |
+          python -m pytest -q \
+            tests/chokepoint/test_approval_expiry_across_preparation.py \
+            tests/conformance/test_attestation_chronology.py \
+            tests/conformance/test_unicode_hostname_taxonomy.py \
+            tests/conformance/test_prod_fix_1_revert_pins.py \
+            --junitxml=prod-fix-1.xml
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          cases = list(ET.parse("prod-fix-1.xml").iter("testcase"))
+          expected = {"test_approval_expiry_across_preparation": 46,
+                      "test_attestation_chronology": 14,
+                      "test_unicode_hostname_taxonomy": 30,
+                      "test_prod_fix_1_revert_pins": 5}
+          for module, count in expected.items():
+              actual = sum(c.get("classname", "").endswith(module) for c in cases)
+              assert actual == count, (module, actual, count)
+          assert len(cases) == sum(expected.values())
+          assert all(c.find(t) is None for c in cases for t in ("skipped", "failure", "error"))
+          print(f"PROD-FIX-1: {len(cases)} proofs; zero skips/failures/errors")
+          PY
+
+      - name: PROD-FIX-1 guard reverts (must be caught)
+        run: python scripts/prod_fix_1_revert_proofs.py
+
       - name: Union-handling proofs (exact test NAMES, zero skips)
         # A type fix that satisfies mypy but still crashes at runtime is a void
         # guard: mypy proves the Unavailable branch is WRITTEN, not that it is

@@ -1044,8 +1044,8 @@ object-locked bucket, `AppendOnlyLog` for a log run by another party). There is
 no second signing path and no second publishing path.
 
 **What it detects: a silent posture downgrade, by an external witness.** At
-startup and on a cadence, `attestation/` computes a digest of the
-**resolved** posture, signs it, and publishes it. `prometheus-protocol
+startup — and again whenever the integrator calls it — `attestation/` computes a
+digest of the **resolved** posture, signs it, and publishes it. `prometheus-protocol
 verify-config` then answers one of three things: **ATTESTED** (the signature is
 valid under the pinned public key *and* the digest equals the live resolved
 posture), **MISMATCH** (valid signature, different posture — the
@@ -1087,8 +1087,17 @@ posture is on no external record, and the runtime continues — attestation is
 then an optional witness, and turning an optional witness's outage into a hard
 availability failure is the worse trade. No background thread does the cadence:
 a thread that publishes and swallows what it catches is precisely the shape this
-control exists to prevent, so the cadence is a method the caller drives and
-every failure reaches that caller.
+control exists to prevent, so every failure reaches the caller.
+
+**Re-attestation on a cadence is an INTEGRATION OBLIGATION, not a guarantee this
+product provides.** `ConfigAttestor.attest_if_due()` publishes when the interval
+has elapsed *when it is called*, and nothing in this repository calls it on a
+timer — there is no product-level scheduler. An integrator who never calls it
+gets the startup attestation and nothing more, and the record ages silently. It
+is written this way deliberately (a self-driving thread that swallowed its own
+failures would be the void-guard shape), but "on a cadence" must not be read as
+a property the runtime upholds by itself. Driving `attest_if_due()` — and
+surfacing what it raises — is the integrator's to do.
 
 **The external-target trust boundary is §3.4's, unchanged.** The witness is
 worth what the medium's refusal to be rewritten is worth: an object-lock bucket

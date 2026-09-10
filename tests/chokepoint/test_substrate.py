@@ -366,7 +366,13 @@ class _SpyExecutor:
         self._calls = calls
 
     def __call__(
-        self, sql: str, target: DbTarget, execution_id: str, artifact_sha256: str
+        self,
+        sql: str,
+        target: DbTarget,
+        execution_id: str,
+        artifact_sha256: str,
+        *,
+        deadline: object = None,
     ) -> tuple[bool, str]:
         self._calls.append((sql, target, execution_id, artifact_sha256))
         # Legacy (False, detail) is UNKNOWN, never proof of rollback — which is

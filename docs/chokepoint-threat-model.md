@@ -144,14 +144,43 @@ test (a check tested only on the happy path is itself a void guard):
   concurrent drivers cannot both execute and a restart cannot forget a spent approval.
   Spent nonces are intentionally retained rather than pruned: deleting one could revive a
   replay if the host wall clock later moved backward into that approval's validity window.
-- **P6 — Expiry.** Approvals are short-lived; past the TTL they are refused
-  (**expired-fails**). Default TTL: **90 seconds** — the clock starts after human or
-  automated authorization, so it covers only the approval-to-execution hop. Exact-boundary,
-  non-finite-time, and serialization tests keep the deadline fail-closed.
+- **P6 — Expiry.** Approvals are short-lived. Default TTL: **90 seconds** — the clock
+  starts after human or automated authorization, so it covers only the
+  approval-to-execution hop.
+
+  **Corrected (F7).** This used to read "past the TTL they are refused". It was checked
+  ONCE, at the start of the runner's execute path, and everything after that sample —
+  ownership substrate checks, reconciliation (a remote anchor history read, a full chain
+  recompute, a receipt lookup per unresolved intent), the nonce claim under a 30-second
+  busy timeout, the ledger append, and intent anchor publication (four HTTP exchanges
+  against an https anchor) — ran unbounded. An independent review reproduced an approval
+  expiring at t=1001 executing at t=5000 with `executed=True` and `state=committed`.
+
+  What is now true: an invocation fixes ONE deadline from the validity remaining when it
+  begins, on two clocks (the signed wall-clock expiry and a fixed elapsed deadline from a
+  suspend-aware source), and re-checks it before the nonce claim, before the durable
+  intent, before calling the executor, before the executor opens any credentialed
+  connection, and again after its two blocking advisory locks. The ruled policy is **no
+  privileged database contact after expiry**. See `admission.py` for the clock model,
+  including the declared clock uncertainty and the refusal when UTC is untrusted.
+
+  **What this does not claim.** Not atomicity between a Python clock check and database
+  execution: the process can be descheduled after a check passes. A strict database-side
+  admission guarantee needs a database-side mechanism with its own clock and trust model,
+  and this is not one. The narrow, true statement is that no credentialed connection is
+  opened and no migration statement is sent after a check that has already failed.
 - **P7 — Unforgeable approval.** The approval cannot be produced by the agent zone (§4.3).
 - **P8 — Fail closed.** Any ambiguity — an `Unavailable` verifier, an unbound / expired /
   replayed / mismatched approval, a runner that cannot confirm the target — results in the
-  migration **not running**. There is no fail-open branch anywhere in the chain.
+  migration **not being started**. There is no fail-open branch anywhere in the chain.
+
+  **Corrected (F7).** This used to read "results in the migration not running", which
+  overstates it in one direction that matters: once the executor has been entered, an
+  ambiguity does not establish that nothing ran. A timeout, a cancellation and an expiry
+  are each consistent with a transaction that committed and whose reply was lost. Those
+  outcomes stay UNKNOWN, keep the durable intent unresolved and the nonce spent, and are
+  settled only by an acknowledged rollback or a receipt-based reconciliation — never by
+  relabelling "expired" as "rolled back".
 - **P9 — Tamper-evident ledger.** The audit trail is a hash chain: each entry carries the
   prior entry's hash, so any retroactive edit or deletion is detectable by a verifier that
   walks the chain and reports the first broken link. The runner must commit an execution
