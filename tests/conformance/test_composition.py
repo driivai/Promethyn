@@ -38,7 +38,7 @@ from prometheus_protocol.core.models import (
 )
 from prometheus_protocol.execution.controller import ExecutionController
 from prometheus_protocol.execution.executor import SandboxExecutor
-from prometheus_protocol.gate.authorization import ActionGate
+from prometheus_protocol.gate.authorization import ActionGate, OUTCOME_UNAVAILABLE
 from prometheus_protocol.gate.promotion import OUTCOME_BLOCK
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
 from prometheus_protocol.orchestration import (
@@ -222,7 +222,11 @@ def test_high_composed_confidence_cannot_execute_a_soft_action():
     # Yet the soft action is BLOCKED, and nothing executed — the composed number
     # granted no authority.
     softact = next(s for s in run.steps if s.step_id == "softact")
-    assert softact.outcome == OUTCOME_BLOCK
+    # CHECKPOINT 3 — refused at COVERAGE, not the gate. Three high-confidence
+    # HARD steps still cannot lend authority to a SOFT one; the policy now
+    # refuses the soft grader as a permitted implementation before the gate is
+    # reached. The composition property is unchanged: nothing executes.
+    assert softact.outcome == OUTCOME_UNAVAILABLE
     assert ledger.executions() and all(not e["executed"] for e in ledger.executions())
     assert run.executed_subject_ids == ()
 

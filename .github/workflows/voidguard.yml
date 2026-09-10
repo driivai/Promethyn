@@ -47,6 +47,10 @@ on:
       - "tests/conformance/test_secret_sink_regressions.py"
       - "scripts/phase_1_2a_revert_proofs.py"
       - "scripts/phase_1_2b_revert_proofs.py"
+      - "scripts/phase_1_2c_revert_proofs.py"
+      # CHECKPOINT 3. An acceptance condition that refuses nothing is a guard
+      # that cannot fail — exactly what the scan looks for.
+      - "tests/conformance/test_advisory_cannot_satisfy.py"
       # PHASE-1.2b. The scan looks for guards that cannot fail. A mint guard
       # that refuses nothing, or an authorization surface that accepts anything
       # while claiming a type, is exactly that shape.

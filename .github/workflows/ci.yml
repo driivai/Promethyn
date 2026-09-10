@@ -307,6 +307,37 @@ jobs:
       - name: PHASE-1.2b guard reverts (must be caught)
         run: python scripts/phase_1_2b_revert_proofs.py
 
+      - name: PHASE-1.2 CHECKPOINT 3 proofs (advisory evidence cannot satisfy)
+        # The measured gap: validate_coverage was tier-blind, so a policy naming
+        # any advisory implementation made advisory evidence sufficient for
+        # coverage. Correct for R2 (what is REQUIRED is keyed by check identity)
+        # and wrong for the separate question of what COUNTS as satisfying one.
+        #
+        # The rule is over what the evidence IS, never over what it is called:
+        # two of the three soft-lever wrappers derive their identity at
+        # construction, so an identity rule would be a rule over spellings.
+        # Every refusal here has a positive control beside it.
+        run: |
+          python -m pytest -q \
+            tests/conformance/test_advisory_cannot_satisfy.py \
+            tests/conformance/test_phase_1_2c_revert_pins.py \
+            --junitxml=checkpoint-3.xml
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          cases = list(ET.parse("checkpoint-3.xml").iter("testcase"))
+          expected = {"test_advisory_cannot_satisfy": 22,
+                      "test_phase_1_2c_revert_pins": 6}
+          for module, count in expected.items():
+              actual = sum(module in c.get("classname", "") for c in cases)
+              assert actual == count, (module, actual, count)
+          assert len(cases) == sum(expected.values())
+          assert all(c.find(t) is None for c in cases for t in ("skipped", "failure", "error"))
+          print(f"CHECKPOINT 3: {len(cases)} proofs; zero skips/failures/errors")
+          PY
+
+      - name: PHASE-1.2 CHECKPOINT 3 guard reverts (must be caught)
+        run: python scripts/phase_1_2c_revert_proofs.py
+
       - name: The bank decision surface has not moved
         # verifier/bank.py came out from under its net-diff-empty guard in this
         # sprint. judge() is UNCHANGED and this is what says so: 240 enumerated

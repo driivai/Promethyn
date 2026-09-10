@@ -41,6 +41,24 @@ WHAT THIS DOES NOT COVER, named rather than implied:
 * **An attacker who can make the stronger permitted implementation unavailable
   may get the weaker one to answer** (R4). That is inherent to permitting more
   than one; the policy naming them is the auditable control, not this code.
+* **A verifier that CLAIMS a tier it does not have is believed here**
+  (CHECKPOINT 3). The satisfaction rule reads ``Evidence.tier`` — the tier the
+  evidence reports — because that is what covers derived identities and
+  implementations this package has never seen. It is therefore only as good as
+  the report. This is not new: the bank has always seeded an unknown verifier's
+  tier from its first evidence. What changed is that the tier is now load-bearing
+  in one more place, so the residual is worth stating precisely:
+
+  - a REGISTERED verifier cannot lie. ``VerifierBank._ensure_stats`` refuses
+    evidence whose tier contradicts the stored one, loudly — measured;
+  - an UNREGISTERED verifier's claim is believed, and its evidence can satisfy a
+    requirement — also measured.
+
+  **Registration is the control**, and it is a deployment's responsibility, in
+  the same way that constructing a result for every check it ran is (above).
+  Coverage deliberately holds no trust store: it validates the evidence it is
+  GIVEN, and reaching for a store here would make the coverage decision depend on
+  mutable calibration state.
 """
 
 from __future__ import annotations
@@ -48,6 +66,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from prometheus_protocol.core.models import (
+    AUTHORITATIVE_TIERS,
     Evidence,
     Unavailable,
     Verdict,
@@ -67,6 +86,10 @@ REFUSED_ABSTAINED = "coverage.abstained"
 REFUSED_INCOMPLETE = "coverage.incomplete"
 REFUSED_INVALID_EVIDENCE = "coverage.invalid_evidence"
 REFUSED_AMBIGUOUS = "coverage.ambiguous"
+#: PHASE-1.2 CHECKPOINT 3. The only PASS for a required check came from ADVISORY
+#: evidence. Distinct from every reason above because the check RAN, REPORTED,
+#: and PASSED — it simply cannot be what satisfies a requirement.
+REFUSED_ADVISORY_ONLY = "coverage.advisory_only"
 
 REFUSAL_REASONS: frozenset[str] = frozenset({
     REFUSED_UNSATISFACTORY,
@@ -74,6 +97,7 @@ REFUSAL_REASONS: frozenset[str] = frozenset({
     REFUSED_INCOMPLETE,
     REFUSED_INVALID_EVIDENCE,
     REFUSED_AMBIGUOUS,
+    REFUSED_ADVISORY_ONLY,
 })
 
 
@@ -163,6 +187,33 @@ def _satisfactory(outcome: Evidence) -> bool:
     return outcome.decided == Verdict.PASS
 
 
+def _authoritative(outcome: Evidence) -> bool:
+    """Whether this evidence can be what SATISFIES a requirement.
+
+    PHASE-1.2 CHECKPOINT 3. Read off the tier the evidence REPORTS, never off
+    the implementation's name. That is the whole design: the soft-lever wrappers
+    derive their identities at construction
+    (``f"{base}:threshold@{x}"``, ``f"{base}:k{k}-{require}"``), so any rule over
+    identity strings would be a rule over spellings — the failure already
+    recorded in the threat model. A rule over what the evidence IS covers every
+    wrapper, every derived identity, and every implementation this package has
+    never heard of, including a deployment's own.
+
+    ``tier is None`` FAILS CLOSED. ``Evidence.tier`` is optional and the bank
+    resolves it from the trust store at fusion time; coverage holds no store, so
+    a missing tier is a tier it could not establish, and could-not-establish is
+    never established. Exactly one ``Evidence`` in ``src/`` omits it and it is a
+    conformance fixture, not a coverage producer.
+
+    THIS DOES NOT MAKE REQUIREMENTS TIER-KEYED (R2). What is REQUIRED still comes
+    from the policy and the action class alone, keyed by check identity. This is
+    the separate question of what COUNTS as satisfying one — the same kind of
+    condition as "a PASS verdict", applied to the same evidence.
+    """
+
+    return outcome.tier in AUTHORITATIVE_TIERS
+
+
 def validate_coverage(
     snapshot: BoundRequirements, results: tuple[BoundResult, ...] | list[BoundResult]
 ) -> CoverageSatisfied | CoverageRefused:
@@ -181,6 +232,9 @@ def validate_coverage(
     duplicate or conflicting results            refuse (``ambiguous``); a
                                                 duplicate NEVER counts toward
                                                 coverage
+    a PASS from ADVISORY evidence only          refuse (``advisory_only``); the
+                                                check ran and passed, and still
+                                                does not satisfy
     ==========================================  =================================
 
     Exceptions and timeouts are the caller's to turn into an ``Unavailable``
@@ -272,6 +326,7 @@ def validate_coverage(
         satisfied_by: str | None = None
         saw_fail = False
         saw_abstain = False
+        advisory_pass: str | None = None
         for result in for_check:
             if isinstance(result.outcome, Unavailable):
                 # RECORDED AND IRRELEVANT (R3). It does not satisfy, and it does
@@ -279,8 +334,14 @@ def validate_coverage(
                 unavailable.append((item.check_id, result.implementation))
                 continue
             if _satisfactory(result.outcome):
-                if satisfied_by is None:
-                    satisfied_by = result.implementation
+                # A PASS, but only AUTHORITATIVE evidence satisfies. Advisory
+                # evidence is remembered separately so the refusal below can say
+                # what actually happened rather than "nothing answered".
+                if _authoritative(result.outcome):
+                    if satisfied_by is None:
+                        satisfied_by = result.implementation
+                elif advisory_pass is None:
+                    advisory_pass = result.implementation
             elif result.outcome.decided == Verdict.ABSTAIN:
                 saw_abstain = True
             else:
@@ -296,6 +357,20 @@ def validate_coverage(
         if satisfied_by is not None:
             answered_by[item.check_id] = satisfied_by
             continue
+        if advisory_pass is not None:
+            # ADVISORY EVIDENCE CANNOT SATISFY A REQUIREMENT, however confident
+            # it is. Ordered before the abstention row deliberately: when a
+            # permitted implementation passed advisory and another abstained,
+            # the operationally important fact is that the policy permits an
+            # implementation which can never satisfy what it was permitted for.
+            # That is a policy error to fix, not a run to retry.
+            return CoverageRefused(
+                REFUSED_ADVISORY_ONLY,
+                item.check_id,
+                f"the only satisfactory result came from {advisory_pass}, which "
+                "reports advisory evidence; a requirement is satisfied by "
+                "authoritative evidence or not at all",
+            )
         if saw_abstain:
             # PRESERVED AS AN ABSTENTION, not flattened into "incomplete": an
             # abstention means the check RAN and reached no conclusion, which is
