@@ -159,10 +159,16 @@ def mutations():
         ),
         # -- the swarm: fail closed, or do not proceed ------------------------
         (
+            # PHASE-1.2a retargeted this. The old line
+            # ``if isinstance(evidence, Unavailable): return evidence`` no longer
+            # exists: ``_verify`` now reports checks separately and coverage
+            # decides authorization. The GUARANTEE is unchanged — a check that
+            # could not run is recorded and nothing executes — so the mutation
+            # follows it to the line that now carries it.
             "swarm-proceeds-on-checks-that-could-not-run",
             swarm_runtime.SwarmRuntime._verify,
             [(
-                "        if isinstance(evidence, Unavailable):",
+                "        if isinstance(outcome, Unavailable):",
                 "        if False:",
             )],
             CRASHES,

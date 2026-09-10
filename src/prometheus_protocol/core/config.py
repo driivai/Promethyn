@@ -81,6 +81,7 @@ SECURITY_FIELDS = (
     "allow_unverified_substrate",
     "config_attestation_target",
     "require_config_attestation",
+    "verification_profile",
 )
 
 
@@ -269,6 +270,18 @@ class Config:
     # record. Off by default — a development install has no external witness to
     # publish to, exactly as with require_ledger_anchor (§5.4).
     require_config_attestation: bool = False
+    # PHASE-1.2a — which committed verification profile decides what must be
+    # verified before an action is authorized. A SECURITY field: it selects the
+    # requirement set every authorization is measured against, so naming a
+    # profile that does not exist is refused at load rather than defaulted —
+    # authorizing under a policy nobody selected is the failure the refusal
+    # exists to prevent.
+    #
+    # R1 staging: this names a profile COMMITTED to this package, which is right
+    # for this version and wrong for the product. A customer-supplied,
+    # digest-pinned policy is a later supplier of the same value; nothing
+    # downstream reaches for the profile table directly.
+    verification_profile: str = "baseline"
 
     def __post_init__(self) -> None:
         """Reject non-finite, out-of-range and wrong-signed numeric settings.

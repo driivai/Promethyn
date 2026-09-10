@@ -161,8 +161,19 @@ def test_inv4_failing_check_cannot_reach_the_executor():
     runtime = _runtime(RoleSynthesisEngine([WeakPlanner()]))
     run = runtime.run(TaskPacket(goal="g", budget=5))
     record = next(r for r in run.records if r.proposal.kind == KIND_PROPOSED_ACTION)
-    assert record.verified.judgment.verdict == Verdict.FAIL
-    assert record.decision is not None and not record.decision.approved
+    # PHASE-1.2a — the INVARIANT is unchanged and still asserted below: a failing
+    # check cannot reach the executor. What changed is WHICH refusal fires first.
+    # This proposal has no executable cases, and the baseline policy requires
+    # ``executable.cases`` for a sandbox action, so coverage refuses for want of a
+    # required result BEFORE the structural failure is fused. No VerifiedProposal
+    # is built, because there is no judgment to carry.
+    #
+    # The refusal is strictly stronger than the FAIL this used to assert: it holds
+    # whether or not the structural check passes, which is exactly the fail-open
+    # the old assertion could not see — a PASSING structural check produced an
+    # authoritative PASS here.
+    assert record.verified is None
+    assert record.decision is None, "the gate must not be consulted without coverage"
     assert record.execution is None
     assert runtime.executor.executed == []
 

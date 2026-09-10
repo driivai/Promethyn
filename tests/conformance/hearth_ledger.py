@@ -181,6 +181,18 @@ EXPECTED_PROTECTED_FILES = 21
 #:   that field, and still reads the legacy first-line form for any custom
 #:   verifier that writes a reply into ``detail``. No metric changed.
 #:
+#:
+#: * **PHASE-1.2a (the trusted verification-policy model)** — ``verifier/bank.py``.
+#:   The sprint the net-diff-empty guard was holding this file for. ``judge`` is
+#:   UNCHANGED — the decision surface in ``bank_decision_surface.json`` did not
+#:   move by a single row, and that is the point: fusion was not re-tuned. What is
+#:   added is ``judge_covered``, a NEW entry point in front of it that validates
+#:   required coverage against the resolved policy snapshot BEFORE fusing, and
+#:   refuses when a required check has no valid, satisfactory, correctly bound
+#:   result. ``judge`` remains for callers that have not migrated, which is a
+#:   NAMED EXPOSURE rather than an oversight: closing it means a raw
+#:   ``Judgment(PASS, authoritative=True)`` must stop being sufficient for
+#:   authorization, a breaking interface change and the next sprint's subject.
 #: Those sprints are why these bytes are what they are. They do NOT license the
 #: next edit to the same files: updating a digest below is a fresh decision, and
 #: the reason for it belongs beside it.
@@ -216,7 +228,7 @@ DIGESTS: dict[str, str] = {
     "src/prometheus_protocol/verifier/aggregate.py":
         "5963bb6b4047c0ec2c900b10187e861ad95541dca87c0b98bdb5db34dcd1c37c",
     "src/prometheus_protocol/verifier/bank.py":
-        "d4f6c8f5cf297d05270377db5d9d83dfce63f85008e293c7838c0a4acb531401",
+        "dd0c2a79c5516db85336fa960ae2e0c83e266674463491f785ff0e87dcc5862d",
     "src/prometheus_protocol/verifier/grounding.py":
         "edb44c93c371cbf4a5099e607f4de0332d1bb902d47913bdd3708d5be1b4da3f",
     "src/prometheus_protocol/verifier/model_judge.py":

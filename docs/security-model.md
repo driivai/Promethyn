@@ -183,6 +183,101 @@ The residual, stated because a hidden gap is worth less than a named one:
 - **The canary sweep proves absence for the surfaces it drives.** A code path
   no test reaches is untested, not proven clean.
 
+## Threat: an action authorized without the verification it required
+
+Two fail-opens were reproduced, neither caused by a broken verifier. The swarm's
+aggregation substituted *everything that ran passed* for *everything REQUIRED
+passed*: a missing verifier, a raising verifier or an ABSTAIN was discarded, a
+passing structural check then yielded a synthetic HARD PASS, and the gate
+approved. Separately the bank accepted a HARD PASS alongside a HARD Unavailable
+and returned an authoritative PASS — which is CORRECT for two redundant HARD
+verifiers where either suffices, and a fail-open when the unavailable one was
+the only thing covering a requirement. The bank could not tell those apart
+because nothing told it.
+
+Every producer implements "couldn't-verify is never verified-clean". The
+aggregate did not. The missing thing was not a fix to either aggregator; it was
+a trusted notion of a REQUIRED CHECK, which no layer had.
+
+### The invariant
+
+> An action is authorizable only when every requirement derived from the trusted
+> policy has a valid, satisfactory result bound to that action and verification
+> attempt. Untrusted inputs may request additional checks but cannot weaken those
+> requirements. Missing policy, missing evidence, uncertainty, or an unavailable
+> required verifier cannot produce an authorization-capable result.
+
+No clause is added to that and none is excepted. In particular, permitting more
+than one implementation for a requirement does not add one: the requirement is
+satisfied by a RESULT, never by the permitted set's size.
+
+### How it is made true
+
+**A requirement is keyed by CHECK IDENTITY, not by verifier or tier.**
+`BoundRequirement` carries `check_id` and the implementations permitted to
+satisfy it, and deliberately has **no tier field**. HARD means authoritative
+evidence; it never means "this check covers every requirement". The consequence
+that has to hold is that a missing executable check cannot ERASE a requirement —
+and it cannot, because the requirement is derived from the policy and the action
+class alone, never from what the plan turned out to contain.
+
+**The resolver is trusted; the plan is not.** An untrusted proposal may request
+additional checks and they are recorded. It cannot remove, replace, downgrade or
+omit-into-nonexistence a policy requirement. If policy requires executable
+verification for a code action, an empty entry point means **verification cannot
+proceed** — not "this action needs only structural checks". Adding a
+`required=True` field to the plan would not fix this, because the attack is
+omission, not mislabeling.
+
+**Coverage is validated before fusion.** `VerifierBank.judge_covered` decides
+coverage against the resolved snapshot first and fuses only what survives.
+Fusion answers "how confident are we in the verdict we have"; it was never able
+to answer "is there a verdict we are missing".
+
+**Interchangeable redundancy is not quorum.** Two permitted implementations
+means the requirement was never keyed to one. It is satisfied when at least one
+produced a valid, satisfactory, correctly bound result; unavailable results from
+the others are recorded and irrelevant. Both unavailable **refuses** — absence
+never satisfies, however many were permitted. Quorum, substitution and fallback
+are deferred as distinct concepts needing their own specification and threat
+model, and nothing here leaves a hook for them.
+
+### Where policy lives, and why that is temporary
+
+Profiles are committed data under the content-based Hearth sanction, selected by
+`Config.verification_profile`, with the profile's content digest bound into every
+snapshot so a decision is bound to the policy that produced it.
+
+**That is right for this version and wrong for the product.** A licensed
+component whose customers cannot supply their own digest-pinned policy without a
+code change is a bad product shape — their policy is their risk decision, not
+ours. The resolver therefore takes a policy VALUE and nothing downstream reaches
+for the profile table, so a customer-supplied supplier is a later addition
+beside `load_profile`, not a rewrite.
+
+### The residuals, named
+
+- **The operator asserts that permitted implementations are equivalent; nothing
+  verifies it.** The policy names them and the record shows WHICH one answered,
+  so a reviewer can see that A was down and B answered. Managed, not hidden.
+- **An attacker who can make the stronger permitted implementation unavailable
+  may get the weaker one to answer.** Inherent to permitting more than one; the
+  policy naming them is the auditable control. It does not extend to satisfying
+  a requirement with no answer.
+- **A raw authoritative `Judgment` still authorizes.** `VerifierBank.judge` and
+  the `ExecutionController.submit` path predate this layer and do not consult it;
+  `tools/git.py` produces one today and `tools/stale_branch_demo.py` executes on
+  it. Until the unbound-judgment route is closed — a breaking interface change,
+  the next sprint — **an old call path can bypass the policy layer entirely.**
+- **`frozen=True` is not protection against hostile Python in the process.**
+  `object.__setattr__` reaches through it. It prevents accidental mutation and
+  guarantees a policy value cannot drift between being digested and being
+  enforced; the control against arbitrary code is the process boundary.
+- **Coverage validates the evidence it is GIVEN.** A trusted caller that never
+  constructs a result for a check it ran looks identical to a check that never
+  ran, and coverage refuses — the safe direction, but caller completeness stays
+  the caller's contract.
+
 ## Threat: silent or irreversible change
 
 Every attempt and promotion is appended to the ledger, and every promoted

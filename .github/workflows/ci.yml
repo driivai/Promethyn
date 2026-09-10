@@ -226,6 +226,57 @@ jobs:
       - name: PROD-FIX-2 guard reverts (must be caught)
         run: python scripts/prod_fix_2_revert_proofs.py
 
+      - name: PHASE-1.2a proofs (requirement coverage enforced before fusion)
+        # The trusted verification-policy model. The load-bearing test is the
+        # essential regression: a required executable check MISSING plus a
+        # structural HARD PASS must refuse, with no approval and zero executor
+        # calls, driven through the real swarm runtime with the real bank, gate
+        # and executor. The ten-row fault matrix is beside it.
+        #
+        # Pinned by exact collection per module and zero skips. Every test here
+        # runs in-process on SQLite and an in-memory trust store. No matrix row
+        # needs a container: the two timeout rows drive the real
+        # SubprocessVerifier through a sandbox stub that reports a wall-clock
+        # timeout with candidate_started set either way, the no-isolation row
+        # uses NullSandbox, and the positive control uses UnsafeLocalSandbox
+        # deliberately (its "candidate" is a four-character arithmetic fixture
+        # this repository authored). So every row is deterministic on every host,
+        # and a skip here would mean a proof stopped running rather than an
+        # environment lacking something.
+        run: |
+          python -m pytest -q \
+            tests/conformance/test_bound_requirements_encoding.py \
+            tests/conformance/test_coverage_enforcement.py \
+            tests/conformance/test_policy_enforcement_regression.py \
+            tests/conformance/test_no_second_aggregator.py \
+            tests/conformance/test_phase_1_2a_revert_pins.py \
+            --junitxml=phase-1-2a.xml
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          cases = list(ET.parse("phase-1-2a.xml").iter("testcase"))
+          expected = {"test_bound_requirements_encoding": 21,
+                      "test_coverage_enforcement": 33,
+                      "test_policy_enforcement_regression": 19,
+                      "test_no_second_aggregator": 9,
+                      "test_phase_1_2a_revert_pins": 7}
+          for module, count in expected.items():
+              actual = sum(c.get("classname", "").endswith(module) for c in cases)
+              assert actual == count, (module, actual, count)
+          assert len(cases) == sum(expected.values())
+          assert all(c.find(t) is None for c in cases for t in ("skipped", "failure", "error"))
+          print(f"PHASE-1.2a: {len(cases)} proofs; zero skips/failures/errors")
+          PY
+
+      - name: PHASE-1.2a guard reverts (must be caught)
+        run: python scripts/phase_1_2a_revert_proofs.py
+
+      - name: The bank decision surface has not moved
+        # verifier/bank.py came out from under its net-diff-empty guard in this
+        # sprint. judge() is UNCHANGED and this is what says so: 240 enumerated
+        # decisions against the checked-in table. A move here is reconciled
+        # deliberately, in the same change, with the reason.
+        run: python -m pytest -q tests/conformance/test_bank_decision_surface.py
+
       - name: Union-handling proofs (exact test NAMES, zero skips)
         # A type fix that satisfies mypy but still crashes at runtime is a void
         # guard: mypy proves the Unavailable branch is WRITTEN, not that it is
