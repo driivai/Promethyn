@@ -4,13 +4,37 @@ The bank depends only on a :class:`TrustStore` port (injected) and the pure
 trust/aggregation math. It never lets an advisory verdict override an
 authoritative one — soft verdicts are calibration signal only — and it teaches
 lower-trust verifiers by comparing them against the authoritative reference.
+
+PHASE-1.2a — COVERAGE IS VALIDATED BEFORE FUSION.
+
+:meth:`VerifierBank.judge` answers "given these results, what is the verdict".
+It cannot answer "is there a result MISSING", and it never could: nothing told it
+what was owed. An independent review reproduced the consequence twice — a
+passing structural check standing in for an executable check that never ran, and
+a HARD PASS beside a HARD Unavailable returning an authoritative PASS with the
+outage kept only as metadata. The second is INTENTIONAL behaviour for two
+redundant HARD verifiers where either suffices; the bank simply could not tell
+redundant from required, because nothing told it.
+
+:meth:`VerifierBank.judge_covered` is the entry point that can. It takes the
+resolved :class:`~prometheus_protocol.policy.snapshot.BoundRequirements` and
+results bound to it, validates coverage against the policy FIRST, and only then
+fuses. Fusion behaviour for what survives is unchanged — this adds a gate in
+front of it, it does not re-tune it.
+
+``judge`` remains, unchanged, for the paths that have not migrated. That is an
+EXPOSURE and it is named rather than implied: a caller that goes on using
+``judge`` gets the old semantics and the policy layer is not consulted. Closing
+it means a raw ``Judgment(PASS, authoritative=True)`` must stop being sufficient
+for production authorization, which is a breaking interface change and the next
+sprint's subject.
 """
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Sequence
+from typing import TYPE_CHECKING, Sequence
 
 from prometheus_protocol.core.validation import require_unit_interval
 from prometheus_protocol.core.models import (
@@ -31,6 +55,10 @@ from prometheus_protocol.verifier.trust import (
     updated,
     youden,
 )
+
+if TYPE_CHECKING:  # pragma: no cover - import cycle: policy imports core.models
+    from prometheus_protocol.policy.coverage import BoundResult
+    from prometheus_protocol.policy.snapshot import BoundRequirements
 
 
 @dataclass(frozen=True)
@@ -131,6 +159,70 @@ class VerifierBank:
             self._latency_n[vid] = self._latency_n.get(vid, 0) + 1
 
     # -- judging -----------------------------------------------------------
+
+    def judge_covered(
+        self,
+        snapshot: "BoundRequirements",
+        results: "Sequence[BoundResult]",
+    ) -> Judgment | Unavailable:
+        """Validate required coverage against the policy, THEN fuse.
+
+        This is the authorization-capable entry point. The order is the whole
+        point and is not an optimisation: fusion over an incomplete result set
+        produces a confident answer to a question nobody was owed an answer to.
+
+        What comes back, by row of the enforcement table:
+
+        * **satisfied** — fusion proceeds over the validated results, and the
+          returned :class:`Judgment` is exactly what ``judge`` would have
+          produced for those results. Advisory and soft-tier behaviour is
+          untouched.
+        * **the required check FAILED** — an authoritative
+          ``Judgment(FAIL)``. A failure is a real answer, not an outage, and
+          reporting it as unavailable would lose that the check ran and said no.
+        * **anything else** — an :class:`Unavailable`. Abstained, incomplete,
+          invalid evidence and ambiguity are all "there is no satisfactory
+          result for a required check", which is a could-not-verify, and EX-1
+          says a could-not-verify is never a verdict.
+
+        ``INFRA_FAULT`` vs ``POLICY_REFUSAL`` follows the meaning already fixed
+        in ``core/models.py``: an incomplete coverage is a fault to repair, while
+        an abstention, invalid evidence or an ambiguity is the policy layer
+        deliberately declining to treat what it has as sufficient.
+        """
+
+        from prometheus_protocol.policy.coverage import (
+            REFUSED_INCOMPLETE,
+            REFUSED_UNSATISFACTORY,
+            CoverageRefused,
+            validate_coverage,
+        )
+
+        outcome = validate_coverage(snapshot, tuple(results))
+        if isinstance(outcome, CoverageRefused):
+            if outcome.reason == REFUSED_UNSATISFACTORY:
+                return Judgment(
+                    verdict=Verdict.FAIL,
+                    confidence=1.0,
+                    authoritative=True,
+                    contributing=(outcome.check_id,),
+                )
+            reason = (
+                Unavailability.INFRA_FAULT
+                if outcome.reason == REFUSED_INCOMPLETE
+                else Unavailability.POLICY_REFUSAL
+            )
+            return Unavailable(
+                verifier_id="policy-coverage",
+                tier=Tier.HARD,
+                reason=reason,
+                detail=f"{outcome.reason} check={outcome.check_id} {outcome.detail}".strip(),
+            )
+
+        # Coverage holds. Only now does anything get fused, and it is fused by
+        # the SAME code path every other caller uses — a second aggregator here
+        # would be the defect this sprint exists to remove, wearing a fix.
+        return self.judge(outcome.graded)
 
     def judge(
         self, evidence: Sequence[Evidence | Unavailable]

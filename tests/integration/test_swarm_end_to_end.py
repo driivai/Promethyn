@@ -32,7 +32,14 @@ def _runtime(synthesis=None):
 
 
 def test_full_packet_produces_a_recorded_chain(swarm_runtime):
-    run = swarm_runtime.run(TaskPacket(goal="deliver the milestone", budget=5, risk_class="medium"))
+    run = swarm_runtime.run(
+        TaskPacket(
+            goal="add two integers",
+            budget=5,
+            risk_class="medium",
+            entry_point="add",
+        )
+    )
 
     # The chain is produced end to end.
     assert run.records
@@ -74,8 +81,12 @@ def test_proposal_with_failing_skeptic_check_never_reaches_executor():
     assert runtime.executor.executed == []
     # And the ledger shows the action was rejected, not executed.
     kinds = {row["kind"] for row in runtime.ledger.attempts()}
-    assert "swarm:rejected" in kinds
+    # PHASE-1.2a — recorded as judged-but-unauthorized rather than rejected: the
+    # required executable check has no result, so coverage refuses before any
+    # verdict is fused. The property this test guards — nothing executed — is
+    # asserted above and is unchanged.
     assert "swarm:executed" not in kinds
+    assert kinds == {"swarm:judged"}
 
 
 def test_policy_violation_blocks_execution():

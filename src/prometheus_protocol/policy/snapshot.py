@@ -103,20 +103,29 @@ _TAG_STR = b"s"
 _TAG_SEQ = b"L"
 _TAG_REQUIREMENT = b"R"
 
-#: What kind of thing is being authorized. Closed on purpose, and checked at
-#: construction: the action class selects which policy requirements apply, so an
-#: unrecognised class must never silently mean "no requirements apply". A new
-#: class is added here deliberately, in the same change that teaches a policy
-#: what to require for it.
+#: What kind of thing is being authorized, KEYED BY WHAT MAKES THE ACTION
+#: CONSEQUENTIAL — because the consequence is what determines which checks are
+#: required. Closed on purpose and checked at construction: the action class
+#: selects which policy requirements apply, so an unrecognised class must never
+#: silently mean "no requirements apply".
+#:
+#: DELIBERATELY ONLY WHAT EXISTS. A closed set naming classes with no
+#: implementation behind them is a set of guesses, and guessed classes attract
+#: guessed requirements in the profiles. Each future class arrives in the sprint
+#: that adds the action it names; the construction-time validation above makes
+#: that a deliberate, reviewable addition rather than a silent string.
 ACTION_CLASSES: frozenset[str] = frozenset({
-    #: Executing proposed or generated code.
-    "code.execute",
-    #: Applying a schema/data migration to a database principal.
-    "migration.execute",
-    #: Promoting a skill into the registry.
-    "skill.promote",
-    #: A swarm proposal advancing to the gate.
-    "proposal.advance",
+    #: Untrusted code runs in the isolated verifier/executor. No privileged
+    #: target: the consequence is bounded by the sandbox. Covers the
+    #: ``SubprocessVerifier`` path under ``build_orchestrator`` and the
+    #: ``SandboxExecutor`` path under ``build_execution_controller`` — both run
+    #: candidate ``code`` inside the configured isolating adapter, so they are
+    #: one consequence class, not two.
+    "sandbox.execute",
+    #: A schema or data change lands on a privileged database principal. The
+    #: consequence is durable, outside any sandbox, and bound to a named
+    #: principal. Covers ``build_migration_runtime``.
+    "database.migrate",
 })
 
 

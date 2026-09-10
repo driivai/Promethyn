@@ -7,7 +7,7 @@ from prometheus_protocol.swarm.models import KIND_PROPOSED_ACTION, TaskPacket
 
 
 def test_pipeline_executes_a_clean_action(swarm_runtime):
-    run = swarm_runtime.run(TaskPacket(goal="ship it", budget=5))
+    run = swarm_runtime.run(TaskPacket(goal="add two integers", budget=5, entry_point="add"))
     actions = [r for r in run.records if r.proposal.kind == KIND_PROPOSED_ACTION]
     assert actions
     for record in actions:
@@ -18,7 +18,7 @@ def test_pipeline_executes_a_clean_action(swarm_runtime):
 
 
 def test_nonaction_proposals_are_judged_but_not_executed(swarm_runtime):
-    run = swarm_runtime.run(TaskPacket(goal="g", budget=5))
+    run = swarm_runtime.run(TaskPacket(goal="add two integers", budget=5, entry_point="add"))
     nonactions = [r for r in run.records if r.proposal.kind != KIND_PROPOSED_ACTION]
     assert nonactions
     for record in nonactions:
@@ -29,7 +29,7 @@ def test_nonaction_proposals_are_judged_but_not_executed(swarm_runtime):
 
 
 def test_chain_is_recorded_in_the_ledger(swarm_runtime):
-    swarm_runtime.run(TaskPacket(goal="g", budget=5))
+    swarm_runtime.run(TaskPacket(goal="add two integers", budget=5, entry_point="add"))
     rows = swarm_runtime.ledger.attempts()
     assert rows
     assert all(row["split"] == "swarm" for row in rows)
@@ -39,7 +39,7 @@ def test_chain_is_recorded_in_the_ledger(swarm_runtime):
 
 
 def test_run_is_deterministic(swarm_runtime):
-    packet = TaskPacket(goal="g", budget=5)
+    packet = TaskPacket(goal="add two integers", budget=5, entry_point="add")
     first = swarm_runtime.run(packet)
     second = swarm_runtime.run(packet)
     assert [(r.proposal.id, r.verified.judgment.verdict) for r in first.records] == [

@@ -48,8 +48,27 @@ def swarm_runtime():
     from prometheus_protocol.verifier.bank import VerifierBank
     from prometheus_protocol.verifier.store import InMemoryTrustStore
 
+    from prometheus_protocol._examples.swarm_tasks import correct_code_task
+    from prometheus_protocol.sandbox.unsafe import UnsafeLocalSandbox
+    from prometheus_protocol.verifier.runner import SubprocessVerifier
+
     # Roles reason via a deterministic mock provider (scripted role outputs).
-    provider = build_swarm_provider()
+    #
+    # PHASE-1.2a — THE EXAMPLE IS NOW POLICY-COMPLIANT, and it had to become so.
+    # It previously scripted NO executable cases and wired NO code verifier, so
+    # a proposed action reached the executor on structural predicates alone.
+    # That was the reproduced fail-open, demonstrated by the shipped example: the
+    # baseline profile requires ``executable.cases`` for ``sandbox.execute``, and
+    # under it this fixture authorized nothing until the executable path was
+    # real. Tests that assert an action executes therefore pass a packet with an
+    # ``entry_point``, which is what makes the skeptic attach cases.
+    #
+    # ``UnsafeLocalSandbox`` is deliberate here and nowhere near production: the
+    # "candidate" is the four characters of arithmetic in ``correct_code_task``,
+    # a fixture this repository authored, not an untrusted proposal. Isolation
+    # exists to contain code whose behaviour is not known in advance. The tests
+    # that verify isolation ITSELF live in the sandbox suite.
+    provider = build_swarm_provider([correct_code_task()])
     return SwarmRuntime(
         synthesis=RoleSynthesisEngine(provider=provider),
         debate=DebateLayer(),
@@ -58,4 +77,5 @@ def swarm_runtime():
         executor=RecordingExecutor(),
         ledger=SqliteLedger(":memory:"),
         provider=provider,
+        code_verifier=SubprocessVerifier(memory_mb=0, sandbox=UnsafeLocalSandbox()),
     )

@@ -49,7 +49,7 @@ def a_snapshot(**overrides: object) -> BoundRequirements:
         policy_digest="b" * 64,
         artifact_sha256="a" * 64,
         target_canonical=TARGET,
-        action_class="migration.execute",
+        action_class="database.migrate",
         attempt_id="attempt-0001",
         requirements=(
             BoundRequirement(
@@ -75,8 +75,8 @@ def a_snapshot(**overrides: object) -> BoundRequirements:
 #: this. That is the point: an encoding that can drift silently is two digests
 #: for one coverage claim. Change it only with a deliberate version bump of the
 #: domain separator, in the same commit, with the reason.
-GOLDEN_DIGEST = "631a78cb62ef2beba6ce85cc3c43ce020b925c91375acf22224a8fab9213678c"
-GOLDEN_PREIMAGE_BYTES = 769
+GOLDEN_DIGEST = "05703e3847de94a97c5c00cce8e448afa18d201115340698c68121e07f743aed"
+GOLDEN_PREIMAGE_BYTES = 768
 
 
 def _u64(n: int) -> bytes:
@@ -180,7 +180,7 @@ def test_every_field_actually_moves_the_digest():
         "policy_digest": "c" * 64,
         "artifact_sha256": "d" * 64,
         "target_canonical": TARGET.replace("appdb", "otherdb"),
-        "action_class": "code.execute",
+        "action_class": "sandbox.execute",
         "attempt_id": "attempt-0002",
         "requirements": (
             BoundRequirement(check_id="structural.syntax", permitted=("swarm.structural",)),
@@ -352,7 +352,12 @@ def test_an_unknown_action_class_is_refused():
 
     with pytest.raises(SnapshotError, match="not a known action class"):
         a_snapshot(action_class="code.exec")
-    assert "migration.execute" in ACTION_CLASSES
+    # Dropped classes are refused too, so a profile written against the old
+    # taxonomy fails loudly rather than resolving to no requirements.
+    for gone in ("code.execute", "migration.execute", "skill.promote", "proposal.advance"):
+        with pytest.raises(SnapshotError, match="not a known action class"):
+            a_snapshot(action_class=gone)
+    assert ACTION_CLASSES == {"sandbox.execute", "database.migrate"}
 
 
 # ---------------------------------------------------------------------------

@@ -8,6 +8,59 @@ in `spec/invariants.md` is a major version bump.
 ## [Unreleased]
 
 ### Fixed
+- **PHASE-1.2a — the trusted verification-policy model: requirement coverage
+  enforced before fusion.** Two reproduced authorization fail-opens, neither
+  caused by a broken verifier. The swarm's aggregation substituted *everything
+  that ran passed* for *everything REQUIRED passed*: a missing, raising or
+  abstaining verifier was discarded, a passing structural check then yielded a
+  synthetic HARD PASS, and the gate approved — **five of eight verifier states
+  produced an approved action and an executor call** (measured, before and
+  after). Separately the bank accepted a HARD PASS beside a HARD Unavailable and
+  returned an authoritative PASS. The second is INTENTIONAL for two redundant
+  HARD verifiers where either suffices; the bank could not tell redundant from
+  required because nothing told it. The missing thing was not a fix to either
+  aggregator — it was a trusted notion of a REQUIRED CHECK, which no layer had.
+  - **The invariant** is now stated verbatim in `docs/security-model.md` and
+    asserted by a test: *an action is authorizable only when every requirement
+    derived from the trusted policy has a valid, satisfactory result bound to
+    that action and verification attempt.* No clause added, no exception.
+  - **Requirements are keyed by CHECK IDENTITY, not by verifier or tier.**
+    `BoundRequirement` deliberately has **no tier field**: HARD means
+    authoritative evidence, never "this check covers every requirement". The
+    consequence that must hold — a missing executable check cannot ERASE a
+    requirement — holds because the requirement is derived from the policy and
+    the action class alone.
+  - **The omission rule.** If policy requires executable verification for a code
+    action, an empty entry point means **verification cannot proceed**, not
+    "this action needs only structural checks". A `required=True` field on the
+    untrusted plan would not fix it: the attack is omission, not mislabeling.
+  - **Coverage is validated before fusion.** `VerifierBank.judge_covered`
+    decides coverage against the resolved snapshot and fuses only what survives.
+    `judge` itself is **unchanged** — the 240-row decision surface in
+    `bank_decision_surface.json` did not move by a single row, which is the
+    point: fusion was not re-tuned.
+  - **Interchangeable redundancy is not quorum (R3).** Two permitted
+    implementations means the requirement was never keyed to one; it is
+    satisfied when at least one produced a valid, satisfactory, correctly bound
+    result. **Both unavailable REFUSES** — absence never satisfies, however many
+    were permitted. Quorum, substitution and fallback are deferred, with no hook
+    and no config option left for them.
+  - **The action-class taxonomy was shrunk to what exists**: `sandbox.execute`
+    and `database.migrate`, keyed by what makes the action consequential.
+    `proposal.advance` was dropped (an internal state transition that touches
+    nothing) and `skill.promote` too — it has an implementation, but
+    `PromotionGate` decides on held-out rate and never reaches the bank, so a
+    requirement for it would have no enforcement point.
+  - **A fail-open found and fixed while building this**, pinned by its own test:
+    an early draft of the coverage validator dropped results for unrequired
+    checks instead of fusing them, so a failing structural check vanished
+    whenever the required check passed.
+  - **A second aggregator found in the tree**: `tools/git.py` produces an
+    authoritative `Judgment` that `tools/stale_branch_demo.py` passes straight
+    into `ExecutionController.submit`. It is sanctioned in the new guard **with
+    its reason and driven by a test**, because closing it is the next sprint's
+    breaking interface change. **Until then an old call path can bypass the
+    policy layer entirely** — stated in the docs, not only here.
 - **PROD-FIX-2 — F8: secrets propagated into diagnostics.** An independent
   review put one canary token in the configured API key and found it in roughly
   twenty-five distinct public strings: `repr(Config)`, `asdict(Config)`
