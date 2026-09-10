@@ -4,6 +4,9 @@ Every package in the runtime and development dependency closure, its license,
 and the obligation it carries. Resolved 2026-09-06 from a clean virtual
 environment installed with `pip install ".[dev]" -c constraints.txt`
 (Python 3.11, Linux x86-64); the machine-readable form is `docs/sbom.cdx.json`.
+That file is a **single-platform installed snapshot**, not a cross-environment
+closure — see "What the SBOM is a bill of" below for the one model and how it
+reconciles with `constraints.txt`.
 
 **Headline for counsel:** no GPL or AGPL component anywhere in the closure.
 One runtime dependency is LGPL-3.0 (`psycopg`), used as an unmodified,
@@ -106,6 +109,35 @@ ask twice:
 - **Python 3.10 note.** `exceptiongroup` and `tomli` install only on 3.10; the
   SBOM was generated on 3.11 and therefore omits them, which is why they are
   listed here and pinned in `constraints.txt`.
+
+## What the SBOM is a bill of, and how it relates to `constraints.txt`
+
+An earlier version of this document left two readings of the SBOM standing at
+once, and a reviewer counting 23 constraints against 22 components could not
+tell which was meant. One model, stated:
+
+> **`docs/sbom.cdx.json` is a single-platform INSTALLED SNAPSHOT** — the actual
+> contents of one virtual environment, on **CPython 3.11, Linux x86-64**,
+> after `pip install ".[dev]" -c constraints.txt`. It is not a cross-environment
+> closure and does not carry environment markers.
+
+`constraints.txt` is the other thing: a **resolution input spanning CPython
+3.10–3.12**. It is deliberately a superset of any one snapshot. Every difference
+between the two files follows from that and none of them is drift:
+
+| difference | why |
+|---|---|
+| `colorama` in constraints, not in the SBOM | Windows-only (a `pytest`/`build` dependency on `sys_platform == "win32"`); never installs on the Linux snapshot |
+| `exceptiongroup`, `tomli` in constraints, not in the SBOM | install only on CPython 3.10; the snapshot is 3.11 |
+| `pip`, `setuptools` in the SBOM, not in constraints | the environment's own installer and build backend. They are genuinely present in the snapshot, so a snapshot that omitted them would be wrong; they are not pinned because they are not resolved dependencies of this project — pip provides them |
+
+The security-relevant direction is the one that is checked rather than asserted:
+**everything the snapshot installed is pinned.** `tests/conformance/test_dependency_closure.py`
+requires every SBOM component except that installer/build pair to appear in
+`constraints.txt` at the same version, so a package that arrives in the
+environment without a pin fails the build. The reverse direction — constraints
+naming packages a Linux/3.11 snapshot does not install — is the model working as
+described, not a discrepancy.
 
 ## Regenerating this record
 

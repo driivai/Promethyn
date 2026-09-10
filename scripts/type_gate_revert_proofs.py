@@ -34,6 +34,16 @@ bypass, or the bank's partial-unavailability handling. Two of those four are now
 covered (the config and CI bypasses, added below). The other two are named here
 rather than left for the next reviewer to find.
 
+Phase 2 grew again in TYPE-GATE-HARDEN-3 with the nine bypasses a fourth review
+found, each of which passed EVERY guard beforehand because the guard's permitted
+set was over the wrong thing: a directive hidden in a file the sweep excluded by
+BASENAME; four ways to filter the ``pull_request`` trigger while its NAME stays
+present; a survivor filter spelled with a qualified name and with an import
+alias, neither of them the three identifier SPELLINGS the sweep matched; an
+arbitrary later edit to a file whose PATH was sanctioned once and therefore
+forever; and a truth set written in a container and order the two-regex sweep
+did not enumerate.
+
 Run with the repository's test environment:
     python scripts/type_gate_revert_proofs.py
 """
@@ -60,8 +70,8 @@ EXPECTED_REVERTS = 12
 EXPECTED_CALL_FAILURES = 17
 
 #: Phase 2 (the guards themselves). Observed then pinned, same discipline.
-EXPECTED_CONFIG_MUTATIONS = 10
-EXPECTED_GUARD_FAILURES = 11
+EXPECTED_CONFIG_MUTATIONS = 19
+EXPECTED_GUARD_FAILURES = 20
 
 
 def enforce_expected(caught: int, failures: int) -> None:
@@ -336,6 +346,110 @@ def config_mutations():
             "      - name: Type gate receipt (disabled)\n        if: false",
             GATE_TESTS,
             "separate_mandatory_step_requires",
+        ),
+        # -------------------------------------------------------------------
+        # TYPE-GATE-HARDEN-3. Each of these passed EVERY guard before this
+        # sprint, because each permitted set was over the wrong thing: file
+        # basenames, trigger names, identifier spellings, sanctioned paths, one
+        # literal truth-set spelling.
+        # -------------------------------------------------------------------
+        (
+            # F-11: the sweep excluded any file whose BASENAME matched the
+            # guard's own, so the guard module — and any production file called
+            # the same thing — was the one place a directive could hide.
+            "directive-hides-in-a-file-the-sweep-excluded-by-name",
+            GATE_TESTS,
+            '"""The type gate cannot be narrowed back, and cannot be carved out.',
+            '# mypy: disable-error-code="union-attr"\n'
+            '"""The type gate cannot be narrowed back, and cannot be carved out.',
+            GATE_TESTS,
+            "inline_mypy_directive",
+        ),
+        (
+            # F-12: the key set is unchanged, so the old assertion passed. The
+            # workflow no longer fires on any pull request that changes code.
+            "pull-request-trigger-is-filtered-to-docs",
+            ".github/workflows/ci.yml",
+            "  pull_request:\n",
+            '  pull_request:\n    paths: ["docs/**"]\n',
+            GATE_TESTS,
+            "workflow_answers_to_exactly_the_permitted_triggers",
+        ),
+        (
+            # F-12: the same bypass inverted — exclude exactly the code trees.
+            "pull-request-trigger-ignores-every-code-path",
+            ".github/workflows/ci.yml",
+            "  pull_request:\n",
+            '  pull_request:\n    paths-ignore: ["src/**", "scripts/**", "tests/**"]\n',
+            GATE_TESTS,
+            "workflow_answers_to_exactly_the_permitted_triggers",
+        ),
+        (
+            # F-12: a branch filter naming a branch nobody opens PRs against.
+            "pull-request-trigger-is-bound-to-a-dead-branch",
+            ".github/workflows/ci.yml",
+            "  pull_request:\n",
+            '  pull_request:\n    branches: ["a-branch-that-does-not-exist"]\n',
+            GATE_TESTS,
+            "workflow_answers_to_exactly_the_permitted_triggers",
+        ),
+        (
+            # F-12: not even a filter — a different VALUE under the same key.
+            "pull-request-trigger-value-is-replaced-wholesale",
+            ".github/workflows/ci.yml",
+            "  pull_request:\n",
+            "  pull_request: {}\n",
+            GATE_TESTS,
+            "workflow_answers_to_exactly_the_permitted_triggers",
+        ),
+        (
+            # F-13: a survivor filter spelled with the QUALIFIED name. Narrows
+            # correctly under mypy; not an ast.Name, so the old sweep saw
+            # nothing.
+            "survivor-filter-uses-the-qualified-union-name",
+            "src/prometheus_protocol/verifier/soft_levers.py",
+            "        ran, missing = partition_outcomes(results)\n",
+            "        from prometheus_protocol.core import models as _models\n"
+            "        ran = [r for r in results if not isinstance(r, _models.Unavailable)]\n"
+            "        missing = [r for r in results if isinstance(r, _models.Unavailable)]\n",
+            GATE_TESTS,
+            "expression_position",
+        ),
+        (
+            # F-13: the same filter behind an import alias. A different id, so
+            # the old sweep saw nothing here either.
+            "survivor-filter-renames-the-union-on-import",
+            "src/prometheus_protocol/verifier/soft_levers.py",
+            "        ran, missing = partition_outcomes(results)\n",
+            "        from prometheus_protocol.core.models import Unavailable as _Missing\n"
+            "        ran = [r for r in results if not isinstance(r, _Missing)]\n"
+            "        missing = [r for r in results if isinstance(r, _Missing)]\n",
+            GATE_TESTS,
+            "expression_position",
+        ),
+        (
+            # HEARTH: an arbitrary later edit to the AUTHORIZATION GATE, which
+            # entered the sanctioned PATH set in PR #52 and was therefore
+            # invisible to all four Hearth guards from that moment on.
+            "sanctioned-once-edited-forever",
+            "src/prometheus_protocol/gate/authorization.py",
+            '"""Action-authorization gate.',
+            '"""Action-authorization gate. (an arbitrary later edit)',
+            "tests/conformance/test_composition.py",
+            "sanctioned_content",
+        ),
+        (
+            # STRICT-BOOLEAN: a truth set the two-regex sweep does not match —
+            # different container, different order, casefold instead of lower.
+            "boolean-setting-read-by-a-truth-set-nobody-enumerated",
+            "src/prometheus_protocol/sandbox/factory.py",
+            '    return parse_env_bool(\n'
+            '        "PROM_ALLOW_UNSAFE_EXEC", env.get("PROM_ALLOW_UNSAFE_EXEC"), default=False\n'
+            '    )',
+            '    raw = env.get("PROM_ALLOW_UNSAFE_EXEC") or ""\n'
+            '    return raw.casefold() in frozenset(("on", "yes", "true", "1"))',
+            "tests/conformance/test_strict_booleans.py",
+            "read_outside_the_strict_parser",
         ),
     ]
 

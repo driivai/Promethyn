@@ -41,6 +41,7 @@ import subprocess
 import sys
 import tempfile
 import tokenize
+import typing
 
 import pytest
 
@@ -443,11 +444,33 @@ def _step_named(job: dict, name: str) -> dict:
 #: Triggers are governed here too. They are INSIDE the boundary the honest-limit
 #: note above draws: branch protection lives outside the repository, but which
 #: events the workflow answers to is committed in this file.
-_ALLOWED_JOB_KEYS = {
+#: NO ENTRY MAY MEAN "ANY VALUE". The previous version wrote ``None`` for three
+#: of the four keys and skipped the comparison for them, so ``services``,
+#: ``strategy`` and ``steps`` were permitted KEYS with unconstrained VALUES —
+#: which is a set over key names when what varies is the value under them. An
+#: entry is therefore either the exact permitted value, or ``_PinnedBy("...")``
+#: naming the test in THIS MODULE that pins it, and
+#: ``test_no_allowlist_entry_delegates_to_a_test_that_does_not_exist`` requires
+#: that test to exist. Delegation is allowed; abdication is not.
+class _PinnedBy(typing.NamedTuple):
+    test: str
+
+
+_ALLOWED_JOB_KEYS: dict[str, object] = {
     "runs-on": "ubuntu-latest",
-    "services": None,     # value not pinned: the Postgres fixture is its own concern
-    "strategy": None,     # pinned in detail by the matrix test below
-    "steps": None,        # pinned in detail by the step tests below
+    "services": _PinnedBy("test_the_job_declares_exactly_the_expected_services"),
+    "strategy": _PinnedBy("test_the_gate_runs_in_every_matrix_job_on_every_supported_python"),
+    "steps": _PinnedBy("test_the_gate_step_command_is_exactly_the_gate_and_nothing_else"),
+}
+
+#: The database fixture, pinned. Not because the type gate depends on Postgres,
+#: but because ``services`` may not be a key with an unconstrained value: the
+#: live-database proofs in this workflow are only proofs of anything if the
+#: service they run against is the one they were written for. The env block and
+#: the health-check options are deliberately NOT pinned — they are credentials
+#: and timing for that same container — and the test below says so.
+_ALLOWED_SERVICES = {
+    "postgres": {"image": "postgres:16-alpine", "ports": ["5432:5432"]},
 }
 
 #: Note the key: PyYAML resolves a bare ``on:`` to the BOOLEAN True (YAML 1.1
@@ -456,7 +479,28 @@ _ALLOWED_JOB_KEYS = {
 #: sprint is about, so it is named rather than left as a trap.
 _TRIGGER_KEY = True
 
-_ALLOWED_TRIGGERS = {
+#: THE PERMITTED VALUES, PINNED STRUCTURALLY — no entry means "any value".
+#:
+#: The previous version wrote ``"pull_request": None`` and then read ``None`` as
+#: "accept whatever is there". That is a permitted set over trigger NAMES while
+#: what varies is the FILTER underneath them, and the gap is total: every one of
+#:
+#:     pull_request: {paths: ["docs/**"]}
+#:     pull_request: {paths-ignore: ["src/**", "scripts/**", "tests/**"]}
+#:     pull_request: {branches: ["a-branch-that-does-not-exist"]}
+#:
+#: leaves ``set(triggers)`` identical, passes the old assertion untouched, and
+#: means the workflow never fires on a pull request that changes code. Nineteen
+#: guards pass; nothing is gated.
+#:
+#: ``None`` here is now the PINNED VALUE, not a wildcard: PyYAML resolves a bare
+#: ``pull_request:`` with nothing under it to ``None``, and a bare trigger is
+#: exactly what is required — an unfiltered trigger, firing on every pull request
+#: whatever it touches. Anything else, including a scalar and including a filter
+#: that looks harmless, is refused. Denylisting ``paths``/``paths-ignore``/
+#: ``branches`` would have closed three spellings and left ``types``,
+#: ``branches-ignore``, ``tags`` and whatever Actions adds next.
+_ALLOWED_TRIGGERS: dict[str, object] = {
     "push": {"branches": ["main"]},
     "pull_request": None,
 }
@@ -482,12 +526,18 @@ def test_the_workflow_answers_to_exactly_the_permitted_triggers():
         f"{sorted(_ALLOWED_TRIGGERS)}. A workflow that does not fire on "
         "pull_request leaves every PR ungated while every guard here passes."
     )
+    # Unconditional: there is no branch here that skips the comparison, because
+    # a trigger whose value is not compared is a trigger that can be filtered
+    # down to nothing while the key stays present.
     for name, expected in _ALLOWED_TRIGGERS.items():
-        if expected is not None:
-            assert triggers[name] == expected, (
-                f"trigger {name!r} is {triggers[name]!r}, permitted {expected!r} "
-                "— narrowing which pushes or branches run the gate narrows the gate"
-            )
+        assert triggers[name] == expected, (
+            f"trigger {name!r} is {triggers[name]!r}, permitted {expected!r}. A "
+            "paths, paths-ignore or branches filter on pull_request keeps this "
+            "key set identical and stops the gate firing on code PRs; a bare "
+            "`pull_request:` (parsed as None) fires on all of them. If a filter "
+            "is genuinely wanted, change the permitted value here deliberately, "
+            "with the reason."
+        )
 
 
 def test_the_build_job_carries_exactly_the_permitted_keys():
@@ -509,9 +559,62 @@ def test_the_build_job_carries_exactly_the_permitted_keys():
     missing = sorted(set(_ALLOWED_JOB_KEYS) - set(job))
     assert missing == [], f"jobs.build has lost key(s) {missing}"
     for key, expected in _ALLOWED_JOB_KEYS.items():
-        if expected is not None:
-            assert job[key] == expected, (
-                f"jobs.build.{key} is {job[key]!r}, permitted {expected!r}"
+        if isinstance(expected, _PinnedBy):
+            continue  # pinned by the named test; its existence is asserted below
+        assert job[key] == expected, (
+            f"jobs.build.{key} is {job[key]!r}, permitted {expected!r}"
+        )
+
+
+def test_no_allowlist_entry_delegates_to_a_test_that_does_not_exist():
+    """``_PinnedBy`` is a promise that some OTHER test constrains the value.
+
+    An unkept promise is indistinguishable from "any value permitted", which is
+    the defect this replaced — so the promise is checked. If a delegated-to test
+    is deleted or renamed, the delegation fails here rather than quietly becoming
+    a wildcard.
+    """
+
+    delegated = {
+        key: value.test
+        for key, value in _ALLOWED_JOB_KEYS.items()
+        if isinstance(value, _PinnedBy)
+    }
+    assert delegated, "no delegation left — inline the check or keep this honest"
+    for key, name in delegated.items():
+        assert name in globals() and callable(globals()[name]), (
+            f"jobs.build.{key} delegates its value to {name!r}, which does not "
+            "exist in this module. The key would carry ANY value."
+        )
+        # And it must be a collected test, not a helper: the manifest step in CI
+        # requires exactly the test names listed in the manifest, so a delegated
+        # check that is not a test would never run.
+        assert name.startswith("test_"), f"{name!r} is not a test function"
+
+
+def test_the_job_declares_exactly_the_expected_services():
+    """``services`` is the key ``_ALLOWED_JOB_KEYS`` delegates here.
+
+    The live-database steps in this workflow ("PostgreSQL chokepoint live tests
+    (must run, never skip)") assert against a real server. Swapping the image, or
+    dropping the port mapping, does not make them skip — it makes them fail for a
+    reason unrelated to what they test, or, worse, pass against something else.
+
+    NOT pinned, deliberately: ``env`` and ``options``. Those are the container's
+    credentials and its health-check timings; pinning them here would make this
+    guard fire on unrelated tuning while proving nothing further.
+    """
+
+    services = _build_job()["services"]
+    assert set(services) == set(_ALLOWED_SERVICES), (
+        f"jobs.build declares services {sorted(services)}; permitted "
+        f"{sorted(_ALLOWED_SERVICES)}"
+    )
+    for name, pinned in _ALLOWED_SERVICES.items():
+        for field, expected in pinned.items():
+            assert services[name].get(field) == expected, (
+                f"services.{name}.{field} is {services[name].get(field)!r}, "
+                f"permitted {expected!r}"
             )
 
 
@@ -672,48 +775,82 @@ def test_the_gate_runner_refuses_a_run_that_checked_too_few_files():
 # (``verifier/bank.py``, the bank's own graded/unavailable split), which is the
 # argument for sweeping rather than auditing.
 
+#: Only used to check the SANCTIONED entries below, never to decide what is
+#: swept. See ``test_no_union_is_narrowed_in_expression_position``.
 _UNION_TYPES = {"Unavailable", "Evidence", "Judgment"}
 
+#: Every way Python asks "what type is this?" — a closed set fixed by the
+#: language, not a list of the union's spellings.
+#:
+#: THE PREVIOUS VERSION MATCHED THE WRONG THING. It swept for an ``ast.Name``
+#: whose ``id`` was in ``_UNION_TYPES`` — three identifier SPELLINGS. What varies
+#: is not the spelling of the test, it is the spelling of the NAME, and there are
+#: unlimited spellings of the same symbol::
+#:
+#:     [r for r in rs if not isinstance(r, models.Unavailable)]   # ast.Attribute
+#:     from ...models import Unavailable as Missing
+#:     [r for r in rs if not isinstance(r, Missing)]              # different id
+#:
+#: Both narrow correctly under mypy; neither is an ``ast.Name`` in the set. Nor
+#: would the obvious repairs close it — adding ``ast.Attribute.attr`` to the set
+#: leaves ``getattr(models, "Unavailable")``, and adding the known aliases leaves
+#: the next one.
+#:
+#: So this restricts the PROPERTY rather than the syntax, which is the reviewer's
+#: option (b) and the shape chosen here: within the shipped package, an
+#: expression-position test may not be a TYPE TEST AT ALL, whatever type it
+#: names. The permitted set is now over the thing that varies — the test
+#: expression — instead of over three identifiers. There are exactly eleven such
+#: tests in the package today (ten distinct sources; ``runner.py`` carries one of
+#: them twice) and none of them touches the union. Each is sanctioned below BY
+#: ITS SOURCE, so changing one to test a union member stops matching its sanction
+#: and fails.
+_TYPE_TEST_CALLS = {"isinstance", "issubclass", "type", "hasattr", "getattr"}
 
-class _ExpressionNarrowings(ast.NodeVisitor):
-    """Any expression-position TEST that mentions a union member.
 
-    The previous version required ``ast.Call`` -> ``isinstance`` ->
-    ``unparse(args[1])`` in a name set, and an independent review put four other
-    spellings straight through it — including ``not isinstance(r, Unavailable)``,
-    which is the most natural way to write the survivor filter this exists to
-    forbid:
+def _type_test_reason(node: ast.AST) -> str | None:
+    """Why ``node`` is a type test, or ``None``.
 
-        [r for r in rs if not isinstance(r, Unavailable)]   # missed
-        [r for r in rs if type(r) is Evidence]              # missed
-        [r for r in rs if isinstance(r, (Evidence,))]       # missed
-        list(filter(lambda r: not isinstance(r, Unavailable), rs))  # missed
-
-    So it no longer asks "is this the isinstance shape I thought of?" — an
-    enumeration, and enumerations have now failed three times here. It asks
-    whether an expression-position test MENTIONS a union member at all, and
-    permits none. The syntax of the narrowing stops mattering.
+    ``type(x) is C``, ``x.__class__ is C``, ``isinstance``/``issubclass``, and
+    the duck-typed pair ``hasattr``/three-argument ``getattr`` — which is how a
+    survivor filter is written when someone has been told not to use
+    ``isinstance``.
     """
 
-    def __init__(self) -> None:
-        self.hits: list[tuple[str, int]] = []
+    for child in ast.walk(node):
+        if isinstance(child, ast.Call):
+            func = child.func
+            name = (
+                func.id if isinstance(func, ast.Name)
+                else func.attr if isinstance(func, ast.Attribute)
+                else None
+            )
+            if name in _TYPE_TEST_CALLS:
+                return name
+        if isinstance(child, ast.Attribute) and child.attr == "__class__":
+            return "__class__"
+    return None
 
-    def _mentions_a_union(self, node: ast.AST) -> bool:
-        return any(
-            isinstance(child, ast.Name) and child.id in _UNION_TYPES
-            for child in ast.walk(node)
-        )
+
+class _ExpressionTypeTests(ast.NodeVisitor):
+    """Every test in expression position, with the reason it is a type test."""
+
+    def __init__(self) -> None:
+        self.hits: list[tuple[str, int, str, str]] = []
+
+    def _record(self, kind: str, node: ast.expr) -> None:
+        reason = _type_test_reason(node)
+        if reason is not None:
+            self.hits.append((kind, node.lineno, reason, ast.unparse(node)))
 
     def visit_IfExp(self, node: ast.IfExp) -> None:
-        if self._mentions_a_union(node.test):
-            self.hits.append(("ternary", node.lineno))
+        self._record("ternary", node.test)
         self.generic_visit(node)
 
     def visit_Lambda(self, node: ast.Lambda) -> None:
         # ``filter(lambda r: not isinstance(r, Unavailable), rs)`` is the same
         # survivor filter wearing a different hat.
-        if self._mentions_a_union(node.body):
-            self.hits.append(("lambda", node.lineno))
+        self._record("lambda", node.body)
         self.generic_visit(node)
 
     def generic_visit(self, node: ast.AST) -> None:
@@ -722,33 +859,121 @@ class _ExpressionNarrowings(ast.NodeVisitor):
         ):
             for generator in node.generators:
                 for condition in generator.ifs:
-                    if self._mentions_a_union(condition):
-                        self.hits.append(("comprehension filter", condition.lineno))
+                    self._record("comprehension filter", condition)
         super().generic_visit(node)
 
 
+#: The eleven expression-position type tests the package carries, sanctioned by
+#: ``path::<normalized test>``. NOT by line — a line number is an identity and
+#: shifts with any edit above it; the normalized source is the CONTENT, so
+#: editing the test to name a different type stops matching and fails.
+#:
+#: Every one tests a builtin or a local record type, never a union member; that
+#: is asserted independently below rather than left to review.
+_SANCTIONED_EXPRESSION_TYPE_TESTS: frozenset[str] = frozenset({
+    "src/prometheus_protocol/chokepoint/ownership.py::isinstance(value, str) and value",
+    "src/prometheus_protocol/chokepoint/runner.py::isinstance(payload, dict)",
+    "src/prometheus_protocol/chokepoint/runner.py::isinstance(seq, int) and (not isinstance(seq, bool))",
+    "src/prometheus_protocol/chokepoint/substrate.py::isinstance(row, MountEntry) and counts[row.mount_id] == 1",
+    "src/prometheus_protocol/core/transport.py::isinstance(req, DeadlineRequest)",
+    "src/prometheus_protocol/core/transport.py::hasattr(sock, 'settimeout')",
+    "src/prometheus_protocol/forge/miner.py::(ep := getattr(task, 'entry_point', ''))",
+    "src/prometheus_protocol/ledger/sqlite_ledger.py::isinstance(evidence, dict)",
+    "src/prometheus_protocol/ledger/tip_anchor.py::isinstance(body, bytes)",
+    "src/prometheus_protocol/swarm/roles.py::isinstance(text, str)",
+})
+
+
 def test_no_union_is_narrowed_in_expression_position():
-    """Every union narrowing is statement-form, so it can carry an
-    ``assert_never`` and a third member fails the build."""
+    """No expression-position TYPE TEST in the shipped package, sanctions aside.
+
+    A ternary, a comprehension filter or a lambda cannot carry an exhaustive
+    terminal branch, so a third union member is silently taken by the else-branch
+    (a verdict nobody reached) or silently dropped from a collection (a quorum
+    that never met).
+
+    WHAT THE PERMITTED SET IS OVER: the test expression itself, normalized
+    through ``ast.unparse`` and keyed to its file. Every spelling of the type
+    being tested — bare name, qualified attribute, import alias, tuple, a
+    ``getattr`` on the module — is refused identically, because the guard never
+    looks at which type is named.
+
+    WHAT CAN STILL VARY THAT THIS DOES NOT CONSTRAIN, stated rather than left to
+    be found: a HELPER. ``[r for r in rs if _ran(r)]``, with ``_ran`` doing the
+    ``isinstance`` in statement form one function away, is not a type test at the
+    filter site and is not caught here. Closing that needs interprocedural
+    resolution; it is not closed, and the thirty-six expression-position tests in
+    the package that call a non-builtin are the search space if it ever is. What
+    stands behind it is behavioural, not syntactic: the ensemble and k-sample
+    levers are driven with a REAL ``Unavailable`` in
+    ``test_unavailable_consumers_do_not_crash.py``, and a survivor filter that
+    drops the missing list — however it is spelled — fails those.
+    """
 
     # Scoped to the shipped package. In a test, `any(isinstance(r, Unavailable)
     # for r in ...)` is an ASSERTION about a result, not a consumer that would
     # silently drop a third member from a quorum — the property this is about.
     offenders = []
     for path in _package_files():
-        visitor = _ExpressionNarrowings()
+        rel = path.relative_to(REPO)
+        visitor = _ExpressionTypeTests()
         visitor.visit(ast.parse(path.read_text(encoding="utf-8")))
-        offenders += [
-            f"{path.relative_to(REPO)}:{line} ({kind})" for kind, line in visitor.hits
-        ]
+        for kind, line, reason, source in visitor.hits:
+            if f"{rel}::{source}" in _SANCTIONED_EXPRESSION_TYPE_TESTS:
+                continue
+            offenders.append(f"{rel}:{line} ({kind}, {reason}) {source}")
 
     assert offenders == [], (
-        f"union narrowed in expression position at {offenders}. A ternary, a "
-        "comprehension filter or a lambda cannot carry an exhaustive terminal "
-        "branch, so a third union member is silently taken by the else-branch (a "
-        "verdict nobody reached) or silently dropped from a collection (a quorum "
-        "that never met). Narrow in statement form with assert_never, or use "
-        "core.models.partition_outcomes for the collection case."
+        f"expression-position type test at {offenders}. Narrow in statement form "
+        "with assert_never, or use core.models.partition_outcomes for the "
+        "collection case. If the test genuinely cannot narrow a union — it "
+        "inspects a builtin or a local record type — sanction it in "
+        "_SANCTIONED_EXPRESSION_TYPE_TESTS by its exact source, with the reason."
+    )
+
+
+def test_no_sanctioned_expression_test_touches_the_union():
+    """Belt to the braces above: the sanction list cannot be used to smuggle a
+    union narrowing back in.
+
+    This one DOES match identifier spellings, and that is sound here for a reason
+    the primary sweep could not rely on: it runs over a hand-written list of ten
+    entries whose text is fixed in this file, not over code an attacker chooses.
+    A qualified or aliased spelling added to the list would have to be added by
+    someone editing this file, and it would be reviewed as what it is.
+    """
+
+    for entry in sorted(_SANCTIONED_EXPRESSION_TYPE_TESTS):
+        path, _, source = entry.partition("::")
+        assert (REPO / path).exists(), f"sanctioned test names a missing file: {entry}"
+        mentioned = {
+            node.id for node in ast.walk(ast.parse(source, mode="eval"))
+            if isinstance(node, ast.Name)
+        } | {
+            node.attr for node in ast.walk(ast.parse(source, mode="eval"))
+            if isinstance(node, ast.Attribute)
+        }
+        assert not (mentioned & _UNION_TYPES), (
+            f"sanctioned expression-position test names a union member: {entry}. "
+            "A union may not be narrowed in expression position, sanction or no."
+        )
+
+
+def test_every_sanctioned_expression_test_is_still_present():
+    """A sanction for a test that no longer exists is dead weight that would let
+    the same source reappear elsewhere in that file unreviewed."""
+
+    observed = set()
+    for path in _package_files():
+        rel = path.relative_to(REPO)
+        visitor = _ExpressionTypeTests()
+        visitor.visit(ast.parse(path.read_text(encoding="utf-8")))
+        observed |= {f"{rel}::{source}" for _, _, _, source in visitor.hits}
+
+    stale = sorted(_SANCTIONED_EXPRESSION_TYPE_TESTS - observed)
+    assert stale == [], (
+        f"sanctioned expression-position test(s) no longer in the tree: {stale}. "
+        "Remove the sanction in the same change that removed the code."
     )
 
 
@@ -801,28 +1026,47 @@ def test_partition_outcomes_is_exhaustive_and_drops_nothing():
 #: added HERE, deliberately, narrow and with the reason named, the same sanction
 #: discipline the Hearth guards use. It does not arrive in passing.
 #:
-#: Prose that quotes the directive inside backticks (the comments explaining the
-#: removals above) is not a directive and is excluded by the lookbehind.
-_ANY_IGNORE = re.compile(r"(?<!`)#\s*type:\s*ignore")
+#: Matched against COMMENT TOKENS and ANCHORED AT THE START of the comment,
+#: which is exactly where mypy honours it. Measured, not assumed:
+#:
+#:     x: int = "no"  # type: ignore              -> silenced
+#:     x: int = "no"  #type:ignore                -> silenced
+#:     x: int = "no"  # type: ignore # noqa       -> silenced
+#:     x: int = "no"  # noqa  # type: ignore      -> STILL REPORTED
+#:
+#: So the directive is real only when the comment BEGINS with it, and prose that
+#: mentions one — including every comment in this module — never does. The old
+#: backtick lookbehind was a convention standing in for that structural fact and
+#: is gone with it.
+_ANY_IGNORE = re.compile(r"#\s*type:\s*ignore")
 
 #: Sanctioned ignores, by ``path:line``. Empty, and adding an entry is a
 #: deliberate change to this file with a justification in the report.
 _SANCTIONED_IGNORES: frozenset[str] = frozenset()
 
-#: ``getattr(result, "verdict", <default>)`` — the fail-open shape the sprint
-#: names explicitly. With ``PASS`` it is a direct authorization fail-open; with
-#: ``ABSTAIN`` it erases the EX-1 distinction between "the verifier declined"
-#: and "the verifier could not run".
-_VERDICT_GETATTR = re.compile(
-    # The whitespace lives INSIDE the lookahead: with `\s*(?!...)` outside it,
-    # the engine backtracks the `\s*` to zero and the lookahead passes at the
-    # space — so prose that elides the default as `...` matched anyway.
-    r"getattr\(\s*[^,()]+,\s*[\"']verdict[\"']\s*,(?!\s*\.\.\.)"
-)
-
 
 def _source_files() -> list[pathlib.Path]:
-    """Every file the gate checks — all three trees, not just src."""
+    """Every file the gate checks — all three trees, not just src.
+
+    THERE IS NO EXCLUSION, and there must not be one. The previous version of
+    this module swept ``[p for p in _source_files() if p.name != _SELF]``, where
+    ``_SELF`` was this file's BASENAME. That is a permitted set over the wrong
+    thing: the set covers FILENAMES, and what an attacker chooses is the
+    filename. A real, checked production module at
+    ``src/prometheus_protocol/core/test_type_gate.py`` — inside ``files``,
+    inside the gate, reported in mypy's count — was swept out of every check
+    below simply by being called that, and could carry
+    ``# mypy: disable-error-code="union-attr"`` over a live defect with the gate
+    green and every guard here passing.
+
+    The exclusion existed because the sweeps read RAW TEXT, and this module
+    necessarily states the forbidden shapes in its own regexes and prose. They
+    now read TOKENS and AST nodes instead, so the question each one asks has the
+    same answer in this file as in any other and no file needs excusing. Nor
+    would the obvious repairs have helped: renaming ``_SELF``, adding a
+    "no test-shaped names in src" rule, or excluding the exact PATH all leave a
+    set over identity when the thing that varies is content.
+    """
 
     return sorted(
         path for tree in CHECKED_TREES for path in (REPO / tree).rglob("*.py")
@@ -835,14 +1079,23 @@ def _package_files() -> list[pathlib.Path]:
     return sorted((REPO / CHECKED_TREE).rglob("*.py"))
 
 
-#: This module states the forbidden shapes in its own regexes and prose, so it
-#: matches itself. Excluded by NAME, like the strict-boolean sweep excludes the
-#: parser it is about — not by a pattern that could quietly exclude more.
-_SELF = pathlib.Path(__file__).name
+def _comment_tokens(path: pathlib.Path) -> list[tuple[int, str]]:
+    """Every COMMENT token in ``path``, as ``(line, text)``.
 
+    Token type is what separates a directive from a mention of one. A checker
+    directive is a COMMENT; the same characters inside a string literal are a
+    STRING — this module's own regexes, and the mutation fixtures in
+    ``scripts/type_gate_revert_proofs.py`` which carry the directive as data
+    BECAUSE it is the mutation these guards are proved against. Neither is a
+    comment, so neither is swept, in whichever file it appears.
+    """
 
-def _swept_files() -> list[pathlib.Path]:
-    return [p for p in _source_files() if p.name != _SELF]
+    with path.open("rb") as handle:
+        return [
+            (token.start[0], token.string)
+            for token in tokenize.tokenize(handle.readline)
+            if token.type == tokenize.COMMENT
+        ]
 
 
 #: INLINE mypy CONFIGURATION, governed as an allowlist whose permitted set is
@@ -872,6 +1125,12 @@ def _swept_files() -> list[pathlib.Path]:
 #: which would have pushed the fix towards excluding the runner and turning the
 #: exclusion into a hiding place. Tokenising asks the precise question instead:
 #: is there a comment that reconfigures the checker?
+#:
+#: Anchored at the start of the comment, and swept over the WHOLE file: measured,
+#: ``# mypy:`` is honoured on any line, not only the first, and is NOT honoured
+#: when other text precedes it in the same comment. The pattern is deliberately
+#: wider than what mypy honours (``#mypy:`` and ``# mypy :`` are both refused by
+#: mypy and both flagged here) — erring towards flagging is the safe direction.
 _INLINE_MYPY_DIRECTIVE = re.compile(r"^#\s*mypy\s*:")
 
 #: Sanctioned inline directives, by ``path:line``. EMPTY, and it stays empty
@@ -889,16 +1148,13 @@ def test_no_inline_mypy_directive_reconfigures_the_checker_per_file():
     """
 
     offenders = []
-    for path in _swept_files():
-        with path.open("rb") as handle:
-            for token in tokenize.tokenize(handle.readline):
-                if token.type != tokenize.COMMENT:
-                    continue
-                if not _INLINE_MYPY_DIRECTIVE.match(token.string.strip()):
-                    continue
-                location = f"{path.relative_to(REPO)}:{token.start[0]}"
-                if location not in _SANCTIONED_INLINE_DIRECTIVES:
-                    offenders.append(location)
+    for path in _source_files():
+        for line, text in _comment_tokens(path):
+            if not _INLINE_MYPY_DIRECTIVE.match(text.strip()):
+                continue
+            location = f"{path.relative_to(REPO)}:{line}"
+            if location not in _SANCTIONED_INLINE_DIRECTIVES:
+                offenders.append(location)
     assert offenders == [], (
         f"inline mypy configuration at {offenders}. A '# mypy:' comment "
         "reconfigures the checker for that whole file, and the planted-defect "
@@ -910,12 +1166,14 @@ def test_no_inline_mypy_directive_reconfigures_the_checker_per_file():
 
 
 def test_no_type_ignore_survives_anywhere_in_the_source_tree():
+    """Every checked file, this one included — see ``_source_files``."""
+
     offenders = [
         location
-        for path in _swept_files()
-        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
-        if _ANY_IGNORE.search(line)
-        and (location := f"{path.relative_to(REPO)}:{n}") not in _SANCTIONED_IGNORES
+        for path in _source_files()
+        for line, text in _comment_tokens(path)
+        if _ANY_IGNORE.match(text.strip())
+        and (location := f"{path.relative_to(REPO)}:{line}") not in _SANCTIONED_IGNORES
     ]
     assert offenders == [], (
         f"unsanctioned '# type: ignore' at {offenders}. Silencing the checker is "
@@ -926,17 +1184,83 @@ def test_no_type_ignore_survives_anywhere_in_the_source_tree():
     )
 
 
+def _distinguishing_attributes() -> frozenset[str]:
+    """Every attribute that tells the union's members apart, FROM THE TYPES.
+
+    ``getattr(outcome, "verdict", Verdict.PASS)`` is the fail-open shape the
+    sprint names: an ``Unavailable`` has no verdict BY DESIGN, and substituting
+    one turns "the verifier could not run" into a verdict nobody reached. But
+    ``verdict`` is not the only attribute that separates the members, and the
+    previous guard was a regex over that ONE SPELLING — a permitted set over a
+    single literal, while what varies is which attribute is being defaulted.
+    ``getattr(outcome, "passed", True)`` and ``getattr(outcome, "failures", ())``
+    are the same fail-open one word over, and both walked straight past it.
+
+    So the set is derived from the dataclasses themselves: any field present on
+    one member of ``Evidence | Unavailable`` (or ``Judgment | Unavailable``) and
+    absent from the other. Adding a field to ``Evidence`` widens this guard in
+    the same commit, with nobody having to remember to.
+    """
+
+    from dataclasses import fields
+
+    from prometheus_protocol.core.models import Evidence, Judgment, Unavailable
+
+    evidence = {f.name for f in fields(Evidence)}
+    judgment = {f.name for f in fields(Judgment)}
+    unavailable = {f.name for f in fields(Unavailable)}
+    return frozenset((evidence ^ unavailable) | (judgment ^ unavailable))
+
+
+#: Sanctioned ``getattr`` defaults, by ``path::<normalized call>``. The key
+#: carries the CALL, not the line: an entry sanctions that exact expression in
+#: that file, so rewriting the call to name a different object or a different
+#: default no longer matches and fails. Both entries probe a foreign object that
+#: merely shares a field name with the union.
+_SANCTIONED_GETATTR_DEFAULTS: frozenset[str] = frozenset({
+    # ``case.verifier`` is a conformance Verifier protocol object, not an
+    # outcome; ``tier`` is optional on it and the default records "unspecified".
+    "src/prometheus_protocol/conformance/contract.py::getattr(case.verifier, 'tier', None)",
+    # ``exc`` is a urllib/http exception; ``.reason`` is its own attribute and
+    # has nothing to do with ``Unavailable.reason``.
+    "src/prometheus_protocol/core/transport.py::getattr(exc, 'reason', None)",
+})
+
+
 def test_no_verdict_getattr_default_in_the_source_tree():
-    offenders = [
-        f"{path.relative_to(REPO)}:{n}"
-        for path in _swept_files()
-        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
-        if _VERDICT_GETATTR.search(line)
-    ]
+    """No ``getattr`` default may stand in for an attribute that distinguishes
+    the union's members. Read from the AST, so prose and mutation fixtures that
+    quote the shape as text are not calls and are not swept."""
+
+    distinguishing = _distinguishing_attributes()
+    assert "verdict" in distinguishing, (
+        "the derivation no longer yields the attribute the sprint names — the "
+        "models changed shape and this guard must be re-derived deliberately"
+    )
+
+    offenders = []
+    for path in _source_files():
+        rel = path.relative_to(REPO)
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "getattr"
+                and len(node.args) == 3
+                and isinstance(node.args[1], ast.Constant)
+                and node.args[1].value in distinguishing
+            ):
+                continue
+            if f"{rel}::{ast.unparse(node)}" in _SANCTIONED_GETATTR_DEFAULTS:
+                continue
+            offenders.append(f"{rel}:{node.lineno} ({ast.unparse(node)})")
+
     assert offenders == [], (
-        f"getattr(..., 'verdict', <default>) at {offenders}. An Unavailable has "
-        "no verdict BY DESIGN: substituting one turns 'the verifier could not "
-        "run' into a verdict nobody reached. Narrow with isinstance instead."
+        f"getattr with a default for a union-distinguishing attribute at "
+        f"{offenders}. An Unavailable has no verdict, no passed, no failures BY "
+        "DESIGN: substituting one turns 'the verifier could not run' into an "
+        "outcome nobody reached. Narrow with isinstance, or use "
+        "core.models.partition_outcomes."
     )
 
 

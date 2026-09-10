@@ -33,12 +33,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Fetch full history so origin/main is resolvable. Several conformance
-          # tests assert the Hearth (and default-judge path) are byte-identical to
-          # main by diffing against origin/main; under the default shallow checkout
-          # (fetch-depth 1) origin/main is absent and those tests SILENTLY SKIP —
-          # the "Hearth unchanged" guard then never runs in CI. fetch-depth: 0
-          # makes them run.
+          # Full history. This was added because the Hearth guards diffed against
+          # origin/main and SILENTLY SKIPPED when it was unresolvable under the
+          # default shallow checkout; those guards now compare content digests
+          # and need no branch at all. It stays for the provenance check
+          # (check_ip_consistency.py --history walks every commit reachable from
+          # the branch) and so a shallow checkout cannot quietly re-enter as a
+          # reason some later guard cannot run.
           fetch-depth: 0
 
       - name: Set up Python ${{ matrix.python-version }}
@@ -275,11 +276,15 @@ jobs:
         env:
           PROM_REQUIRE_PRIVILEGED: "1"
 
-      - name: Hearth guards must EXECUTE, not skip (fetch-depth 0 makes origin/main resolvable)
-        # The four Hearth/default-judge byte-identical tests skipif origin/main is
+      - name: Hearth content guards must EXECUTE, not skip
+        # The four Hearth/default-judge guards used to skipif origin/main was
         # unresolvable — TRUE under the old shallow checkout, so they silently
-        # skipped in CI. -v -rs makes their execution visible by name and shows the
-        # SKIPPED list (they must not appear in it).
+        # skipped in CI. They no longer consult git at all: they compare each
+        # frozen file's bytes against the sanctioned digest in
+        # tests/conformance/hearth_ledger.py, so there is no branch to resolve
+        # and no predicate to skip on. The step stays because -v -rs makes their
+        # execution visible by name and shows the SKIPPED list (they must not
+        # appear in it), which is the property that was actually load-bearing.
         run: python -m pytest -v -rs -k hearth tests/conformance
 
       - name: Test

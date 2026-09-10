@@ -17,10 +17,13 @@ verifiers/providers, so the arithmetic is proven fully offline.
 
 from __future__ import annotations
 
-import os
-import subprocess
-
 import pytest
+
+from hearth_ledger import (
+    SOFT_LEVER_FILES,
+    UNSANCTIONED_MESSAGE,
+    unsanctioned_changes,
+)
 
 from prometheus_protocol.benchmarks.judge_eval import compute_metrics, parse_confidence
 from prometheus_protocol.core.interfaces import Provider, Verifier
@@ -354,102 +357,35 @@ def test_judge_temperature_defaults_to_zero_everywhere():
 
 
 # --------------------------------------------------------------------------
-# 8. the Hearth and the default judge path are unchanged vs main
+# 8. the Hearth and the default judge path are the sanctioned CONTENT
 # --------------------------------------------------------------------------
 
-_UNCHANGED_FILES = (
-    # Hearth
-    "src/prometheus_protocol/verifier/bank.py",
-    "src/prometheus_protocol/verifier/aggregate.py",
-    "src/prometheus_protocol/verifier/trust.py",
-    "src/prometheus_protocol/gate/promotion.py",
-    "src/prometheus_protocol/gate/authorization.py",
-    "src/prometheus_protocol/execution/executor.py",
-    "src/prometheus_protocol/execution/controller.py",
-    "src/prometheus_protocol/forge/miner.py",
-    "src/prometheus_protocol/core/models.py",
-    "src/prometheus_protocol/core/interfaces.py",
-    # the DEFAULT soft-judge path — levers are opt-in wrappers, not edits
-    "src/prometheus_protocol/verifier/model_judge.py",
-    "src/prometheus_protocol/verifier/grounding.py",
-    # the read-only harness the driver reuses
-    "src/prometheus_protocol/benchmarks/judge_eval.py",
-    "src/prometheus_protocol/benchmarks/grounding_eval.py",
-)
-
-# EX-1 (PR #52: a HARD verifier that cannot execute must not abstain) changed
-# exactly these ten frozen files, with explicit approval — the sanctioned delta.
-# The guard tolerates a change to one of THESE and still fails on ANY other
-# protected-file change, so the Hearth + default judge path stay protected
-# against unsanctioned edits while EX-1's approved surface lands.
-_EX1_CHANGED = frozenset({
-    "src/prometheus_protocol/core/models.py",
-    "src/prometheus_protocol/core/interfaces.py",
-    "src/prometheus_protocol/verifier/runner.py",
-    "src/prometheus_protocol/verifier/sql.py",
-    "src/prometheus_protocol/verifier/bank.py",
-    "src/prometheus_protocol/gate/authorization.py",
-    "src/prometheus_protocol/benchmarks/judge_eval.py",
-    "src/prometheus_protocol/orchestration/runtime.py",
-    "src/prometheus_protocol/execution/controller.py",
-    "src/prometheus_protocol/execution/pending.py",
-})
-
-# PROM-HARDEN-MAX attacker 4 (the transport adversary) changed exactly these two
-# frozen files, and nothing else on the protected list: a provider that cannot be
-# reached — timeout, refused certificate, response bomb — is now returned as
-# ``Unavailable`` (could-not-run, no verdict) instead of an ``ABSTAIN`` Evidence.
-# The ABSTAIN was the EX-1 defect at the transport layer: a dead or hostile
-# endpoint read as a working judge with nothing to say, and a network adversary
-# could manufacture abstentions at will. Same sanction discipline as EX-1: the
-# delta is named here so the guard still fails on ANY other protected change.
-_HARDEN4_CHANGED = frozenset({
-    "src/prometheus_protocol/verifier/model_judge.py",
-    "src/prometheus_protocol/verifier/grounding.py",
-})
-
-# TYPE-GATE (whole-tree strict type checking, made CI-blocking) changed exactly
-# these two further protected files:
-#   * ``gate/promotion.py`` — ``ScoreFn`` was annotated ``Sequence[Task]`` while
-#     the gate already forwarded ``Sequence[LearnableTask]``; the annotation was
-#     wrong about the code. ``OUTCOME_UNAVAILABLE`` was added as a caller-side
-#     marker for "no judgment existed, so nothing was submitted"; the gate never
-#     returns it, and ``approved`` is untouched.
-#   * ``benchmarks/grounding_eval.py`` — ``run_grounding_eval`` read ``.verdict``
-#     off an ``Evidence | Unavailable`` and would crash when the judge could not
-#     run. It now records the could-not-run as ``judged=None`` +
-#     ``judge_unavailable=True``, the representation ``judge_eval.py`` already
-#     used for the same fault, and no longer parses a confidence off an
-#     Unavailable. The judge's own decision path is unchanged.
-# Same sanction discipline as EX-1: the delta is named here so the guard still
-# fails on ANY other protected change.
-#
-# TYPE-GATE also changed ``verifier/bank.py``, which is already inside
-# ``_EX1_CHANGED`` above and so needs no new entry — recorded here so an auditor
-# reading "what did TYPE-GATE touch in the Hearth" is not misled by the entry
-# list alone. The change: the four ratcheted ``# type: ignore[arg-type]`` there
-# are replaced by ``Evidence.decided``, which states the ``__post_init__``
-# guarantee that the ``Verdict | None`` field type could not. The fused verdict,
-# the confidence arithmetic and the calibration writes are unchanged.
-_TYPE_GATE_CHANGED = frozenset({
-    "src/prometheus_protocol/gate/promotion.py",
-    "src/prometheus_protocol/benchmarks/grounding_eval.py",
-})
-_SANCTIONED = _EX1_CHANGED | _HARDEN4_CHANGED | _TYPE_GATE_CHANGED
+_HEARTH_FILES = SOFT_LEVER_FILES
 
 
-def _git(*args: str) -> subprocess.CompletedProcess:
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    return subprocess.run(["git", *args], capture_output=True, text=True, cwd=root)
+def test_hearth_and_default_judge_path_are_the_sanctioned_content():
+    """The soft levers are opt-in WRAPPERS: neither the Hearth nor the default
+    judge path is edited to accommodate them. The ledger holds the sanctioned
+    content of both.
 
+    THE COMPARISON REFERENCE IS THE LEDGER, NOT A BRANCH. This used to run
+    ``git diff --name-only origin/main`` and reject changed paths outside a
+    permitted set. Two defects, both closed here:
 
-@pytest.mark.skipif(
-    _git("rev-parse", "--verify", "origin/main").returncode != 0,
-    reason="origin/main not available in this checkout",
-)
-def test_hearth_and_default_judge_path_unchanged_versus_main():
-    diff = _git("diff", "--name-only", "origin/main", "--", *_UNCHANGED_FILES)
-    assert diff.returncode == 0, diff.stderr
-    changed = [line for line in diff.stdout.splitlines() if line.strip()]
-    unsanctioned = [f for f in changed if f not in _SANCTIONED]
-    assert unsanctioned == [], f"unsanctioned protected change vs origin/main: {unsanctioned}"
+    * the permitted set was over PATHS, so a file sanctioned once — including
+      ``gate/authorization.py`` — was sanctioned FOREVER, and every later edit
+      to it was invisible rather than allowed;
+    * on main the diff against ``origin/main`` is empty, so after each merge the
+      guard asserted nothing at all.
+
+    Hashing the files on disk fixes both: any edit to any frozen file fails until
+    its digest is updated deliberately, and the assertion holds identically on a
+    branch, on main, in a worktree and in a fresh clone. The ``skipif origin/main
+    is unresolvable`` marker is gone with the git dependency — it was how these
+    guards silently stopped running under a shallow checkout.
+    """
+
+    unsanctioned = unsanctioned_changes(_HEARTH_FILES)
+    assert unsanctioned == [], (
+        UNSANCTIONED_MESSAGE + "\n" + "\n".join(unsanctioned)
+    )

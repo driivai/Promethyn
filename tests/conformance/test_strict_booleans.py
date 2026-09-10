@@ -14,6 +14,8 @@ everything would pass a rejection test vacuously.
 
 from __future__ import annotations
 
+import ast
+import inspect
 import pathlib
 import re
 from types import SimpleNamespace
@@ -28,6 +30,7 @@ from prometheus_protocol.chokepoint import (
     unverified_substrate_allowed,
     verified_substrate_required,
 )
+from prometheus_protocol.core import config as _config_module
 from prometheus_protocol.core.booleans import FALSE_WORDS, TRUE_WORDS, parse_env_bool, require_bool
 from prometheus_protocol.core.config import BOOLEAN_FIELDS, SECURITY_FIELDS, Config
 from prometheus_protocol.core.errors import ConfigError
@@ -285,8 +288,20 @@ def test_every_ci_gate_flag_is_read_through_the_strict_parser():
 
 
 def test_the_old_truth_set_pattern_appears_nowhere_else():
-    """The exact defect shape: a truth-set copied per module. The words may
-    exist in exactly one place, the parser."""
+    """The literal tuple the fail-open was copied from, pinned at one site.
+
+    WHAT THIS PROVES, narrowed to the truth. It proves that THIS SPELLING —
+    ``"1", "true", "yes", "on"`` in that order — occurs nowhere but the parser.
+    It does not prove that no loose boolean reader exists: a reordered tuple, a
+    ``frozenset``, a ``casefold()`` membership test or a new coercion wrapper all
+    walk past it, because it is a regex over one literal and what varies is how
+    somebody writes a truth set.
+
+    It is kept because it is cheap and because that literal really is the shape
+    that was copied. The property is carried by
+    ``test_no_boolean_security_setting_is_read_outside_the_strict_parser``, which
+    constrains where the setting is READ instead of how a truth set is SPELLED.
+    """
 
     pattern = re.compile(r'"1",\s*"true",\s*"yes",\s*"on"')
     offenders = []
@@ -299,6 +314,157 @@ def test_the_old_truth_set_pattern_appears_nowhere_else():
             if pattern.search(path.read_text(encoding="utf-8")):
                 offenders.append(str(path.relative_to(REPO)))
     assert offenders == [], offenders
+
+
+# ---------------------------------------------------------------------------
+# 5b. The property: a boolean security setting is read ONE way
+# ---------------------------------------------------------------------------
+#
+# The sweep above is a regex over a spelling. This is the property it was
+# standing in for, and it is enforceable structurally because every boolean
+# security setting in this repository is read out of a Mapping by name: find
+# every such read in the source, test and script trees, and require it to be
+# lexically inside a ``parse_env_bool(...)`` call. A reordered tuple, a
+# ``frozenset``, a ``casefold()`` membership test, a helper, or a coercion
+# wrapper nobody has invented yet all fail identically — not because the shape
+# was anticipated, but because the read is not going through the parser.
+
+#: The house naming convention for a boolean setting, which is what makes this
+#: enforceable for settings that DO NOT YET EXIST. Derived names (below) cover
+#: what is wired up today; the pattern covers the next one, which is the case a
+#: derived-only set would miss.
+_BOOLEAN_ENV_PATTERN = re.compile(r"^PROM_(?:REQUIRE|ALLOW|ENABLE|DISABLE)_[A-Z0-9_]+$")
+
+#: Reads that are not security reads, sanctioned by ``path::<normalized source>``
+#: — content, not line, so rewriting the expression stops matching.
+_SANCTIONED_LOOSE_READS = frozenset({
+    # A parametrized test restating its own fixture: the dict on the left of the
+    # comparison is the one the test itself just built, and the assertion is that
+    # the READER agrees with it. Not a setting being consumed.
+    "tests/conformance/test_security_posture.py::env.get('PROM_REQUIRE_DIGEST_PIN')",
+})
+
+_STRICT_CALLS = {"parse_env_bool", "_env_bool"}
+
+
+def _boolean_env_names() -> set[str]:
+    """Every boolean setting name that is wired up today, from live objects."""
+
+    return {name for name, _ in ENV_READERS} | set(CONFIG_ENV.values()) | set(CI_FLAGS)
+
+
+def _module_level_aliases(tree: ast.Module, names: set[str]) -> dict[str, str]:
+    """``EXTERNAL_SIGNER_REQUIRED_ENV = "PROM_REQUIRE_EXTERNAL_SIGNER"``.
+
+    Every reader in this repository names its variable through a constant like
+    this, so a sweep that only understood string literals would see almost none
+    of the real reads.
+    """
+
+    aliases = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):
+            value = node.value.value
+            if isinstance(value, str) and (
+                value in names or _BOOLEAN_ENV_PATTERN.match(value)
+            ):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        aliases[target.id] = value
+    return aliases
+
+
+def test_the_config_helper_really_delegates_to_the_one_parser():
+    """``_env_bool`` is treated as strict by the sweep below, so that has to be
+    true rather than assumed: a helper that stopped delegating would launder
+    every read in ``core/config.py``."""
+
+    source = inspect.getsource(_config_module._env_bool)
+    assert "parse_env_bool(name, env.get(name), default=default)" in source, source
+
+
+def test_no_boolean_security_setting_is_read_outside_the_strict_parser():
+    """THE PROPERTY. Every read of a boolean security setting goes through
+    ``core.booleans.parse_env_bool``, and nothing else reads one.
+
+    WHAT THE PERMITTED SET IS OVER: the READ SITE — every ``env.get(NAME)``,
+    ``os.getenv(NAME)`` and ``env[NAME]`` in the three checked trees, where NAME
+    is a boolean setting by the wired-up list or by the naming convention. What
+    varies is where and how somebody reads the variable, and every read is
+    covered.
+
+    WHAT CAN STILL VARY THAT THIS DOES NOT CONSTRAIN, stated rather than left to
+    be found: a key that is neither a literal nor a module-level constant —
+    ``os.environ.get(prefix + suffix)``, or a name passed in from a caller. The
+    repository has no such read today (all thirty are literals or ``*_ENV``
+    constants), and a reader written that way would be conspicuous next to the
+    convention every other one follows; it is not caught here.
+    """
+
+    names = _boolean_env_names()
+    assert len(names) >= 13, f"the derived name set collapsed to {sorted(names)}"
+
+    offenders = []
+    for root in ("src/prometheus_protocol", "scripts", "tests"):
+        for path in sorted((REPO / root).rglob("*.py")):
+            relative = path.relative_to(REPO)
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            aliases = _module_level_aliases(tree, names)
+            parents = {
+                child: node
+                for node in ast.walk(tree)
+                for child in ast.iter_child_nodes(node)
+            }
+
+            def setting_read(node: ast.AST) -> str | None:
+                key = None
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                    if node.func.attr in ("get", "getenv") and node.args:
+                        key = node.args[0]
+                elif isinstance(node, ast.Subscript):
+                    key = node.slice
+                if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                    name = key.value
+                elif isinstance(key, ast.Name):
+                    name = aliases.get(key.id, "")
+                else:
+                    return None
+                strict = name in names or bool(_BOOLEAN_ENV_PATTERN.match(name))
+                return name if strict else None
+
+            for node in ast.walk(tree):
+                name = setting_read(node)
+                if name is None:
+                    continue
+                enclosing = parents.get(node)
+                through_parser = False
+                while enclosing is not None:
+                    if isinstance(enclosing, ast.Call):
+                        function = enclosing.func
+                        called = (
+                            function.id if isinstance(function, ast.Name)
+                            else function.attr if isinstance(function, ast.Attribute)
+                            else ""
+                        )
+                        if called in _STRICT_CALLS:
+                            through_parser = True
+                            break
+                    enclosing = parents.get(enclosing)
+                if through_parser:
+                    continue
+                if f"{relative}::{ast.unparse(node)}" in _SANCTIONED_LOOSE_READS:
+                    continue
+                offenders.append(f"{relative}:{node.lineno} {ast.unparse(node)}")
+
+    assert offenders == [], (
+        f"boolean security setting read outside parse_env_bool at {offenders}. "
+        "bool('false') is True and 'tru' is silently False — that is the "
+        "fail-open pair this parser exists to stop, and it comes back the moment "
+        "a setting is read any other way. Route the read through "
+        "core.booleans.parse_env_bool. If the read genuinely is not a setting "
+        "being consumed, sanction it in _SANCTIONED_LOOSE_READS by its exact "
+        "source, with the reason."
+    )
 
 
 def test_ci_flag_misspelling_is_refused_at_import_of_a_gated_module(monkeypatch, tmp_path):
