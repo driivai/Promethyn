@@ -257,7 +257,12 @@ jobs:
           expected = {"test_bound_requirements_encoding": 21,
                       "test_coverage_enforcement": 33,
                       "test_policy_enforcement_regression": 19,
-                      "test_no_second_aggregator": 9,
+                      # PHASE-1.2b — 9 -> 11. Closing the unbound-judgment route
+                      # moved the interesting capability from constructing a
+                      # verdict to MINTING an assessment, so the 2d guard gained
+                      # a second sweep (permitted minters, and its staleness
+                      # check). Re-pinned in the same change that added them.
+                      "test_no_second_aggregator": 11,
                       "test_phase_1_2a_revert_pins": 7}
           for module, count in expected.items():
               actual = sum(c.get("classname", "").endswith(module) for c in cases)
