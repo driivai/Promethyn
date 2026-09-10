@@ -76,13 +76,13 @@ def test_every_TERM_of_every_selection_actually_selects_tests(runner):
     HOW IT CHECKS, and the limit of that. The names are read out of each file's
     AST, and a term counts as live when it is a substring of a test function's
     name — which is what ``-k`` does for a plain identifier. It does NOT spawn
-    pytest: an earlier version ran ``pytest --collect-only`` per term, a local
-    full-suite run hung on it once (25 minutes wall against 20 seconds of CPU,
-    observed once and never explained), and starting a pytest session from inside
-    a pytest session is fragile in ways this proof has no reason to depend on.
-    In-process it is 0.14s against 5.23s. It did NOT hang CI — that was claimed
-    in the commit that replaced it and was wrong, read off a check-runs response
-    still reporting ``in_progress`` long after the jobs had finished.
+    pytest. The earlier version ran ``pytest --collect-only`` per term and was
+    replaced for one measured reason: 0.14s against 5.23s, plus not wanting a
+    pytest session inside a pytest session. It was NOT replaced because it hung.
+    Two commits claimed it did — once on CI, once locally — and both were wrong;
+    the CI run carrying it went green in 7m43s and the local run was killed at
+    about two minutes while running normally. Recorded here because the wrong
+    reason is the more memorable one, and the next reader should not inherit it.
 
     The limit the AST scan buys: a term matching only a ``parametrize`` ID, a
     class name or a file path would be reported as dead. None here is of that
