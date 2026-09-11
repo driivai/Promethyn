@@ -12,6 +12,8 @@ import sys
 
 import pytest
 
+from tests.support.platform_gate import require_linux
+
 
 PROBE = r'''
 import json, os, sqlite3, subprocess, sys
@@ -210,7 +212,11 @@ print(json.dumps({"case": case, "passed": True}))
                                   "hidden_descendant", "journal_posix_lock", "namespace_file",
                                   "deleted_source"])
 def test_linux_opened_substrate(case, tmp_path):
-    assert sys.platform.startswith("linux"), "Linux mount integration is required, not skipped"
+    # Still "required, not skipped" WHERE IT MATTERS: CI sets PROM_REQUIRE_LINUX=1
+    # and this FAILS under it exactly as the bare assert did. Off Linux, on a
+    # developer's machine, it now skips with the reason instead of failing, so a
+    # platform mismatch is not indistinguishable from a regression.
+    require_linux()
     command = ["unshare", "--mount", "--propagation", "private"]
     if os.geteuid() != 0:
         command += ["--user", "--map-root-user"]

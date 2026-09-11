@@ -11,6 +11,14 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      # THE PLATFORM CONTRACT, enforced where it is promised. The platform gate
+      # (tests/support/platform_gate.py) SKIPS off Linux so a developer on macOS
+      # can tell a platform mismatch from a regression. Under this flag it FAILS
+      # instead — so on the platform this project actually supports, the gate can
+      # never be a silent no-op, and a skip here is a broken promise rather than
+      # a shrug. Same idiom as PROM_REQUIRE_SANDBOX / PROM_REQUIRE_PG below.
+      PROM_REQUIRE_LINUX: "1"
     services:
       postgres:
         image: postgres:16-alpine
