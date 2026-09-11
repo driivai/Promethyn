@@ -338,6 +338,23 @@ jobs:
       - name: PHASE-1.2 CHECKPOINT 3 guard reverts (must be caught)
         run: python scripts/phase_1_2c_revert_proofs.py
 
+      - name: PHASE-1.2c Checkpoint B execution-descriptor proofs
+        run: |
+          python -m pytest -q \
+            tests/conformance/test_execution_descriptor.py \
+            tests/conformance/test_phase_1_2c_checkpoint_b_revert_pins.py \
+            --junitxml=execution-descriptor.xml
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          cases = list(ET.parse("execution-descriptor.xml").iter("testcase"))
+          assert len(cases) == 16, f"16 descriptor proofs required; observed {len(cases)}"
+          assert all(c.find(t) is None for c in cases for t in ("skipped", "failure", "error"))
+          print("Checkpoint B: 16 proofs; zero skips/failures/errors")
+          PY
+
+      - name: PHASE-1.2c Checkpoint B seam mutations (must be caught)
+        run: python scripts/phase_1_2c_checkpoint_b_revert_proofs.py
+
       - name: The bank decision surface has not moved
         # verifier/bank.py came out from under its net-diff-empty guard in this
         # sprint. judge() is UNCHANGED and this is what says so: 240 enumerated

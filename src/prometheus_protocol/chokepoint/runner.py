@@ -2332,6 +2332,7 @@ def build_migration_runtime(
 
     if audit is None:
         raise ValueError("migration runner audit sink is required")
+    execution_authorizer = _migration_execution_authorizer(settings)
     signer = resolve_signer(config, settings=settings, env=env)
     substrate_policy = resolve_substrate_policy(config, settings=settings, env=env)
     consumed = ConsumedApprovals(
@@ -2351,7 +2352,11 @@ def build_migration_runtime(
             or ledger_anchor_required(env),
         )
         authority = RecordedApprovalAuthority(
-            signer=signer, journal=journal, context=authorization, clock=clock
+            signer=signer,
+            journal=journal,
+            context=authorization,
+            clock=clock,
+            execution_authorizer=execution_authorizer,
         )
         runner = BrokeredMigrationRunner(
             authority=authority,
@@ -2366,6 +2371,20 @@ def build_migration_runtime(
         consumed.close()
         raise
     return MigrationRuntime(authority=authority, runner=runner)
+
+
+def _migration_execution_authorizer(settings: object | None):
+    """Resolve the selected verification profile at the production root."""
+
+    from prometheus_protocol.policy.execution import ExecutionAuthorizer, profile_supplier
+    from prometheus_protocol.policy.profile import DEFAULT_PROFILE_ID
+
+    profile_id = getattr(settings, "verification_profile", DEFAULT_PROFILE_ID)
+    # profile_supplier validates eagerly enough to reject malformed identities;
+    # load once as well so an unknown profile refuses factory construction.
+    supplier = profile_supplier(profile_id)
+    supplier()
+    return ExecutionAuthorizer(supplier)
 
 
 def build_migration_runner(

@@ -29,7 +29,6 @@ Run with the repository's test environment:
 """
 
 from prometheus_protocol.chokepoint import approval
-from prometheus_protocol.execution import controller
 from prometheus_protocol.gate import authorization
 from prometheus_protocol.policy import assessment
 from prometheus_protocol.verifier import bank
@@ -42,7 +41,7 @@ AGGREGATOR = "tests/conformance/test_no_second_aggregator.py"
 #: Observed first, then pinned — never predicted. Both a shortfall and an excess
 #: are refused.
 EXPECTED_REVERTS = 7
-EXPECTED_CALL_FAILURES = 10
+EXPECTED_CALL_FAILURES = 9
 
 
 def enforce_expected(caught: int, failures: int) -> None:
@@ -66,10 +65,14 @@ def mutations():
             # off it — which is exactly what the gate did before.
             "gate-reads-a-raw-judgment-again",
             authorization.ActionGate.decide,
-            [(
-                '    judgment = require_assessment(assessment, surface="ActionGate.decide").outcome',
-                "    judgment = getattr(assessment, \"outcome\", assessment)",
-            )],
+            [
+                (
+                    '    checked = require_assessment(assessment, surface="ActionGate.decide")',
+                    "    if isinstance(assessment, Judgment):\n"
+                    "        return GateDecision(approved=True, judgment=assessment, action=action)\n"
+                    '    checked = require_assessment(assessment, surface="ActionGate.decide")',
+                )
+            ],
             CLOSED,
             "presenting_one_anyway or no_approval_and_zero_executor_calls",
         ),
@@ -78,12 +81,12 @@ def mutations():
             # mints a signed capability against a privileged principal.
             "migration-authority-accepts-a-raw-judgment",
             approval.ApprovalAuthority.authorize,
-            [(
-                "    checked = require_assessment(\n"
-                "        assessment, surface=\"ApprovalAuthority.authorize\"\n"
-                "    )",
-                "    checked = assessment",
-            )],
+            [
+                (
+                    '    checked = require_assessment(assessment, surface="ApprovalAuthority.authorize")',
+                    "    checked = assessment",
+                )
+            ],
             CLOSED,
             "migration_authority_mints_no_capability",
         ),
@@ -91,20 +94,24 @@ def mutations():
         (
             "migration-authority-stops-checking-the-artifact",
             approval.ApprovalAuthority.authorize,
-            [(
-                "    if not hmac.compare_digest(checked.artifact_sha256, artifact.sha256):",
-                "    if False:",
-            )],
+            [
+                (
+                    "    if not hmac.compare_digest(checked.artifact_sha256, artifact.sha256):",
+                    "    if False:",
+                )
+            ],
             CLOSED,
             "DIFFERENT_action_mints_no_capability",
         ),
         (
             "migration-authority-stops-checking-the-action-class",
             approval.ApprovalAuthority.authorize,
-            [(
-                "    if checked.action_class != ACTION_DATABASE_MIGRATE:",
-                "    if False:",
-            )],
+            [
+                (
+                    "    if checked.action_class != ACTION_DATABASE_MIGRATE:",
+                    "    if False:",
+                )
+            ],
             CLOSED,
             "DIFFERENT_ACTION_CLASS_mints_no_capability",
         ),
@@ -134,12 +141,14 @@ def mutations():
             # production module able to mint can authorize around any verdict.
             "the-bank-mints-without-validating-coverage",
             bank.VerifierBank.assess,
-            [(
-                "    return mint(snapshot, self.judge_covered(snapshot, results))",
-                "    from prometheus_protocol.core.models import Judgment, Verdict\n"
-                "    return mint(snapshot, Judgment(\n"
-                "        verdict=Verdict.PASS, confidence=1.0, authoritative=True))",
-            )],
+            [
+                (
+                    "    return mint(expected, self.judge_covered(expected, results))",
+                    "    from prometheus_protocol.core.models import Judgment, Verdict\n"
+                    "    return mint(snapshot, Judgment(\n"
+                    "        verdict=Verdict.PASS, confidence=1.0, authoritative=True))",
+                )
+            ],
             CLOSED,
             "refused_coverage_still_refuses",
         ),

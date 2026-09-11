@@ -45,7 +45,9 @@ from prometheus_protocol.verifier.store import InMemoryTrustStore
 
 from tests.support.assessments import carrying
 
-_REQUIRE = parse_env_bool("PROM_REQUIRE_SANDBOX", os.environ.get("PROM_REQUIRE_SANDBOX"), default=False)
+_REQUIRE = parse_env_bool(
+    "PROM_REQUIRE_SANDBOX", os.environ.get("PROM_REQUIRE_SANDBOX"), default=False
+)
 
 _TASK = Task(
     id="live/add",
@@ -57,12 +59,16 @@ _TASK = Task(
 _GOOD = "def add(a, b):\n    return a + b\n"
 _BAD = "def add(a, b):\n    return a - b\n"
 # The action prints a marker so the test can prove the code really ran in-sandbox.
-_ACTION_CODE = _GOOD + "\nif __name__ == '__main__':\n    print('add(2,3)=', add(2, 3))\n"
+_ACTION_CODE = (
+    _GOOD + "\nif __name__ == '__main__':\n    print('add(2,3)=', add(2, 3))\n"
+)
 
 
 def _require_sandbox() -> None:
     if not NamespaceSandbox.available():
-        reason = "namespace isolation runtime (unprivileged user namespaces) unavailable"
+        reason = (
+            "namespace isolation runtime (unprivileged user namespaces) unavailable"
+        )
         if _REQUIRE:
             pytest.fail(f"PROM_REQUIRE_SANDBOX=1 but {reason}")
         pytest.skip(reason)
@@ -81,12 +87,16 @@ def test_milestone_live_execution_end_to_end():
     _require_sandbox()
     ledger = SqliteLedger(":memory:")
     controller = ExecutionController(
-        gate=ActionGate(escalate_below=0.75, route_high_risk=True),
+        gate=ActionGate(
+            target_canonical="sandbox://test", escalate_below=0.75, route_high_risk=True
+        ),
         executor=SandboxExecutor(sandbox=NamespaceSandbox()),
         ledger=ledger,
         clock=lambda: "2026-07-01T00:00:00Z",
     )
-    action = ExecutableAction(kind=ACTION_PYTHON_CODE, code=_ACTION_CODE, entry_point="add")
+    action = ExecutableAction(
+        kind=ACTION_PYTHON_CODE, code=_ACTION_CODE, entry_point="add"
+    )
 
     # The correct solution earns an authoritative PASS at full confidence.
     good = _judge(_GOOD)
@@ -94,16 +104,26 @@ def test_milestone_live_execution_end_to_end():
 
     # 1. APPROVED, high-confidence, low-risk -> EXECUTES inside the sandbox.
     approved = controller.submit(
-        assessment=carrying(good), action=action, risk_class="low", subject_id="live/ok"
+        attempt_id="attempt-1",
+        assessment=carrying(good),
+        action=action,
+        risk_class="low",
+        subject_id="live/ok",
     )
     assert approved.outcome == OUTCOME_APPROVE
-    assert approved.execution.executed and approved.execution.sandbox_name == "namespace"
+    assert (
+        approved.execution.executed and approved.execution.sandbox_name == "namespace"
+    )
     assert approved.execution.exit_status == 0
     assert "add(2,3)= 5" in approved.execution.stdout
 
     # 2. The SAME action at HIGH risk HALTS for a human, then executes on approval.
     held = controller.submit(
-        assessment=carrying(good), action=action, risk_class="high", subject_id="live/hold"
+        attempt_id="attempt-1",
+        assessment=carrying(good),
+        action=action,
+        risk_class="high",
+        subject_id="live/hold",
     )
     assert held.outcome == OUTCOME_ROUTE and held.execution is None
     result = controller.approve(
@@ -115,12 +135,20 @@ def test_milestone_live_execution_end_to_end():
     bad = _judge(_BAD)
     assert bad.verdict == Verdict.FAIL
     blocked = controller.submit(
-        assessment=carrying(bad), action=action, risk_class="low", subject_id="live/bad"
+        attempt_id="attempt-1",
+        assessment=carrying(bad),
+        action=action,
+        risk_class="low",
+        subject_id="live/bad",
     )
     assert blocked.outcome == OUTCOME_BLOCK and blocked.execution is None
 
     # Audit: all three paths are recorded, re-readable end to end.
     execs = ledger.executions()
-    assert [e["source"] for e in execs] == ["auto-approved", "human-approved", "blocked"]
+    assert [e["source"] for e in execs] == [
+        "auto-approved",
+        "human-approved",
+        "blocked",
+    ]
     assert ledger.pending_action(held.pending.id)["decided_by"] == "will@driivai.com"
     assert len(ledger.pending_actions()) == 1

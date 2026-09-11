@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING, Callable, Sequence
 
 from prometheus_protocol.core.validation import require_unit_interval
 from prometheus_protocol.core.models import (
@@ -59,6 +59,7 @@ from prometheus_protocol.verifier.trust import (
 if TYPE_CHECKING:  # pragma: no cover - import cycle: policy imports core.models
     from prometheus_protocol.policy.assessment import PolicyAssessment
     from prometheus_protocol.policy.coverage import BoundResult
+    from prometheus_protocol.policy.profile import VerificationPolicy
     from prometheus_protocol.policy.snapshot import BoundRequirements
 
 
@@ -101,17 +102,30 @@ class VerifierBank:
         store: TrustStore | None = None,
         *,
         escalate_below: float = 0.75,
+        policy_supplier: "Callable[[], VerificationPolicy] | None" = None,
     ) -> None:
         self._store: TrustStore = store if store is not None else InMemoryTrustStore()
         self.escalate_below = require_unit_interval(
             escalate_below, name="escalate_below"
         )
+        self._policy_supplier = policy_supplier
         # Ephemeral running means of observed cost/latency, used only to break
         # ties in rank(); not part of the persisted trust state.
         self._cost_sum: dict[str, float] = {}
         self._cost_n: dict[str, int] = {}
         self._latency_sum: dict[str, float] = {}
         self._latency_n: dict[str, int] = {}
+
+    def bind_policy_supplier(self, supplier: "Callable[[], VerificationPolicy]") -> None:
+        """Bind the trusted selected-policy source before the first assessment."""
+
+        if self._policy_supplier is not None:
+            raise ValueError("VerifierBank policy supplier is already bound")
+        self._policy_supplier = supplier
+
+    @property
+    def has_policy_supplier(self) -> bool:
+        return self._policy_supplier is not None
 
     # -- registration ------------------------------------------------------
 
@@ -183,8 +197,28 @@ class VerifierBank:
         """
 
         from prometheus_protocol.policy.assessment import mint
+        from prometheus_protocol.policy.execution import ExecutionNotAuthorized
+        from prometheus_protocol.policy.resolver import resolve
+        from prometheus_protocol.policy.snapshot import snapshot_digest
 
-        return mint(snapshot, self.judge_covered(snapshot, results))
+        if self._policy_supplier is None:
+            raise ExecutionNotAuthorized(
+                "VerifierBank requires the selected-policy supplier before minting"
+            )
+        policy = self._policy_supplier()
+        expected = resolve(
+            policy,
+            artifact_sha256=snapshot.artifact_sha256,
+            target_canonical=snapshot.target_canonical,
+            action_class=snapshot.action_class,
+            attempt_id=snapshot.attempt_id,
+        )
+        if snapshot_digest(expected) != snapshot_digest(snapshot):
+            raise ExecutionNotAuthorized(
+                "snapshot differs from requirements re-resolved from selected policy"
+            )
+
+        return mint(expected, self.judge_covered(expected, results))
 
     def judge_covered(
         self,

@@ -45,6 +45,7 @@ from prometheus_protocol.policy.snapshot import ACTION_DATABASE_MIGRATE
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle: policy imports core.models
     from prometheus_protocol.policy.assessment import PolicyAssessment
+    from prometheus_protocol.policy.execution import ExecutionAuthorizer
 
 
 class RecordedApprovalAuthority(ApprovalAuthority):
@@ -55,11 +56,13 @@ class RecordedApprovalAuthority(ApprovalAuthority):
         journal: AuthorizationJournal,
         context: AuthorizationContext,
         clock: Callable[[], float],
+        execution_authorizer: "ExecutionAuthorizer",
     ) -> None:
         super().__init__(signer=signer)
         self._journal = journal
         self._context = context.snapshot()
         self._clock = clock
+        self._execution_authorizer = execution_authorizer
         self._scheme, self._key_id = signer.scheme, signer.key_id
         self._check_signer()
 
@@ -142,6 +145,7 @@ class RecordedApprovalAuthority(ApprovalAuthority):
         *,
         artifact: MigrationArtifact,
         target: MigrationTarget,
+        attempt_id: str,
         now: float,
         ttl_seconds: float = DEFAULT_TTL_SECONDS,
     ) -> Approval | None:
@@ -218,11 +222,30 @@ class RecordedApprovalAuthority(ApprovalAuthority):
                 approval_preimage=preimage.hex(),
                 approval_digest=hashlib.sha256(preimage).hexdigest(),
             )
+            binding_valid = False
+            if (
+                isinstance(assessment, PolicyAssessment)
+                and self._execution_authorizer is not None
+            ):
+                try:
+                    self._execution_authorizer.authorize_context(
+                        assessment,
+                        artifact_sha256=digest,
+                        action_class=ACTION_DATABASE_MIGRATE,
+                        target_canonical=target.canonical,
+                        attempt_id=attempt_id,
+                        action=artifact,
+                    )
+                    binding_valid = True
+                except ValueError:
+                    value["reason"] = "assessment_binding_mismatch"
             if not isinstance(assessment, PolicyAssessment):
                 # An unbound judgment reached the migration authority. Refused
                 # and RECORDED under its own reason, so it is separable in the
                 # journal from a verdict that failed on its merits.
                 value["reason"] = "unbound_authorization"
+            elif not binding_valid:
+                value["reason"] = "assessment_binding_mismatch"
             elif assessment.action_class != ACTION_DATABASE_MIGRATE:
                 value["reason"] = "wrong_action_class"
             elif assessment.artifact_sha256 != digest:

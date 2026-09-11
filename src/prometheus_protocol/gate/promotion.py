@@ -21,6 +21,7 @@ from typing import Callable, Sequence
 
 from prometheus_protocol.core.interfaces import Gate, LearnableTask
 from prometheus_protocol.core.models import ExecutableAction, Judgment, Skill
+from prometheus_protocol.policy.execution import AuthorizedExecution
 
 # The three action-authorization outcomes. ``approve`` executes; ``route`` holds
 # the action for a human (a pending action); ``block`` denies it terminally.
@@ -43,9 +44,7 @@ class FirewallError(AssertionError):
     """Raised when the train and held-out task-id sets intersect."""
 
 
-def assert_disjoint(
-    train_ids: Sequence[str], heldout_ids: Sequence[str]
-) -> None:
+def assert_disjoint(train_ids: Sequence[str], heldout_ids: Sequence[str]) -> None:
     """Assert the held-out firewall holds. Raise ``FirewallError`` if not."""
 
     overlap = set(train_ids) & set(heldout_ids)
@@ -78,6 +77,9 @@ class GateDecision:
     # sandboxed execution. Both default to the legacy shape.
     outcome: str = ""
     action: ExecutableAction | None = None
+    # Present on action decisions only.  The executor and human-hold path require
+    # this seam-minted proof; promotion decisions deliberately leave it unset.
+    authorization: AuthorizedExecution[ExecutableAction] | None = None
 
     @property
     def promoted(self) -> bool:

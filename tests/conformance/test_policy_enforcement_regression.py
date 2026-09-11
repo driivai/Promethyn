@@ -92,8 +92,13 @@ def test_a_structural_pass_cannot_stand_in_for_a_missing_executable_check():
         snapshot_digest=snapshot_digest(snapshot),
         implementation="swarm-checks",
         outcome=Evidence(
-            passed=True, total=3, passed_count=3, failures=(),
-            verifier_id="swarm-checks", verdict=Verdict.PASS, tier=Tier.HARD,
+            passed=True,
+            total=3,
+            passed_count=3,
+            failures=(),
+            verifier_id="swarm-checks",
+            verdict=Verdict.PASS,
+            tier=Tier.HARD,
         ),
     )
 
@@ -111,8 +116,13 @@ def test_a_structural_pass_cannot_stand_in_for_a_missing_executable_check():
         snapshot_digest=snapshot_digest(snapshot),
         implementation=IMPL_SUBPROCESS,
         outcome=Evidence(
-            passed=True, total=1, passed_count=1, failures=(),
-            verifier_id=IMPL_SUBPROCESS, verdict=Verdict.PASS, tier=Tier.HARD,
+            passed=True,
+            total=1,
+            passed_count=1,
+            failures=(),
+            verifier_id=IMPL_SUBPROCESS,
+            verdict=Verdict.PASS,
+            tier=Tier.HARD,
         ),
     )
     bank.register(IMPL_SUBPROCESS, Tier.HARD)
@@ -168,6 +178,7 @@ def test_every_production_entry_point_is_driven_behaviourally():
     assert isinstance(controller._gate, ActionGate)
     with pytest.raises(UnboundAuthorization):
         controller.submit(
+            attempt_id="attempt-1",
             assessment=Judgment(
                 verdict=Verdict.PASS, confidence=1.0, authoritative=True
             ),
@@ -268,12 +279,16 @@ def _synthesis() -> RoleSynthesisEngine:
                     entry_point="add",
                     cases=(Case((2, 3), 5), Case((-1, 1), 0)),
                 )
-                out.append(_proposal(
-                    self.id, KIND_CRITIQUE,
-                    f"Critique of {proposal.id}.",
-                    "A proposal that cannot survive falsification is unsound.",
-                    inputs=(proposal.id,), checks=(structural, executable),
-                ))
+                out.append(
+                    _proposal(
+                        self.id,
+                        KIND_CRITIQUE,
+                        f"Critique of {proposal.id}.",
+                        "A proposal that cannot survive falsification is unsound.",
+                        inputs=(proposal.id,),
+                        checks=(structural, executable),
+                    )
+                )
             return out
 
     return RoleSynthesisEngine([CodePlanner(), Skeptic()])
@@ -284,7 +299,7 @@ def _runtime(code_verifier) -> SwarmRuntime:
         synthesis=_synthesis(),
         debate=DebateLayer(),
         bank=VerifierBank(InMemoryTrustStore()),
-        gate=ActionGate(),
+        gate=ActionGate(target_canonical="sandbox://swarm"),
         executor=RecordingExecutor(),
         ledger=SqliteLedger(":memory:"),
         code_verifier=code_verifier,
@@ -310,8 +325,10 @@ class _ReturnsUnavailable:
 
     def verify(self, *, code, task):
         return Unavailable(
-            verifier_id=self.verifier_id, tier=Tier.HARD,
-            reason=Unavailability.INFRA_FAULT, detail="no sandbox",
+            verifier_id=self.verifier_id,
+            tier=Tier.HARD,
+            reason=Unavailability.INFRA_FAULT,
+            detail="no sandbox",
         )
 
 
@@ -379,14 +396,26 @@ _MATRIX = [
     ("returns Unavailable", _ReturnsUnavailable()),
     ("returns ABSTAIN", _ReturnsVerdict(Verdict.ABSTAIN)),
     ("returns FAIL", _ReturnsVerdict(Verdict.FAIL)),
-    ("SubprocessVerifier timeout BEFORE confirmed candidate start",
-     SubprocessVerifier(memory_mb=0, sandbox=_TimedOutSandbox(candidate_started=False))),
-    ("SubprocessVerifier timeout AFTER confirmed candidate start",
-     SubprocessVerifier(memory_mb=0, sandbox=_TimedOutSandbox(candidate_started=True))),
-    ("SubprocessVerifier refuses (no isolation)",
-     SubprocessVerifier(memory_mb=0, sandbox=NullSandbox())),
-    ("SubprocessVerifier runs (positive control)",
-     SubprocessVerifier(memory_mb=0, sandbox=UnsafeLocalSandbox())),
+    (
+        "SubprocessVerifier timeout BEFORE confirmed candidate start",
+        SubprocessVerifier(
+            memory_mb=0, sandbox=_TimedOutSandbox(candidate_started=False)
+        ),
+    ),
+    (
+        "SubprocessVerifier timeout AFTER confirmed candidate start",
+        SubprocessVerifier(
+            memory_mb=0, sandbox=_TimedOutSandbox(candidate_started=True)
+        ),
+    ),
+    (
+        "SubprocessVerifier refuses (no isolation)",
+        SubprocessVerifier(memory_mb=0, sandbox=NullSandbox()),
+    ),
+    (
+        "SubprocessVerifier runs (positive control)",
+        SubprocessVerifier(memory_mb=0, sandbox=UnsafeLocalSandbox()),
+    ),
 ]
 
 
@@ -401,8 +430,11 @@ def test_the_two_timeout_rows_really_are_two_different_outcomes():
     """
 
     task = Task(
-        id="t/add", entry_point="add", prompt="add two integers",
-        split=SPLIT_TRAIN, cases=(Case((2, 3), 5),),
+        id="t/add",
+        entry_point="add",
+        prompt="add two integers",
+        split=SPLIT_TRAIN,
+        cases=(Case((2, 3), 5),),
     )
     before = SubprocessVerifier(
         memory_mb=0, sandbox=_TimedOutSandbox(candidate_started=False)
@@ -420,26 +452,40 @@ def test_the_two_timeout_rows_really_are_two_different_outcomes():
     # has no result to weigh, the other has one that declines to answer.
     policy = load_profile("baseline")
     snapshot = resolve(
-        policy, artifact_sha256=ARTIFACT, target_canonical=TARGET,
-        action_class="sandbox.execute", attempt_id="t-1",
+        policy,
+        artifact_sha256=ARTIFACT,
+        target_canonical=TARGET,
+        action_class="sandbox.execute",
+        attempt_id="t-1",
     )
     digest = snapshot_digest(snapshot)
     structural = BoundResult(
-        check_id=CHECK_STRUCTURAL, snapshot_digest=digest,
+        check_id=CHECK_STRUCTURAL,
+        snapshot_digest=digest,
         implementation="swarm-checks",
         outcome=Evidence(
-            passed=True, total=1, passed_count=1, failures=(),
-            verifier_id="swarm-checks", verdict=Verdict.PASS, tier=Tier.HARD,
+            passed=True,
+            total=1,
+            passed_count=1,
+            failures=(),
+            verifier_id="swarm-checks",
+            verdict=Verdict.PASS,
+            tier=Tier.HARD,
         ),
     )
     reasons = set()
     for outcome in (before, after):
         refusal = validate_coverage(
             snapshot,
-            (structural, BoundResult(
-                check_id=CHECK_EXECUTABLE_CASES, snapshot_digest=digest,
-                implementation=IMPL_SUBPROCESS, outcome=outcome,
-            )),
+            (
+                structural,
+                BoundResult(
+                    check_id=CHECK_EXECUTABLE_CASES,
+                    snapshot_digest=digest,
+                    implementation=IMPL_SUBPROCESS,
+                    outcome=outcome,
+                ),
+            ),
         )
         reasons.add(refusal.reason)
     assert len(reasons) == 2, f"both timeout rows refused identically: {reasons}"
@@ -503,7 +549,9 @@ def test_a_fault_never_crashes_the_runtime():
 
     for label, verifier in _MATRIX:
         runtime = _runtime(verifier)
-        run = runtime.run(TaskPacket(goal="add two integers", budget=5, entry_point="add"))
+        run = runtime.run(
+            TaskPacket(goal="add two integers", budget=5, entry_point="add")
+        )
         assert run.records, label
         assert runtime.ledger.attempts(), f"{label}: nothing was recorded"
 
@@ -530,7 +578,9 @@ def test_the_invariant_is_stated_in_the_docs_verbatim():
     import pathlib
     import re
 
-    doc = (pathlib.Path(__file__).resolve().parents[2] / "docs" / "security-model.md").read_text()
+    doc = (
+        pathlib.Path(__file__).resolve().parents[2] / "docs" / "security-model.md"
+    ).read_text()
     # Normalised for the blockquote markers and line wrapping the doc uses.
     flat = re.sub(r"\s+", " ", doc.replace("\n> ", " ").replace("> ", ""))
     assert re.sub(r"\s+", " ", _INVARIANT) in flat, (
@@ -551,7 +601,9 @@ def test_the_docs_record_that_the_unbound_judgment_route_IS_CLOSED():
     import pathlib
     import re
 
-    doc = (pathlib.Path(__file__).resolve().parents[2] / "docs" / "security-model.md").read_text()
+    doc = (
+        pathlib.Path(__file__).resolve().parents[2] / "docs" / "security-model.md"
+    ).read_text()
     flat = re.sub(r"\s+", " ", doc)
     assert "CLOSED in PHASE-1.2b" in flat
     # The four surfaces, named — including the one the brief did not name.
@@ -564,14 +616,19 @@ def test_the_docs_record_that_the_unbound_judgment_route_IS_CLOSED():
         assert surface in flat, surface
     # And the residual that replaced it, stated rather than implied.
     assert "not a security boundary" in flat
-    assert "the control against arbitrary in-process code remains the process boundary" in flat
+    assert (
+        "the control against arbitrary in-process code remains the process boundary"
+        in flat
+    )
 
 
 def test_the_docs_name_both_r4_residuals():
     import pathlib
     import re
 
-    doc = (pathlib.Path(__file__).resolve().parents[2] / "docs" / "security-model.md").read_text()
+    doc = (
+        pathlib.Path(__file__).resolve().parents[2] / "docs" / "security-model.md"
+    ).read_text()
     flat = re.sub(r"\s+", " ", doc)
     assert "equivalent; nothing verifies it" in flat
     assert "may get the weaker one to answer" in flat

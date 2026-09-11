@@ -15,7 +15,6 @@ from prometheus_protocol.core.models import (
     Attempt,
     Evidence,
     Skill,
-    Task,
     Tier,
     Unavailable,
 )
@@ -257,6 +256,7 @@ class Ledger(ABC):
         confidence: float,
         action: dict,
         judgment: dict,
+        authorization: dict | None = None,
         created_at: str,
     ) -> int:
         """Record a routed action awaiting a human decision; return its id."""

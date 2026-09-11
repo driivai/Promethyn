@@ -85,11 +85,9 @@ _TARGET_NAMES = frozenset({"Judgment"})
 #: Where an authoritative Judgment may be constructed, as
 #: ``module::qualified-function``, each with the reason it is permitted.
 _PERMITTED_CONSTRUCTORS: dict[str, str] = {
-    "prometheus_protocol.verifier.bank::VerifierBank._authoritative_judgment":
-        "THE aggregator. Fusion of authoritative evidence is what this function is.",
-    "prometheus_protocol.verifier.bank::VerifierBank.judge_covered":
-        "The coverage refusal for a FAILED required check. A failure is a real "
-        "answer and is reported as one; it refuses authorization either way.",
+    "prometheus_protocol.verifier.bank::VerifierBank._authoritative_judgment": "THE aggregator. Fusion of authoritative evidence is what this function is.",
+    "prometheus_protocol.verifier.bank::VerifierBank.judge_covered": "The coverage refusal for a FAILED required check. A failure is a real "
+    "answer and is reported as one; it refuses authorization either way.",
 }
 # PHASE-1.2b — THE SANCTION IS GONE, not commented out. It read
 # ``prometheus_protocol.tools.git::judgment_for`` and excused a real second
@@ -142,7 +140,9 @@ def _callee_symbol(node: ast.Call, bindings: dict[str, str]) -> str | None:
 def _is_authoritative_literal(node: ast.Call) -> bool:
     for keyword in node.keywords:
         if keyword.arg == "authoritative":
-            return isinstance(keyword.value, ast.Constant) and keyword.value.value is True
+            return (
+                isinstance(keyword.value, ast.Constant) and keyword.value.value is True
+            )
     return False
 
 
@@ -155,17 +155,24 @@ def _enclosing(tree: ast.Module, target: ast.Call) -> str:
     class _Walk(ast.NodeVisitor):
         def _scope(self, node, name: str) -> None:
             stack.append(name)
-            if getattr(node, "lineno", -1) <= target.lineno <= getattr(
-                node, "end_lineno", -1
+            if (
+                getattr(node, "lineno", -1)
+                <= target.lineno
+                <= getattr(node, "end_lineno", -1)
             ):
                 nonlocal best
                 best = ".".join(stack)
             self.generic_visit(node)
             stack.pop()
 
-        def visit_ClassDef(self, node): self._scope(node, node.name)
-        def visit_FunctionDef(self, node): self._scope(node, node.name)
-        def visit_AsyncFunctionDef(self, node): self._scope(node, node.name)
+        def visit_ClassDef(self, node):
+            self._scope(node, node.name)
+
+        def visit_FunctionDef(self, node):
+            self._scope(node, node.name)
+
+        def visit_AsyncFunctionDef(self, node):
+            self._scope(node, node.name)
 
     _Walk().visit(tree)
     return best
@@ -264,7 +271,10 @@ def test_the_unbound_judgment_route_is_closed():
 
     import prometheus_protocol.tools.git as git_tool
     from prometheus_protocol.core.models import (
-        Evidence, Judgment, Tier, Unavailable, Verdict,
+        Evidence,
+        Judgment,
+        Unavailable,
+        Verdict,
     )
     from prometheus_protocol.gate.authorization import ActionGate
     from prometheus_protocol.policy.assessment import UnboundAuthorization
@@ -291,8 +301,11 @@ def test_the_unbound_judgment_route_is_closed():
     )
 
     with pytest.raises(UnboundAuthorization):
-        ActionGate().decide(
+        ActionGate(
+            target_canonical="sandbox://test",
+        ).decide(
             Judgment(verdict=Verdict.PASS, confidence=1.0, authoritative=True),
+            attempt_id="attempt-1",
             risk_class="low",
             subject_id="s",
         )
@@ -306,9 +319,8 @@ def test_the_unbound_judgment_route_is_closed():
 #: one layer up, and the reason a guard's permitted set has to follow the
 #: capability rather than the name it had last sprint.
 _PERMITTED_MINTERS: dict[str, str] = {
-    "prometheus_protocol.verifier.bank::VerifierBank.assess":
-        "THE minting site. It mints only what judge_covered returned, which is "
-        "coverage validated against the resolved snapshot.",
+    "prometheus_protocol.verifier.bank::VerifierBank.assess": "THE minting site. It mints only what judge_covered returned, which is "
+    "coverage validated against the resolved snapshot.",
 }
 
 
@@ -381,9 +393,10 @@ def test_a_new_constructor_in_any_spelling_would_fail_the_guard(spelling, tmp_pa
     tree = ast.parse(source)
     bindings = _resolve_bindings(tree)
     calls = [
-        n for n in ast.walk(tree)
+        n
+        for n in ast.walk(tree)
         if isinstance(n, ast.Call) and _is_authoritative_literal(n)
     ]
     assert calls, "the fixture built no authoritative construction"
     assert _callee_symbol(calls[0], bindings) == f"{_TARGET_MODULE}.Judgment"
-    assert f"<synthetic>::sneak" not in _PERMITTED_CONSTRUCTORS
+    assert "<synthetic>::sneak" not in _PERMITTED_CONSTRUCTORS

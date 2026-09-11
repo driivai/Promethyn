@@ -34,12 +34,11 @@ from prometheus_protocol.core.models import (
     ACTION_PYTHON_CODE,
     ExecutableAction,
     Tier,
-    Verdict,
 )
 from prometheus_protocol.execution.controller import ExecutionController
 from prometheus_protocol.execution.executor import SandboxExecutor
 from prometheus_protocol.gate.authorization import ActionGate, OUTCOME_UNAVAILABLE
-from prometheus_protocol.gate.promotion import OUTCOME_BLOCK
+from prometheus_protocol.policy.execution import ExecutionAuthorizer
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
 from prometheus_protocol.orchestration import (
     ActionGateway,
@@ -53,7 +52,6 @@ from prometheus_protocol.sandbox import NamespaceSandbox
 from prometheus_protocol.verifier.bank import VerifierBank
 
 from prometheus_protocol.benchmarks.chain_eval import (
-    Bucket,
     calibration_table,
     discrimination,
     expected_calibration_error,
@@ -62,12 +60,16 @@ from prometheus_protocol.benchmarks.chain_eval import (
 
 from tests.support.assessments import workflow_policy
 
-_REQUIRE = parse_env_bool("PROM_REQUIRE_SANDBOX", os.environ.get("PROM_REQUIRE_SANDBOX"), default=False)
+_REQUIRE = parse_env_bool(
+    "PROM_REQUIRE_SANDBOX", os.environ.get("PROM_REQUIRE_SANDBOX"), default=False
+)
 
 
 def _require_runtime() -> None:
     if not NamespaceSandbox.available():
-        reason = "namespace isolation runtime (unprivileged user namespaces) unavailable"
+        reason = (
+            "namespace isolation runtime (unprivileged user namespaces) unavailable"
+        )
         if _REQUIRE:
             pytest.fail(f"PROM_REQUIRE_SANDBOX=1 but {reason}")
         pytest.skip(reason)
@@ -86,11 +88,11 @@ def test_calibration_table_matches_hand_computed():
     table = calibration_table(_COMPOSED, _CORRECT, n_buckets=5)
     # (n, n_correct, mean_composed, frac_correct) per bucket, hand-computed.
     expected = [
-        (1, 0, 0.10, 0.0),                 # [0.0,0.2)
-        (2, 1, 0.30, 0.5),                 # [0.2,0.4)
-        (1, 1, 0.50, 1.0),                 # [0.4,0.6)
-        (2, 1, 0.70, 0.5),                 # [0.6,0.8)
-        (4, 3, 0.925, 0.75),               # [0.8,1.0]  (includes the 1.00)
+        (1, 0, 0.10, 0.0),  # [0.0,0.2)
+        (2, 1, 0.30, 0.5),  # [0.2,0.4)
+        (1, 1, 0.50, 1.0),  # [0.4,0.6)
+        (2, 1, 0.70, 0.5),  # [0.6,0.8)
+        (4, 3, 0.925, 0.75),  # [0.8,1.0]  (includes the 1.00)
     ]
     assert len(table) == 5
     for bk, (n, nc, meanc, frac) in zip(table, expected):
@@ -122,8 +124,8 @@ def test_false_confidence_matches_hand_computed():
 
 def test_discrimination_matches_hand_computed():
     mc, mw, sep = discrimination(_COMPOSED, _CORRECT)
-    assert math.isclose(mc, 4.30 / 6, abs_tol=1e-9)   # mean composed over correct
-    assert math.isclose(mw, 2.00 / 4, abs_tol=1e-9)   # mean composed over incorrect
+    assert math.isclose(mc, 4.30 / 6, abs_tol=1e-9)  # mean composed over correct
+    assert math.isclose(mw, 2.00 / 4, abs_tol=1e-9)  # mean composed over incorrect
     assert math.isclose(sep, 4.30 / 6 - 2.00 / 4, abs_tol=1e-9)
 
 
@@ -171,10 +173,16 @@ def test_composition_module_holds_no_execution_capability():
     a composed number is a summary, structurally unable to reach the world."""
 
     forbidden = {
-        "ExecutionController", "ActionGate", "PromotionGate", "SandboxExecutor",
-        "ActionGateway", "ExecutableAction",
+        "ExecutionController",
+        "ActionGate",
+        "PromotionGate",
+        "SandboxExecutor",
+        "ActionGateway",
+        "ExecutableAction",
     }
-    assert not (set(vars(comp)) & forbidden), "composition must hold no action capability"
+    assert not (set(vars(comp)) & forbidden), (
+        "composition must hold no action capability"
+    )
     for name in ("execute", "approve", "submit", "route_action"):
         assert not hasattr(comp, name)
 
@@ -185,30 +193,57 @@ def test_high_composed_confidence_cannot_execute_a_soft_action():
     (soft) action — the gate blocks it on its own per-step judgment."""
 
     ledger = SqliteLedger(":memory:")
+    policy = workflow_policy("hg1", "hg2", "hg3", "soft-grader")
     controller = ExecutionController(
-        gate=ActionGate(escalate_below=0.75, route_high_risk=True),
+        gate=ActionGate(
+            target_canonical="sandbox://workflow",
+            escalate_below=0.75,
+            route_high_risk=True,
+            authorizer=ExecutionAuthorizer(lambda: policy),
+        ),
         executor=SandboxExecutor(),
         ledger=ledger,
     )
     runtime = WorkflowRuntime(
-        bank=VerifierBank(), gateway=ActionGateway(controller.submit), ledger=ledger,
+        bank=VerifierBank(),
+        gateway=ActionGateway(controller.submit),
+        ledger=ledger,
         # Every grader in this workflow is permitted, so coverage holds and the
         # assertion stays about COMPOSITION: three high-confidence HARD steps
         # cannot lend authority to a SOFT one. The gate is what refuses.
-        policy=workflow_policy("hg1", "hg2", "hg3", "soft-grader"),
+        policy=policy,
     )
     action = ExecutableAction(kind=ACTION_PYTHON_CODE, code="print('should not run')")
-    wf = Workflow(workflow_id="authz-wf", steps=(
-        AgentStep("h1", ScriptedAgent("h1", "ok"), ScriptedGrader("hg1", Tier.HARD), task="t"),
-        AgentStep("h2", ScriptedAgent("h2", "ok"), ScriptedGrader("hg2", Tier.HARD), task="t"),
-        AgentStep("h3", ScriptedAgent("h3", "ok"), ScriptedGrader("hg3", Tier.HARD), task="t"),
-        AgentStep(
-            "softact",
-            ScriptedAgent("softact", "do", action=action, risk_class="low"),
-            ScriptedGrader("soft-grader", Tier.SOFT),
-            task="t", depends_on=("h1", "h2", "h3"),
+    wf = Workflow(
+        workflow_id="authz-wf",
+        steps=(
+            AgentStep(
+                "h1",
+                ScriptedAgent("h1", "ok"),
+                ScriptedGrader("hg1", Tier.HARD),
+                task="t",
+            ),
+            AgentStep(
+                "h2",
+                ScriptedAgent("h2", "ok"),
+                ScriptedGrader("hg2", Tier.HARD),
+                task="t",
+            ),
+            AgentStep(
+                "h3",
+                ScriptedAgent("h3", "ok"),
+                ScriptedGrader("hg3", Tier.HARD),
+                task="t",
+            ),
+            AgentStep(
+                "softact",
+                ScriptedAgent("softact", "do", action=action, risk_class="low"),
+                ScriptedGrader("soft-grader", Tier.SOFT),
+                task="t",
+                depends_on=("h1", "h2", "h3"),
+            ),
         ),
-    ))
+    )
     run = runtime.run(wf)
 
     confidences = [s.confidence for s in run.steps]
@@ -289,6 +324,4 @@ def test_hearth_and_orchestration_core_are_the_sanctioned_content():
     """
 
     unsanctioned = unsanctioned_changes(_HEARTH_FILES)
-    assert unsanctioned == [], (
-        UNSANCTIONED_MESSAGE + "\n" + "\n".join(unsanctioned)
-    )
+    assert unsanctioned == [], UNSANCTIONED_MESSAGE + "\n" + "\n".join(unsanctioned)

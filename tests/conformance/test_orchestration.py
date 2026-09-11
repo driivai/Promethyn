@@ -32,7 +32,6 @@ from hearth_ledger import (
 from prometheus_protocol.core.booleans import parse_env_bool
 from prometheus_protocol.core.models import (
     ACTION_PYTHON_CODE,
-    Evidence,
     ExecutableAction,
     Tier,
     Verdict,
@@ -40,7 +39,8 @@ from prometheus_protocol.core.models import (
 from prometheus_protocol.execution.controller import ExecutionController
 from prometheus_protocol.execution.executor import SandboxExecutor
 from prometheus_protocol.gate.authorization import ActionGate, OUTCOME_UNAVAILABLE
-from prometheus_protocol.gate.promotion import OUTCOME_BLOCK, OUTCOME_ROUTE
+from prometheus_protocol.policy.execution import ExecutionAuthorizer
+from prometheus_protocol.gate.promotion import OUTCOME_ROUTE
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
 from prometheus_protocol.orchestration import (
     ActionGateway,
@@ -57,12 +57,16 @@ from prometheus_protocol.verifier.bank import VerifierBank
 
 from tests.support.assessments import workflow_policy
 
-_REQUIRE = parse_env_bool("PROM_REQUIRE_SANDBOX", os.environ.get("PROM_REQUIRE_SANDBOX"), default=False)
+_REQUIRE = parse_env_bool(
+    "PROM_REQUIRE_SANDBOX", os.environ.get("PROM_REQUIRE_SANDBOX"), default=False
+)
 
 
 def _require_runtime() -> None:
     if not NamespaceSandbox.available():
-        reason = "namespace isolation runtime (unprivileged user namespaces) unavailable"
+        reason = (
+            "namespace isolation runtime (unprivileged user namespaces) unavailable"
+        )
         if _REQUIRE:
             pytest.fail(f"PROM_REQUIRE_SANDBOX=1 but {reason}")
         pytest.skip(reason)
@@ -72,9 +76,19 @@ def _print_action(label: str) -> ExecutableAction:
     return ExecutableAction(kind=ACTION_PYTHON_CODE, code=f"print({label!r})")
 
 
-def _controller(ledger: SqliteLedger, *, route_high_risk: bool = True) -> ExecutionController:
+def _controller(
+    ledger: SqliteLedger, *, route_high_risk: bool = True, policy=None
+) -> ExecutionController:
+    from prometheus_protocol.policy.profile import DEFAULT_PROFILE_ID, load_profile
+
+    selected = policy if policy is not None else load_profile(DEFAULT_PROFILE_ID)
     return ExecutionController(
-        gate=ActionGate(escalate_below=0.75, route_high_risk=route_high_risk),
+        gate=ActionGate(
+            target_canonical="sandbox://workflow",
+            escalate_below=0.75,
+            route_high_risk=route_high_risk,
+            authorizer=ExecutionAuthorizer(lambda: selected),
+        ),
         executor=SandboxExecutor(),
         ledger=ledger,
     )
@@ -90,17 +104,39 @@ def test_gateway_exposes_only_route_action():
     public = {n for n in dir(gw) if not n.startswith("__")}
     # The one capability, and its single stored callable — nothing else.
     assert public == {"route_action", "_submit"}
-    for forbidden in ("approve", "reject", "execute", "_execute", "gate",
-                      "_gate", "executor", "_executor", "controller", "_controller"):
+    for forbidden in (
+        "approve",
+        "reject",
+        "execute",
+        "_execute",
+        "gate",
+        "_gate",
+        "executor",
+        "_executor",
+        "controller",
+        "_controller",
+    ):
         assert not hasattr(gw, forbidden), forbidden
 
 
 def test_runtime_has_no_executor_gate_or_execute_path():
-    rt = WorkflowRuntime(bank=VerifierBank(), gateway=ActionGateway(lambda **kw: None),
-                         ledger=SqliteLedger(":memory:"),
-                         policy=workflow_policy("plan-review", "impl-check"))
-    for forbidden in ("execute", "_execute", "approve", "_executor", "executor",
-                      "_gate", "gate", "_controller", "controller"):
+    rt = WorkflowRuntime(
+        bank=VerifierBank(),
+        gateway=ActionGateway(lambda **kw: None),
+        ledger=SqliteLedger(":memory:"),
+        policy=workflow_policy("plan-review", "impl-check"),
+    )
+    for forbidden in (
+        "execute",
+        "_execute",
+        "approve",
+        "_executor",
+        "executor",
+        "_gate",
+        "gate",
+        "_controller",
+        "controller",
+    ):
         assert not hasattr(rt, forbidden), forbidden
     # Its only authority-bearing collaborator is the gateway.
     assert hasattr(rt, "_gateway") and isinstance(rt._gateway, ActionGateway)
@@ -124,21 +160,28 @@ def test_soft_only_claim_cannot_execute():
     """
 
     ledger = SqliteLedger(":memory:")
+    policy = workflow_policy("soft-grader")
     bank = VerifierBank()
     bank.register("soft-grader", Tier.SOFT)
     runtime = WorkflowRuntime(
-        bank=bank, gateway=ActionGateway(_controller(ledger).submit), ledger=ledger,
-        policy=workflow_policy("soft-grader"),
+        bank=bank,
+        gateway=ActionGateway(_controller(ledger, policy=policy).submit),
+        ledger=ledger,
+        policy=policy,
     )
-    wf = Workflow(workflow_id="soft-wf", steps=(
-        AgentStep(
-            step_id="s1",
-            agent=ScriptedAgent("a1", "do the thing", action=_print_action("x"),
-                                risk_class="low"),
-            grader=ScriptedGrader("soft-grader", Tier.SOFT),
-            task="t",
+    wf = Workflow(
+        workflow_id="soft-wf",
+        steps=(
+            AgentStep(
+                step_id="s1",
+                agent=ScriptedAgent(
+                    "a1", "do the thing", action=_print_action("x"), risk_class="low"
+                ),
+                grader=ScriptedGrader("soft-grader", Tier.SOFT),
+                task="t",
+            ),
         ),
-    ))
+    )
     run = runtime.run(wf)
     assert run.steps[0].outcome == OUTCOME_UNAVAILABLE
     assert run.executed_subject_ids == ()
@@ -152,19 +195,37 @@ def test_soft_only_claim_cannot_execute():
 
 def test_agent_message_cannot_be_untiered():
     good = AgentMessage(
-        workflow_id="w", from_step="a", from_agent="ag", content="c",
-        tier=Tier.SOFT, verdict=Verdict.PASS, confidence=0.5, provenance="p",
+        workflow_id="w",
+        from_step="a",
+        from_agent="ag",
+        content="c",
+        tier=Tier.SOFT,
+        verdict=Verdict.PASS,
+        confidence=0.5,
+        provenance="p",
     )
     assert good.tier is Tier.SOFT
     with pytest.raises(TypeError):
         AgentMessage(
-            workflow_id="w", from_step="a", from_agent="ag", content="c",
-            tier="soft", verdict=Verdict.PASS, confidence=0.5, provenance="p",
+            workflow_id="w",
+            from_step="a",
+            from_agent="ag",
+            content="c",
+            tier="soft",
+            verdict=Verdict.PASS,
+            confidence=0.5,
+            provenance="p",
         )
     with pytest.raises(TypeError):
         AgentMessage(
-            workflow_id="w", from_step="a", from_agent="ag", content="c",
-            tier=Tier.SOFT, verdict="pass", confidence=0.5, provenance="p",
+            workflow_id="w",
+            from_step="a",
+            from_agent="ag",
+            content="c",
+            tier=Tier.SOFT,
+            verdict="pass",
+            confidence=0.5,
+            provenance="p",
         )
 
 
@@ -183,22 +244,36 @@ def test_downstream_agent_receives_tier_tagged_messages_not_facts():
 
     ledger = SqliteLedger(":memory:")
     runtime = WorkflowRuntime(
-        bank=VerifierBank(), gateway=ActionGateway(_controller(ledger).submit), ledger=ledger,
+        bank=VerifierBank(),
+        gateway=ActionGateway(_controller(ledger).submit),
+        ledger=ledger,
         policy=workflow_policy("plan-review", "impl-check"),
     )
-    wf = Workflow(workflow_id="msg-wf", steps=(
-        AgentStep("up", ScriptedAgent("up-agent", "upstream claim"),
-                  ScriptedGrader("g-soft", Tier.SOFT), task="t"),
-        AgentStep("down", CapturingAgent(), ScriptedGrader("g-soft2", Tier.SOFT),
-                  task="t", depends_on=("up",)),
-    ))
+    wf = Workflow(
+        workflow_id="msg-wf",
+        steps=(
+            AgentStep(
+                "up",
+                ScriptedAgent("up-agent", "upstream claim"),
+                ScriptedGrader("g-soft", Tier.SOFT),
+                task="t",
+            ),
+            AgentStep(
+                "down",
+                CapturingAgent(),
+                ScriptedGrader("g-soft2", Tier.SOFT),
+                task="t",
+                depends_on=("up",),
+            ),
+        ),
+    )
     runtime.run(wf)
 
     inputs = captured["inputs"]
     assert isinstance(inputs, tuple) and len(inputs) == 1
     msg = inputs[0]
-    assert isinstance(msg, AgentMessage)          # not a str, not a bare fact
-    assert isinstance(msg.tier, Tier)             # it wears its grading
+    assert isinstance(msg, AgentMessage)  # not a str, not a bare fact
+    assert isinstance(msg.tier, Tier)  # it wears its grading
     assert isinstance(msg.verdict, Verdict)
     assert 0.0 <= msg.confidence <= 1.0
     assert msg.from_step == "up" and msg.content == "upstream claim"
@@ -214,10 +289,13 @@ def test_human_backstop_holds_in_a_workflow():
     from prometheus_protocol.orchestration.demo import build_workflow
 
     ledger = SqliteLedger(":memory:")
-    controller = _controller(ledger)
+    policy = workflow_policy("plan-review", "impl-check")
+    controller = _controller(ledger, policy=policy)
     runtime = WorkflowRuntime(
-        bank=VerifierBank(), gateway=ActionGateway(controller.submit), ledger=ledger,
-        policy=workflow_policy("plan-review", "impl-check"),
+        bank=VerifierBank(),
+        gateway=ActionGateway(controller.submit),
+        ledger=ledger,
+        policy=policy,
     )
     run = runtime.run(build_workflow())
 
@@ -242,15 +320,29 @@ def test_human_backstop_holds_in_a_workflow():
 def test_workflow_run_is_auditable_per_step():
     ledger = SqliteLedger(":memory:")
     runtime = WorkflowRuntime(
-        bank=VerifierBank(), gateway=ActionGateway(_controller(ledger).submit), ledger=ledger,
+        bank=VerifierBank(),
+        gateway=ActionGateway(_controller(ledger).submit),
+        ledger=ledger,
         policy=workflow_policy("plan-review", "impl-check"),
     )
-    wf = Workflow(workflow_id="audit-wf", steps=(
-        AgentStep("a", ScriptedAgent("agent-a", "claim a"),
-                  ScriptedGrader("g", Tier.SOFT), task="t"),
-        AgentStep("b", ScriptedAgent("agent-b", "claim b"),
-                  ScriptedGrader("h", Tier.HARD), task="t", depends_on=("a",)),
-    ))
+    wf = Workflow(
+        workflow_id="audit-wf",
+        steps=(
+            AgentStep(
+                "a",
+                ScriptedAgent("agent-a", "claim a"),
+                ScriptedGrader("g", Tier.SOFT),
+                task="t",
+            ),
+            AgentStep(
+                "b",
+                ScriptedAgent("agent-b", "claim b"),
+                ScriptedGrader("h", Tier.HARD),
+                task="t",
+                depends_on=("a",),
+            ),
+        ),
+    )
     runtime.run(wf)
     rows = ledger.workflow_steps("audit-wf")
     assert [r["step_id"] for r in rows] == ["a", "b"]
@@ -266,30 +358,71 @@ def test_workflow_run_is_auditable_per_step():
 
 def test_workflow_dag_order_is_deterministic_and_validated():
     steps = (
-        AgentStep("c", ScriptedAgent("c", "c"), ScriptedGrader("g", Tier.SOFT),
-                  task="t", depends_on=("a", "b")),
-        AgentStep("a", ScriptedAgent("a", "a"), ScriptedGrader("g", Tier.SOFT), task="t"),
-        AgentStep("b", ScriptedAgent("b", "b"), ScriptedGrader("g", Tier.SOFT), task="t"),
+        AgentStep(
+            "c",
+            ScriptedAgent("c", "c"),
+            ScriptedGrader("g", Tier.SOFT),
+            task="t",
+            depends_on=("a", "b"),
+        ),
+        AgentStep(
+            "a", ScriptedAgent("a", "a"), ScriptedGrader("g", Tier.SOFT), task="t"
+        ),
+        AgentStep(
+            "b", ScriptedAgent("b", "b"), ScriptedGrader("g", Tier.SOFT), task="t"
+        ),
     )
     order = [s.step_id for s in Workflow(steps=steps).order()]
     assert order == ["a", "b", "c"]  # topo, ties broken by id
 
     with pytest.raises(WorkflowError):  # unknown dependency
-        Workflow(steps=(AgentStep("x", ScriptedAgent("x", "x"),
-                                  ScriptedGrader("g", Tier.SOFT), task="t",
-                                  depends_on=("missing",)),))
+        Workflow(
+            steps=(
+                AgentStep(
+                    "x",
+                    ScriptedAgent("x", "x"),
+                    ScriptedGrader("g", Tier.SOFT),
+                    task="t",
+                    depends_on=("missing",),
+                ),
+            )
+        )
     with pytest.raises(WorkflowError):  # cycle
-        Workflow(steps=(
-            AgentStep("p", ScriptedAgent("p", "p"), ScriptedGrader("g", Tier.SOFT),
-                      task="t", depends_on=("q",)),
-            AgentStep("q", ScriptedAgent("q", "q"), ScriptedGrader("g", Tier.SOFT),
-                      task="t", depends_on=("p",)),
-        ))
+        Workflow(
+            steps=(
+                AgentStep(
+                    "p",
+                    ScriptedAgent("p", "p"),
+                    ScriptedGrader("g", Tier.SOFT),
+                    task="t",
+                    depends_on=("q",),
+                ),
+                AgentStep(
+                    "q",
+                    ScriptedAgent("q", "q"),
+                    ScriptedGrader("g", Tier.SOFT),
+                    task="t",
+                    depends_on=("p",),
+                ),
+            )
+        )
     with pytest.raises(WorkflowError):  # duplicate id
-        Workflow(steps=(
-            AgentStep("d", ScriptedAgent("d", "d"), ScriptedGrader("g", Tier.SOFT), task="t"),
-            AgentStep("d", ScriptedAgent("d2", "d2"), ScriptedGrader("g", Tier.SOFT), task="t"),
-        ))
+        Workflow(
+            steps=(
+                AgentStep(
+                    "d",
+                    ScriptedAgent("d", "d"),
+                    ScriptedGrader("g", Tier.SOFT),
+                    task="t",
+                ),
+                AgentStep(
+                    "d",
+                    ScriptedAgent("d2", "d2"),
+                    ScriptedGrader("g", Tier.SOFT),
+                    task="t",
+                ),
+            )
+        )
 
 
 # --------------------------------------------------------------------------
@@ -323,6 +456,4 @@ def test_hearth_is_the_sanctioned_content():
     """
 
     unsanctioned = unsanctioned_changes(_HEARTH_FILES)
-    assert unsanctioned == [], (
-        UNSANCTIONED_MESSAGE + "\n" + "\n".join(unsanctioned)
-    )
+    assert unsanctioned == [], UNSANCTIONED_MESSAGE + "\n" + "\n".join(unsanctioned)

@@ -15,7 +15,6 @@ import pathlib
 import pytest
 
 import prometheus_protocol.swarm as swarm_pkg
-from prometheus_protocol.core.models import Judgment, Verdict
 from prometheus_protocol.gate.authorization import ActionGate
 from prometheus_protocol.gate.promotion import GateDecision
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
@@ -23,7 +22,6 @@ from prometheus_protocol.swarm.debate import DebateLayer
 from prometheus_protocol.swarm.executor import Executor, RecordingExecutor
 from prometheus_protocol.swarm.models import (
     KIND_PROPOSED_ACTION,
-    ExecutionResult,
     FalsificationCheck,
     Proposal,
     Provenance,
@@ -40,7 +38,9 @@ from prometheus_protocol.verifier.bank import VerifierBank
 from prometheus_protocol.verifier.store import InMemoryTrustStore
 
 _SWARM_DIR = pathlib.Path(swarm_pkg.__file__).parent
-_SWARM_SOURCES = {p.name: p.read_text(encoding="utf-8") for p in _SWARM_DIR.glob("*.py")}
+_SWARM_SOURCES = {
+    p.name: p.read_text(encoding="utf-8") for p in _SWARM_DIR.glob("*.py")
+}
 _COMBINED = "\n".join(_SWARM_SOURCES.values())
 
 
@@ -60,7 +60,9 @@ def _runtime(synthesis=None):
         synthesis=synthesis or RoleSynthesisEngine(),
         debate=DebateLayer(),
         bank=VerifierBank(InMemoryTrustStore()),
-        gate=ActionGate(),
+        gate=ActionGate(
+            target_canonical="sandbox://test",
+        ),
         executor=RecordingExecutor(),
         ledger=SqliteLedger(":memory:"),
     )
@@ -78,17 +80,19 @@ def test_inv1_executor_accepts_only_approved_gate_decision():
     with pytest.raises(TypeError):
         executor.execute(TestPlan(entries=()))
 
-    # An unapproved decision is refused; an approved one is acted on.
+    # An unapproved decision is refused; a bare approved bit is also refused.
     with pytest.raises(ValueError):
         executor.execute(GateDecision(approved=False, subject_id="p/1"))
-    result = executor.execute(GateDecision(approved=True, subject_id="p/1"))
-    assert result.executed and result.subject_id == "p/1"
+    with pytest.raises(ValueError, match="validated execution descriptor"):
+        executor.execute(GateDecision(approved=True, subject_id="p/1"))
 
 
 def test_inv1_executor_exposes_no_proposal_entry_point():
     public = [name for name in dir(Executor) if not name.startswith("_")]
     assert "execute" in public
-    assert all("propos" not in name.lower() and "plan" not in name.lower() for name in public)
+    assert all(
+        "propos" not in name.lower() and "plan" not in name.lower() for name in public
+    )
     params = [p for p in inspect.signature(Executor.execute).parameters if p != "self"]
     assert params == ["decision"]
 
@@ -98,7 +102,13 @@ def test_inv1_executor_exposes_no_proposal_entry_point():
 
 def test_inv2_testplan_has_no_truth_or_approval_field():
     forbidden = {"verdict", "confidence", "approved", "approval", "judgment"}
-    for dc in (TestPlan, TestPlanEntry, VerificationRequest, FalsificationCheck, Proposal):
+    for dc in (
+        TestPlan,
+        TestPlanEntry,
+        VerificationRequest,
+        FalsificationCheck,
+        Proposal,
+    ):
         assert not ({f.name for f in dataclasses.fields(dc)} & forbidden)
 
 
@@ -209,7 +219,9 @@ def test_inv5_swarm_defines_no_duplicate_grounding_type():
             base_names = {b.id for b in node.bases if isinstance(b, ast.Name)} | {
                 b.attr for b in node.bases if isinstance(b, ast.Attribute)
             }
-            assert not (base_names & forbidden), f"{name}: {node.name} forks a grounding type"
+            assert not (base_names & forbidden), (
+                f"{name}: {node.name} forks a grounding type"
+            )
 
 
 # -- INV-SWARM-6: firewall preserved ----------------------------------------

@@ -33,7 +33,6 @@ from prometheus_protocol.benchmarks.grounding_items import (
     GOLD_NOT_SUPPORTED,
     GOLD_SUPPORTED,
     build_grounding_items,
-    task_for,
 )
 from prometheus_protocol.benchmarks.grounding_loop_demo import (
     HUMAN_REVIEWER_ID,
@@ -54,15 +53,19 @@ from prometheus_protocol.core.models import (
 )
 from prometheus_protocol.execution.controller import ExecutionController
 from prometheus_protocol.gate.authorization import ActionGate
+from prometheus_protocol.policy.execution import ExecutionAuthorizer
 from prometheus_protocol.gate.promotion import OUTCOME_BLOCK
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
 from prometheus_protocol.sandbox import NamespaceSandbox
 from prometheus_protocol.verifier.bank import VerifierBank
 from prometheus_protocol.verifier.grounding import GroundingTask, GroundingVerifier
 
-from tests.support.assessments import carrying
+from prometheus_protocol.swarm.models import content_hash
+from tests.support.assessments import a_policy, carrying
 
-_REQUIRE = parse_env_bool("PROM_REQUIRE_SANDBOX", os.environ.get("PROM_REQUIRE_SANDBOX"), default=False)
+_REQUIRE = parse_env_bool(
+    "PROM_REQUIRE_SANDBOX", os.environ.get("PROM_REQUIRE_SANDBOX"), default=False
+)
 
 
 class _OneReplyProvider(Provider):
@@ -133,7 +136,9 @@ def test_grounding_evidence_is_soft_tier_and_strictly_parsed():
     assert (not_supported.tier, not_supported.verdict) == (Tier.SOFT, Verdict.FAIL)
     for malformed in ("", "NOT", "unsupported", "It looks fine.", "TRUE 0.9"):
         evidence = _soft(malformed)
-        assert (evidence.tier, evidence.verdict) == (Tier.SOFT, Verdict.ABSTAIN), malformed
+        assert (evidence.tier, evidence.verdict) == (Tier.SOFT, Verdict.ABSTAIN), (
+            malformed
+        )
     # A provider that cannot be reached is not an abstention: the judge did not
     # run. It comes back as Unavailable, with no verdict at all (threat model §4).
     unavailable = _soft_outcome(RuntimeError("gateway down"))
@@ -149,8 +154,12 @@ def test_grounding_judge_cannot_masquerade_as_hard():
     bank = VerifierBank()
     bank.register("grounding-judge", Tier.SOFT)
     forged = Evidence(
-        passed=True, total=1, passed_count=1,
-        verifier_id="grounding-judge", verdict=Verdict.PASS, tier=Tier.HARD,
+        passed=True,
+        total=1,
+        passed_count=1,
+        verifier_id="grounding-judge",
+        verdict=Verdict.PASS,
+        tier=Tier.HARD,
     )
     with pytest.raises(ValueError, match="tier is fixed"):
         bank.judge([forged])
@@ -175,9 +184,22 @@ def test_soft_only_judgment_never_authorizes_routes_or_executes():
     assert judgment.verdict == Verdict.PASS
     assert judgment.authoritative is False
 
-    gate = ActionGate(escalate_below=0.75, route_high_risk=True)
+    action = ExecutableAction(kind=ACTION_PYTHON_CODE, code="print('claim')")
+    assessment = carrying(judgment, artifact_sha256=content_hash(action.code))
+    gate = ActionGate(
+        target_canonical="sandbox://test",
+        escalate_below=0.75,
+        route_high_risk=True,
+        authorizer=ExecutionAuthorizer(lambda: a_policy()),
+    )
     for risk in ("low", "medium", "high"):
-        decision = gate.decide(carrying(judgment), risk_class=risk, subject_id="publish:x")
+        decision = gate.decide(
+            assessment,
+            attempt_id="attempt-1",
+            action=action,
+            risk_class=risk,
+            subject_id="publish:x",
+        )
         assert decision.outcome == OUTCOME_BLOCK, risk
         assert decision.approved is False
 
@@ -186,8 +208,9 @@ def test_soft_only_judgment_never_authorizes_routes_or_executes():
         gate=gate, executor=executor, ledger=SqliteLedger(":memory:")
     )
     outcome = controller.submit(
-        assessment=carrying(judgment),
-        action=ExecutableAction(kind=ACTION_PYTHON_CODE, code="print('claim')"),
+        attempt_id="attempt-1",
+        assessment=assessment,
+        action=action,
         risk_class="medium",
         subject_id="publish:x",
     )
@@ -215,12 +238,30 @@ def test_human_review_unlocks_and_calibrates():
 
     # Human disagreement decides the other way: the judge cannot override.
     fused_fail = bank.judge(
-        [_soft("SUPPORTED 0.99"), human_review(Verdict.FAIL, reviewer="op", note="not entailed")]
+        [
+            _soft("SUPPORTED 0.99"),
+            human_review(Verdict.FAIL, reviewer="op", note="not entailed"),
+        ]
     )
     assert fused_fail.verdict == Verdict.FAIL
     assert fused_fail.authoritative is True
-    gate = ActionGate(escalate_below=0.75, route_high_risk=True)
-    assert gate.decide(carrying(fused_fail), risk_class="medium").outcome == OUTCOME_BLOCK
+    action = ExecutableAction(kind=ACTION_PYTHON_CODE, code="print('claim')")
+    gate = ActionGate(
+        target_canonical="sandbox://test",
+        escalate_below=0.75,
+        route_high_risk=True,
+        authorizer=ExecutionAuthorizer(lambda: a_policy()),
+    )
+    assessment = carrying(fused_fail, artifact_sha256=content_hash(action.code))
+    assert (
+        gate.decide(
+            assessment,
+            attempt_id="attempt-1",
+            action=action,
+            risk_class="medium",
+        ).outcome
+        == OUTCOME_BLOCK
+    )
 
 
 # --------------------------------------------------------------------------
@@ -257,11 +298,13 @@ def test_admissions_arithmetic_is_exact_on_grounding_v2():
 
     gold = {i.item_id: i.gold for i in items}
     false_passes = sorted(
-        r.item_id for r in rows
+        r.item_id
+        for r in rows
         if gold[r.item_id] == GOLD_NOT_SUPPORTED and r.judged == Verdict.PASS
     )
     false_fails = sorted(
-        r.item_id for r in rows
+        r.item_id
+        for r in rows
         if gold[r.item_id] == GOLD_SUPPORTED and r.judged == Verdict.FAIL
     )
     assert false_passes == ["h10", "h41", "h62"]
@@ -290,11 +333,13 @@ def test_admissions_arithmetic_is_exact_against_gold():
     by_id = {r.item_id: r for r in rows}
     gold = {i.item_id: i.gold for i in items}
     false_passes = sorted(
-        r.item_id for r in rows
+        r.item_id
+        for r in rows
         if gold[r.item_id] == GOLD_NOT_SUPPORTED and r.judged == Verdict.PASS
     )
     false_fails = sorted(
-        r.item_id for r in rows
+        r.item_id
+        for r in rows
         if gold[r.item_id] == GOLD_SUPPORTED and r.judged == Verdict.FAIL
     )
     assert false_passes == ["g06", "g43"]
@@ -309,7 +354,9 @@ def test_admissions_arithmetic_is_exact_against_gold():
 
 def test_grounding_loop_demo_blocks_all_but_the_human_approved_publish():
     if not NamespaceSandbox.available():
-        reason = "namespace isolation runtime (unprivileged user namespaces) unavailable"
+        reason = (
+            "namespace isolation runtime (unprivileged user namespaces) unavailable"
+        )
         if _REQUIRE:
             pytest.fail(f"PROM_REQUIRE_SANDBOX=1 but {reason}")
         pytest.skip(reason)

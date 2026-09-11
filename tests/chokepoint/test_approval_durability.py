@@ -129,8 +129,10 @@ def _process_execute(
             authority=ApprovalAuthority(key=_KEY),
             target=target,
             consumed=store,
-            executor=lambda sql, bound, execution_id, artifact_sha256, *,
-            deadline=None: (True, "ok"),
+            executor=lambda sql, bound, execution_id, artifact_sha256, *, deadline=None: (
+                True,
+                "ok",
+            ),
             receipt_lookup=_no_receipt,
             audit=_Audit(),
             clock=lambda: 1_001.0,
@@ -249,8 +251,13 @@ def test_independent_processes_cannot_both_spend_approval(tmp_path):
         assert process.exitcode == 0
 
     assert sum(executed for executed, _, _ in outcomes) == 1
-    assert sum(refused and reason in {REPLAY, RECONCILIATION_REQUIRED}
-               for _, refused, reason in outcomes) == 1
+    assert (
+        sum(
+            refused and reason in {REPLAY, RECONCILIATION_REQUIRED}
+            for _, refused, reason in outcomes
+        )
+        == 1
+    )
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="fork is unavailable")
@@ -365,9 +372,13 @@ def test_production_runtime_uses_stable_key_store_and_required_audit(tmp_path):
     approval = first.authority.authorize(
         for_migration(
             Judgment(verdict=Verdict.PASS, confidence=1, authoritative=True),
-            artifact=artifact, target=target.identity,
+            artifact=artifact,
+            target=target.identity,
         ),
-        artifact=artifact, target=target.identity, now=1_000.0
+        attempt_id="attempt-1",
+        artifact=artifact,
+        target=target.identity,
+        now=1_000.0,
     )
     assert first.runner.execute(approval=approval, artifact=artifact).executed
     first.close()
@@ -601,7 +612,9 @@ class _FakePsycopg:
         return self.connection
 
 
-@pytest.mark.parametrize("hostile_sql", [r"\! env", r"\connect otherdb", r"\copy t FROM PROGRAM 'id'"])
+@pytest.mark.parametrize(
+    "hostile_sql", [r"\! env", r"\connect otherdb", r"\copy t FROM PROGRAM 'id'"]
+)
 def test_driver_executor_treats_psql_meta_commands_only_as_sql(
     monkeypatch, hostile_sql: str
 ):
@@ -611,9 +624,7 @@ def test_driver_executor_treats_psql_meta_commands_only_as_sql(
     )
     target = _target(schema='billing, "private"')
 
-    result = postgres_executor(
-        hostile_sql, target, "a" * 64, "b" * 64
-    )
+    result = postgres_executor(hostile_sql, target, "a" * 64, "b" * 64)
 
     assert result.state == EXECUTION_COMMITTED and result.detail == ""
     assert driver.connect_kwargs == {

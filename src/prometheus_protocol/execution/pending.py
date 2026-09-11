@@ -14,7 +14,14 @@ from typing import Callable
 
 from prometheus_protocol.core.interfaces import Ledger
 from prometheus_protocol.core.validation import require_non_negative_int
-from prometheus_protocol.core.models import ExecutableAction, Judgment, Verdict
+from prometheus_protocol.core.models import (
+    ExecutableAction,
+    Judgment,
+    Tier,
+    Unavailability,
+    Unavailable,
+    Verdict,
+)
 from prometheus_protocol.execution.models import (
     HumanDecision,
     PendingAction,
@@ -24,6 +31,11 @@ from prometheus_protocol.gate.promotion import (
     OUTCOME_APPROVE,
     OUTCOME_ROUTE,
     GateDecision,
+)
+from prometheus_protocol.policy.execution import (
+    AuthorizedExecution,
+    ExecutionAuthorizer,
+    ExecutionNotAuthorized,
 )
 
 
@@ -101,7 +113,29 @@ def _judgment_from_dict(data: dict) -> Judgment:
         contributing=tuple(data.get("contributing", ())),
         conflict=bool(data.get("conflict", False)),
         detail=data.get("detail", ""),
+        unavailable=tuple(
+            Unavailable(
+                verifier_id=item["verifier_id"],
+                tier=Tier(item["tier"]),
+                reason=Unavailability(item["reason"]),
+                detail=item.get("detail", ""),
+            )
+            for item in data.get("unavailable", ())
+        ),
     )
+
+
+def _authorization_to_dict(value: AuthorizedExecution[ExecutableAction]) -> dict:
+    d = value.descriptor
+    return {
+        "snapshot_digest": value.assessment.snapshot_digest,
+        "policy_id": d.policy_id,
+        "policy_digest": d.policy_digest,
+        "artifact_sha256": d.artifact_sha256,
+        "target_canonical": d.target_canonical,
+        "action_class": d.action_class,
+        "attempt_id": d.attempt_id,
+    }
 
 
 class PendingActionService:
@@ -117,14 +151,14 @@ class PendingActionService:
         *,
         clock: Callable[[], str] | None = None,
         ttl_seconds: int = _DEFAULT_TTL_SECONDS,
+        authorizer: ExecutionAuthorizer | None = None,
     ) -> None:
         self._ledger = ledger
         self._clock = clock or _utc_now_iso
         # 0 disables expiry (documented); a negative value fell into the same
         # branch and disabled it too, which was never a chosen setting.
-        self._ttl_seconds = require_non_negative_int(
-            ttl_seconds, name="ttl_seconds"
-        )
+        self._ttl_seconds = require_non_negative_int(ttl_seconds, name="ttl_seconds")
+        self._authorizer = authorizer
 
     # -- holding -----------------------------------------------------------
 
@@ -145,6 +179,20 @@ class PendingActionService:
         judgment = decision.judgment
         if judgment is None:
             raise ValueError("a routed action must carry the judgment it rests on")
+        authorization = decision.authorization
+        if not isinstance(authorization, AuthorizedExecution):
+            raise ExecutionNotAuthorized(
+                "a routed hold requires a validated execution descriptor"
+            )
+        if action != decision.action or action != authorization.action:
+            raise ExecutionNotAuthorized(
+                "hold action differs from the gate-validated action"
+            )
+        if self._authorizer is None:
+            raise ExecutionNotAuthorized(
+                "pending service has no trusted policy supplier"
+            )
+        authorization = self._authorizer.revalidate(authorization)
 
         created = self._clock()
         pending_id = self._ledger.record_pending_action(
@@ -155,6 +203,7 @@ class PendingActionService:
             confidence=judgment.confidence,
             action=_action_to_dict(action),
             judgment=_judgment_to_dict(judgment),
+            authorization=_authorization_to_dict(authorization),
             created_at=created,
         )
         return PendingAction(
@@ -167,6 +216,7 @@ class PendingActionService:
             status=PendingStatus.PENDING,
             created_at=created,
             human_decision=None,
+            authorization=authorization,
         )
 
     # -- reading -----------------------------------------------------------
@@ -203,6 +253,7 @@ class PendingActionService:
 
         timestamp = now or self._clock()
         pending = self._require_pending(pending_id)
+        authorization = self._revalidate(pending)
         # Stale-approval guard: a hold past its TTL cannot be approved, even if a
         # sweep has not run yet. Expire it on the spot (audited) and refuse, so no
         # execution can follow a lapsed approval.
@@ -229,6 +280,7 @@ class PendingActionService:
             reason=detail,
             outcome=OUTCOME_APPROVE,
             action=pending.action,
+            authorization=authorization,
         )
 
     def reject(
@@ -284,6 +336,7 @@ class PendingActionService:
                 f"pending action {pending_id} is still pending: it needs a human "
                 "decision first (a retry cannot bypass the halt)"
             )
+        authorization = self._revalidate(pending)
         if pending.status != PendingStatus.APPROVED:
             raise ValueError(
                 f"pending action {pending_id} is {pending.status.value} and can "
@@ -345,6 +398,7 @@ class PendingActionService:
             reason=detail,
             outcome=OUTCOME_APPROVE,
             action=pending.action,
+            authorization=authorization,
         )
 
     # -- expiry ------------------------------------------------------------
@@ -396,8 +450,16 @@ class PendingActionService:
             )
         return pending
 
-    @staticmethod
-    def _from_row(row: dict) -> PendingAction:
+    def _revalidate(
+        self, pending: PendingAction
+    ) -> AuthorizedExecution[ExecutableAction]:
+        if self._authorizer is None or pending.authorization is None:
+            raise ExecutionNotAuthorized(
+                "legacy hold has no trusted execution descriptor; re-verification is required"
+            )
+        return self._authorizer.revalidate(pending.authorization)
+
+    def _from_row(self, row: dict) -> PendingAction:
         # A human_decision records an actual human approve/reject. A system
         # expiry is a transition audited in the row (status/decided_at/reason),
         # not a human decision, so it is not surfaced here.
@@ -412,14 +474,28 @@ class PendingActionService:
                 timestamp=row.get("decided_at") or "",
                 reason=row.get("decision_reason") or "",
             )
+        action = _action_from_dict(row["action"])
+        judgment = _judgment_from_dict(row["judgment"])
+        raw = row.get("authorization")
+        authorization = None
+        if isinstance(raw, dict):
+            if self._authorizer is not None:
+                authorization = self._authorizer.restore_persisted(
+                    raw,
+                    outcome=judgment,
+                    action=action,
+                    target_canonical=raw["target_canonical"],
+                    attempt_id=raw["attempt_id"],
+                )
         return PendingAction(
             id=row["id"],
             subject_id=row["subject_id"],
             risk_class=row["risk_class"],
             reason=row["reason"],
-            action=_action_from_dict(row["action"]),
-            judgment=_judgment_from_dict(row["judgment"]),
+            action=action,
+            judgment=judgment,
             status=PendingStatus(row["status"]),
             created_at=row["created_at"],
             human_decision=human_decision,
+            authorization=authorization,
         )

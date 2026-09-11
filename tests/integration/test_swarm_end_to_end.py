@@ -25,7 +25,9 @@ def _runtime(synthesis=None):
         synthesis=synthesis or RoleSynthesisEngine(),
         debate=DebateLayer(),
         bank=VerifierBank(InMemoryTrustStore()),
-        gate=ActionGate(),
+        gate=ActionGate(
+            target_canonical="sandbox://swarm",
+        ),
         executor=RecordingExecutor(),
         ledger=SqliteLedger(":memory:"),
     )

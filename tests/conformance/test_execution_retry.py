@@ -26,7 +26,6 @@ import pytest
 
 from prometheus_protocol.core.booleans import parse_env_bool
 from prometheus_protocol.core.models import (
-
     ACTION_PYTHON_CODE,
     ExecutableAction,
     Judgment,
@@ -34,26 +33,31 @@ from prometheus_protocol.core.models import (
 )
 from prometheus_protocol.execution.controller import ExecutionController
 from prometheus_protocol.execution.executor import SandboxExecutor
-from prometheus_protocol.execution.models import PendingStatus
 from prometheus_protocol.execution.pending import PendingActionService
 from prometheus_protocol.gate.authorization import ActionGate
+from prometheus_protocol.policy.execution import ExecutionAuthorizer
 from prometheus_protocol.gate.promotion import GateDecision
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
 from prometheus_protocol.sandbox import NamespaceSandbox
 from prometheus_protocol.sandbox.unsafe import NullSandbox
 from prometheus_protocol.swarm.executor import Executor
-from prometheus_protocol.swarm.models import ExecutionResult
+from prometheus_protocol.swarm.models import ExecutionResult, content_hash
 
-from tests.support.assessments import carrying
+from tests.support.assessments import a_policy, carrying
 
-_REQUIRE = parse_env_bool("PROM_REQUIRE_SANDBOX", os.environ.get("PROM_REQUIRE_SANDBOX"), default=False)
+_REQUIRE = parse_env_bool(
+    "PROM_REQUIRE_SANDBOX", os.environ.get("PROM_REQUIRE_SANDBOX"), default=False
+)
 _T0 = "2026-07-01T00:00:00Z"
 # PHASE-1.2b — these are ASSESSMENTS now. The gate reads a
 # policy-evaluated, action-bound assessment; a bare Judgment has no
 # parameter to arrive through. ``carrying`` mints one around an exact
 # verdict so these tests keep asserting what they always asserted (gate
 # thresholds, TTL, retry) instead of re-testing the policy layer.
-_LOW = carrying(Judgment(verdict=Verdict.PASS, confidence=0.60, authoritative=True))
+_LOW = carrying(
+    Judgment(verdict=Verdict.PASS, confidence=0.60, authoritative=True),
+    artifact_sha256=content_hash("print('mark')"),
+)
 
 
 class _Clock:
@@ -76,7 +80,9 @@ class _SpyExecutor(Executor):
         if not decision.approved:
             raise ValueError("refusing to execute an unapproved gate decision")
         self.calls.append(decision)
-        return ExecutionResult(executed=True, subject_id=decision.subject_id, detail="spy")
+        return ExecutionResult(
+            executed=True, subject_id=decision.subject_id, detail="spy"
+        )
 
 
 def _action(code: str = "print('mark')") -> ExecutableAction:
@@ -85,7 +91,12 @@ def _action(code: str = "print('mark')") -> ExecutableAction:
 
 def _controller(ledger, *, executor: Executor, clock: _Clock, ttl: int = 0):
     return ExecutionController(
-        gate=ActionGate(escalate_below=0.75, route_high_risk=True),
+        gate=ActionGate(
+            target_canonical="sandbox://test",
+            escalate_below=0.75,
+            route_high_risk=True,
+            authorizer=ExecutionAuthorizer(lambda: a_policy()),
+        ),
         executor=executor,
         ledger=ledger,
         clock=clock,
@@ -95,7 +106,9 @@ def _controller(ledger, *, executor: Executor, clock: _Clock, ttl: int = 0):
 
 def _isolating_sandbox() -> NamespaceSandbox:
     if not NamespaceSandbox.available():
-        reason = "namespace isolation runtime (unprivileged user namespaces) unavailable"
+        reason = (
+            "namespace isolation runtime (unprivileged user namespaces) unavailable"
+        )
         if _REQUIRE:
             pytest.fail(f"PROM_REQUIRE_SANDBOX=1 but {reason}")
         pytest.skip(reason)
@@ -122,7 +135,9 @@ def test_retry_executes_an_approval_refused_by_a_missing_sandbox():
     outage = _controller(
         ledger, executor=SandboxExecutor(sandbox=NullSandbox()), clock=clock
     )
-    held = outage.submit(assessment=_LOW, action=_action(), subject_id="s").pending
+    held = outage.submit(
+        attempt_id="attempt-1", assessment=_LOW, action=_action(), subject_id="s"
+    ).pending
     refused = outage.approve(held.id, identity="will@driivai.com", reason="ok")
     assert refused.refused and not refused.executed
     decided_before = _decision_record(ledger, held.id)
@@ -149,7 +164,9 @@ def test_retry_executes_a_deferred_no_exec_approval():
     clock = _Clock(_T0)
     spy = _SpyExecutor()
     controller = _controller(ledger, executor=spy, clock=clock)
-    held = controller.submit(assessment=_LOW, action=_action(), subject_id="s").pending
+    held = controller.submit(
+        attempt_id="attempt-1", assessment=_LOW, action=_action(), subject_id="s"
+    ).pending
     # Deferred: the approval is recorded, execution deliberately not driven.
     controller.pending.approve(held.id, identity="will@driivai.com")
     assert ledger.executions() == []
@@ -165,7 +182,9 @@ def test_retry_fail_closes_again_when_the_sandbox_is_still_missing():
     controller = _controller(
         ledger, executor=SandboxExecutor(sandbox=NullSandbox()), clock=clock
     )
-    held = controller.submit(assessment=_LOW, action=_action(), subject_id="s").pending
+    held = controller.submit(
+        attempt_id="attempt-1", assessment=_LOW, action=_action(), subject_id="s"
+    ).pending
     controller.approve(held.id, identity="will@driivai.com")
 
     result = controller.retry_execution(held.id, identity="will@driivai.com")
@@ -185,7 +204,9 @@ def test_retry_is_refused_for_a_still_pending_hold():
     ledger = SqliteLedger(":memory:")
     spy = _SpyExecutor()
     controller = _controller(ledger, executor=spy, clock=_Clock(_T0))
-    held = controller.submit(assessment=_LOW, action=_action(), subject_id="s").pending
+    held = controller.submit(
+        attempt_id="attempt-1", assessment=_LOW, action=_action(), subject_id="s"
+    ).pending
 
     with pytest.raises(ValueError, match="still pending"):
         controller.retry_execution(held.id, identity="will@driivai.com")
@@ -200,7 +221,9 @@ def test_retry_is_refused_for_a_rejected_hold():
     ledger = SqliteLedger(":memory:")
     spy = _SpyExecutor()
     controller = _controller(ledger, executor=spy, clock=_Clock(_T0))
-    held = controller.submit(assessment=_LOW, action=_action(), subject_id="s").pending
+    held = controller.submit(
+        attempt_id="attempt-1", assessment=_LOW, action=_action(), subject_id="s"
+    ).pending
     controller.reject(held.id, identity="will@driivai.com", reason="no")
     decided_before = _decision_record(ledger, held.id)
 
@@ -216,7 +239,9 @@ def test_retry_is_refused_for_an_expired_hold():
     spy = _SpyExecutor()
     clock = _Clock(_T0)
     controller = _controller(ledger, executor=spy, clock=clock, ttl=100)
-    held = controller.submit(assessment=_LOW, action=_action(), subject_id="s").pending
+    held = controller.submit(
+        attempt_id="attempt-1", assessment=_LOW, action=_action(), subject_id="s"
+    ).pending
     clock.now = "2026-07-01T00:03:20Z"  # +200s: past the TTL
     controller.sweep()
     assert ledger.pending_action(held.id)["status"] == "expired"
@@ -231,7 +256,9 @@ def test_retry_is_refused_for_an_already_executed_hold():
     ledger = SqliteLedger(":memory:")
     spy = _SpyExecutor()
     controller = _controller(ledger, executor=spy, clock=_Clock(_T0))
-    held = controller.submit(assessment=_LOW, action=_action(), subject_id="s").pending
+    held = controller.submit(
+        attempt_id="attempt-1", assessment=_LOW, action=_action(), subject_id="s"
+    ).pending
     controller.approve(held.id, identity="will@driivai.com")  # executed (spy)
     assert len(spy.calls) == 1
 
@@ -248,7 +275,9 @@ def test_a_successful_retry_cannot_itself_be_retried():
     ledger = SqliteLedger(":memory:")
     spy = _SpyExecutor()
     controller = _controller(ledger, executor=spy, clock=_Clock(_T0))
-    held = controller.submit(assessment=_LOW, action=_action(), subject_id="s").pending
+    held = controller.submit(
+        attempt_id="attempt-1", assessment=_LOW, action=_action(), subject_id="s"
+    ).pending
     controller.pending.approve(held.id, identity="will@driivai.com")  # deferred
     assert controller.retry_execution(held.id, identity="will@driivai.com").executed
     assert len(spy.calls) == 1
@@ -269,7 +298,9 @@ def test_a_claimed_hold_cannot_be_double_executed_by_a_retry():
     ledger = SqliteLedger(":memory:")
     spy = _SpyExecutor()
     controller = _controller(ledger, executor=spy, clock=_Clock(_T0))
-    held = controller.submit(assessment=_LOW, action=_action(), subject_id="s").pending
+    held = controller.submit(
+        attempt_id="attempt-1", assessment=_LOW, action=_action(), subject_id="s"
+    ).pending
     controller.pending.approve(held.id, identity="will@driivai.com")  # deferred
 
     # Simulate a concurrent driver that has already claimed the execution.
@@ -290,7 +321,9 @@ def test_second_concurrent_approve_cannot_double_execute():
     ledger = SqliteLedger(":memory:")
     spy = _SpyExecutor()
     controller = _controller(ledger, executor=spy, clock=_Clock(_T0))
-    held = controller.submit(assessment=_LOW, action=_action(), subject_id="s").pending
+    held = controller.submit(
+        attempt_id="attempt-1", assessment=_LOW, action=_action(), subject_id="s"
+    ).pending
     controller.approve(held.id, identity="will@driivai.com")  # executed, claim held
     assert len(spy.calls) == 1
     # The claim survived the successful execution, so no further execution can
@@ -304,7 +337,9 @@ def test_a_refused_execution_releases_the_claim_for_retry():
     controller = _controller(
         ledger, executor=SandboxExecutor(sandbox=NullSandbox()), clock=clock
     )
-    held = controller.submit(assessment=_LOW, action=_action(), subject_id="s").pending
+    held = controller.submit(
+        attempt_id="attempt-1", assessment=_LOW, action=_action(), subject_id="s"
+    ).pending
     assert controller.approve(held.id, identity="will@driivai.com").refused
     # The fail-closed refusal released the claim, so the hold is claimable again
     # (which is what lets a retry re-drive it once the sandbox is back).
@@ -326,12 +361,20 @@ def test_retry_is_conservative_about_unlinked_legacy_executions():
     ledger = SqliteLedger(":memory:")
     spy = _SpyExecutor()
     controller = _controller(ledger, executor=spy, clock=_Clock(_T0))
-    held = controller.submit(assessment=_LOW, action=_action(), subject_id="s").pending
+    held = controller.submit(
+        attempt_id="attempt-1", assessment=_LOW, action=_action(), subject_id="s"
+    ).pending
     controller.pending.approve(held.id, identity="will@driivai.com")
     # A legacy row: executed, human-approved, no pending link.
     ledger.record_execution(
-        subject_id="s", source="human-approved", executed=True, refused=False,
-        sandbox_name="namespace", exit_status=0, detail="legacy", created_at=_T0,
+        subject_id="s",
+        source="human-approved",
+        executed=True,
+        refused=False,
+        sandbox_name="namespace",
+        exit_status=0,
+        detail="legacy",
+        created_at=_T0,
     )
 
     with pytest.raises(ValueError, match="cannot be proven"):
@@ -347,7 +390,9 @@ def test_retry_window_lapses_with_the_ttl_and_leaves_the_decision_untouched():
     spy = _SpyExecutor()
     clock = _Clock(_T0)
     controller = _controller(ledger, executor=spy, clock=clock, ttl=100)
-    held = controller.submit(assessment=_LOW, action=_action(), subject_id="s").pending
+    held = controller.submit(
+        attempt_id="attempt-1", assessment=_LOW, action=_action(), subject_id="s"
+    ).pending
     controller.pending.approve(held.id, identity="will@driivai.com")  # deferred
     decided_before = _decision_record(ledger, held.id)
 
@@ -366,7 +411,9 @@ def test_ttl_zero_disables_the_retry_window():
     spy = _SpyExecutor()
     clock = _Clock("2020-01-01T00:00:00Z")
     controller = _controller(ledger, executor=spy, clock=clock, ttl=0)
-    held = controller.submit(assessment=_LOW, action=_action(), subject_id="s").pending
+    held = controller.submit(
+        attempt_id="attempt-1", assessment=_LOW, action=_action(), subject_id="s"
+    ).pending
     controller.pending.approve(held.id, identity="will@driivai.com")
 
     clock.now = "2030-01-01T00:00:00Z"  # ten years later
@@ -385,7 +432,10 @@ def test_retry_executes_through_the_real_sandbox_after_an_outage():
         ledger, executor=SandboxExecutor(sandbox=NullSandbox()), clock=clock
     )
     held = outage.submit(
-        assessment=_LOW, action=_action("print('RETRIED-AND-RAN')"), subject_id="s"
+        attempt_id="attempt-1",
+        assessment=_LOW,
+        action=_action("print('RETRIED-AND-RAN')"),
+        subject_id="s",
     ).pending
     assert outage.approve(held.id, identity="will@driivai.com").refused
 
@@ -401,10 +451,38 @@ def test_retry_executes_through_the_real_sandbox_after_an_outage():
 
 
 def _seed_pending(ledger_path: str, *, created_at: str, subject: str, code: str) -> int:
+    from prometheus_protocol.policy.assessment import mint
+    from prometheus_protocol.policy.profile import DEFAULT_PROFILE_ID, load_profile
+    from prometheus_protocol.policy.resolver import resolve
+
+    policy = load_profile(DEFAULT_PROFILE_ID)
+    selected_action = _action(code)
+    assessed = mint(
+        resolve(
+            policy,
+            artifact_sha256=content_hash(code),
+            target_canonical="sandbox://execution",
+            action_class="sandbox.execute",
+            attempt_id="attempt-1",
+        ),
+        Judgment(verdict=Verdict.PASS, confidence=0.60, authoritative=True),
+    )
+    authorizer = ExecutionAuthorizer(lambda: policy)
     ledger = SqliteLedger(ledger_path)
-    service = PendingActionService(ledger, clock=lambda: created_at, ttl_seconds=999_999)
-    decision = ActionGate(escalate_below=0.75, route_high_risk=True).decide(
-        _LOW, risk_class="low", subject_id=subject, action=_action(code)
+    service = PendingActionService(
+        ledger, clock=lambda: created_at, ttl_seconds=999_999, authorizer=authorizer
+    )
+    decision = ActionGate(
+        escalate_below=0.75,
+        route_high_risk=True,
+        authorizer=authorizer,
+        target_canonical="sandbox://execution",
+    ).decide(
+        assessed,
+        attempt_id="attempt-1",
+        risk_class="low",
+        subject_id=subject,
+        action=selected_action,
     )
     held = service.hold(decision, risk_class="low")
     ledger.close()
@@ -458,7 +536,9 @@ def test_cli_retry_execution_unknown_id(tmp_path, monkeypatch, capsys):
     assert "no pending action with id 999" in capsys.readouterr().err
 
 
-def test_cli_retry_execution_fail_closes_without_a_sandbox(tmp_path, monkeypatch, capsys):
+def test_cli_retry_execution_fail_closes_without_a_sandbox(
+    tmp_path, monkeypatch, capsys
+):
     # The eligible-but-sandbox-missing branch: retry_decision succeeds, execution
     # is refused fail-closed, the command reports it and returns 1.
     from prometheus_protocol.cli.main import main

@@ -50,6 +50,7 @@ class SubmitFn(Protocol):
         *,
         assessment: "PolicyAssessment",
         action: ExecutableAction,
+        attempt_id: str,
         risk_class: str = "low",
         subject_id: str = "",
     ) -> SubmitOutcome: ...
@@ -75,6 +76,7 @@ class ActionGateway:
         *,
         assessment: "PolicyAssessment",
         action: ExecutableAction,
+        attempt_id: str,
         risk_class: str = "low",
         subject_id: str = "",
     ) -> SubmitOutcome:
@@ -92,6 +94,7 @@ class ActionGateway:
         return self._submit(
             assessment=assessment,
             action=action,
+            attempt_id=attempt_id,
             risk_class=risk_class,
             subject_id=subject_id,
         )

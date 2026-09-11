@@ -29,12 +29,12 @@ from prometheus_protocol.core.models import (
     ExecutableAction,
     Tier,
     Unavailable,
-    Verdict,
 )
 from prometheus_protocol.core.reporting import render_judgment, render_outcome
 from prometheus_protocol.execution.controller import ExecutionController
 from prometheus_protocol.execution.executor import SandboxExecutor
 from prometheus_protocol.gate.authorization import ActionGate
+from prometheus_protocol.policy.execution import ExecutionAuthorizer
 from prometheus_protocol.gate.promotion import (
     OUTCOME_APPROVE,
     OUTCOME_BLOCK,
@@ -56,6 +56,7 @@ from prometheus_protocol.swarm.models import content_hash
 # ---------------------------------------------------------------------------
 # PHASE-1.2b — the demos go through the policy layer, like everything else.
 # ---------------------------------------------------------------------------
+
 
 def _demo_policy(check_id: str, *implementations: str) -> VerificationPolicy:
     """A policy VALUE naming this demo's own verifiers (R1).
@@ -91,15 +92,18 @@ def _assess(bank, policy, check_id, outcomes, *, subject_id: str, artifact: str)
         attempt_id=subject_id,
     )
     digest = snapshot_digest(snapshot)
-    return bank.assess(snapshot, [
-        BoundResult(
-            check_id=check_id,
-            snapshot_digest=digest,
-            implementation=outcome.verifier_id,
-            outcome=outcome,
-        )
-        for outcome in outcomes
-    ])
+    return bank.assess(
+        snapshot,
+        [
+            BoundResult(
+                check_id=check_id,
+                snapshot_digest=digest,
+                implementation=outcome.verifier_id,
+                outcome=outcome,
+            )
+            for outcome in outcomes
+        ],
+    )
 
 
 #: The frozen model's scripted proposals, keyed by task id found in the prompt.
@@ -146,12 +150,17 @@ def run_loop(*, out: Callable[[str], None] = print) -> dict:
     tasks = {t.id: t for t in build_sql_tasks()}
     provider = demo_provider()
     verifier = SqlVerifier()
-    bank = VerifierBank()
-    bank.register(verifier.verifier_id, Tier.HARD)
     policy = _demo_policy("sql.query", verifier.verifier_id)
+    bank = VerifierBank(policy_supplier=lambda: policy)
+    bank.register(verifier.verifier_id, Tier.HARD)
     ledger = SqliteLedger(":memory:")
     controller = ExecutionController(
-        gate=ActionGate(escalate_below=0.75, route_high_risk=True),
+        gate=ActionGate(
+            escalate_below=0.75,
+            route_high_risk=True,
+            authorizer=ExecutionAuthorizer(lambda: policy),
+            target_canonical="sandbox://demo",
+        ),
         executor=SandboxExecutor(),
         ledger=ledger,
     )
@@ -167,9 +176,14 @@ def run_loop(*, out: Callable[[str], None] = print) -> dict:
         out(f"[loop]   proposed : {proposal}")
         evidence = verifier.verify(code=proposal, task=task)
         out(f"[loop]   verified : {render_outcome(evidence)}")
+        action = _action_for(task, proposal)
         assessment = _assess(
-            bank, policy, "sql.query", [evidence],
-            subject_id=task.id, artifact=proposal,
+            bank,
+            policy,
+            "sql.query",
+            [evidence],
+            subject_id=task.id,
+            artifact=action.code,
         )
         judgment = assessment.outcome
         out(f"[loop]   judged   : {render_judgment(judgment)}")
@@ -177,33 +191,43 @@ def run_loop(*, out: Callable[[str], None] = print) -> dict:
             # There is no judgment, so there is nothing to authorize on. The gate
             # is not consulted and no action is proposed: an action the verifier
             # could not judge must never reach execution.
-            out("[loop]   gate     : NOT SUBMITTED — the verifier could not run, "
-                "so there is no judgment to authorize on")
+            out(
+                "[loop]   gate     : NOT SUBMITTED — the verifier could not run, "
+                "so there is no judgment to authorize on"
+            )
             out("[loop]   executed : never (no judgment, no authorization)")
             summary[task_id] = OUTCOME_UNAVAILABLE
             return
         outcome = controller.submit(
             assessment=assessment,
-            action=_action_for(task, proposal),
+            action=action,
+            attempt_id=task.id,
             risk_class=risk_class,
             subject_id=task.id,
         )
         execution = outcome.execution
         pending = outcome.pending
         if outcome.outcome == OUTCOME_APPROVE and execution is not None:
-            out(f"[loop]   gate     : APPROVED -> executed in sandbox "
+            out(
+                f"[loop]   gate     : APPROVED -> executed in sandbox "
                 f"{execution.sandbox_name!r} "
-                f"(exit {execution.exit_status})")
+                f"(exit {execution.exit_status})"
+            )
             out(f"[loop]   output   : {execution.stdout.strip()!r}")
         elif outcome.outcome == OUTCOME_ROUTE and pending is not None:
-            out(f"[loop]   gate     : ROUTED to a human (pending #{pending.id}) "
-                f"— {outcome.decision.reason}")
+            out(
+                f"[loop]   gate     : ROUTED to a human (pending #{pending.id}) "
+                f"— {outcome.decision.reason}"
+            )
             result = controller.approve(
-                pending.id, identity="demo-operator",
+                pending.id,
+                identity="demo-operator",
                 reason="export reviewed and accepted",
             )
-            out(f"[loop]   human    : APPROVED by demo-operator -> executed "
-                f"(exit {result.exit_status})")
+            out(
+                f"[loop]   human    : APPROVED by demo-operator -> executed "
+                f"(exit {result.exit_status})"
+            )
             out(f"[loop]   output   : {result.stdout.strip()!r}")
         else:
             out(f"[loop]   gate     : BLOCKED — {outcome.decision.reason}")
@@ -221,12 +245,16 @@ def run_loop(*, out: Callable[[str], None] = print) -> dict:
     out("")
     out("=== audit (from the ledger, not from memory) ===")
     for row in ledger.human_decisions():
-        out(f"[audit] hold #{row['id']} {row['subject_id']}: {row['status']} "
-            f"by {row['decided_by']} ({row['decision_reason']})")
+        out(
+            f"[audit] hold #{row['id']} {row['subject_id']}: {row['status']} "
+            f"by {row['decided_by']} ({row['decision_reason']})"
+        )
     executed = [r for r in ledger.executions() if r["executed"]]
     blocked = [r for r in ledger.executions() if r["source"] == "blocked"]
-    out(f"[audit] executions recorded: {len(ledger.executions())} "
-        f"(executed {len(executed)}, blocked {len(blocked)})")
+    out(
+        f"[audit] executions recorded: {len(ledger.executions())} "
+        f"(executed {len(executed)}, blocked {len(blocked)})"
+    )
     summary["executed"] = len(executed)
     summary["blocked"] = len(blocked)
     summary["decisions"] = ledger.human_decisions()
@@ -247,8 +275,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         and summary.get("blocked") == 1
     )
     print("")
-    print("[demo] loop closed cleanly in the SQL domain"
-          if ok else "[demo] UNEXPECTED loop shape — inspect the beats above")
+    print(
+        "[demo] loop closed cleanly in the SQL domain"
+        if ok
+        else "[demo] UNEXPECTED loop shape — inspect the beats above"
+    )
     return 0 if ok else 1
 
 

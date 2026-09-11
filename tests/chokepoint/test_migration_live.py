@@ -52,7 +52,9 @@ from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
 
 from tests.support.assessments import for_migration
 
-_REQUIRE = parse_env_bool("PROM_REQUIRE_PG", os.environ.get("PROM_REQUIRE_PG"), default=False)
+_REQUIRE = parse_env_bool(
+    "PROM_REQUIRE_PG", os.environ.get("PROM_REQUIRE_PG"), default=False
+)
 
 
 def _target_from_env() -> DbTarget | None:
@@ -120,8 +122,7 @@ def _receipt_row(target: DbTarget, execution_id: str):
 
     with _connect(target) as connection, connection.cursor() as cursor:
         cursor.execute(
-            "SELECT pg_catalog.to_regclass("
-            "'promethyn_internal.migration_receipts')"
+            "SELECT pg_catalog.to_regclass('promethyn_internal.migration_receipts')"
         )
         relation = cursor.fetchone()
         if relation is None or relation[0] is None:
@@ -147,8 +148,7 @@ def _delete_receipt(target: DbTarget, execution_id: str | None) -> None:
         if relation is None or relation[0] is None:
             return
         cursor.execute(
-            "DELETE FROM promethyn_internal.migration_receipts "
-            "WHERE execution_id = %s",
+            "DELETE FROM promethyn_internal.migration_receipts WHERE execution_id = %s",
             (execution_id,),
         )
 
@@ -189,7 +189,10 @@ def _runner_and_approval(target: DbTarget, store_path, sql: str):
     )
     approval = authority.authorize(
         for_migration(judgment, artifact=artifact, target=target.identity),
-        artifact=artifact, target=target.identity, now=time.time()
+        attempt_id="attempt-1",
+        artifact=artifact,
+        target=target.identity,
+        now=time.time(),
     )
     assert approval is not None
     return runner, artifact, approval, audit
@@ -198,7 +201,7 @@ def _runner_and_approval(target: DbTarget, store_path, sql: str):
 def test_live_end_to_end_and_replay_refused(tmp_path):
     target = _require_db()
     # A uniquely-named table so the run is observable and the suite is re-runnable.
-    tbl = f"chokepoint_probe_{int(time.time()*1000)}"
+    tbl = f"chokepoint_probe_{int(time.time() * 1000)}"
     runner, artifact, approval, audit = _runner_and_approval(
         target, tmp_path / "consumed.db", f"CREATE TABLE {tbl} (id int);"
     )
@@ -214,9 +217,10 @@ def test_live_end_to_end_and_replay_refused(tmp_path):
         # (a second CREATE of the same table would ERROR — proof it never ran).
         second = runner.execute(approval=approval, artifact=artifact)
         assert second.refused and second.reason == REPLAY, second.detail
-        assert _scalar(
-            target, f"SELECT count(*) FROM pg_tables WHERE tablename='{tbl}'"
-        ) == 1
+        assert (
+            _scalar(target, f"SELECT count(*) FROM pg_tables WHERE tablename='{tbl}'")
+            == 1
+        )
     finally:
         _execute(target, f"DROP TABLE IF EXISTS {tbl}")
         runner.close()
@@ -239,9 +243,10 @@ def test_live_executor_uses_exact_bound_schema(tmp_path):
     try:
         result = runner.execute(approval=approval, artifact=artifact)
         assert result.executed, result.detail
-        assert _scalar(
-            target, f"SELECT to_regclass('{schema}.{table}') IS NOT NULL"
-        ) is True
+        assert (
+            _scalar(target, f"SELECT to_regclass('{schema}.{table}') IS NOT NULL")
+            is True
+        )
         assert _scalar(target, f"SELECT to_regclass('public.{table}') IS NULL") is True
     finally:
         _execute(target, f"DROP SCHEMA IF EXISTS {schema} CASCADE")
@@ -380,9 +385,7 @@ def test_live_restart_proves_failed_transaction_did_not_commit(tmp_path):
     consumed_path = tmp_path / "rolled-back-receipt-consumed.db"
     ledger = SqliteLedger(audit_path)
     authority = ApprovalAuthority()
-    artifact = MigrationArtifact(
-        f"CREATE TABLE {table} (id int); SELECT 1 / 0;"
-    )
+    artifact = MigrationArtifact(f"CREATE TABLE {table} (id int); SELECT 1 / 0;")
     approval = authority.mint(
         artifact_sha256=artifact.sha256,
         target=target.identity,
@@ -439,7 +442,9 @@ def test_live_lost_commit_response_remains_pending_until_receipt_recovery(tmp_pa
         bound = dataclasses.replace(target, host="127.0.0.1", port=proxy.port)
         store_path = tmp_path / "consumed.db"
         runner, artifact, approval, audit = _runner_and_approval(
-            bound, store_path, f"CREATE TABLE {table} (id int); INSERT INTO {table} VALUES (1)"
+            bound,
+            store_path,
+            f"CREATE TABLE {table} (id int); INSERT INTO {table} VALUES (1)",
         )
         authority = runner._authority
         execution_id = None
@@ -455,24 +460,43 @@ def test_live_lost_commit_response_remains_pending_until_receipt_recovery(tmp_pa
             # never reached the production executor over the wire.
             assert _scalar(target, f"SELECT count(*) FROM {table}") == 1
             assert _receipt_row(target, execution_id) is not None
-            assert [e["event"] for e in audit.chained_events()] == ["execute_intent", "execute_unknown"]
+            assert [e["event"] for e in audit.chained_events()] == [
+                "execute_intent",
+                "execute_unknown",
+            ]
             runner.close()
             restarted = BrokeredMigrationRunner(
-                authority=authority, target=bound, consumed=ConsumedApprovals(store_path),
-                audit=audit, clock=time.time,
+                authority=authority,
+                target=bound,
+                consumed=ConsumedApprovals(store_path),
+                audit=audit,
+                clock=time.time,
                 receipt_lookup=lambda *a: ReceiptStatus(RECEIPT_UNAVAILABLE),
             )
             second_artifact = MigrationArtifact(f"INSERT INTO {table} VALUES (2)")
-            second_approval = authority.mint(artifact_sha256=second_artifact.sha256,
-                                             target=bound.identity, now=time.time())
-            blocked = restarted.execute(approval=second_approval, artifact=second_artifact)
+            second_approval = authority.mint(
+                artifact_sha256=second_artifact.sha256,
+                target=bound.identity,
+                now=time.time(),
+            )
+            blocked = restarted.execute(
+                approval=second_approval, artifact=second_artifact
+            )
             assert blocked.reason == RECONCILIATION_REQUIRED
             assert _scalar(target, f"SELECT count(*) FROM {table}") == 1
             restarted._receipt_lookup = postgres_receipt_lookup
             report = restarted.reconcile_unfinished()
-            assert len(report) == 1 and report[0].resolved and report[0].state == RECEIPT_COMMITTED
-            assert restarted.execute(approval=approval, artifact=artifact).reason == REPLAY
-            assert restarted.execute(approval=second_approval, artifact=second_artifact).executed
+            assert (
+                len(report) == 1
+                and report[0].resolved
+                and report[0].state == RECEIPT_COMMITTED
+            )
+            assert (
+                restarted.execute(approval=approval, artifact=artifact).reason == REPLAY
+            )
+            assert restarted.execute(
+                approval=second_approval, artifact=second_artifact
+            ).executed
             assert _scalar(target, f"SELECT count(*) FROM {table}") == 2
         finally:
             runner.close()
@@ -483,7 +507,9 @@ def test_live_lost_commit_response_remains_pending_until_receipt_recovery(tmp_pa
             _delete_receipt(target, execution_id)
 
 
-def _live_paused_owner(target, store_path, audit_path, approval, artifact, pipe, pause_after_intent):
+def _live_paused_owner(
+    target, store_path, audit_path, approval, artifact, pipe, pause_after_intent
+):
     """Spawned runner using real PostgreSQL; pipe barriers carry no shared mutex."""
     ledger = SqliteLedger(audit_path)
 
@@ -504,7 +530,10 @@ def _live_paused_owner(target, store_path, audit_path, approval, artifact, pipe,
 
     runner = BrokeredMigrationRunner(
         authority=ApprovalAuthority(key=b"live-recovery-authority-key-32-bytes"),
-        target=target, consumed=ConsumedApprovals(store_path), audit=Audit(), clock=time.time,
+        target=target,
+        consumed=ConsumedApprovals(store_path),
+        audit=Audit(),
+        clock=time.time,
     )
     try:
         pipe.send(runner.execute(approval=approval, artifact=artifact))
@@ -520,12 +549,16 @@ def test_live_suspended_owner_cannot_be_declared_rolled_back(tmp_path, terminate
     table = "paused_owner_" + uuid.uuid4().hex
     authority = ApprovalAuthority(key=b"live-recovery-authority-key-32-bytes")
     artifact = MigrationArtifact(f"CREATE TABLE {table} (id int)")
-    approval = authority.mint(artifact_sha256=artifact.sha256, target=target.identity, now=time.time())
+    approval = authority.mint(
+        artifact_sha256=artifact.sha256, target=target.identity, now=time.time()
+    )
     context = multiprocessing.get_context("spawn")
     parent, child = context.Pipe()
     store_path, audit_path = tmp_path / "store.db", tmp_path / "audit.db"
-    process = context.Process(target=_live_paused_owner,
-        args=(target, store_path, audit_path, approval, artifact, child, True))
+    process = context.Process(
+        target=_live_paused_owner,
+        args=(target, store_path, audit_path, approval, artifact, child, True),
+    )
     process.start()
     child.close()
     restarted = ledger = None
@@ -537,10 +570,19 @@ def test_live_suspended_owner_cannot_be_declared_rolled_back(tmp_path, terminate
         os.kill(process.pid, signal.SIGSTOP)
         stopped = True
         ledger = SqliteLedger(audit_path)
-        restarted = BrokeredMigrationRunner(authority=authority, target=target,
-            consumed=ConsumedApprovals(store_path), audit=ledger, clock=time.time)
+        restarted = BrokeredMigrationRunner(
+            authority=authority,
+            target=target,
+            consumed=ConsumedApprovals(store_path),
+            audit=ledger,
+            clock=time.time,
+        )
         report = restarted.reconcile_unfinished()
-        assert len(report) == 1 and report[0].state == EXECUTION_BUSY and not report[0].resolved
+        assert (
+            len(report) == 1
+            and report[0].state == EXECUTION_BUSY
+            and not report[0].resolved
+        )
         assert _scalar(target, f"SELECT to_regclass('{table}') IS NULL") is True
         assert not any(e["event"] == "execute_outcome" for e in ledger.chained_events())
         if terminate:
@@ -548,8 +590,14 @@ def test_live_suspended_owner_cannot_be_declared_rolled_back(tmp_path, terminate
             process.join(5)
             stopped = False
             report = restarted.reconcile_unfinished()
-            assert len(report) == 1 and report[0].state == RECEIPT_NOT_FOUND and report[0].resolved
-            assert restarted.execute(approval=approval, artifact=artifact).reason == REPLAY
+            assert (
+                len(report) == 1
+                and report[0].state == RECEIPT_NOT_FOUND
+                and report[0].resolved
+            )
+            assert (
+                restarted.execute(approval=approval, artifact=artifact).reason == REPLAY
+            )
         else:
             os.kill(process.pid, signal.SIGCONT)
             stopped = False
@@ -580,12 +628,16 @@ def test_live_dead_client_with_active_transaction_stays_pending(tmp_path):
     table = "active_owner_" + uuid.uuid4().hex
     authority = ApprovalAuthority(key=b"live-recovery-authority-key-32-bytes")
     artifact = MigrationArtifact(f"CREATE TABLE {table} (id int); SELECT pg_sleep(30)")
-    approval = authority.mint(artifact_sha256=artifact.sha256, target=target.identity, now=time.time())
+    approval = authority.mint(
+        artifact_sha256=artifact.sha256, target=target.identity, now=time.time()
+    )
     context = multiprocessing.get_context("spawn")
     parent, child = context.Pipe()
     store_path, audit_path = tmp_path / "store.db", tmp_path / "audit.db"
-    process = context.Process(target=_live_paused_owner,
-        args=(target, store_path, audit_path, approval, artifact, child, False))
+    process = context.Process(
+        target=_live_paused_owner,
+        args=(target, store_path, audit_path, approval, artifact, child, False),
+    )
     process.start()
     child.close()
     restarted = ledger = None
@@ -596,8 +648,10 @@ def test_live_dead_client_with_active_transaction_stays_pending(tmp_path):
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             with _connect(target) as connection:
-                row = connection.execute("SELECT pid FROM pg_stat_activity WHERE query = %s AND state='active'",
-                                         (artifact.sql,)).fetchone()
+                row = connection.execute(
+                    "SELECT pid FROM pg_stat_activity WHERE query = %s AND state='active'",
+                    (artifact.sql,),
+                ).fetchone()
             if row:
                 backend_pid = row[0]
                 break
@@ -606,12 +660,23 @@ def test_live_dead_client_with_active_transaction_stays_pending(tmp_path):
         process.kill()
         process.join(5)
         ledger = SqliteLedger(audit_path)
-        restarted = BrokeredMigrationRunner(authority=authority, target=target,
-            consumed=ConsumedApprovals(store_path), audit=ledger, clock=time.time)
+        restarted = BrokeredMigrationRunner(
+            authority=authority,
+            target=target,
+            consumed=ConsumedApprovals(store_path),
+            audit=ledger,
+            clock=time.time,
+        )
         report = restarted.reconcile_unfinished()
-        assert len(report) == 1 and report[0].state == RECEIPT_IN_PROGRESS and not report[0].resolved
+        assert (
+            len(report) == 1
+            and report[0].state == RECEIPT_IN_PROGRESS
+            and not report[0].resolved
+        )
         with _connect(target) as connection:
-            assert connection.execute("SELECT pg_terminate_backend(%s)", (backend_pid,)).fetchone()[0]
+            assert connection.execute(
+                "SELECT pg_terminate_backend(%s)", (backend_pid,)
+            ).fetchone()[0]
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             report = restarted.reconcile_unfinished()
@@ -663,8 +728,12 @@ def test_live_an_expired_approval_makes_no_privileged_database_contact(tmp_path)
             return super().resolve_password()
 
     watched = _Watched(
-        target.host, target.port, target.dbname, target.user,
-        target.password, schema=target.schema,
+        target.host,
+        target.port,
+        target.dbname,
+        target.user,
+        target.password,
+        schema=target.schema,
     )
 
     # A deadline that expired a minute ago, on the real clock.
@@ -691,10 +760,17 @@ def test_live_an_expired_approval_makes_no_privileged_database_contact(tmp_path)
     # And the server agrees: the table does not exist.
     import psycopg
 
-    with psycopg.connect(
-        host=target.host, port=target.port, dbname=target.dbname,
-        user=target.user, password=target.resolve_password(), connect_timeout=10,
-    ) as connection, connection.cursor() as cursor:
+    with (
+        psycopg.connect(
+            host=target.host,
+            port=target.port,
+            dbname=target.dbname,
+            user=target.user,
+            password=target.resolve_password(),
+            connect_timeout=10,
+        ) as connection,
+        connection.cursor() as cursor,
+    ):
         cursor.execute("SELECT pg_catalog.to_regclass(%s)", (table,))
         assert cursor.fetchone()[0] is None, "the migration ran after expiry"
 
@@ -711,17 +787,27 @@ def test_live_a_current_approval_still_executes(tmp_path):
         clock=time.time,
     )
     result = postgres_executor(
-        f"CREATE TABLE {table} (id int);", target, "c" * 64, "d" * 64,
+        f"CREATE TABLE {table} (id int);",
+        target,
+        "c" * 64,
+        "d" * 64,
         deadline=deadline,
     )
     assert result.state == EXECUTION_COMMITTED, result
 
     import psycopg
 
-    with psycopg.connect(
-        host=target.host, port=target.port, dbname=target.dbname,
-        user=target.user, password=target.resolve_password(), connect_timeout=10,
-    ) as connection, connection.cursor() as cursor:
+    with (
+        psycopg.connect(
+            host=target.host,
+            port=target.port,
+            dbname=target.dbname,
+            user=target.user,
+            password=target.resolve_password(),
+            connect_timeout=10,
+        ) as connection,
+        connection.cursor() as cursor,
+    ):
         cursor.execute("SELECT pg_catalog.to_regclass(%s)", (table,))
         assert cursor.fetchone()[0] is not None
         cursor.execute(f"DROP TABLE {table}")

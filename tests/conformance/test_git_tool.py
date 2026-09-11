@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -39,7 +40,11 @@ from prometheus_protocol.tools.git import (
 
 from prometheus_protocol.core.models import Tier
 from prometheus_protocol.policy.coverage import BoundResult
-from prometheus_protocol.policy.profile import CHECK_MERGE_PROOF, DEFAULT_PROFILE_ID, load_profile
+from prometheus_protocol.policy.profile import (
+    CHECK_MERGE_PROOF,
+    DEFAULT_PROFILE_ID,
+    load_profile,
+)
 from prometheus_protocol.policy.resolver import resolve
 from prometheus_protocol.policy.snapshot import ACTION_BRANCH_DELETE, snapshot_digest
 from prometheus_protocol.swarm.models import content_hash
@@ -47,7 +52,9 @@ from prometheus_protocol.tools.git import MERGE_CHECK_VERIFIER_ID
 from prometheus_protocol.verifier.bank import VerifierBank
 from prometheus_protocol.verifier.store import InMemoryTrustStore
 
-_REQUIRE = parse_env_bool("PROM_REQUIRE_SANDBOX", os.environ.get("PROM_REQUIRE_SANDBOX"), default=False)
+_REQUIRE = parse_env_bool(
+    "PROM_REQUIRE_SANDBOX", os.environ.get("PROM_REQUIRE_SANDBOX"), default=False
+)
 
 _FIXED_ENV = {
     **os.environ,
@@ -58,7 +65,9 @@ _FIXED_ENV = {
 
 def _sandbox() -> NamespaceSandbox:
     if not NamespaceSandbox.available():
-        reason = "namespace isolation runtime (unprivileged user namespaces) unavailable"
+        reason = (
+            "namespace isolation runtime (unprivileged user namespaces) unavailable"
+        )
         if _REQUIRE:
             pytest.fail(f"PROM_REQUIRE_SANDBOX=1 but {reason}")
         pytest.skip(reason)
@@ -67,9 +76,20 @@ def _sandbox() -> NamespaceSandbox:
 
 def _git(repo, *args) -> str:
     return subprocess.run(
-        ["git", "-C", str(repo), "-c", "user.email=fixture@example.invalid",
-         "-c", "user.name=fixture", *args],
-        check=True, capture_output=True, text=True, env=_FIXED_ENV,
+        [
+            "git",
+            "-C",
+            str(repo),
+            "-c",
+            "user.email=fixture@example.invalid",
+            "-c",
+            "user.name=fixture",
+            *args,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=_FIXED_ENV,
     ).stdout
 
 
@@ -82,8 +102,11 @@ def _make_repo(path) -> None:
     """
 
     path.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["git", "-C", str(path), "-c", "init.defaultBranch=main", "init", "-q"],
-                   check=True, env=_FIXED_ENV)
+    subprocess.run(
+        ["git", "-C", str(path), "-c", "init.defaultBranch=main", "init", "-q"],
+        check=True,
+        env=_FIXED_ENV,
+    )
     _git(path, "commit", "-q", "--allow-empty", "-m", "base")
     # Fully merged: branch, commit, merge back into main.
     _git(path, "checkout", "-q", "-b", "risky-experiment")
@@ -107,12 +130,14 @@ def _branches(repo) -> set[str]:
 
 def _controller(repo, sandbox) -> ExecutionController:
     return ExecutionController(
-        gate=ActionGate(escalate_below=0.75, route_high_risk=True),
+        gate=ActionGate(
+            escalate_below=0.75,
+            route_high_risk=True,
+            target_canonical=f"git://{Path(repo).resolve()}",
+        ),
         executor=GitBranchDeleteExecutor(repo_path=repo, sandbox=sandbox),
         ledger=SqliteLedger(":memory:"),
     )
-
-
 
 
 def _assessment(tool, branch):
@@ -130,14 +155,22 @@ def _assessment(tool, branch):
         action_class=ACTION_BRANCH_DELETE,
         attempt_id=f"delete-branch:{branch}",
     )
-    bank = VerifierBank(InMemoryTrustStore())
+    bank = VerifierBank(
+        InMemoryTrustStore(), policy_supplier=lambda: load_profile(DEFAULT_PROFILE_ID)
+    )
     bank.register(MERGE_CHECK_VERIFIER_ID, Tier.HARD)
-    return bank.assess(snapshot, [BoundResult(
-        check_id=CHECK_MERGE_PROOF,
-        snapshot_digest=snapshot_digest(snapshot),
-        implementation=MERGE_CHECK_VERIFIER_ID,
-        outcome=evidence_for(tool.classify(branch)),
-    )])
+    return bank.assess(
+        snapshot,
+        [
+            BoundResult(
+                check_id=CHECK_MERGE_PROOF,
+                snapshot_digest=snapshot_digest(snapshot),
+                implementation=MERGE_CHECK_VERIFIER_ID,
+                outcome=evidence_for(tool.classify(branch)),
+            )
+        ],
+    )
+
 
 def _submit(controller, tool, branch, risk=None):
     """``risk=None`` uses the tool's own classification.
@@ -151,6 +184,7 @@ def _submit(controller, tool, branch, risk=None):
     """
 
     return controller.submit(
+        attempt_id=f"delete-branch:{branch}",
         assessment=_assessment(tool, branch),
         action=tool.delete_action(branch),
         risk_class=risk if risk is not None else risk_class_for(tool.classify(branch)),
@@ -229,7 +263,11 @@ def test_inv_denied_hold_never_deletes_and_the_decision_is_recorded(tmp_path):
     tool = GitTool(repo_path=tmp_path, sandbox=sandbox)
     ledger = SqliteLedger(":memory:")
     controller = ExecutionController(
-        gate=ActionGate(escalate_below=0.75, route_high_risk=True),
+        gate=ActionGate(
+            escalate_below=0.75,
+            route_high_risk=True,
+            target_canonical=f"git://{tmp_path.resolve()}",
+        ),
         executor=GitBranchDeleteExecutor(repo_path=tmp_path, sandbox=sandbox),
         ledger=ledger,
     )
@@ -277,8 +315,13 @@ def test_wall_raw_actions_and_unapproved_decisions_cannot_execute(tmp_path):
     with pytest.raises(TypeError):
         executor.execute(ExecutableAction(kind=ACTION_PYTHON_CODE, code="pass"))
     tool = GitTool(repo_path=tmp_path, sandbox=sandbox)
-    routed = ActionGate(escalate_below=0.75, route_high_risk=True).decide(
+    routed = ActionGate(
+        escalate_below=0.75,
+        route_high_risk=True,
+        target_canonical=f"git://{tmp_path.resolve()}",
+    ).decide(
         _assessment(tool, "merged-cleanup"),
+        attempt_id="delete-branch:merged-cleanup",
         risk_class=risk_class_for(tool.classify("merged-cleanup")),
         action=tool.delete_action("merged-cleanup"),
     )
@@ -291,22 +334,18 @@ def test_base_branch_is_refused_even_when_approved(tmp_path):
     sandbox = _sandbox()
     _make_repo(tmp_path)
     executor = GitBranchDeleteExecutor(repo_path=tmp_path, sandbox=sandbox)
-    gate = ActionGate()  # bare authorizer: approve a (mis)judged main-delete
-    from prometheus_protocol.core.models import Judgment, Verdict
-
-    from tests.support.assessments import carrying
+    gate = ActionGate(target_canonical=f"git://{tmp_path.resolve()}")
+    tool = GitTool(repo_path=tmp_path, sandbox=sandbox)
 
     # A fully-satisfied assessment pointed at the BASE branch. The point of this
     # test is that the executor refuses the base branch regardless of how good
     # the authorization looks, so the authorization here is made deliberately
     # perfect rather than deliberately unbound.
     approved = gate.decide(
-        carrying(
-            Judgment(verdict=Verdict.PASS, confidence=1.0, authoritative=True),
-            action_class=ACTION_BRANCH_DELETE,
-        ),
+        _assessment(tool, "main"),
+        attempt_id="delete-branch:main",
         risk_class="low",
-        action=GitTool(repo_path=tmp_path, sandbox=sandbox).delete_action("main"),
+        action=tool.delete_action("main"),
     )
     assert approved.approved
     result = executor.execute(approved)
@@ -319,7 +358,11 @@ def test_base_branch_is_refused_even_when_approved(tmp_path):
 
 def _real_controller(repo, sandbox, ledger=None):
     return ExecutionController(
-        gate=ActionGate(escalate_below=0.75, route_high_risk=True),
+        gate=ActionGate(
+            escalate_below=0.75,
+            route_high_risk=True,
+            target_canonical=f"git://{Path(repo).resolve()}",
+        ),
         executor=GitBranchDeleteExecutor(
             repo_path=repo, sandbox=sandbox, allow_delete=True
         ),
@@ -373,7 +416,11 @@ def test_fail_closed_when_isolation_cannot_start(tmp_path):
     _make_repo(tmp_path)
     tool = GitTool(repo_path=tmp_path, sandbox=_sandbox())
     controller = ExecutionController(
-        gate=ActionGate(escalate_below=0.75, route_high_risk=True),
+        gate=ActionGate(
+            escalate_below=0.75,
+            route_high_risk=True,
+            target_canonical=f"git://{tmp_path.resolve()}",
+        ),
         executor=GitBranchDeleteExecutor(
             repo_path=tmp_path, sandbox=NullSandbox(), allow_delete=True
         ),
@@ -394,8 +441,11 @@ def test_sandbox_executor_still_refuses_the_git_kind(tmp_path):
     _make_repo(tmp_path)
     tool = GitTool(repo_path=tmp_path, sandbox=sandbox)
     assessment = _assessment(tool, "risky-experiment")
-    decision = ActionGate().decide(
-        assessment, risk_class="low", action=tool.delete_action("risky-experiment")
+    decision = ActionGate(target_canonical=f"git://{tmp_path.resolve()}").decide(
+        assessment,
+        attempt_id="delete-branch:risky-experiment",
+        risk_class="low",
+        action=tool.delete_action("risky-experiment"),
     )
     assert decision.approved
     result = SandboxExecutor(sandbox=sandbox).execute(decision)

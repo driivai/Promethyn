@@ -112,20 +112,34 @@ def covered(
 
     if outcome is None:
         outcome = Evidence(
-            passed=True, total=1, passed_count=1, failures=(),
-            verifier_id=implementation, verdict=Verdict.PASS, tier=Tier.HARD,
+            passed=True,
+            total=1,
+            passed_count=1,
+            failures=(),
+            verifier_id=implementation,
+            verdict=Verdict.PASS,
+            tier=Tier.HARD,
         )
     policy = a_policy(
         check_id=check_id, implementation=implementation, action_class=action_class
     )
     snapshot = a_snapshot(action_class=action_class, policy=policy, **snapshot_kwargs)
-    the_bank = bank if bank is not None else VerifierBank(InMemoryTrustStore())
-    return the_bank.assess(snapshot, [BoundResult(
-        check_id=check_id,
-        snapshot_digest=snapshot_digest(snapshot),
-        implementation=implementation,
-        outcome=outcome,
-    )])
+    the_bank = (
+        bank
+        if bank is not None
+        else VerifierBank(InMemoryTrustStore(), policy_supplier=lambda: policy)
+    )
+    return the_bank.assess(
+        snapshot,
+        [
+            BoundResult(
+                check_id=check_id,
+                snapshot_digest=snapshot_digest(snapshot),
+                implementation=implementation,
+                outcome=outcome,
+            )
+        ],
+    )
 
 
 def carrying(
@@ -152,11 +166,17 @@ def for_migration(outcome, *, artifact, target) -> PolicyAssessment:
 
     from prometheus_protocol.policy.snapshot import ACTION_DATABASE_MIGRATE
 
-    return carrying(
+    from prometheus_protocol.policy.assessment import mint
+    from prometheus_protocol.policy.profile import DEFAULT_PROFILE_ID, load_profile
+
+    return mint(
+        a_snapshot(
+            action_class=ACTION_DATABASE_MIGRATE,
+            artifact_sha256=artifact.sha256,
+            target_canonical=target.canonical,
+            policy=load_profile(DEFAULT_PROFILE_ID),
+        ),
         outcome,
-        action_class=ACTION_DATABASE_MIGRATE,
-        artifact_sha256=artifact.sha256,
-        target_canonical=target.canonical,
     )
 
 
@@ -195,10 +215,12 @@ def authorize_migration(authority, outcome, *, artifact, target, **kwargs):
     deliberately instead.
     """
 
+    assessment = for_migration(outcome, artifact=artifact, target=target)
     return authority.authorize(
-        for_migration(outcome, artifact=artifact, target=target),
+        assessment,
         artifact=artifact,
         target=target,
+        attempt_id=assessment.attempt_id,
         **kwargs,
     )
 

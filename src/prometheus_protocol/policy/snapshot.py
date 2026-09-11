@@ -4,17 +4,12 @@ WHAT THIS IS. When the trusted resolver turns a selected policy into concrete
 requirements for one artifact, one target, one action and one verification
 attempt, the result is a :class:`BoundRequirements` snapshot.
 
-WHAT IS NOT TRUE OF IT YET. This docstring said the snapshot "is persisted and
-bound into the authorization record, so a decision can be shown to have been
-made under a particular coverage claim". It is not, and it cannot be shown.
-``GateDecision`` has no snapshot, policy, action-class or attempt field, and the
-string ``snapshot_digest`` does not appear anywhere under ``ledger/``,
-``execution/`` or ``gate/``. The digest reaches :class:`PolicyAssessment` and
-stops there. Persisting it — with the attempt id and the resolved requirements —
-is deferred work, and it is the AUDIT consequence of the enforcement gap the
-execution descriptor closes: until a decision carries what it was decided under,
-no after-the-fact review can tell a correctly resolved authorization from a
-weakened one.
+HOW IT REACHES AUTHORIZATION. ``PolicyAssessment`` carries this digest and
+Checkpoint B's ``ExecutionAuthorizer`` compares it with a fresh resolution of
+the selected policy for the concrete execution descriptor. ``GateDecision``
+then carries the seam-minted authorization and pending holds persist its six
+identities. The broader migration authorization record still does not contain
+the complete resolved requirement tuple; that audit expansion remains R5/R6.
 
 A second thing this encoding does NOT do, said here because the encoding is
 otherwise easy to over-read: pinning the digest makes two different requirement
@@ -152,11 +147,13 @@ ACTION_DATABASE_MIGRATE = "database.migrate"
 #: ``skill.promote`` failed and was dropped for.
 ACTION_BRANCH_DELETE = "branch.delete"
 
-ACTION_CLASSES: frozenset[str] = frozenset({
-    ACTION_SANDBOX_EXECUTE,
-    ACTION_DATABASE_MIGRATE,
-    ACTION_BRANCH_DELETE,
-})
+ACTION_CLASSES: frozenset[str] = frozenset(
+    {
+        ACTION_SANDBOX_EXECUTE,
+        ACTION_DATABASE_MIGRATE,
+        ACTION_BRANCH_DELETE,
+    }
+)
 
 
 class SnapshotError(ValueError):
@@ -208,11 +205,11 @@ class BoundRequirement:
     permitted: tuple[str, ...]
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self, "check_id", _identity(self.check_id, what="check_id")
-        )
+        object.__setattr__(self, "check_id", _identity(self.check_id, what="check_id"))
         if isinstance(self.permitted, (str, bytes)):
-            raise SnapshotError("permitted implementations must be a sequence, not a string")
+            raise SnapshotError(
+                "permitted implementations must be a sequence, not a string"
+            )
         names = [
             _identity(name, what="permitted implementation")
             for name in tuple(self.permitted)
@@ -275,9 +272,7 @@ class BoundRequirements:
             "target_canonical",
             "attempt_id",
         ):
-            object.__setattr__(
-                self, name, _identity(getattr(self, name), what=name)
-            )
+            object.__setattr__(self, name, _identity(getattr(self, name), what=name))
         if self.action_class not in ACTION_CLASSES:
             raise SnapshotError(
                 f"{self.action_class!r} is not a known action class. The set is "
@@ -385,4 +380,3 @@ def snapshot_digest(snapshot: BoundRequirements) -> str:
     processes and hosts for one resolved coverage claim."""
 
     return hashlib.sha256(snapshot_preimage(snapshot)).hexdigest()
-

@@ -29,7 +29,9 @@ from prometheus_protocol.benchmarks.sql_loop_demo import run_loop
 
 from tests.support.assessments import carrying
 
-_REQUIRE = parse_env_bool("PROM_REQUIRE_SANDBOX", os.environ.get("PROM_REQUIRE_SANDBOX"), default=False)
+_REQUIRE = parse_env_bool(
+    "PROM_REQUIRE_SANDBOX", os.environ.get("PROM_REQUIRE_SANDBOX"), default=False
+)
 
 _TASK = SqlTask(
     id="sql/conf",
@@ -53,7 +55,9 @@ _ORDERED_TASK = SqlTask(
 
 def _require_runtime() -> None:
     if not NamespaceSandbox.available():
-        reason = "namespace isolation runtime (unprivileged user namespaces) unavailable"
+        reason = (
+            "namespace isolation runtime (unprivileged user namespaces) unavailable"
+        )
         if _REQUIRE:
             pytest.fail(f"PROM_REQUIRE_SANDBOX=1 but {reason}")
         pytest.skip(reason)
@@ -83,9 +87,7 @@ def test_query_error_on_valid_schema_is_the_candidates_fail():
 
 
 def test_sandbox_fault_is_unavailable_not_a_verdict():
-    outcome = SqlVerifier(sandbox=NullSandbox()).verify(
-        code="SELECT 1", task=_TASK
-    )
+    outcome = SqlVerifier(sandbox=NullSandbox()).verify(code="SELECT 1", task=_TASK)
     # Could-not-execute is a non-verdict (Unavailable), never an ABSTAIN: it has
     # no ``verdict`` at all, so it cannot be mistaken for one.
     assert isinstance(outcome, Unavailable)
@@ -96,8 +98,11 @@ def test_sandbox_fault_is_unavailable_not_a_verdict():
 def test_unsound_reference_is_abstain_never_pinned_on_the_candidate():
     _require_runtime()
     broken = SqlTask(
-        id="sql/broken", prompt="x", schema_sql=_TASK.schema_sql,
-        fixture_sql=_TASK.fixture_sql, reference_query="SELECT nope FROM o",
+        id="sql/broken",
+        prompt="x",
+        schema_sql=_TASK.schema_sql,
+        fixture_sql=_TASK.fixture_sql,
+        reference_query="SELECT nope FROM o",
     )
     evidence = SqlVerifier().verify(code="SELECT city FROM o", task=broken)
     assert evidence.verdict == Verdict.ABSTAIN
@@ -126,10 +131,10 @@ def test_ordered_task_enforces_order_and_unordered_does_not():
         "WHERE city IS NOT NULL GROUP BY city ORDER BY s ASC"
     )
     assert verifier.verify(code=reordered, task=_ORDERED_TASK).verdict == Verdict.FAIL
-    assert verifier.verify(code=reordered, task=_TASK).verdict == Verdict.FAIL  # rows differ (filter)
-    unordered_ok = (
-        "SELECT city, SUM(total) FROM o GROUP BY city ORDER BY city DESC"
-    )
+    assert (
+        verifier.verify(code=reordered, task=_TASK).verdict == Verdict.FAIL
+    )  # rows differ (filter)
+    unordered_ok = "SELECT city, SUM(total) FROM o GROUP BY city ORDER BY city DESC"
     assert verifier.verify(code=unordered_ok, task=_TASK).verdict == Verdict.PASS
 
 
@@ -175,7 +180,12 @@ def test_unavailable_sql_verification_routes_to_human_never_authorizes(monkeypat
     assert isinstance(judgment, Unavailable)
     from prometheus_protocol.gate.authorization import ActionGate, OUTCOME_UNAVAILABLE
 
-    decision = ActionGate(escalate_below=0.75, route_high_risk=True).decide(
-        carrying(judgment), risk_class="medium", subject_id="sql/unavailable"
+    decision = ActionGate(
+        target_canonical="sandbox://test", escalate_below=0.75, route_high_risk=True
+    ).decide(
+        carrying(judgment),
+        attempt_id="attempt-1",
+        risk_class="medium",
+        subject_id="sql/unavailable",
     )
     assert decision.outcome == OUTCOME_UNAVAILABLE and not decision.approved

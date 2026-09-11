@@ -73,7 +73,9 @@ def swarm_runtime():
         synthesis=RoleSynthesisEngine(provider=provider),
         debate=DebateLayer(),
         bank=VerifierBank(InMemoryTrustStore()),
-        gate=ActionGate(),
+        gate=ActionGate(
+            target_canonical="sandbox://swarm",
+        ),
         executor=RecordingExecutor(),
         ledger=SqliteLedger(":memory:"),
         provider=provider,

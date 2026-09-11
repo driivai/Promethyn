@@ -289,6 +289,14 @@ class GitBranchDeleteExecutor(Executor):
             raise ValueError("refusing to execute an unapproved gate decision")
 
         action = decision.action
+        from prometheus_protocol.policy.execution import AuthorizedExecution
+        authorization = decision.authorization
+        if not isinstance(authorization, AuthorizedExecution):
+            raise ValueError("approved decision carries no validated execution descriptor")
+        if authorization.action != action:
+            raise ValueError("approved action differs from its execution descriptor")
+        if authorization.descriptor.target_canonical != f"git://{self.repo_path}":
+            raise ValueError("execution descriptor names a different git principal")
         if action is None:
             return self._refuse(decision, "approved decision carries no executable action")
         if action.kind != ACTION_GIT_DELETE_BRANCH:

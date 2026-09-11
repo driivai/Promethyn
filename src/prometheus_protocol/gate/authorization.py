@@ -21,6 +21,7 @@ from prometheus_protocol.core.models import (
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle: policy imports core.models
     from prometheus_protocol.policy.assessment import PolicyAssessment
+    from prometheus_protocol.policy.execution import ExecutionAuthorizer
 from prometheus_protocol.gate.promotion import (
     OUTCOME_APPROVE,
     OUTCOME_BLOCK,
@@ -50,9 +51,10 @@ _DEFAULT_MIN_CONFIDENCE: dict[str, float] = {
 class ActionGate:
     """Authorizes an action from a single judgment.
 
-    Routing is opt-in and additive. Constructed bare (``ActionGate()``) the gate
-    is a pure binary authorizer, exactly as before: an authoritative PASS at or
-    above the risk floor is approved, everything else is blocked. When
+    The canonical target is mandatory construction context; it cannot be copied
+    from the assessment being checked. Routing is opt-in and additive. Without
+    routing options, an authoritative PASS at or above the risk floor is
+    approved and everything else is blocked. When
     ``escalate_below`` and/or ``route_high_risk`` are supplied, it additionally
     *routes* — an authoritative PASS that is too uncertain, below the floor, or
     high-risk is neither approved nor blocked but held for a human. Routing never
@@ -66,12 +68,28 @@ class ActionGate:
         min_confidence: Mapping[str, float] | None = None,
         escalate_below: float | None = None,
         route_high_risk: bool = False,
+        authorizer: "ExecutionAuthorizer | None" = None,
+        target_canonical: str,
     ) -> None:
         self._min_confidence = dict(
             _DEFAULT_MIN_CONFIDENCE if min_confidence is None else min_confidence
         )
         self._escalate_below = escalate_below
         self._route_high_risk = route_high_risk
+        if authorizer is None:
+            from prometheus_protocol.policy.execution import (
+                ExecutionAuthorizer,
+                profile_supplier,
+            )
+            from prometheus_protocol.policy.profile import DEFAULT_PROFILE_ID
+
+            authorizer = ExecutionAuthorizer(profile_supplier(DEFAULT_PROFILE_ID))
+        self._authorizer = authorizer
+        self._target_canonical = target_canonical
+
+    @property
+    def authorizer(self) -> "ExecutionAuthorizer":
+        return self._authorizer
 
     def decide(
         self,
@@ -80,6 +98,7 @@ class ActionGate:
         risk_class: str = "low",
         subject_id: str = "",
         action: ExecutableAction | None = None,
+        attempt_id: str,
     ) -> GateDecision:
         """Authorize an action from a POLICY-EVALUATED, ACTION-BOUND assessment.
 
@@ -93,23 +112,28 @@ class ActionGate:
         rather than returning an unapproved decision, because a falsy return is
         something a caller could read as a policy denial.
 
-        WHAT THIS METHOD READS, AND WHAT IT IGNORES. It reads
-        ``assessment.outcome``. It reads nothing else. ``action`` is carried into
-        the returned decision and is never compared with
-        ``assessment.artifact_sha256`` or ``assessment.action_class``, and
-        ``snapshot_digest`` is not compared with anything at all. Measured
-        consequences, both reproduced in ``tests/conformance/``: an assessment
-        resolved for artifact A returns ``approved=True`` for an action running
-        unrelated code B, and an assessment whose ``action_class`` is
-        ``sandbox.execute`` returns ``approved=True`` for a
-        ``git_delete_branch`` action. The parameter type is therefore a proof
-        that SOME policy was evaluated, not a proof it was evaluated for THIS
-        action. ``docs/execution-descriptor.md`` is the seam that closes it.
+        DESCRIPTOR SEAM. Before verdict routing, the selected policy is re-resolved
+        for the concrete action, target principal, and attempt. The resulting
+        identity is compared with the assessment and carried in every decision;
+        an executor never receives a bare boolean approval.
         """
 
         from prometheus_protocol.policy.assessment import require_assessment
 
-        judgment = require_assessment(assessment, surface="ActionGate.decide").outcome
+        checked = require_assessment(assessment, surface="ActionGate.decide")
+        if action is None:
+            from prometheus_protocol.policy.execution import ExecutionNotAuthorized
+
+            raise ExecutionNotAuthorized(
+                "ActionGate.decide requires the concrete action"
+            )
+        authorization = self._authorizer.authorize(
+            checked,
+            action=action,
+            target_canonical=self._target_canonical,
+            attempt_id=attempt_id,
+        )
+        judgment = checked.outcome
         if isinstance(judgment, Unavailable):
             # An authoritative verifier could NOT execute: there is no verdict to
             # authorize on. Never approve; route to a human hold via the distinct
@@ -124,6 +148,7 @@ class ActionGate:
                 ),
                 outcome=OUTCOME_UNAVAILABLE,
                 action=action,
+                authorization=authorization,
             )
         floor = self._min_confidence.get(risk_class, 0.0)
         outcome = self._outcome(judgment, risk_class=risk_class, floor=floor)
@@ -134,6 +159,7 @@ class ActionGate:
             reason=_reason(judgment, risk_class, floor, outcome),
             outcome=outcome,
             action=action,
+            authorization=authorization,
         )
 
     def _routing_enabled(self) -> bool:
@@ -154,14 +180,15 @@ class ActionGate:
         # on, and so does a confidence below the escalation bar.
         if self._route_high_risk and risk_class == "high":
             return OUTCOME_ROUTE
-        if self._escalate_below is not None and judgment.confidence < self._escalate_below:
+        if (
+            self._escalate_below is not None
+            and judgment.confidence < self._escalate_below
+        ):
             return OUTCOME_ROUTE
         return OUTCOME_APPROVE
 
 
-def _reason(
-    judgment: Judgment, risk_class: str, floor: float, outcome: str
-) -> str:
+def _reason(judgment: Judgment, risk_class: str, floor: float, outcome: str) -> str:
     if outcome == OUTCOME_APPROVE:
         return (
             f"authorized: {judgment.verdict.value} verdict, authoritative, "

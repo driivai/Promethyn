@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
 
 from prometheus_protocol.core.interfaces import Ledger
-from prometheus_protocol.core.models import ExecutableAction, Judgment, Unavailable
+from prometheus_protocol.core.models import ExecutableAction
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle: policy imports core.models
     from prometheus_protocol.policy.assessment import PolicyAssessment
@@ -56,7 +56,9 @@ def _judgment_or_none(decision: GateDecision) -> dict | None:
 class SubmitOutcome:
     """What happened when an action was submitted for authorization."""
 
-    outcome: str  # OUTCOME_APPROVE / OUTCOME_ROUTE / OUTCOME_BLOCK / OUTCOME_UNAVAILABLE
+    outcome: (
+        str  # OUTCOME_APPROVE / OUTCOME_ROUTE / OUTCOME_BLOCK / OUTCOME_UNAVAILABLE
+    )
     decision: GateDecision
     execution: ExecutionResult | None = None
     pending: PendingAction | None = None
@@ -78,7 +80,10 @@ class ExecutionController:
         self._ledger = ledger
         self._clock = clock or _utc_now_iso
         self._pending = pending or PendingActionService(
-            ledger, clock=self._clock, ttl_seconds=ttl_seconds
+            ledger,
+            clock=self._clock,
+            ttl_seconds=ttl_seconds,
+            authorizer=gate.authorizer,
         )
         # Opportunistic expiry (belt): a controller coming up sweeps lapsed
         # holds, so TTL enforcement does not depend on an operator remembering
@@ -107,6 +112,7 @@ class ExecutionController:
         *,
         assessment: "PolicyAssessment",
         action: ExecutableAction,
+        attempt_id: str,
         risk_class: str = "low",
         subject_id: str = "",
     ) -> SubmitOutcome:
@@ -117,19 +123,10 @@ class ExecutionController:
         an authoritative check could not run (never executes, and never an
         approvable hold — a human must not rubber-stamp an unverified action).
 
-        WHAT THIS METHOD DOES NOT GUARD. It is one door into execution, not the
-        door. :attr:`pending` exposes ``PendingActionService.hold``, which takes
-        a ``GateDecision`` and no assessment, and :meth:`approve` takes only a
-        hold id. Measured against this tree: a hand-built routed ``GateDecision``
-        carrying ``Judgment(FAIL, 1.0, authoritative=True)`` is accepted by
-        ``hold``, approved through :meth:`approve`, and reaches the executor —
-        one executor call, ledger row ``human-approved``, ``executed=True``.
-        Nothing in that path consults a policy. Migrating this signature closed
-        the unbound-judgment route THROUGH THIS METHOD; it did not close the
-        human path, and the class docstring's "there is no code path here from a
-        routed action to ``executor.execute`` that does not pass through
-        :meth:`approve`" remains true while saying nothing about what may be
-        held in the first place. See ``docs/execution-descriptor.md``.
+        HUMAN PATH. A routed decision carries the same validated execution
+        descriptor. The pending service checks it at admission, persists it, and
+        re-validates it on approval, reload, and retry. A human can resolve the
+        risk decision but cannot manufacture completion of a required check.
 
         PHASE-1.2b — the keyword is ``assessment`` and it is a
         :class:`~prometheus_protocol.policy.assessment.PolicyAssessment`. The old
@@ -139,7 +136,11 @@ class ExecutionController:
         """
 
         decision = self._gate.decide(
-            assessment, risk_class=risk_class, subject_id=subject_id, action=action
+            assessment,
+            risk_class=risk_class,
+            subject_id=subject_id,
+            action=action,
+            attempt_id=attempt_id,
         )
         outcome = decision.effective_outcome
         if outcome == OUTCOME_APPROVE:
@@ -182,7 +183,9 @@ class ExecutionController:
         )
         return SubmitOutcome(outcome=outcome, decision=decision)
 
-    def approve(self, pending_id: int, *, identity: str, reason: str = "") -> ExecutionResult:
+    def approve(
+        self, pending_id: int, *, identity: str, reason: str = ""
+    ) -> ExecutionResult:
         """Record a human approval, then execute the held action."""
 
         # Opportunistic expiry before deciding: any hold that has lapsed by now

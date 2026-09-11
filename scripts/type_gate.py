@@ -85,11 +85,13 @@ RECEIPT = REPO / "type-gate-receipt.json"
 #: grows it. Never lower it to accommodate a narrowing — a smaller tree passing
 #: is not this tree passing. The tolerance absorbs a file or two in flight; it is
 #: not a budget for removing directories.
-EXPECTED_CHECKED_FILES = 281
+EXPECTED_CHECKED_FILES = 285
 CHECKED_FILE_TOLERANCE = 2
 MINIMUM_CHECKED_FILES = EXPECTED_CHECKED_FILES - CHECKED_FILE_TOLERANCE
 
-_SUCCESS = re.compile(r"^Success: no issues found in (\d+) source files?$", re.MULTILINE)
+_SUCCESS = re.compile(
+    r"^Success: no issues found in (\d+) source files?$", re.MULTILINE
+)
 
 
 def config_digest() -> str:
@@ -113,7 +115,9 @@ def run_identity() -> dict[str, str]:
 def main() -> int:
     probe = subprocess.run(
         [sys.executable, "-m", "mypy", "--version"],
-        capture_output=True, text=True, cwd=REPO,
+        capture_output=True,
+        text=True,
+        cwd=REPO,
     )
     if probe.returncode != 0:
         # Previously unchecked, and its result recorded as "" — a receipt that
@@ -142,7 +146,9 @@ def main() -> int:
 
     result = subprocess.run(
         [sys.executable, "-m", "mypy", "--config-file", str(CONFIG)],
-        capture_output=True, text=True, cwd=REPO,
+        capture_output=True,
+        text=True,
+        cwd=REPO,
     )
     sys.stdout.write(result.stdout)
     sys.stderr.write(result.stderr)
@@ -186,7 +192,9 @@ def main() -> int:
         + "\n",
         encoding="utf-8",
     )
-    print(f"[type-gate] OK — {checked} files checked; receipt written to {RECEIPT.name}")
+    print(
+        f"[type-gate] OK — {checked} files checked; receipt written to {RECEIPT.name}"
+    )
     return 0
 
 

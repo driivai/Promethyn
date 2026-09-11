@@ -1,7 +1,7 @@
 # The trusted execution descriptor
 
-**Status: DESIGN. Nothing here is built.** This document is the checkpoint the
-sprint stops at, so the shape can be read before it is committed to code.
+**Status: IMPLEMENTED.** The design below is enforced by the Checkpoint B code and
+its behavioural and executed-mutation proofs.
 
 ## 1. What this closes
 
@@ -147,12 +147,10 @@ unmentioned:
 
 ## 5. A2 — what the gate compares
 
-Today `ActionGate.decide` reads `assessment.outcome` and nothing else; `action`
-is carried into the decision and never compared with anything. Under this
-design the gate takes an `AuthorizedExecution` rather than a bare assessment, so
-the comparison has already happened and cannot be skipped by a surface that
-forgets to call it — the same "construction, not check" move PHASE-1.2b made at
-the type level, applied this time to the *content*.
+`ActionGate.decide` now calls `ExecutionAuthorizer` before it reads the outcome.
+The authorizer derives artifact and consequence class from the concrete action,
+uses the gate's composition-root target and the caller's mandatory attempt
+identity, and returns the `AuthorizedExecution` carried in `GateDecision`.
 
 ### Insufficient fixes, and why each is rejected
 
@@ -175,10 +173,9 @@ the type level, applied this time to the *content*.
 
 ## 6. A3 — the human path consumes the same proof
 
-`PendingActionService.hold` accepts a `GateDecision` and no assessment; a routed
-decision carrying a FAIL was held, approved and executed. The human path is not
-a weaker path that needs a guard bolted on — it must consume the **same**
-`AuthorizedExecution`:
+The historical reproduction entered through `PendingActionService.hold`: a
+routed decision carrying a FAIL was held, approved and executed. The implemented
+human path consumes the **same** `AuthorizedExecution`:
 
 - `hold` takes the `AuthorizedExecution` and **persists the descriptor with the
   hold**, so the record says what was held and under which policy and attempt.
@@ -209,13 +206,9 @@ decision was made.
 
 ## 7. A4 — wired at the ACTUAL composition roots
 
-Measured: `build_verification_policy` has no production caller, and
-`build_orchestrator`, `build_execution_controller` and `build_migration_runtime`
-reference no policy at all. So there is currently no trusted supplier for step
-(1) to consult, which is why A4 is inside this seam and not a tidy-up beside it.
-
-Every production entry point constructs the descriptor builder from the
-configured supplier: `build_orchestrator`, `build_execution_controller`,
+Before Checkpoint B, `build_verification_policy` had no production caller and
+the supported roots referenced no selected policy. Every production entry point
+now constructs the descriptor builder from the configured supplier: `build_orchestrator`, `build_execution_controller`,
 `build_migration_runtime`, the swarm runtime, the workflow runtime, and the Git
 tool path.
 
@@ -285,7 +278,7 @@ Named here rather than discovered later:
    it is handed and the executor runs the action it is handed. Anything able to
    mutate the action object between those two points is in class (5).
 
-## 10. What Checkpoint B builds
+## 10. What Checkpoint B implements
 
 The seam, plus tests reproducing every scenario above and a positive control per
 finding. Negative tests alone would pass against a seam that refuses everything.
@@ -315,3 +308,37 @@ still taking no `Judgment` parameter.
 - **R7, the mint-sweep alias.** `_resolve_bindings` resolves imports, not
   assignments, so `_m = mint` is invisible to the sweep. Queued behind R5/R6.
 - Everything in § A6.
+
+## Checkpoint B implementation
+
+`policy.execution.ExecutionAuthorizer` is now the single assessment-to-execution
+seam.  It constructs an immutable `ExecutionDescriptor`, loads the selected
+policy through the composition-root supplier, **re-resolves** that policy for
+the concrete artifact, consequence class, target principal and attempt, and
+compares the resulting snapshot and all six identities with the assessment.
+It never re-digests a caller-provided requirement set.  Successful validation
+mints the otherwise-unconstructable `AuthorizedExecution` carried by
+`GateDecision`; the sandbox, recording-swarm and Git executors reject decisions
+without it.
+
+`VerifierBank.assess` performs the same trusted re-resolution before minting a
+`PolicyAssessment`.  A bank used for authorization therefore requires a policy
+supplier; `SwarmRuntime` binds its explicit policy value and production
+factories bind `Config.verification_profile`.  The committed
+`defense-in-depth` non-baseline profile adds structural verification to sandbox
+execution, making selection observable rather than testing the baseline default
+against itself.
+
+Human review resolves only the risk decision.  `PendingActionService.hold`
+accepts only a routed decision already carrying `AuthorizedExecution`, refuses
+an action argument different from the validated action, and persists the full
+binding.  Approval, reload and retry restore that context and re-run the same
+authorizer against the currently selected policy before producing an approving
+decision.  Legacy rows without an authorization binding are refused with
+"re-verification required": manufacturing a completed mandatory check from a
+human click would collapse two different authorities.
+
+Production migration issuance also invokes the same authorizer before the
+recorded authority may sign.  Unknown profiles are loaded at supported factory
+construction, so configuration errors refuse startup rather than silently
+falling back to baseline.

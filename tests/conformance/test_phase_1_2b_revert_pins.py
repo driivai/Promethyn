@@ -31,7 +31,9 @@ SCRIPT = REPO / "scripts" / "phase_1_2b_revert_proofs.py"
 def runner():
     sys.path.insert(0, str(REPO / "scripts"))
     try:
-        spec = importlib.util.spec_from_file_location("phase_1_2b_revert_proofs", SCRIPT)
+        spec = importlib.util.spec_from_file_location(
+            "phase_1_2b_revert_proofs", SCRIPT
+        )
         assert spec is not None and spec.loader is not None
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -41,7 +43,7 @@ def runner():
 
 
 def test_the_runner_is_pinned_and_every_target_still_exists(runner):
-    assert (runner.EXPECTED_REVERTS, runner.EXPECTED_CALL_FAILURES) == (7, 10)
+    assert (runner.EXPECTED_REVERTS, runner.EXPECTED_CALL_FAILURES) == (7, 9)
     plan = runner.mutations()
     assert len(plan) == runner.EXPECTED_REVERTS
     assert len({name for name, *_ in plan}) == len(plan), "duplicate mutation names"
@@ -121,12 +123,12 @@ def test_every_mutation_reopens_something_phase_1_2b_closed(runner):
     mutations no longer do that is measuring nothing."""
 
     installed = (
-        "require_assessment",                          # the interface
-        "checked.action_class",                        # the binding: action class
-        "checked.artifact_sha256",                     # the binding: artifact
-        "self._minted is not _MINT",                   # the mint guard
-        'object.__setattr__(self, "_minted", None)',   # the consumed token
-        "mint(snapshot, self.judge_covered",           # only the bank mints
+        "require_assessment",  # the interface
+        "checked.action_class",  # the binding: action class
+        "checked.artifact_sha256",  # the binding: artifact
+        "self._minted is not _MINT",  # the mint guard
+        'object.__setattr__(self, "_minted", None)',  # the consumed token
+        "mint(expected, self.judge_covered",  # only the bank mints
     )
     for name, _function, edits, _file, _selection in runner.mutations():
         for old, new in edits:

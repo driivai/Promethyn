@@ -18,7 +18,6 @@ import pytest
 
 from prometheus_protocol.core.booleans import parse_env_bool
 from prometheus_protocol.core.models import (
-
     ACTION_PYTHON_CODE,
     ExecutableAction,
     Judgment,
@@ -27,6 +26,7 @@ from prometheus_protocol.core.models import (
 from prometheus_protocol.execution.controller import ExecutionController
 from prometheus_protocol.execution.executor import SandboxExecutor
 from prometheus_protocol.gate.authorization import ActionGate
+from prometheus_protocol.policy.execution import ExecutionAuthorizer
 from prometheus_protocol.gate.promotion import OUTCOME_ROUTE, GateDecision
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
 from prometheus_protocol.sandbox import NamespaceSandbox
@@ -40,23 +40,36 @@ from prometheus_protocol.swarm.models import (
     content_hash,
 )
 
-from tests.support.assessments import carrying
+from tests.support.assessments import a_policy, carrying
 
-_REQUIRE = parse_env_bool("PROM_REQUIRE_SANDBOX", os.environ.get("PROM_REQUIRE_SANDBOX"), default=False)
+_REQUIRE = parse_env_bool(
+    "PROM_REQUIRE_SANDBOX", os.environ.get("PROM_REQUIRE_SANDBOX"), default=False
+)
 _CLOCK = "2026-07-01T00:00:00Z"
 # PHASE-1.2b — these are ASSESSMENTS now. The gate reads a
 # policy-evaluated, action-bound assessment; a bare Judgment has no
 # parameter to arrive through. ``carrying`` mints one around an exact
 # verdict so these tests keep asserting what they always asserted (gate
 # thresholds, TTL, retry) instead of re-testing the policy layer.
-_PASS_HIGH = carrying(Judgment(verdict=Verdict.PASS, confidence=0.99, authoritative=True))
-_PASS_LOW = carrying(Judgment(verdict=Verdict.PASS, confidence=0.60, authoritative=True))
-_FAIL = carrying(Judgment(verdict=Verdict.FAIL, confidence=0.99, authoritative=True))
+_PASS_HIGH = carrying(
+    Judgment(verdict=Verdict.PASS, confidence=0.99, authoritative=True),
+    artifact_sha256=content_hash("print('MARK')"),
+)
+_PASS_LOW = carrying(
+    Judgment(verdict=Verdict.PASS, confidence=0.60, authoritative=True),
+    artifact_sha256=content_hash("print('MARK')"),
+)
+_FAIL = carrying(
+    Judgment(verdict=Verdict.FAIL, confidence=0.99, authoritative=True),
+    artifact_sha256=content_hash("print('MARK')"),
+)
 
 
 def _isolating_sandbox() -> NamespaceSandbox:
     if not NamespaceSandbox.available():
-        reason = "namespace isolation runtime (unprivileged user namespaces) unavailable"
+        reason = (
+            "namespace isolation runtime (unprivileged user namespaces) unavailable"
+        )
         if _REQUIRE:
             pytest.fail(f"PROM_REQUIRE_SANDBOX=1 but {reason}")
         pytest.skip(reason)
@@ -80,7 +93,9 @@ class _SpyExecutor(Executor):
         if not decision.approved:
             raise ValueError("refusing to execute an unapproved gate decision")
         self.calls.append(decision)
-        return ExecutionResult(executed=True, subject_id=decision.subject_id, detail="spy")
+        return ExecutionResult(
+            executed=True, subject_id=decision.subject_id, detail="spy"
+        )
 
 
 def _action(code: str = "print('MARK')") -> ExecutableAction:
@@ -88,14 +103,25 @@ def _action(code: str = "print('MARK')") -> ExecutableAction:
 
 
 def _approved(code: str = "print('RAN')") -> GateDecision:
-    return GateDecision(
-        approved=True, subject_id="s", action=_action(code), outcome="approve"
+    chosen = _action(code)
+    assessed = carrying(
+        Judgment(verdict=Verdict.PASS, confidence=1.0, authoritative=True),
+        artifact_sha256=content_hash(code),
     )
+    return ActionGate(
+        target_canonical="sandbox://test",
+        authorizer=ExecutionAuthorizer(lambda: a_policy()),
+    ).decide(assessed, attempt_id="attempt-1", action=chosen, subject_id="s")
 
 
 def _controller(executor: Executor) -> ExecutionController:
     return ExecutionController(
-        gate=ActionGate(escalate_below=0.75, route_high_risk=True),
+        gate=ActionGate(
+            target_canonical="sandbox://test",
+            escalate_below=0.75,
+            route_high_risk=True,
+            authorizer=ExecutionAuthorizer(lambda: a_policy()),
+        ),
         executor=executor,
         ledger=SqliteLedger(":memory:"),
         clock=lambda: _CLOCK,
@@ -119,7 +145,9 @@ def test_inv_exec_1_refuses_when_no_isolating_sandbox():
 
 def test_inv_exec_1_executes_inside_isolation():
     sandbox = _isolating_sandbox()
-    result = SandboxExecutor(sandbox=sandbox).execute(_approved("print('INSIDE-SANDBOX')"))
+    result = SandboxExecutor(sandbox=sandbox).execute(
+        _approved("print('INSIDE-SANDBOX')")
+    )
     assert result.executed and not result.refused
     assert result.sandbox_name == sandbox.name and result.exit_status == 0
     assert "INSIDE-SANDBOX" in result.stdout
@@ -162,7 +190,11 @@ def test_inv_exec_1_marker_forgery_cannot_fake_a_refusal():
 def test_inv_exec_2_executor_accepts_only_approved_gate_decision():
     ex = SandboxExecutor(sandbox=NullSandbox())
     proposal = Proposal(
-        id="p", role_id="r", kind="proposed_action", content="c", rationale="r",
+        id="p",
+        role_id="r",
+        kind="proposed_action",
+        content="c",
+        rationale="r",
         provenance=Provenance(content_hash=content_hash("c")),
     )
     with pytest.raises(TypeError):
@@ -171,14 +203,22 @@ def test_inv_exec_2_executor_accepts_only_approved_gate_decision():
         ex.execute(TestPlan(entries=()))  # nor a test plan
     with pytest.raises(ValueError):
         # a blocked / unapproved decision cannot be executed
-        ex.execute(GateDecision(approved=False, subject_id="s", action=_action(), outcome="block"))
+        ex.execute(
+            GateDecision(
+                approved=False, subject_id="s", action=_action(), outcome="block"
+            )
+        )
 
 
 def test_inv_exec_2_a_pending_action_cannot_reach_the_executor():
     spy = _SpyExecutor()
     controller = _controller(spy)
     outcome = controller.submit(
-        assessment=_PASS_LOW, action=_action(), risk_class="low", subject_id="s"
+        attempt_id="attempt-1",
+        assessment=_PASS_LOW,
+        action=_action(),
+        risk_class="low",
+        subject_id="s",
     )
     assert outcome.outcome == OUTCOME_ROUTE
     assert spy.calls == []  # a held action never reached execution
@@ -190,7 +230,9 @@ def test_inv_exec_2_a_pending_action_cannot_reach_the_executor():
 def test_inv_exec_3_no_execution_without_a_recorded_human_approval():
     spy = _SpyExecutor()
     controller = _controller(spy)
-    held = controller.submit(assessment=_PASS_LOW, action=_action(), subject_id="s").pending
+    held = controller.submit(
+        attempt_id="attempt-1", assessment=_PASS_LOW, action=_action(), subject_id="s"
+    ).pending
     assert spy.calls == []  # routed: nothing executed
 
     controller.approve(held.id, identity="will@driivai.com", reason="ok")
@@ -204,7 +246,9 @@ def test_inv_exec_3_no_execution_without_a_recorded_human_approval():
 def test_inv_exec_3_a_rejected_action_never_executes():
     spy = _SpyExecutor()
     controller = _controller(spy)
-    held = controller.submit(assessment=_PASS_LOW, action=_action(), subject_id="s").pending
+    held = controller.submit(
+        attempt_id="attempt-1", assessment=_PASS_LOW, action=_action(), subject_id="s"
+    ).pending
     controller.reject(held.id, identity="will@driivai.com", reason="no")
     assert spy.calls == []
 
@@ -213,7 +257,11 @@ def test_inv_exec_3_high_risk_halts_even_at_high_confidence():
     spy = _SpyExecutor()
     controller = _controller(spy)
     outcome = controller.submit(
-        assessment=_PASS_HIGH, action=_action(), risk_class="high", subject_id="s"
+        attempt_id="attempt-1",
+        assessment=_PASS_HIGH,
+        action=_action(),
+        risk_class="high",
+        subject_id="s",
     )
     assert outcome.outcome == OUTCOME_ROUTE and spy.calls == []
 
@@ -224,20 +272,44 @@ def test_inv_exec_3_high_risk_halts_even_at_high_confidence():
 def test_inv_exec_4_execution_chain_is_re_readable_from_the_ledger():
     ledger = SqliteLedger(":memory:")
     controller = ExecutionController(
-        gate=ActionGate(escalate_below=0.75, route_high_risk=True),
+        gate=ActionGate(
+            target_canonical="sandbox://test",
+            escalate_below=0.75,
+            route_high_risk=True,
+            authorizer=ExecutionAuthorizer(lambda: a_policy()),
+        ),
         executor=_SpyExecutor(),
         ledger=ledger,
         clock=lambda: _CLOCK,
     )
-    controller.submit(assessment=_PASS_HIGH, action=_action(), subject_id="s/auto")
-    held = controller.submit(assessment=_PASS_LOW, action=_action(), subject_id="s/hold").pending
+    controller.submit(
+        attempt_id="attempt-1",
+        assessment=_PASS_HIGH,
+        action=_action(),
+        subject_id="s/auto",
+    )
+    held = controller.submit(
+        attempt_id="attempt-1",
+        assessment=_PASS_LOW,
+        action=_action(),
+        subject_id="s/hold",
+    ).pending
     controller.approve(held.id, identity="will@driivai.com")
-    controller.submit(assessment=_FAIL, action=_action(), subject_id="s/block")
+    controller.submit(
+        attempt_id="attempt-1", assessment=_FAIL, action=_action(), subject_id="s/block"
+    )
 
     execs = ledger.executions()
-    assert [e["source"] for e in execs] == ["auto-approved", "human-approved", "blocked"]
+    assert [e["source"] for e in execs] == [
+        "auto-approved",
+        "human-approved",
+        "blocked",
+    ]
     # The human decision is queryable end to end.
     resolved = ledger.pending_action(held.id)
-    assert resolved["status"] == "approved" and resolved["decided_by"] == "will@driivai.com"
+    assert (
+        resolved["status"] == "approved"
+        and resolved["decided_by"] == "will@driivai.com"
+    )
     # Nothing happened off-ledger: one pending row, three execution rows.
     assert len(ledger.pending_actions()) == 1 and len(execs) == 3
