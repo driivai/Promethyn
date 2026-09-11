@@ -117,6 +117,20 @@ class ExecutionController:
         an authoritative check could not run (never executes, and never an
         approvable hold — a human must not rubber-stamp an unverified action).
 
+        WHAT THIS METHOD DOES NOT GUARD. It is one door into execution, not the
+        door. :attr:`pending` exposes ``PendingActionService.hold``, which takes
+        a ``GateDecision`` and no assessment, and :meth:`approve` takes only a
+        hold id. Measured against this tree: a hand-built routed ``GateDecision``
+        carrying ``Judgment(FAIL, 1.0, authoritative=True)`` is accepted by
+        ``hold``, approved through :meth:`approve`, and reaches the executor —
+        one executor call, ledger row ``human-approved``, ``executed=True``.
+        Nothing in that path consults a policy. Migrating this signature closed
+        the unbound-judgment route THROUGH THIS METHOD; it did not close the
+        human path, and the class docstring's "there is no code path here from a
+        routed action to ``executor.execute`` that does not pass through
+        :meth:`approve`" remains true while saying nothing about what may be
+        held in the first place. See ``docs/execution-descriptor.md``.
+
         PHASE-1.2b — the keyword is ``assessment`` and it is a
         :class:`~prometheus_protocol.policy.assessment.PolicyAssessment`. The old
         ``judgment=`` keyword is gone rather than deprecated: leaving it would

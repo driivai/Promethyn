@@ -92,6 +92,19 @@ class ActionGate:
         :class:`~prometheus_protocol.policy.assessment.UnboundAuthorization`
         rather than returning an unapproved decision, because a falsy return is
         something a caller could read as a policy denial.
+
+        WHAT THIS METHOD READS, AND WHAT IT IGNORES. It reads
+        ``assessment.outcome``. It reads nothing else. ``action`` is carried into
+        the returned decision and is never compared with
+        ``assessment.artifact_sha256`` or ``assessment.action_class``, and
+        ``snapshot_digest`` is not compared with anything at all. Measured
+        consequences, both reproduced in ``tests/conformance/``: an assessment
+        resolved for artifact A returns ``approved=True`` for an action running
+        unrelated code B, and an assessment whose ``action_class`` is
+        ``sandbox.execute`` returns ``approved=True`` for a
+        ``git_delete_branch`` action. The parameter type is therefore a proof
+        that SOME policy was evaluated, not a proof it was evaluated for THIS
+        action. ``docs/execution-descriptor.md`` is the seam that closes it.
         """
 
         from prometheus_protocol.policy.assessment import require_assessment

@@ -216,6 +216,31 @@ EXPECTED_PROTECTED_FILES = 21
 #:     grader's evidence, so a caller-chosen grader can no longer authorize a
 #:     sandbox execution by being present.
 #:
+#:
+#: * **PHASE-1.2c COMMIT ONE (correcting the docstrings)** —
+#:   ``gate/authorization.py`` and ``execution/controller.py``. **Comment-only.
+#:   No statement, signature, parameter or branch changed in either file**; both
+#:   diffs are additions to a docstring. They are here because an independent
+#:   review found the docstrings claiming properties the code does not have, and
+#:   a false claim in the file a reader opens first is the failure mode this
+#:   repository keeps correcting — so it is corrected BEFORE the sprint that
+#:   makes the claims true, not in the same commit.
+#:
+#:   - ``gate/authorization.py`` — ``ActionGate.decide`` now records that it
+#:     reads ``assessment.outcome`` and NOTHING else: ``action`` is never
+#:     compared with ``artifact_sha256`` or ``action_class``, and
+#:     ``snapshot_digest`` is compared with nothing. Measured: an assessment for
+#:     artifact A approves code B, and a ``sandbox.execute`` assessment approves
+#:     a ``git_delete_branch``.
+#:   - ``execution/controller.py`` — ``submit`` now records that it is one door
+#:     and not the door. ``PendingActionService.hold`` takes a ``GateDecision``
+#:     and no assessment; measured, a routed decision carrying
+#:     ``Judgment(FAIL, 1.0, authoritative=True)`` is held, approved and
+#:     executed (one executor call).
+#:
+#:   The digests move because the bytes moved. Nothing either file DOES moved,
+#:   which is the whole reason this sanction is a small one.
+#:
 #: Those sprints are why these bytes are what they are. They do NOT license the
 #: next edit to the same files: updating a digest below is a fresh decision, and
 #: the reason for it belongs beside it.
@@ -229,7 +254,7 @@ DIGESTS: dict[str, str] = {
     "src/prometheus_protocol/core/models.py":
         "1355a91dfdbc0cd1ad4e3f12c9d4bb02b0548858973e1b583a82daebbc61e48c",
     "src/prometheus_protocol/execution/controller.py":
-        "6812f2f1c15fd20d2b32dddc3b63f1930abc6dfba116e75118ba37e576f06b28",
+        "c0d2ece310a3d96c7405d18e2973bace2b93acac55666a180c29a8a86a71b5fb",
     "src/prometheus_protocol/execution/executor.py":
         "41f01a1c4e08826fe81fb738de882bdfaa73a26184b1391ff4a016a9daba85a5",
     "src/prometheus_protocol/execution/pending.py":
@@ -237,7 +262,7 @@ DIGESTS: dict[str, str] = {
     "src/prometheus_protocol/forge/miner.py":
         "b0e2a53440df5b38a1031cc9648e19b3f9df20081ee34d4e035beda2b6973a29",
     "src/prometheus_protocol/gate/authorization.py":
-        "2dbeba5a50af40a99690e839c10acb234f43f28f10c5f0327bdcbf5f806d8fcf",
+        "1c35a59f34459fbd1de358425712b7d021f577af718050ef4b8d328a4fd067e6",
     "src/prometheus_protocol/gate/promotion.py":
         "4c66123b363dbfe663707442761717bae3a69a8e7b0192413170ed8dbebecb22",
     "src/prometheus_protocol/orchestration/gateway.py":

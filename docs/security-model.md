@@ -211,7 +211,36 @@ No clause is added to that and none is excepted. In particular, permitting more
 than one implementation for a requirement does not add one: the requirement is
 satisfied by a RESULT, never by the permitted set's size.
 
+**That invariant is the goal, and it is NOT yet enforced end to end.** It holds
+for the tested, correctly resolved policy path: given a snapshot the trusted
+resolver produced, coverage validation enforces every clause above. What is
+missing is anything establishing that the snapshot in hand IS the one the
+trusted configuration selected, or that the action it describes is the one the
+gate later executes. Three gaps, measured against this tree and reproduced in
+`tests/conformance/`, not inferred:
+
+| gap | what was measured |
+|---|---|
+| the snapshot is not re-derived | `dataclasses.replace` on a legitimate two-requirement snapshot drops one requirement, PRESERVES `policy_id` and `policy_digest`, and `VerifierBank.assess` mints an assessment citing the policy whose requirement was removed. The gate approves. |
+| the gate compares nothing | `ActionGate.decide` reads `assessment.outcome` and nothing else. An assessment resolved for artifact A approves the execution of unrelated code B, and a `sandbox.execute` assessment approves a `git_delete_branch` action. |
+| the human path takes no assessment | `PendingActionService.hold` accepts a `GateDecision`, not a `PolicyAssessment`. A decision carrying `Judgment(FAIL, 1.0, authoritative=True)` is held, approved, and executed — one executor call. |
+
+These are stated here, in the document a security team reads, because the
+alternative is a reader taking the invariant above for a description of the
+build. It describes the destination. `docs/execution-descriptor.md` is the
+design that closes the distance.
+
 ### How it is made true
+
+**The action-class set is THREE, and closed.** `sandbox.execute`,
+`database.migrate` and `branch.delete` — `policy/snapshot.py::ACTION_CLASSES`. A
+class earns its place by having a real implementation reaching a real
+enforcement point: `proposal.advance` was dropped as an internal state
+transition that touches nothing, and `skill.promote` was dropped because
+`PromotionGate` decides on held-out rate and never reaches the bank, so a
+requirement for it would have no enforcement point. `branch.delete` was added
+with `tools.git.GitBranchDeleteExecutor` in PHASE-1.2b. Any statement that the
+set is two describes the tree between Checkpoint 2 and PHASE-1.2b.
 
 **A requirement is keyed by CHECK IDENTITY, not by verifier or tier.**
 `BoundRequirement` carries `check_id` and the implementations permitted to
@@ -237,16 +266,43 @@ to answer "is there a verdict we are missing".
 **Interchangeable redundancy is not quorum.** Two permitted implementations
 means the requirement was never keyed to one. It is satisfied when at least one
 produced a valid, satisfactory, correctly bound result; unavailable results from
-the others are recorded and irrelevant. Both unavailable **refuses** — absence
-never satisfies, however many were permitted. Quorum, substitution and fallback
-are deferred as distinct concepts needing their own specification and threat
-model, and nothing here leaves a hook for them.
+the others are irrelevant to the decision. Both unavailable **refuses** —
+absence never satisfies, however many were permitted. Quorum, substitution and
+fallback are deferred as distinct concepts needing their own specification and
+threat model, and nothing here leaves a hook for them.
+
+**Those unavailable results are not, today, recorded.** `CoverageSatisfied`
+carries `answered_by` and `recorded_unavailable`, so the coverage layer knows
+that the strong implementation was down and the weak one answered.
+`VerifierBank.judge_covered` then returns `self.judge(outcome.graded)` — only
+the graded evidence — so the structured report is dropped before an assessment
+exists. Measured on a two-implementation requirement with one `Unavailable`:
+`answered_by == {'check.a': 'impl-weak'}` at the coverage layer, and
+`assessment.outcome.unavailable == ()` afterwards. The answering implementation
+does survive, in `Judgment.contributing`; the OUTAGE of the other does not.
+Preserving the structured report is the next sprint's work, and it is an audit
+obligation rather than an enforcement one — no decision changes, but a reviewer
+cannot currently see that A was down.
 
 ### Where policy lives, and why that is temporary
 
-Profiles are committed data under the content-based Hearth sanction, selected by
-`Config.verification_profile`, with the profile's content digest bound into every
-snapshot so a decision is bound to the policy that produced it.
+Profiles are committed data under the content-based Hearth sanction, with the
+profile's content digest bound into every snapshot so a decision is bound to the
+policy that produced it.
+
+**`Config.verification_profile` selects nothing today.** `build_verification_policy`
+in `runtime/factory.py` is documented as "the single consumption site" for that
+setting, and it is — but nothing in production calls it. Its only caller in the
+tree is `tests/conformance/test_policy_enforcement_regression.py`. The runtimes
+that actually resolve policy (`SwarmRuntime`, `orchestration/runtime.py`,
+`tools/stale_branch_demo.py`) default to `load_profile(DEFAULT_PROFILE_ID)` — the
+module-level constant, reached for at the point of use, which is the shape R1
+says not to have. `build_orchestrator`, `build_execution_controller` and
+`build_migration_runtime` reference no policy at all. So an operator who sets
+`verification_profile` in configuration changes nothing about what is enforced,
+which is worse than not offering the setting: it reads as a control and is not
+one. Wiring it at the real composition roots is part of the execution-descriptor
+seam, not a separate cleanup.
 
 **That is right for this version and wrong for the product.** A licensed
 component whose customers cannot supply their own digest-pinned policy without a
@@ -280,19 +336,41 @@ carries the resolved snapshot digest the decision is bound to and the outcome
 coverage validation produced. `VerifierBank.assess` is the only thing that mints
 one, and it mints only what `judge_covered` returned.
 
-**How structural that is, precisely.** At the INTERFACE it is a construction: no
-caller can hand over a verdict, and no amount of forgetting a check reopens the
-route. At the CONSTRUCTOR it is a guard: `PolicyAssessment` refuses to be built
-except by minting, and it CONSUMES its minting token, so `dataclasses.replace`
-inherits a spent one and is refused. That last part was measured — `replace`
-forged a valid-looking assessment before the token was consumed.
+**How structural that is, precisely — and over WHAT.** At the INTERFACE it is a
+construction, *of the TYPE*: no caller can hand a `Judgment` to one of those five
+surfaces, and no amount of forgetting a check reopens that route. At the
+CONSTRUCTOR it is a guard: `PolicyAssessment` refuses to be built except by
+minting, and it CONSUMES its minting token, so `dataclasses.replace` on the
+ASSESSMENT inherits a spent one and is refused. That last part was measured —
+`replace` forged a valid-looking assessment before the token was consumed.
+
+**The construction is over the type, not the content, and the difference is the
+whole of the remaining gap.** Holding a `PolicyAssessment` proves a policy was
+resolved and coverage validated *against whatever snapshot was presented*. It
+does not prove the snapshot was the selected policy's (`dataclasses.replace` on
+the SNAPSHOT is unguarded — the token protects the assessment, and the snapshot
+is an ordinary frozen dataclass), and it does not prove the assessment describes
+the action about to run, because no surface compares its fields to that action.
+A type that can only be built one way still says nothing about what it was built
+*about*. Stated plainly here because "the change is a type, not a check" is true
+and has been read as more than it claims.
 
 **What still varies.** Anything able to run arbitrary code in this process:
 `object.__setattr__` reaches through `frozen=True`, and
 `policy.assessment._MINT` is an importable module global. The mint guard makes an
-accidental assessment impossible and a deliberate one a visible, greppable act
-that `test_no_second_aggregator.py` sweeps for. It is not a security boundary,
-and the control against arbitrary in-process code remains the process boundary.
+accidental assessment impossible and a deliberate one a visible act that
+`test_no_second_aggregator.py` sweeps for. It is not a security boundary, and the
+control against arbitrary in-process code remains the process boundary.
+
+**The mint sweep resolves imports, not assignments.** `_resolve_bindings` walks
+`Import` and `ImportFrom` nodes, so `mint(...)` and `m.mint(...)` resolve to
+`prometheus_protocol.policy.assessment.mint` and are counted. A simple
+assignment alias is not: measured on `_m = mint` followed by `_m(snapshot,
+verdict)`, `_callee_symbol` returns `'_m'` and the call is invisible to the
+sweep. This does not weaken the guard against ACCIDENT — nobody aliases a
+function by mistake — but "a deliberate one is a visible, greppable act" is
+stronger than the sweep delivers, so the word *greppable* has come out of the
+sentence above. Alias resolution is queued behind the audit work.
 
 **A Checkpoint-2 claim withdrawn.** Checkpoint 2 said `build_orchestrator`,
 `build_execution_controller` and `build_migration_runtime` "reach the same
@@ -335,6 +413,16 @@ identity, and every implementation this package has never seen, including a
 deployment's own, which R1 requires to keep working. A missing tier fails
 closed.
 
+**What the rule is NOT: a construction-time prohibition.** Nothing refuses to
+BUILD a policy naming a SOFT implementation as permitted, and the checkpoint's
+own tests deliberately construct exactly such policies in order to show what
+happens next. The rule is a positive allowlist applied at RUNTIME, to each
+`Evidence.tier` as reported, when coverage is validated: an advisory report does
+not satisfy a requirement, and coverage refuses with `coverage.advisory_only`.
+Stating it as "SOFT implementations are banned from policies" would describe a
+check this build does not perform and would misdirect a reader looking for
+where the enforcement lives.
+
 **A defect this found, introduced by PHASE-1.2b.** The grounding demo's policy
 named the SOFT grounding judge and the HUMAN reviewer as permitted
 implementations of the *same* requirement. Under R3 permitted implementations
@@ -344,9 +432,21 @@ requirement now permits the human alone, and the judge's evidence is bound to a
 check nothing requires — which is what advisory evidence is for.
 
 **What still varies.** The rule reads the tier the evidence REPORTS, so it is
-only as good as the report. A REGISTERED verifier cannot lie —
+only as good as the report, and **nothing here authenticates tier provenance
+independently of the reporter.** A REGISTERED verifier cannot lie —
 `VerifierBank._ensure_stats` refuses evidence contradicting the stored tier,
 loudly. An UNREGISTERED verifier's claim is believed. Both measured.
+
+The sharpest statement of that residual, measured on one identity: a conditional
+implementation reporting SOFT has its coverage refused with
+`coverage.advisory_only`; the SAME unregistered identity then reporting HARD is
+satisfied and yields an authoritative `Judgment`. Registering it as SOFT closes
+that — a HARD claim from it raises `ValueError` — but note WHERE: coverage
+validation still returns `CoverageSatisfied` for the HARD claim, because
+coverage deliberately holds no trust store; the refusal comes one layer up, at
+`VerifierBank.assess`. So the tier allowlist and the tier-provenance check are
+two different controls at two different layers, and only the second involves
+registration.
 **Registration is the control**, and it is a deployment's responsibility, like
 constructing a result for every check it ran. Coverage deliberately holds no
 trust store: reaching for one would make the coverage decision depend on mutable
@@ -355,8 +455,12 @@ calibration state.
 ### The residuals, named
 
 - **The operator asserts that permitted implementations are equivalent; nothing
-  verifies it.** The policy names them and the record shows WHICH one answered,
-  so a reviewer can see that A was down and B answered. Managed, not hidden.
+  verifies it.** The policy names them, and `Judgment.contributing` names the
+  implementation that answered. A reviewer can therefore see that B answered —
+  but NOT that A was down, because the coverage layer's `recorded_unavailable`
+  is dropped before the assessment exists (measured; see *Interchangeable
+  redundancy* above). Half the auditable story this residual claimed to rest on
+  is currently missing, and restoring it is the next sprint's first item.
 - **An attacker who can make the stronger permitted implementation unavailable
   may get the weaker one to answer.** Inherent to permitting more than one; the
   policy naming them is the auditable control. It does not extend to satisfying

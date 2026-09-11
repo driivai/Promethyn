@@ -300,8 +300,10 @@ CHECK_MERGE_PROOF = "branch.merge_proof"
 #: ``SubprocessVerifier.VERIFIER_ID`` and ``swarm.runtime.CHECK_VERIFIER_ID``,
 #: not invented here. A profile naming an id nothing reports would be a
 #: permanently unsatisfiable requirement, indistinguishable at the bank from a
-#: check that was omitted; ``test_policy_profiles.py`` asserts these match the
-#: implementations.
+#: check that was omitted. ``tests/conformance/test_coverage_enforcement.py``
+#: asserts these match the implementations. (This comment cited
+#: ``test_policy_profiles.py``, which does not exist and never has — a citation
+#: to a file nobody can open is worse than none, because it reads as coverage.)
 IMPL_SUBPROCESS = "subprocess-tests"
 IMPL_SWARM_STRUCTURAL = "swarm-checks"
 #: Read off ``tools.git.MERGE_CHECK_VERIFIER_ID``, not invented here.
