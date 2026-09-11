@@ -59,6 +59,20 @@ _LOW = carrying(
     artifact_sha256=content_hash("print('mark')"),
 )
 
+#: A distinctive marker for the test that asserts the real sandbox ran the code
+#: after an outage. It needs its own assessment: an assessment is bound to ONE
+#: artifact, so ``_LOW`` above cannot authorize an action carrying other code.
+_RETRIED_CODE = "print('RETRIED-AND-RAN')"
+
+
+def _assessment_for(code: str):
+    """A low-confidence assessment bound to the artifact ``code`` hashes to."""
+
+    return carrying(
+        Judgment(verdict=Verdict.PASS, confidence=0.60, authoritative=True),
+        artifact_sha256=content_hash(code),
+    )
+
 
 class _Clock:
     def __init__(self, now: str) -> None:
@@ -431,10 +445,11 @@ def test_retry_executes_through_the_real_sandbox_after_an_outage():
     outage = _controller(
         ledger, executor=SandboxExecutor(sandbox=NullSandbox()), clock=clock
     )
+    # Bound to the code this action actually runs — see ``_assessment_for``.
     held = outage.submit(
         attempt_id="attempt-1",
-        assessment=_LOW,
-        action=_action("print('RETRIED-AND-RAN')"),
+        assessment=_assessment_for(_RETRIED_CODE),
+        action=_action(_RETRIED_CODE),
         subject_id="s",
     ).pending
     assert outage.approve(held.id, identity="will@driivai.com").refused

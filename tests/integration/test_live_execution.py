@@ -43,7 +43,10 @@ from prometheus_protocol.verifier.bank import VerifierBank
 from prometheus_protocol.verifier.runner import SubprocessVerifier
 from prometheus_protocol.verifier.store import InMemoryTrustStore
 
-from tests.support.assessments import carrying
+from prometheus_protocol.policy.execution import ExecutionAuthorizer
+from prometheus_protocol.swarm.models import content_hash
+
+from tests.support.assessments import a_policy, carrying
 
 _REQUIRE = parse_env_bool(
     "PROM_REQUIRE_SANDBOX", os.environ.get("PROM_REQUIRE_SANDBOX"), default=False
@@ -86,9 +89,16 @@ def _judge(code: str):
 def test_milestone_live_execution_end_to_end():
     _require_sandbox()
     ledger = SqliteLedger(":memory:")
+    # The gate's authorizer re-resolves the SELECTED policy. ``carrying`` mints
+    # against the test policy, so the gate has to be given that same policy —
+    # the default supplier is the shipped baseline, and a policy disagreement
+    # is refused exactly like an artifact one.
     controller = ExecutionController(
         gate=ActionGate(
-            target_canonical="sandbox://test", escalate_below=0.75, route_high_risk=True
+            target_canonical="sandbox://test",
+            escalate_below=0.75,
+            route_high_risk=True,
+            authorizer=ExecutionAuthorizer(lambda: a_policy()),
         ),
         executor=SandboxExecutor(sandbox=NamespaceSandbox()),
         ledger=ledger,
@@ -105,7 +115,7 @@ def test_milestone_live_execution_end_to_end():
     # 1. APPROVED, high-confidence, low-risk -> EXECUTES inside the sandbox.
     approved = controller.submit(
         attempt_id="attempt-1",
-        assessment=carrying(good),
+        assessment=carrying(good, artifact_sha256=content_hash(_ACTION_CODE)),
         action=action,
         risk_class="low",
         subject_id="live/ok",
@@ -120,7 +130,7 @@ def test_milestone_live_execution_end_to_end():
     # 2. The SAME action at HIGH risk HALTS for a human, then executes on approval.
     held = controller.submit(
         attempt_id="attempt-1",
-        assessment=carrying(good),
+        assessment=carrying(good, artifact_sha256=content_hash(_ACTION_CODE)),
         action=action,
         risk_class="high",
         subject_id="live/hold",
@@ -136,7 +146,7 @@ def test_milestone_live_execution_end_to_end():
     assert bad.verdict == Verdict.FAIL
     blocked = controller.submit(
         attempt_id="attempt-1",
-        assessment=carrying(bad),
+        assessment=carrying(bad, artifact_sha256=content_hash(_ACTION_CODE)),
         action=action,
         risk_class="low",
         subject_id="live/bad",

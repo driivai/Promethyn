@@ -180,10 +180,26 @@ def test_unavailable_sql_verification_routes_to_human_never_authorizes(monkeypat
     assert isinstance(judgment, Unavailable)
     from prometheus_protocol.gate.authorization import ActionGate, OUTCOME_UNAVAILABLE
 
+    # Checkpoint B: ``decide`` validates the execution descriptor before it
+    # classifies the outcome, so it now requires the concrete action and a
+    # matching policy even on this path — which never executes anything. The
+    # assertion below is unchanged: an Unavailable still routes to a human via
+    # the distinct terminal outcome, and still never approves.
+    from prometheus_protocol.core.models import ACTION_PYTHON_CODE, ExecutableAction
+    from prometheus_protocol.policy.execution import ExecutionAuthorizer
+    from prometheus_protocol.swarm.models import content_hash
+
+    from tests.support.assessments import a_policy
+
+    action = ExecutableAction(kind=ACTION_PYTHON_CODE, code="SELECT 1")
     decision = ActionGate(
-        target_canonical="sandbox://test", escalate_below=0.75, route_high_risk=True
+        target_canonical="sandbox://test",
+        escalate_below=0.75,
+        route_high_risk=True,
+        authorizer=ExecutionAuthorizer(lambda: a_policy()),
     ).decide(
-        carrying(judgment),
+        carrying(judgment, artifact_sha256=content_hash(action.code)),
+        action=action,
         attempt_id="attempt-1",
         risk_class="medium",
         subject_id="sql/unavailable",

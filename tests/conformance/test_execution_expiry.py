@@ -54,6 +54,20 @@ _LOW = carrying(
     artifact_sha256=content_hash("print('mark')"),
 )
 
+#: A distinctive marker for the test that asserts the sandbox really ran the
+#: code. It needs its own assessment: an assessment is bound to ONE artifact, so
+#: the shared ``_LOW`` above cannot authorize an action carrying other code.
+_APPROVED_CODE = "print('APPROVED-AND-RAN')"
+
+
+def _assessment_for(code: str):
+    """A low-confidence assessment bound to the artifact ``code`` hashes to."""
+
+    return carrying(
+        Judgment(verdict=Verdict.PASS, confidence=0.60, authoritative=True),
+        artifact_sha256=content_hash(code),
+    )
+
 
 class _Clock:
     """A settable clock: advancing ``now`` models time passing between calls."""
@@ -343,10 +357,14 @@ def test_approve_executes_through_the_sandbox():
     controller, ledger, _ = _harness(
         ttl=0, clock=clock, executor=SandboxExecutor(sandbox=sandbox)
     )
+    # The assessment must be bound to the code this action actually runs.
+    # ``_LOW`` is bound to the default ``print('mark')``; handing it to an action
+    # carrying different code is precisely the artifact mismatch the execution
+    # descriptor refuses, and before Checkpoint B nothing compared the two.
     held = controller.submit(
         attempt_id="attempt-1",
-        assessment=_LOW,
-        action=_action("print('APPROVED-AND-RAN')"),
+        assessment=_assessment_for(_APPROVED_CODE),
+        action=_action(_APPROVED_CODE),
         subject_id="s",
     ).pending
 
