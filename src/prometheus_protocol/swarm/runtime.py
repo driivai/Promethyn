@@ -122,8 +122,20 @@ class SwarmRuntime:
         self.provider = provider
         self.memory = memory
         # Runs the Skeptic's executable falsification cases as real HARD
-        # verification. When absent, executable checks ABSTAIN (no veto, no
-        # spurious pass) and only structural checks apply.
+        # verification. When absent, executable checks ABSTAIN — no veto, no
+        # spurious pass.
+        #
+        # This comment used to end "and only structural checks apply". That
+        # described the tree before Checkpoint 2 and is now wrong in two ways.
+        # First, under the shipped baseline an abstaining REQUIRED check refuses
+        # coverage (`coverage.abstained`) rather than falling back to whatever
+        # else ran: measured, structural PASS + executable ABSTAIN yields
+        # CoverageRefused on `executable.cases`, so verification cannot proceed
+        # and the action is never authorized. Second, the baseline's only
+        # requirement for `sandbox.execute` IS `executable.cases` — there are no
+        # structural requirements for it to fall back TO. Absent a code_verifier
+        # the honest description is that this runtime cannot authorize a sandbox
+        # execution at all, which is the fail-closed direction.
         self.code_verifier = code_verifier
         self.verifier_id = verifier_id
         self.tier = tier

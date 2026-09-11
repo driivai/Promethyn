@@ -2,9 +2,27 @@
 
 WHAT THIS IS. When the trusted resolver turns a selected policy into concrete
 requirements for one artifact, one target, one action and one verification
-attempt, the result is a :class:`BoundRequirements` snapshot. That snapshot is
-persisted and bound into the authorization record, so a decision can be shown
-to have been made under a particular coverage claim.
+attempt, the result is a :class:`BoundRequirements` snapshot.
+
+WHAT IS NOT TRUE OF IT YET. This docstring said the snapshot "is persisted and
+bound into the authorization record, so a decision can be shown to have been
+made under a particular coverage claim". It is not, and it cannot be shown.
+``GateDecision`` has no snapshot, policy, action-class or attempt field, and the
+string ``snapshot_digest`` does not appear anywhere under ``ledger/``,
+``execution/`` or ``gate/``. The digest reaches :class:`PolicyAssessment` and
+stops there. Persisting it — with the attempt id and the resolved requirements —
+is deferred work, and it is the AUDIT consequence of the enforcement gap the
+execution descriptor closes: until a decision carries what it was decided under,
+no after-the-fact review can tell a correctly resolved authorization from a
+weakened one.
+
+A second thing this encoding does NOT do, said here because the encoding is
+otherwise easy to over-read: pinning the digest makes two different requirement
+sets distinguishable. It does not make a requirement set TRUSTED. A snapshot
+weakened by ``dataclasses.replace`` digests correctly — to its own weakened
+content — and carries the original ``policy_id`` and ``policy_digest``
+unchanged. Nothing here re-derives the requirements from the policy those two
+fields name. See ``docs/execution-descriptor.md``.
 
 WHY THE ENCODING IS PINNED BEFORE ANYTHING IS BUILT ON IT. Because the digest is
 what the authorization record carries, encoding ambiguity is a FORGEABILITY

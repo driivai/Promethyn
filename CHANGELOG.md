@@ -8,6 +8,73 @@ in `spec/invariants.md` is a major version bump.
 ## [Unreleased]
 
 ### Fixed
+- **PHASE-1.2c COMMIT ONE — the docs corrected to what the code enforces
+  today.** An independent review of PHASE-1.2a–Checkpoint 3 (pinned at
+  `458fb4b6`) concluded that the two original failure patterns are closed for
+  the tested, correctly resolved policy path, but that the larger claim — every
+  consequential authorization necessarily represents the selected policy, this
+  action, and this verification attempt — is **not enforced end to end**. Its
+  three High findings are one missing thing seen from three sides: nothing
+  establishes that the snapshot in hand is the one the trusted configuration
+  selected, or that its action is the one the gate later executes.
+
+  This entry is the correction of the DOCUMENTS, made before the code changes
+  and reproduced rather than taken on the review's word. Every statement below
+  was measured against this tree.
+  - **The end-to-end invariant** (`docs/security-model.md`) is now marked as the
+    destination rather than a description of the build, with the three measured
+    gaps tabulated beside it: a `dataclasses.replace`-weakened snapshot keeps
+    `policy_id`/`policy_digest` and still MINTS; `ActionGate.decide` reads
+    `outcome` and nothing else, so an assessment for artifact A approves code B
+    and a `sandbox.execute` assessment approves a `git_delete_branch`; and
+    `PendingActionService.hold` takes a `GateDecision`, so a held
+    `Judgment(FAIL, 1.0, authoritative=True)` is approved and executed.
+  - **"At the INTERFACE it is a construction"** is true of the TYPE and was
+    being read as true of the CONTENT. Corrected in both `security-model.md` and
+    `policy/assessment.py`, along with the class docstring's claim that an
+    assessment "cannot be reused for a different action without the digest
+    disagreeing" — disagreeing is not refusing, and nothing compares it.
+  - **`Config.verification_profile` selects nothing.** `build_verification_policy`
+    is documented as its single consumption site and has no production caller;
+    its only caller in the tree is a test. The runtimes default to
+    `load_profile(DEFAULT_PROFILE_ID)`.
+  - **The snapshot is not in the authorization record.** `policy/snapshot.py`
+    claimed it was "persisted and bound into the authorization record";
+    `GateDecision` has no such field and `snapshot_digest` appears nowhere under
+    `ledger/`, `execution/` or `gate/`.
+  - **The redundancy story is half-recorded.** `CoverageSatisfied` carries
+    `answered_by` and `recorded_unavailable`, but `judge_covered` returns
+    `judge(outcome.graded)`, so the outage is dropped. Measured:
+    `answered_by == {'check.a': 'impl-weak'}` at the coverage layer,
+    `assessment.outcome.unavailable == ()` after. `Judgment.contributing` still
+    names the answerer; "a reviewer can see that A was down" was false.
+  - **The mint sweep resolves imports, not assignments.** Measured on
+    `_m = mint`: `_callee_symbol` returns `'_m'` and the call is invisible. The
+    word *greppable* has come out of the claim it supported.
+  - **The Checkpoint-3 tier rule restated correctly.** Checkpoint 3 does **not**
+    ban SOFT implementations at policy construction — its tests deliberately
+    build such policies — and it authenticates no tier provenance. The rule is a
+    positive allowlist applied at RUNTIME to each reported `Evidence.tier`.
+    Residual, measured: one UNREGISTERED identity reporting SOFT is refused
+    `coverage.advisory_only`, and the same identity reporting HARD is satisfied;
+    registering it as SOFT makes the HARD claim raise `ValueError` — but at
+    `VerifierBank.assess`, not at `validate_coverage`, which still returns
+    `CoverageSatisfied` because coverage holds no trust store.
+  - **`swarm/runtime.py`'s "only structural checks apply"** described the tree
+    before Checkpoint 2. Measured: structural PASS + executable ABSTAIN now
+    yields `CoverageRefused` on `executable.cases` — and the baseline's only
+    requirement for `sandbox.execute` IS `executable.cases`, so there is nothing
+    to fall back to.
+  - **`policy/profile.py` cited `test_policy_profiles.py`**, which does not
+    exist. The assertion lives in `test_coverage_enforcement.py`.
+  - **The action-class set is recorded as THREE** — `sandbox.execute`,
+    `database.migrate`, `branch.delete` — in `security-model.md`, which had not
+    recorded it at all.
+
+  No behaviour changed in this commit. The six source files edited are
+  byte-different and AST-identical with docstrings stripped, verified
+  mechanically; `gate/authorization.py` and `execution/controller.py` are
+  Hearth-frozen and their digests were re-sanctioned with that reason recorded.
 - **PHASE-1.2 CHECKPOINT 3 — advisory evidence cannot satisfy a policy
   requirement.** The checkpoint was briefed as migrating the three soft-lever
   wrappers into the policy path. The pre-build check answered no to all three
@@ -149,6 +216,10 @@ in `spec/invariants.md` is a major version bump.
     and no config option left for them.
   - **The action-class taxonomy was shrunk to what exists**: `sandbox.execute`
     and `database.migrate`, keyed by what makes the action consequential.
+    (Superseded within this same unreleased cycle: PHASE-1.2b added
+    `branch.delete`, so the current set is **three**. Left standing as the
+    record of what this checkpoint did, with the pointer attached so a reader
+    landing here does not take two for the present state.)
     `proposal.advance` was dropped (an internal state transition that touches
     nothing) and `skill.promote` too — it has an implementation, but
     `PromotionGate` decides on held-out rate and never reaches the bank, so a
