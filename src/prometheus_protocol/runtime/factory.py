@@ -280,6 +280,11 @@ def build_orchestrator(
     memory: MemoryTier | None = None,
 ) -> Orchestrator:
     config = config or Config()
+    # Policy selection is part of supported construction even though this
+    # learning orchestrator promotes skills rather than executing an action.
+    # Its execution controller/gateway is built separately; an unknown selected
+    # profile must nevertheless refuse at the root users call.
+    build_verification_policy(config)
 
     verifier = SubprocessVerifier(
         timeout_s=config.verifier_timeout_s,
@@ -300,7 +305,9 @@ def build_orchestrator(
         trust_store = InMemoryTrustStore()
     else:
         trust_store = SqliteTrustStore(config.trust_store_path)
-    bank = VerifierBank(trust_store)
+    bank = VerifierBank(
+        trust_store, policy_supplier=lambda: build_verification_policy(config)
+    )
     bank.register(verifier.verifier_id, verifier.tier)
     _LOG.info(
         "registered verifier %s (tier=%s)", verifier.verifier_id, verifier.tier.value
@@ -369,23 +376,31 @@ def build_swarm_runtime(
         sandbox=build_sandbox_for(config),
     )
     _LOG.info("swarm runtime built (max_role_calls=%d)", config.max_role_calls)
+    policy = build_verification_policy(config)
+    from prometheus_protocol.policy.execution import ExecutionAuthorizer
+    def supplier() -> VerificationPolicy:
+        return build_verification_policy(config)
     return SwarmRuntime(
         synthesis=RoleSynthesisEngine(
             provider=provider, max_role_calls=config.max_role_calls
         ),
         debate=DebateLayer(),
-        bank=VerifierBank(trust_store),
-        gate=ActionGate(),
+        bank=VerifierBank(trust_store, policy_supplier=supplier),
+        gate=ActionGate(
+            authorizer=ExecutionAuthorizer(supplier), target_canonical="sandbox://swarm"
+        ),
         executor=RecordingExecutor(),
         ledger=ledger if ledger is not None else build_ledger(config),
         provider=provider,
         memory=memory,
         code_verifier=code_verifier,
+        policy=policy,
     )
 
 
 def build_execution_controller(
-    config: Config | None = None, *, ledger: Ledger | None = None
+    config: Config | None = None, *, ledger: Ledger | None = None,
+    target_canonical: str = "sandbox://execution",
 ) -> ExecutionController:
     """Wire the live-execution path: routing gate -> human hold -> sandbox executor.
 
@@ -408,9 +423,44 @@ def build_execution_controller(
         max_processes=config.verifier_max_processes,
     )
     _LOG.info("execution controller built (escalate_below=%.2f)", config.escalate_below)
+    # Resolve at the composition root so an unknown profile refuses startup,
+    # then supply a fresh resolution to every authorization attempt.
+    build_verification_policy(config)
+    from prometheus_protocol.policy.execution import ExecutionAuthorizer
     return ExecutionController(
-        gate=ActionGate(escalate_below=config.escalate_below, route_high_risk=True),
+        gate=ActionGate(
+            escalate_below=config.escalate_below,
+            route_high_risk=True,
+            authorizer=ExecutionAuthorizer(lambda: build_verification_policy(config)),
+            target_canonical=target_canonical,
+        ),
         executor=SandboxExecutor(sandbox=build_sandbox_for(config), limits=limits),
         ledger=ledger if ledger is not None else build_ledger(config),
         ttl_seconds=config.pending_ttl_seconds,
+    )
+
+
+def build_workflow_runtime(
+    config: Config | None = None, *, ledger: SqliteLedger | None = None
+):
+    """Build workflow assessment and execution with one selected-policy supplier."""
+
+    from prometheus_protocol.orchestration.gateway import ActionGateway
+    from prometheus_protocol.orchestration.runtime import WorkflowRuntime
+
+    config = config or Config()
+    selected = build_verification_policy(config)
+    shared_ledger = ledger if ledger is not None else SqliteLedger(config.ledger_path)
+    target = "sandbox://workflow"
+    controller = build_execution_controller(
+        config, ledger=shared_ledger, target_canonical=target
+    )
+    return WorkflowRuntime(
+        bank=VerifierBank(
+            policy_supplier=lambda: build_verification_policy(config)
+        ),
+        gateway=ActionGateway(controller.submit),
+        ledger=shared_ledger,
+        policy=selected,
+        target_canonical=target,
     )

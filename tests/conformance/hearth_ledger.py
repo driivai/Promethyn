@@ -241,6 +241,15 @@ EXPECTED_PROTECTED_FILES = 21
 #:   The digests move because the bytes moved. Nothing either file DOES moved,
 #:   which is the whole reason this sanction is a small one.
 #:
+#: * **PHASE-1.2c CHECKPOINT B (trusted execution descriptor)** — the bank,
+#:   action gate, controller, pending service, real executors, orchestration
+#:   gateway/runtime and Ledger port now carry one seam-minted authorization.
+#:   The selected policy is re-resolved before assessment minting and again on
+#:   hold admission/reload/approval/retry; the concrete action, trusted target
+#:   and mandatory attempt identity are compared before execution. These files
+#:   legitimately move together because sanctioning only one side would leave
+#:   the direct-gate, human-hold or executor join open.
+#:
 #: Those sprints are why these bytes are what they are. They do NOT license the
 #: next edit to the same files: updating a digest below is a fresh decision, and
 #: the reason for it belongs beside it.
@@ -250,33 +259,33 @@ DIGESTS: dict[str, str] = {
     "src/prometheus_protocol/benchmarks/judge_eval.py":
         "25430b5645aff6f655cfaccf33edd9e1cea3e5b4d0c62ef7f23183d9da9f3866",
     "src/prometheus_protocol/core/interfaces.py":
-        "ae8009021b8f604d69646f1097d6f47900a2305b765b5e8e12ffa73ac7968d15",
+        "7098698aa935603b33ccbfc722ae3fe748d68e3ffdaa6adf35e00033a2f467e5",
     "src/prometheus_protocol/core/models.py":
         "1355a91dfdbc0cd1ad4e3f12c9d4bb02b0548858973e1b583a82daebbc61e48c",
     "src/prometheus_protocol/execution/controller.py":
-        "c0d2ece310a3d96c7405d18e2973bace2b93acac55666a180c29a8a86a71b5fb",
+        "a3003b73d63223a361b5f3c884908b642573948a9ec0cb4f036872aec169d0ed",
     "src/prometheus_protocol/execution/executor.py":
-        "41f01a1c4e08826fe81fb738de882bdfaa73a26184b1391ff4a016a9daba85a5",
+        "7fc5ee28f1a76417a9350ee9a0ab1913483991a89d60d9670ffd8149ab6afb0f",
     "src/prometheus_protocol/execution/pending.py":
-        "4316a1eab626c4e5dff58415870216f9acf069aebbbc9f576970747ae279934f",
+        "78207d452d3020614d7032844a274a4c8dfc8edb73c9df7de328513e923aadb0",
     "src/prometheus_protocol/forge/miner.py":
         "b0e2a53440df5b38a1031cc9648e19b3f9df20081ee34d4e035beda2b6973a29",
     "src/prometheus_protocol/gate/authorization.py":
-        "1c35a59f34459fbd1de358425712b7d021f577af718050ef4b8d328a4fd067e6",
+        "3d4a648aeae1267ebdc52acc647d75044e87f8c41a14eb197d781985d70de52e",
     "src/prometheus_protocol/gate/promotion.py":
-        "4c66123b363dbfe663707442761717bae3a69a8e7b0192413170ed8dbebecb22",
+        "8b37e56a52706f66fe7c22fd51c8d10fa95a3ba2d07cae76068c5b85b7c628fa",
     "src/prometheus_protocol/orchestration/gateway.py":
-        "b59813d5b42bad12b83329b7b2e0d68db4591b465546bf9aab5ecb6863cbd4bc",
+        "2c5efd28491e5c2da60e45c56c6b4f56511c80363f8f400b89fc8c949db497d5",
     "src/prometheus_protocol/orchestration/messages.py":
         "bf2d1ff2e986c97aa4bc9c832f0cc18c1950740213dae6c4dc061e84e1073e1e",
     "src/prometheus_protocol/orchestration/runtime.py":
-        "c8b1daeef56c92a95a7d4ae6917362920f90dd254370c3b75aeb3b12ee552540",
+        "155f2e3ded19d9eada66999a82f3180f2887708230d871ea990d33b42724d2ce",
     "src/prometheus_protocol/orchestration/workflow.py":
         "5192847972a44f58d52f838db294c3cdc801d97e1b4bb7bc144fc808fef30e3b",
     "src/prometheus_protocol/verifier/aggregate.py":
         "5963bb6b4047c0ec2c900b10187e861ad95541dca87c0b98bdb5db34dcd1c37c",
     "src/prometheus_protocol/verifier/bank.py":
-        "643d7394e0c8932f1598738365ac9f0539a0820f5c452326155ca5dcd42a6f2d",
+        "477b55b0c9b4c78612bdaada064565e344a29897aca65713fc87c05cb71c216a",
     "src/prometheus_protocol/verifier/grounding.py":
         "edb44c93c371cbf4a5099e607f4de0332d1bb902d47913bdd3708d5be1b4da3f",
     "src/prometheus_protocol/verifier/model_judge.py":

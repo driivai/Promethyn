@@ -61,7 +61,7 @@ from prometheus_protocol.chokepoint.signer import (
     ApprovalSigner,
     LocalHmacSigner,
 )
-from prometheus_protocol.core.models import Judgment, Unavailable, Verdict
+from prometheus_protocol.core.models import Unavailable, Verdict
 from prometheus_protocol.policy.snapshot import ACTION_DATABASE_MIGRATE
 
 #: Default approval lifetime. The window clocks *mint → execute* — an automated
@@ -107,7 +107,9 @@ class MigrationTarget:
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"migration target {name} must be a non-empty string")
             if value != value.strip():
-                raise ValueError(f"migration target {name} cannot have outer whitespace")
+                raise ValueError(
+                    f"migration target {name} cannot have outer whitespace"
+                )
             if "\x00" in value:
                 raise ValueError(f"migration target {name} cannot contain NUL")
         if not isinstance(self.port, int) or isinstance(self.port, bool):
@@ -463,7 +465,9 @@ def _required_signature_hex(value: object, *, scheme: str) -> str:
     ):
         raise ValueError("approval signature must be an even-length hexadecimal string")
     if scheme == HMAC_SHA256 and len(value) != 64:
-        raise ValueError("an hmac-sha256 approval signature must be 64 hexadecimal characters")
+        raise ValueError(
+            "an hmac-sha256 approval signature must be 64 hexadecimal characters"
+        )
     return value.lower()
 
 
@@ -574,9 +578,7 @@ class ApprovalAuthority:
         """Mint a bound, signed, single-use approval. Prefer :meth:`authorize`,
         which will not mint without an authoritative PASS."""
 
-        checked_hash = _required_hex(
-            artifact_sha256, name="artifact_sha256", length=64
-        )
+        checked_hash = _required_hex(artifact_sha256, name="artifact_sha256", length=64)
         if not isinstance(target, MigrationTarget):
             raise TypeError("approval target must be a MigrationTarget")
         now = _required_finite_number(now, name="issued_at")
@@ -606,6 +608,7 @@ class ApprovalAuthority:
         *,
         artifact: MigrationArtifact,
         target: MigrationTarget,
+        attempt_id: str,
         now: float,
         ttl_seconds: float = DEFAULT_TTL_SECONDS,
     ) -> Approval | None:
@@ -626,24 +629,22 @@ class ApprovalAuthority:
         :class:`~prometheus_protocol.policy.assessment.PolicyAssessment`, and an
         unbound judgment raises rather than minting.
 
-        The assessment must also be bound to THIS artifact and target. A
-        capability is minted for one artifact against one principal; an
-        assessment resolved for a different one is evidence about a different
-        action, and accepting it would let a policy evaluation of a harmless
-        migration authorize a destructive one.
+        The assessment must also be bound to THIS artifact, target and caller's
+        canonical attempt identity. An assessment resolved for another attempt
+        or a harmless migration is evidence about a different execution.
         """
 
         from prometheus_protocol.policy.assessment import require_assessment
 
-        checked = require_assessment(
-            assessment, surface="ApprovalAuthority.authorize"
-        )
+        checked = require_assessment(assessment, surface="ApprovalAuthority.authorize")
         judgment = checked.outcome
         if isinstance(judgment, Unavailable):
             return None
         if judgment.verdict != Verdict.PASS or not judgment.authoritative:
             return None
         if checked.action_class != ACTION_DATABASE_MIGRATE:
+            return None
+        if checked.attempt_id != attempt_id:
             return None
         if not hmac.compare_digest(checked.artifact_sha256, artifact.sha256):
             return None
@@ -701,17 +702,15 @@ class ApprovalAuthority:
             return VerifyResult(False, INVALID_SIGNATURE)
         try:
             checked_now = _required_finite_number(now, name="now")
-            issued_at = _required_finite_number(
-                approval.issued_at, name="issued_at"
-            )
-            expires_at = _required_finite_number(
-                approval.expires_at, name="expires_at"
-            )
+            issued_at = _required_finite_number(approval.issued_at, name="issued_at")
+            expires_at = _required_finite_number(approval.expires_at, name="expires_at")
         except (TypeError, ValueError):
             return VerifyResult(False, INVALID_TIME)
         if expires_at <= issued_at:
             return VerifyResult(False, INVALID_TIME)
-        sealed = _canonical(artifact_sha256, approval.target, nonce, issued_at, expires_at)
+        sealed = _canonical(
+            artifact_sha256, approval.target, nonce, issued_at, expires_at
+        )
         if not self._signer.verify(sealed, signature):
             return VerifyResult(False, INVALID_SIGNATURE)
         if not hmac.compare_digest(artifact_sha256, artifact.sha256):

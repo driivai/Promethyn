@@ -62,6 +62,7 @@ REASONS = frozenset(
         "invalid_request",
         "requester_unavailable",
         "security_configuration_unavailable",
+        "assessment_binding_mismatch",
     )
 )
 

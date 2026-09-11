@@ -51,6 +51,7 @@ from prometheus_protocol.core.reporting import render_judgment, render_outcome
 from prometheus_protocol.execution.controller import ExecutionController
 from prometheus_protocol.execution.executor import SandboxExecutor
 from prometheus_protocol.gate.authorization import ActionGate
+from prometheus_protocol.policy.execution import ExecutionAuthorizer
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
 from prometheus_protocol.sandbox import NamespaceSandbox
 from prometheus_protocol.verifier.bank import VerifierBank
@@ -122,18 +123,23 @@ def _assess(bank, policy, check_id, outcomes, *, subject_id: str, artifact: str)
     )
     digest = snapshot_digest(snapshot)
     permitted = snapshot.permitted_for(check_id) or ()
-    return bank.assess(snapshot, [
-        BoundResult(
-            # An outcome from an implementation the policy permits answers the
-            # REQUIRED check. Anything else is advisory: bound, validated and
-            # fused, but not counted toward coverage.
-            check_id=check_id if outcome.verifier_id in permitted else ADVISORY_CHECK,
-            snapshot_digest=digest,
-            implementation=outcome.verifier_id,
-            outcome=outcome,
-        )
-        for outcome in outcomes
-    ])
+    return bank.assess(
+        snapshot,
+        [
+            BoundResult(
+                # An outcome from an implementation the policy permits answers the
+                # REQUIRED check. Anything else is advisory: bound, validated and
+                # fused, but not counted toward coverage.
+                check_id=check_id
+                if outcome.verifier_id in permitted
+                else ADVISORY_CHECK,
+                snapshot_digest=digest,
+                implementation=outcome.verifier_id,
+                outcome=outcome,
+            )
+            for outcome in outcomes
+        ],
+    )
 
 
 HUMAN_REVIEWER_ID = "human-grounding-review"
@@ -166,27 +172,30 @@ def human_review(verdict: Verdict, *, reviewer: str, note: str) -> Evidence:
 def _publish_action(claim: str) -> ExecutableAction:
     """The downstream action a grounded claim would authorize: publish it."""
 
-    return ExecutableAction(
-        kind=ACTION_PYTHON_CODE, code=f"print({claim!r})"
-    )
+    return ExecutableAction(kind=ACTION_PYTHON_CODE, code=f"print({claim!r})")
 
 
 def run_loop(*, out: Callable[[str], None] = print) -> dict:
     items = {i.item_id: i for i in build_grounding_items()}
-    grounded = items["g01"]        # gold: supported (free admission)
-    ungrounded = items["g06"]      # gold: not-supported (unstated causation)
-    unparseable = items["g33"]     # judge reply will be malformed
+    grounded = items["g01"]  # gold: supported (free admission)
+    ungrounded = items["g06"]  # gold: not-supported (unstated causation)
+    unparseable = items["g33"]  # judge reply will be malformed
 
     judge = GroundingVerifier(
         ScriptedGroundingJudgeProvider(list(items.values()), _DEMO_REPLIES)
     )
-    bank = VerifierBank()
+    policy = _demo_policy("grounding.claim", HUMAN_REVIEWER_ID)
+    bank = VerifierBank(policy_supplier=lambda: policy)
     bank.register(judge.verifier_id, judge.tier)
     bank.register(HUMAN_REVIEWER_ID, Tier.HUMAN)
-    policy = _demo_policy("grounding.claim", HUMAN_REVIEWER_ID)
     ledger = SqliteLedger(":memory:")
     controller = ExecutionController(
-        gate=ActionGate(escalate_below=0.75, route_high_risk=True),
+        gate=ActionGate(
+            escalate_below=0.75,
+            route_high_risk=True,
+            authorizer=ExecutionAuthorizer(lambda: policy),
+            target_canonical="sandbox://demo",
+        ),
         executor=SandboxExecutor(),
         ledger=ledger,
     )
@@ -196,8 +205,14 @@ def run_loop(*, out: Callable[[str], None] = print) -> dict:
     out(f"[loop] claim   : {grounded.claim!r}")
     soft = judge.verify(code=grounded.claim, task=task_for(grounded))
     out(f"[loop] judge   : {render_outcome(soft)} (SOFT tier)")
-    assessment = _assess(bank, policy, "grounding.claim", [soft],
-                         subject_id=f"publish:{grounded.item_id}", artifact=grounded.claim)
+    assessment = _assess(
+        bank,
+        policy,
+        "grounding.claim",
+        [soft],
+        subject_id=f"publish:{grounded.item_id}",
+        artifact=_publish_action(grounded.claim).code,
+    )
     judgment = assessment.outcome
     out(f"[loop] bank    : {render_judgment(judgment)}")
     if isinstance(judgment, Unavailable):
@@ -209,17 +224,22 @@ def run_loop(*, out: Callable[[str], None] = print) -> dict:
         summary["soft_only"] = {"outcome": "unavailable", "executed": False}
     else:
         if bank.needs_escalation(judgment):
-            out("[loop] bank    : advisory judgment below the escalation bar -> "
-                "human review is required")
+            out(
+                "[loop] bank    : advisory judgment below the escalation bar -> "
+                "human review is required"
+            )
         outcome = controller.submit(
             assessment=assessment,
             action=_publish_action(grounded.claim),
+            attempt_id=f"publish:{grounded.item_id}",
             risk_class="medium",
             subject_id=f"publish:{grounded.item_id}",
         )
         out(f"[loop] gate    : {outcome.outcome.upper()} — {outcome.decision.reason}")
-        out("[loop] executed: never (soft-only evidence cannot authorize — "
-            "structural, not configured)")
+        out(
+            "[loop] executed: never (soft-only evidence cannot authorize — "
+            "structural, not configured)"
+        )
         summary["soft_only"] = {
             "outcome": outcome.outcome,
             "executed": bool(outcome.execution and outcome.execution.executed),
@@ -228,15 +248,24 @@ def run_loop(*, out: Callable[[str], None] = print) -> dict:
     out("")
     out("=== beat 2: a human grounding review unlocks the loop ===")
     human = human_review(
-        Verdict.PASS, reviewer="demo-operator",
+        Verdict.PASS,
+        reviewer="demo-operator",
         note="claim is entailed by the source (admission is free)",
     )
-    assessment = _assess(bank, policy, "grounding.claim", [soft, human],
-                         subject_id=f"publish:{grounded.item_id}", artifact=grounded.claim)
+    assessment = _assess(
+        bank,
+        policy,
+        "grounding.claim",
+        [soft, human],
+        subject_id=f"publish:{grounded.item_id}",
+        artifact=_publish_action(grounded.claim).code,
+    )
     fused = assessment.outcome
     out(f"[loop] human   : {human.decided.value} (HUMAN tier, authoritative)")
-    out(f"[loop] bank    : {render_judgment(fused)} "
-        f"(judge calibrated against the human decision)")
+    out(
+        f"[loop] bank    : {render_judgment(fused)} "
+        f"(judge calibrated against the human decision)"
+    )
     if isinstance(fused, Unavailable):
         # PHASE-1.2b — falls THROUGH rather than returning, so every beat
         # renders and the ledger audit still runs.
@@ -247,6 +276,7 @@ def run_loop(*, out: Callable[[str], None] = print) -> dict:
         outcome = controller.submit(
             assessment=assessment,
             action=_publish_action(grounded.claim),
+            attempt_id=f"publish:{grounded.item_id}",
             risk_class="medium",
             subject_id=f"publish:{grounded.item_id}",
         )
@@ -254,8 +284,10 @@ def run_loop(*, out: Callable[[str], None] = print) -> dict:
         executed = execution is not None and execution.executed
         out(f"[loop] gate    : {outcome.outcome.upper()} — {outcome.decision.reason}")
         if execution is not None and execution.executed:
-            out(f"[loop] publish : executed in sandbox "
-                f"'{execution.sandbox_name}' (exit {execution.exit_status})")
+            out(
+                f"[loop] publish : executed in sandbox "
+                f"'{execution.sandbox_name}' (exit {execution.exit_status})"
+            )
             out(f"[loop] output  : {execution.stdout.strip()!r}")
         summary["human_unlocked"] = {"outcome": outcome.outcome, "executed": executed}
 
@@ -265,11 +297,18 @@ def run_loop(*, out: Callable[[str], None] = print) -> dict:
     soft_bad = judge.verify(code=ungrounded.claim, task=task_for(ungrounded))
     out(f"[loop] judge   : {render_outcome(soft_bad)} (SOFT tier)")
     human_bad = human_review(
-        Verdict.FAIL, reviewer="demo-operator",
+        Verdict.FAIL,
+        reviewer="demo-operator",
         note="the source states no cause for the closure",
     )
-    assessment = _assess(bank, policy, "grounding.claim", [soft_bad, human_bad],
-                         subject_id=f"publish:{ungrounded.item_id}", artifact=ungrounded.claim)
+    assessment = _assess(
+        bank,
+        policy,
+        "grounding.claim",
+        [soft_bad, human_bad],
+        subject_id=f"publish:{ungrounded.item_id}",
+        artifact=_publish_action(ungrounded.claim).code,
+    )
     fused_bad = assessment.outcome
     out(f"[loop] bank    : {render_judgment(fused_bad)}")
     if isinstance(fused_bad, Unavailable):
@@ -281,6 +320,7 @@ def run_loop(*, out: Callable[[str], None] = print) -> dict:
         outcome = controller.submit(
             assessment=assessment,
             action=_publish_action(ungrounded.claim),
+            attempt_id=f"publish:{ungrounded.item_id}",
             risk_class="medium",
             subject_id=f"publish:{ungrounded.item_id}",
         )
@@ -294,21 +334,30 @@ def run_loop(*, out: Callable[[str], None] = print) -> dict:
     out("=== beat 4: a malformed judge reply is an abstention, not a verdict ===")
     soft_abstain = judge.verify(code=unparseable.claim, task=task_for(unparseable))
     out(f"[loop] judge   : {render_outcome(soft_abstain)} — reply was not a verdict")
-    assessment = _assess(bank, policy, "grounding.claim", [soft_abstain],
-                         subject_id=f"publish:{unparseable.item_id}", artifact=unparseable.claim)
+    assessment = _assess(
+        bank,
+        policy,
+        "grounding.claim",
+        [soft_abstain],
+        subject_id=f"publish:{unparseable.item_id}",
+        artifact=_publish_action(unparseable.claim).code,
+    )
     judgment_abstain = assessment.outcome
     if isinstance(judgment_abstain, Unavailable):
         # PHASE-1.2b — falls THROUGH to the audit rather than returning here.
         # The early return predated coverage, when this branch was unreachable
         # in the happy path; now it is the expected outcome for beat 4, and
         # returning would skip the ledger audit the demo exists to show.
-        out("[loop] gate    : NOT SUBMITTED — the required check has no "
-            "satisfactory result to authorize on")
+        out(
+            "[loop] gate    : NOT SUBMITTED — the required check has no "
+            "satisfactory result to authorize on"
+        )
         summary["abstain"] = {"outcome": "unavailable", "executed": False}
     else:
         outcome = controller.submit(
             assessment=assessment,
             action=_publish_action(unparseable.claim),
+            attempt_id=f"publish:{unparseable.item_id}",
             risk_class="medium",
             subject_id=f"publish:{unparseable.item_id}",
         )
@@ -322,8 +371,10 @@ def run_loop(*, out: Callable[[str], None] = print) -> dict:
     out("=== audit (from the ledger, not from memory) ===")
     executions = ledger.executions()
     executed_n = sum(1 for row in executions if row["executed"])
-    out(f"[audit] executions recorded: {len(executions)} "
-        f"(executed {executed_n}, blocked {len(executions) - executed_n})")
+    out(
+        f"[audit] executions recorded: {len(executions)} "
+        f"(executed {executed_n}, blocked {len(executions) - executed_n})"
+    )
     summary["executions"] = len(executions)
     summary["executed_total"] = executed_n
     return summary
@@ -336,8 +387,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.parse_args(argv)
     if not NamespaceSandbox.available():
-        print("[demo] the namespace isolation runtime is unavailable; the "
-              "publish beat cannot run sandboxed, so the demo refuses to run.")
+        print(
+            "[demo] the namespace isolation runtime is unavailable; the "
+            "publish beat cannot run sandboxed, so the demo refuses to run."
+        )
         return 1
     summary = run_loop()
     ok = (
@@ -357,11 +410,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         and summary["abstain"] == {"outcome": "unavailable", "executed": False}
         and summary["executed_total"] == 1
     )
-    print("[demo] " + (
-        "grounding loop demonstrated: soft-only blocked, human unlocked, "
-        "ungrounded blocked, unreviewed refused before the gate" if ok
-        else "UNEXPECTED OUTCOME (see above)"
-    ))
+    print(
+        "[demo] "
+        + (
+            "grounding loop demonstrated: soft-only blocked, human unlocked, "
+            "ungrounded blocked, unreviewed refused before the gate"
+            if ok
+            else "UNEXPECTED OUTCOME (see above)"
+        )
+    )
     return 0 if ok else 1
 
 

@@ -85,9 +85,19 @@ _FIXED_ENV = {
 
 def _git(repo: Path | str, *args: str) -> str:
     return subprocess.run(
-        ["git", "-C", str(repo), "-c", "user.email=fixture@example.invalid",
-         "-c", "user.name=fixture", *args],
-        check=True, capture_output=True, text=True,
+        [
+            "git",
+            "-C",
+            str(repo),
+            "-c",
+            "user.email=fixture@example.invalid",
+            "-c",
+            "user.name=fixture",
+            *args,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
         env={**os.environ, **_FIXED_ENV},
     ).stdout
 
@@ -104,7 +114,8 @@ def build_demo_repo(path: Path | str) -> Path:
     repo.mkdir(parents=True, exist_ok=True)
     subprocess.run(
         ["git", "-C", str(repo), "-c", "init.defaultBranch=main", "init", "-q"],
-        check=True, env={**os.environ, **_FIXED_ENV},
+        check=True,
+        env={**os.environ, **_FIXED_ENV},
     )
     (repo / "README.txt").write_text("demo fixture\n", encoding="utf-8")
     _git(repo, "add", "README.txt")
@@ -114,8 +125,9 @@ def build_demo_repo(path: Path | str) -> Path:
         if name in UNMERGED_BRANCHES:
             # Stale-looking, but carries work main never received.
             _git(repo, "checkout", "-q", "-b", name)
-            (repo / f"{name}.txt").write_text(f"unmerged work on {name}\n",
-                                              encoding="utf-8")
+            (repo / f"{name}.txt").write_text(
+                f"unmerged work on {name}\n", encoding="utf-8"
+            )
             _git(repo, "add", f"{name}.txt")
             _git(repo, "commit", "-q", "-m", f"{name}: work not on main")
             _git(repo, "checkout", "-q", "main")
@@ -125,8 +137,9 @@ def build_demo_repo(path: Path | str) -> Path:
         else:
             # Merged the ordinary way: branch, commit, merge back into main.
             _git(repo, "checkout", "-q", "-b", name)
-            (repo / f"{name}.txt").write_text(f"merged work on {name}\n",
-                                              encoding="utf-8")
+            (repo / f"{name}.txt").write_text(
+                f"merged work on {name}\n", encoding="utf-8"
+            )
             _git(repo, "add", f"{name}.txt")
             _git(repo, "commit", "-q", "-m", f"{name}: merged work")
             _git(repo, "checkout", "-q", "main")
@@ -166,8 +179,12 @@ def _branch_tips(repo: Path | str, branches: Sequence[str]) -> dict[str, str]:
     return {
         b: _git(repo, "rev-parse", b).strip()
         for b in branches
-        if b in set(_git(repo, "for-each-ref", "refs/heads",
-                         "--format=%(refname:short)").split())
+        if b
+        in set(
+            _git(
+                repo, "for-each-ref", "refs/heads", "--format=%(refname:short)"
+            ).split()
+        )
     }
 
 
@@ -176,8 +193,17 @@ def run_hero(repo: Path | str, *, out: Callable[[str], None] = print) -> dict:
 
     ledger = SqliteLedger(":memory:")
     tool = GitTool(repo_path=repo)
+    policy = load_profile(DEFAULT_PROFILE_ID)
+    repo_canonical = f"git://{Path(repo).resolve()}"
+    from prometheus_protocol.policy.execution import ExecutionAuthorizer
+
     controller = ExecutionController(
-        gate=ActionGate(escalate_below=0.75, route_high_risk=True),
+        gate=ActionGate(
+            escalate_below=0.75,
+            route_high_risk=True,
+            authorizer=ExecutionAuthorizer(lambda: policy),
+            target_canonical=repo_canonical,
+        ),
         executor=GitBranchDeleteExecutor(
             repo_path=repo, sandbox=tool._sandbox, allow_delete=True
         ),
@@ -186,10 +212,8 @@ def run_hero(repo: Path | str, *, out: Callable[[str], None] = print) -> dict:
     # PHASE-1.2b — the demo now runs the real policy path. The merge check is a
     # permitted implementation of the ``branch.merge_proof`` requirement, and the
     # bank decides coverage before anything is authorized.
-    policy = load_profile(DEFAULT_PROFILE_ID)
-    bank = VerifierBank(InMemoryTrustStore())
+    bank = VerifierBank(InMemoryTrustStore(), policy_supplier=lambda: policy)
     bank.register(MERGE_CHECK_VERIFIER_ID, Tier.HARD)
-    repo_canonical = f"git://{Path(repo).resolve()}"
 
     branches = tool.branches()
     out(f"[hero] candidate branches: {', '.join(branches)}")
@@ -206,15 +230,21 @@ def run_hero(repo: Path | str, *, out: Callable[[str], None] = print) -> dict:
             action_class=ACTION_BRANCH_DELETE,
             attempt_id=f"delete-branch:{branch}",
         )
-        assessment = bank.assess(snapshot, [BoundResult(
-            check_id=CHECK_MERGE_PROOF,
-            snapshot_digest=snapshot_digest(snapshot),
-            implementation=MERGE_CHECK_VERIFIER_ID,
-            outcome=evidence_for(classification),
-        )])
+        assessment = bank.assess(
+            snapshot,
+            [
+                BoundResult(
+                    check_id=CHECK_MERGE_PROOF,
+                    snapshot_digest=snapshot_digest(snapshot),
+                    implementation=MERGE_CHECK_VERIFIER_ID,
+                    outcome=evidence_for(classification),
+                )
+            ],
+        )
         outcome = controller.submit(
             assessment=assessment,
             action=tool.delete_action(branch),
+            attempt_id=f"delete-branch:{branch}",
             risk_class=risk_class_for(classification),
             subject_id=f"delete-branch:{branch}",
         )
@@ -226,16 +256,20 @@ def run_hero(repo: Path | str, *, out: Callable[[str], None] = print) -> dict:
             and execution.executed
         ):
             deleted.append(branch)
-            out(f"[hero] {branch}: 0 commits off main -> merge proof satisfied "
-                f"-> deleted in sandbox (exit {execution.exit_status})")
+            out(
+                f"[hero] {branch}: 0 commits off main -> merge proof satisfied "
+                f"-> deleted in sandbox (exit {execution.exit_status})"
+            )
         elif outcome.outcome == OUTCOME_ROUTE and pending is not None:
             held.append((branch, pending.id))
             out(f"[hero] {branch}: HELD for human review (pending #{pending.id})")
         else:
             refused.append(branch)
-            out(f"[hero] {branch}: {classification.unmerged_commits} commit(s) "
+            out(
+                f"[hero] {branch}: {classification.unmerged_commits} commit(s) "
                 f"NOT on main -> merge proof NOT satisfied -> "
-                f"{outcome.outcome} by policy, branch survives")
+                f"{outcome.outcome} by policy, branch survives"
+            )
 
     out(f"[hero] human reviews {len(held)} held action(s) and DENIES them:")
     for branch, pending_id in held:
@@ -247,12 +281,16 @@ def run_hero(repo: Path | str, *, out: Callable[[str], None] = print) -> dict:
         out(f"[hero]   denied #{pending_id} ({branch}) — branch survives")
 
     survivors = tool.branches()
-    out(f"[hero] audit — actions held for human review:")
+    out("[hero] audit — actions held for human review:")
     for row in ledger.human_decisions():
-        out(f"[hero]   #{row['id']} {row['subject_id']}: {row['status']} "
-            f"by {row['decided_by']} ({row['decision_reason']})")
-    out(f"[hero] result: {len(deleted)} deleted / {len(held)} held / "
-        f"{len(refused)} refused by policy / survivors: {', '.join(survivors)}")
+        out(
+            f"[hero]   #{row['id']} {row['subject_id']}: {row['status']} "
+            f"by {row['decided_by']} ({row['decision_reason']})"
+        )
+    out(
+        f"[hero] result: {len(deleted)} deleted / {len(held)} held / "
+        f"{len(refused)} refused by policy / survivors: {', '.join(survivors)}"
+    )
     return {
         "deleted": deleted,
         "held": [b for b, _ in held],
@@ -276,21 +314,29 @@ def run_baseline(repo: Path | str, *, out: Callable[[str], None] = print) -> dic
     for branch in proposed:
         subprocess.run(
             ["git", "-C", str(repo), "branch", "-D", branch],
-            check=True, capture_output=True, env={**os.environ, **_FIXED_ENV},
+            check=True,
+            capture_output=True,
+            env={**os.environ, **_FIXED_ENV},
         )
         deleted.append(branch)
         out(f"[baseline] {branch}: deleted (no check, no gate, no hold)")
 
     lost = []
     for branch, tip in tips.items():
-        reachable = subprocess.run(
-            ["git", "-C", str(repo), "merge-base", "--is-ancestor", tip, "main"],
-            capture_output=True, env={**os.environ, **_FIXED_ENV},
-        ).returncode == 0
+        reachable = (
+            subprocess.run(
+                ["git", "-C", str(repo), "merge-base", "--is-ancestor", tip, "main"],
+                capture_output=True,
+                env={**os.environ, **_FIXED_ENV},
+            ).returncode
+            == 0
+        )
         if not reachable:
             lost.append((branch, tip[:12]))
-    out(f"[baseline] result: {len(deleted)} deleted / DATA LOST on "
-        f"{len(lost)} branch(es):")
+    out(
+        f"[baseline] result: {len(deleted)} deleted / DATA LOST on "
+        f"{len(lost)} branch(es):"
+    )
     for branch, tip in lost:
         out(f"[baseline]   {branch}: commit {tip} is unreachable from any branch")
     return {"deleted": deleted, "lost": [b for b, _ in lost]}
@@ -308,7 +354,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "temporary directory)",
     )
     parser.add_argument(
-        "--keep", action="store_true",
+        "--keep",
+        action="store_true",
         help="keep the fixture directory instead of removing it",
     )
     args = parser.parse_args(argv)
@@ -328,14 +375,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             ok = stopped == sorted(UNMERGED_BRANCHES) and not [
                 b for b in summary["deleted"] if b in UNMERGED_BRANCHES
             ]
-            print(f"[demo] outcome: {len(summary['deleted'])} deleted / "
-                  f"{len(summary['held'])} held / "
-                  f"{len(summary['refused'])} refused by policy / 0 data lost"
-                  + (" — the policy stopped exactly the risky branches" if ok else ""))
+            print(
+                f"[demo] outcome: {len(summary['deleted'])} deleted / "
+                f"{len(summary['held'])} held / "
+                f"{len(summary['refused'])} refused by policy / 0 data lost"
+                + (" — the policy stopped exactly the risky branches" if ok else "")
+            )
         else:
             summary = run_baseline(repo)
-            print(f"[demo] outcome: {len(summary['deleted'])} deleted / "
-                  f"{len(summary['lost'])} branch(es) of work destroyed")
+            print(
+                f"[demo] outcome: {len(summary['deleted'])} deleted / "
+                f"{len(summary['lost'])} branch(es) of work destroyed"
+            )
         return 0
     finally:
         if cleanup:

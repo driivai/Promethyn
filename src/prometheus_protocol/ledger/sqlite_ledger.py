@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS pending_actions (
     status          TEXT    NOT NULL,
     action          TEXT    NOT NULL,   -- JSON: the ExecutableAction payload
     judgment        TEXT    NOT NULL,   -- JSON: the Judgment it rests on
+    authorization   TEXT,               -- JSON: validated descriptor/assessment binding
     created_at      TEXT    NOT NULL,
     decided_by      TEXT,
     decided_at      TEXT,
@@ -150,6 +151,7 @@ CREATE TABLE IF NOT EXISTS audit_chain (
 );
 """
 
+
 def _inserted_id(cur: sqlite3.Cursor) -> int:
     """The row id sqlite just assigned, or a refusal.
 
@@ -162,7 +164,9 @@ def _inserted_id(cur: sqlite3.Cursor) -> int:
 
     row_id = cur.lastrowid
     if row_id is None:  # pragma: no cover - an INSERT always assigns one
-        raise StateError("sqlite reported no row id for an insert that should have made one")
+        raise StateError(
+            "sqlite reported no row id for an insert that should have made one"
+        )
     return row_id
 
 
@@ -195,7 +199,10 @@ _ADDITIVE_COLUMNS: dict[str, list[tuple[str, str]]] = {
         # from the recorded source, makes them permanently separable.
         ("unavailable", "INTEGER"),
     ],
-    "pending_actions": [("execution_committed_at", "TEXT")],
+    "pending_actions": [
+        ("execution_committed_at", "TEXT"),
+        ("authorization", "TEXT"),
+    ],
 }
 
 # Indexes for the range/equality audit queries.
@@ -234,7 +241,9 @@ class SqliteLedger(Ledger):
     """SQLite-backed ledger. Pass ``":memory:"`` for an ephemeral instance."""
 
     @classmethod
-    def private(cls, path: Path | str, *, tip_anchor: TipAnchor | None = None) -> SqliteLedger:
+    def private(
+        cls, path: Path | str, *, tip_anchor: TipAnchor | None = None
+    ) -> SqliteLedger:
         """Create trusted-zone storage; never chmod existing public user data."""
         if not os.fspath(path) or os.fspath(path) == ":memory:":
             raise ValueError("private ledger requires a filesystem path")
@@ -368,8 +377,12 @@ class SqliteLedger(Ledger):
             }
         # Promote the same judgment to columns alongside the JSON — they are
         # written from one source, so they cannot diverge.
-        verdict = attempt.judgment.verdict.value if attempt.judgment is not None else None
-        confidence = attempt.judgment.confidence if attempt.judgment is not None else None
+        verdict = (
+            attempt.judgment.verdict.value if attempt.judgment is not None else None
+        )
+        confidence = (
+            attempt.judgment.confidence if attempt.judgment is not None else None
+        )
         cur = self._conn.execute(
             """
             INSERT INTO attempts (
@@ -437,14 +450,15 @@ class SqliteLedger(Ledger):
         confidence: float,
         action: dict,
         judgment: dict,
+        authorization: dict | None = None,
         created_at: str,
     ) -> int:
         cur = self._conn.execute(
             """
             INSERT INTO pending_actions (
                 subject_id, risk_class, reason, verdict, confidence,
-                status, action, judgment, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                status, action, judgment, authorization, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 subject_id,
@@ -455,6 +469,7 @@ class SqliteLedger(Ledger):
                 _PENDING_STATUS,
                 json.dumps(action),
                 json.dumps(judgment),
+                json.dumps(authorization) if authorization is not None else None,
                 created_at,
             ),
         )
@@ -478,7 +493,14 @@ class SqliteLedger(Ledger):
                SET status = ?, decided_by = ?, decided_at = ?, decision_reason = ?
              WHERE id = ? AND status = ?
             """,
-            (status, decided_by, decided_at, decision_reason, pending_id, _PENDING_STATUS),
+            (
+                status,
+                decided_by,
+                decided_at,
+                decision_reason,
+                pending_id,
+                _PENDING_STATUS,
+            ),
         )
         self._conn.commit()
         if cur.rowcount != 1:
@@ -555,9 +577,7 @@ class SqliteLedger(Ledger):
         # same object, so they cannot diverge.
         verdict = judgment.get("verdict") if judgment else None
         confidence = judgment.get("confidence") if judgment else None
-        authoritative = (
-            int(bool(judgment.get("authoritative"))) if judgment else None
-        )
+        authoritative = int(bool(judgment.get("authoritative"))) if judgment else None
         # EX-1: a could-not-EXECUTE row is marked distinctly (derived from the
         # source the controller records), so an infra/policy unavailability is
         # forever separable in the ledger from a genuine abstention — the two used
@@ -637,8 +657,16 @@ class SqliteLedger(Ledger):
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                workflow_id, step_id, agent_id, tier, verdict, float(confidence),
-                1 if proposed_action else 0, outcome, subject_id, pending_id,
+                workflow_id,
+                step_id,
+                agent_id,
+                tier,
+                verdict,
+                float(confidence),
+                1 if proposed_action else 0,
+                outcome,
+                subject_id,
+                pending_id,
                 created_at,
             ),
         )
@@ -795,14 +823,26 @@ class SqliteLedger(Ledger):
             prev_hash = row["entry_hash"] if row is not None else GENESIS_ROOT
             seq = prev_seq + 1
             digest = entry_hash(
-                seq=seq, created_at=created_at, event=event, subject=subject,
-                payload_canonical=payload_canonical, prev_hash=prev_hash,
+                seq=seq,
+                created_at=created_at,
+                event=event,
+                subject=subject,
+                payload_canonical=payload_canonical,
+                prev_hash=prev_hash,
             )
             try:
                 self._conn.execute(
                     "INSERT INTO audit_chain (seq, created_at, event, subject, "
                     "payload, prev_hash, entry_hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (seq, created_at, event, subject, payload_canonical, prev_hash, digest),
+                    (
+                        seq,
+                        created_at,
+                        event,
+                        subject,
+                        payload_canonical,
+                        prev_hash,
+                        digest,
+                    ),
                 )
                 self._conn.commit()
                 # Anchor AFTER the commit, so the anchored tip never names an
@@ -865,19 +905,28 @@ class SqliteLedger(Ledger):
         loaded, is ``NOT_VERIFIABLE``. Couldn't-verify is not verified-clean.
         """
 
-        if expected_tip is None and expected_tips is None and self._tip_anchor is not None:
+        if (
+            expected_tip is None
+            and expected_tips is None
+            and self._tip_anchor is not None
+        ):
             try:
                 expected_tips = anchor_history(self._tip_anchor)
             except AnchorUnavailable as exc:
                 return ChainVerification(
-                    NOT_VERIFIABLE, 0, None,
+                    NOT_VERIFIABLE,
+                    0,
+                    None,
                     f"the configured tip anchor could not be read: {exc}",
                 )
         try:
             rows = self.chained_events()
         except sqlite3.DatabaseError as exc:
             return ChainVerification(
-                NOT_VERIFIABLE, 0, None, f"the audit chain could not be read: {exc}",
+                NOT_VERIFIABLE,
+                0,
+                None,
+                f"the audit chain could not be read: {exc}",
             )
         return verify_rows(rows, expected_tip=expected_tip, expected_tips=expected_tips)
 
@@ -897,6 +946,8 @@ class SqliteLedger(Ledger):
         record = dict(row)
         record["action"] = json.loads(record["action"])
         record["judgment"] = json.loads(record["judgment"])
+        if record.get("authorization"):
+            record["authorization"] = json.loads(record["authorization"])
         return record
 
     @staticmethod
@@ -938,13 +989,19 @@ def verify_ledger_file(
     location = Path(os.fspath(path))
     if not location.exists():
         return ChainVerification(
-            NOT_VERIFIABLE, 0, None, f"no ledger file at {location}",
+            NOT_VERIFIABLE,
+            0,
+            None,
+            f"no ledger file at {location}",
         )
     try:
         ledger = SqliteLedger(location, tip_anchor=tip_anchor)
     except (StateError, sqlite3.DatabaseError, OSError) as exc:
         return ChainVerification(
-            NOT_VERIFIABLE, 0, None, f"the ledger could not be opened: {exc}",
+            NOT_VERIFIABLE,
+            0,
+            None,
+            f"the ledger could not be opened: {exc}",
         )
     try:
         return ledger.verify_chain(expected_tips=expected_tips)

@@ -80,15 +80,19 @@ class TimingOutProvider(Provider):
 
 
 _TASK = Task(
-    id="unavail/add", entry_point="add",
-    prompt="Return the sum of two integers.", split="train",
+    id="unavail/add",
+    entry_point="add",
+    prompt="Return the sum of two integers.",
+    split="train",
     cases=(Case((2, 3), 5), Case((-1, 1), 0)),
 )
 _GROUNDING_TASK = GroundingTask(
-    id="unavail/g", source="The hall opens at nine and admission is free.",
+    id="unavail/g",
+    source="The hall opens at nine and admission is free.",
 )
 _SQL_TASK = SqlTask(
-    id="unavail/sum", prompt="Total of v.",
+    id="unavail/sum",
+    prompt="Total of v.",
     schema_sql="CREATE TABLE t (id INTEGER PRIMARY KEY, v INTEGER NOT NULL);",
     fixture_sql="INSERT INTO t VALUES (1, 10), (2, 20);",
     reference_query="SELECT SUM(v) FROM t",
@@ -177,7 +181,9 @@ def test_ensemble_lever_reports_how_many_judges_could_not_run():
 
     assert isinstance(result, Unavailable)
     detail = result.detail or ""
-    assert "2" in detail, f"the ensemble must name how many judges could not run: {detail!r}"
+    assert "2" in detail, (
+        f"the ensemble must name how many judges could not run: {detail!r}"
+    )
 
 
 def test_ensemble_lever_does_not_let_survivors_speak_for_the_quorum():
@@ -187,9 +193,7 @@ def test_ensemble_lever_does_not_let_survivors_speak_for_the_quorum():
     from prometheus_protocol.verifier.soft_levers import EnsembleJudge
 
     reachable = ModelJudgeVerifier(ScriptedJudgeProvider({}, model="scripted"))
-    ensemble = EnsembleJudge(
-        [reachable, timing_out_judge()], on_disagreement="abstain"
-    )
+    ensemble = EnsembleJudge([reachable, timing_out_judge()], on_disagreement="abstain")
     result = ensemble.verify(code="def add(a, b): return a + b", task=_TASK)
 
     assert isinstance(result, Unavailable), (
@@ -238,7 +242,8 @@ def test_conformance_check_reports_a_could_not_run_verifier_as_unavailable():
     report = check_verifier(case)
 
     behavioural = [
-        c for c in report.checks
+        c
+        for c in report.checks
         if c.name in {"passes-a-correct-candidate", "fails-a-faulty-candidate"}
     ]
     assert behavioural, "the behavioural checks must appear in the report"
@@ -294,7 +299,9 @@ def test_code_adversarial_probe_reports_unsound_when_it_could_not_run(monkeypatc
 
     from prometheus_protocol.conformance import cases
 
-    monkeypatch.setattr(cases, "SubprocessVerifier", lambda **kw: refusing_code_verifier())
+    monkeypatch.setattr(
+        cases, "SubprocessVerifier", lambda **kw: refusing_code_verifier()
+    )
     ok, detail = cases._code_adversarial()
 
     assert ok is False, "a probe that never ran cannot report the verifier sound"
@@ -332,7 +339,9 @@ def _swarm_runtime(synthesis, code_verifier=None):
         synthesis=synthesis,
         debate=DebateLayer(),
         bank=VerifierBank(InMemoryTrustStore()),
-        gate=ActionGate(),
+        gate=ActionGate(
+            target_canonical="sandbox://swarm",
+        ),
         executor=RecordingExecutor(),
         ledger=SqliteLedger(":memory:"),
         code_verifier=code_verifier,
@@ -399,12 +408,16 @@ def _executable_swarm(entry_point: str = "add"):
                     entry_point=entry_point,
                     cases=(_Case((2, 3), 5), _Case((-1, 1), 0)),
                 )
-                out.append(_proposal(
-                    self.id, KIND_CRITIQUE,
-                    f"Critique of {proposal.id}: attach falsification checks.",
-                    "A proposal that cannot survive falsification is unsound.",
-                    inputs=(proposal.id,), checks=(check,),
-                ))
+                out.append(
+                    _proposal(
+                        self.id,
+                        KIND_CRITIQUE,
+                        f"Critique of {proposal.id}: attach falsification checks.",
+                        "A proposal that cannot survive falsification is unsound.",
+                        inputs=(proposal.id,),
+                        checks=(check,),
+                    )
+                )
             return out
 
     return RoleSynthesisEngine([CodePlanner(), ExecutableSkeptic()])
@@ -484,9 +497,7 @@ def test_swarm_that_can_verify_still_executes():
 
     from prometheus_protocol.swarm.models import TaskPacket
 
-    runtime = _swarm_runtime(
-        _executable_swarm(), code_verifier=working_code_verifier()
-    )
+    runtime = _swarm_runtime(_executable_swarm(), code_verifier=working_code_verifier())
     run = runtime.run(TaskPacket(goal="add two integers", budget=5, entry_point="add"))
 
     assert not any(isinstance(r.evidence, Unavailable) for r in run.records), (
@@ -631,7 +642,9 @@ def test_sql_loop_demo_does_not_submit_an_action_it_cannot_judge(monkeypatch):
     from prometheus_protocol.benchmarks import sql_loop_demo
     from prometheus_protocol.gate.promotion import OUTCOME_UNAVAILABLE
 
-    monkeypatch.setattr(sql_loop_demo, "SqlVerifier", lambda **kw: refusing_sql_verifier())
+    monkeypatch.setattr(
+        sql_loop_demo, "SqlVerifier", lambda **kw: refusing_sql_verifier()
+    )
     lines: list[str] = []
     summary = sql_loop_demo.run_loop(out=lines.append)
 
@@ -659,7 +672,8 @@ def test_grounding_loop_demo_renders_a_could_not_run_and_never_a_verdict(monkeyp
     from prometheus_protocol.benchmarks import grounding_loop_demo
 
     monkeypatch.setattr(
-        grounding_loop_demo, "GroundingVerifier",
+        grounding_loop_demo,
+        "GroundingVerifier",
         lambda *a, **kw: timing_out_grounding_judge(),
     )
     lines: list[str] = []
@@ -692,9 +706,13 @@ def test_render_outcome_keeps_all_four_outcomes_distinct(verdict: Verdict):
     from prometheus_protocol.core.reporting import render_outcome
 
     evidence = Evidence(
-        passed=(verdict == Verdict.PASS), total=1,
-        passed_count=1 if verdict == Verdict.PASS else 0, failures=(),
-        verifier_id="probe", verdict=verdict, tier=Tier.SOFT,
+        passed=(verdict == Verdict.PASS),
+        total=1,
+        passed_count=1 if verdict == Verdict.PASS else 0,
+        failures=(),
+        verifier_id="probe",
+        verdict=verdict,
+        tier=Tier.SOFT,
     )
     rendered = render_outcome(evidence)
     assert verdict.value.upper() in rendered

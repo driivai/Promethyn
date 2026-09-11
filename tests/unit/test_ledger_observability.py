@@ -12,28 +12,40 @@ import sqlite3
 
 from prometheus_protocol.core.models import Attempt, Evidence, Judgment, Verdict
 from prometheus_protocol.execution.controller import ExecutionController
-from prometheus_protocol.execution.pending import _judgment_to_dict
 from prometheus_protocol.gate.authorization import ActionGate
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
 from prometheus_protocol.core.models import ExecutableAction
 from prometheus_protocol.swarm.executor import RecordingExecutor
 
-from tests.support.assessments import carrying
+from prometheus_protocol.policy.execution import ExecutionAuthorizer
+from prometheus_protocol.swarm.models import content_hash
+from tests.support.assessments import a_policy, carrying
 
 
 def _attempt(judgment: Judgment | None) -> Attempt:
     return Attempt(
-        task_id="t", split="train", entry_point="f", code="x",
+        task_id="t",
+        split="train",
+        entry_point="f",
+        code="x",
         evidence=Evidence(passed=True, total=1, passed_count=1),
         judgment=judgment,
     )
 
 
-def _exec(ledger: SqliteLedger, subject: str, *, executed: bool, judgment: dict) -> None:
+def _exec(
+    ledger: SqliteLedger, subject: str, *, executed: bool, judgment: dict
+) -> None:
     ledger.record_execution(
-        subject_id=subject, source="auto-approved", executed=executed, refused=False,
-        sandbox_name="namespace", exit_status=0 if executed else None, detail="",
-        created_at="t", judgment=judgment,
+        subject_id=subject,
+        source="auto-approved",
+        executed=executed,
+        refused=False,
+        sandbox_name="namespace",
+        exit_status=0 if executed else None,
+        detail="",
+        created_at="t",
+        judgment=judgment,
     )
 
 
@@ -70,7 +82,9 @@ def test_attempt_columns_equal_the_evidence_json():
     ledger = SqliteLedger(":memory:")
     try:
         ledger.record_attempt(
-            _attempt(Judgment(Verdict.PASS, 0.83, authoritative=True)), cycle=1, kind="k"
+            _attempt(Judgment(Verdict.PASS, 0.83, authoritative=True)),
+            cycle=1,
+            kind="k",
         )
         row = ledger.attempts()[0]
         assert row["verdict"] == row["evidence"]["judgment"]["verdict"] == "pass"
@@ -108,14 +122,25 @@ def test_unavailable_execution_is_forever_distinct_from_an_abstain():
         # A could-not-EXECUTE row: the controller records source "unavailable"
         # with no judgment (there is no verdict to authorize on).
         ledger.record_execution(
-            subject_id="s1", source="unavailable", executed=False, refused=True,
-            sandbox_name="", exit_status=None, detail="sandbox did not start",
-            created_at="t", judgment=None,
+            subject_id="s1",
+            source="unavailable",
+            executed=False,
+            refused=True,
+            sandbox_name="",
+            exit_status=None,
+            detail="sandbox did not start",
+            created_at="t",
+            judgment=None,
         )
         # A genuine policy block whose fused judgment ABSTAINed.
         ledger.record_execution(
-            subject_id="s2", source="blocked", executed=False, refused=False,
-            sandbox_name="", exit_status=None, detail="blocked",
+            subject_id="s2",
+            source="blocked",
+            executed=False,
+            refused=False,
+            sandbox_name="",
+            exit_status=None,
+            detail="blocked",
             created_at="t",
             judgment={"verdict": "abstain", "confidence": 0.5, "authoritative": False},
         )
@@ -135,13 +160,16 @@ def test_confidence_and_verdict_columns_are_indexed():
     ledger = SqliteLedger(":memory:")
     try:
         names = {
-            r[0] for r in ledger._conn.execute(
+            r[0]
+            for r in ledger._conn.execute(
                 "SELECT name FROM sqlite_master WHERE type = 'index'"
             )
         }
         assert {
-            "idx_attempts_confidence", "idx_attempts_verdict",
-            "idx_executions_confidence", "idx_executions_verdict",
+            "idx_attempts_confidence",
+            "idx_attempts_verdict",
+            "idx_executions_confidence",
+            "idx_executions_verdict",
         } <= names
     finally:
         ledger.close()
@@ -153,12 +181,24 @@ def test_confidence_and_verdict_columns_are_indexed():
 def test_controller_execution_is_queryable_by_confidence():
     ledger = SqliteLedger(":memory:")
     controller = ExecutionController(
-        gate=ActionGate(escalate_below=0.0, route_high_risk=False),  # no routing: auto-exec
-        executor=RecordingExecutor(), ledger=ledger, clock=lambda: "t",
+        gate=ActionGate(
+            target_canonical="sandbox://test",
+            escalate_below=0.0,
+            route_high_risk=False,
+            authorizer=ExecutionAuthorizer(lambda: a_policy()),
+        ),  # no routing: auto-exec
+        executor=RecordingExecutor(),
+        ledger=ledger,
+        clock=lambda: "t",
     )
+    action = ExecutableAction(kind="python_code", code="print(1)")
     controller.submit(
-        assessment=carrying(Judgment(Verdict.PASS, 0.44, authoritative=True)),
-        action=ExecutableAction(kind="python_code", code="print(1)"),
+        attempt_id="attempt-1",
+        assessment=carrying(
+            Judgment(Verdict.PASS, 0.44, authoritative=True),
+            artifact_sha256=content_hash(action.code),
+        ),
+        action=action,
         subject_id="live",
     )
     below = ledger.executions_below_confidence(0.5)
@@ -175,9 +215,12 @@ def test_opening_an_old_ledger_adds_the_columns(tmp_path):
     ledger = SqliteLedger(db)
     try:
         assert set(ledger.migration_added_columns) == {
-            "attempts.verdict", "attempts.confidence",
-            "executions.verdict", "executions.confidence",
-            "executions.authoritative", "executions.judgment",
+            "attempts.verdict",
+            "attempts.confidence",
+            "executions.verdict",
+            "executions.confidence",
+            "executions.authoritative",
+            "executions.judgment",
             "executions.pending_id",
             # EX-1: the could-not-EXECUTE discriminator, added additively to old
             # ledgers so an infra/policy unavailability is forever separable from
@@ -189,10 +232,13 @@ def test_opening_an_old_ledger_adds_the_columns(tmp_path):
             # as "ran and found nothing".
             "attempts.unavailable",
             "pending_actions.execution_committed_at",
+            "pending_actions.authorization",
         }
         cols = {r["name"] for r in ledger._conn.execute("PRAGMA table_info(attempts)")}
         assert {"verdict", "confidence", "unavailable"} <= cols
-        exec_cols = {r["name"] for r in ledger._conn.execute("PRAGMA table_info(executions)")}
+        exec_cols = {
+            r["name"] for r in ledger._conn.execute("PRAGMA table_info(executions)")
+        }
         assert "unavailable" in exec_cols
     finally:
         ledger.close()
@@ -234,8 +280,8 @@ def test_backfill_leaves_malformed_or_missing_json_null_and_counts(tmp_path):
         "INSERT INTO attempts (cycle,kind,task_id,split,entry_point,passed,total,"
         "passed_count,skills_used,code,evidence) VALUES (0,'k','t','train','f',1,1,1,'[]','',?)"
     )
-    conn.execute(ins, ("{malformed json",))                 # unparseable -> skip
-    conn.execute(ins, (json.dumps({"total": 1}),))          # valid, no judgment -> skip
+    conn.execute(ins, ("{malformed json",))  # unparseable -> skip
+    conn.execute(ins, (json.dumps({"total": 1}),))  # valid, no judgment -> skip
     conn.commit()
     conn.close()
 
@@ -243,7 +289,9 @@ def test_backfill_leaves_malformed_or_missing_json_null_and_counts(tmp_path):
     try:
         report = ledger.backfill()
         assert report["attempts"] == {"filled": 0, "skipped": 2}  # counted, not fatal
-        rows = {r[0]: r[1] for r in ledger._conn.execute("SELECT id, verdict FROM attempts")}
+        rows = {
+            r[0]: r[1] for r in ledger._conn.execute("SELECT id, verdict FROM attempts")
+        }
         assert rows[1] is None and rows[2] is None  # left NULL
     finally:
         ledger.close()
@@ -253,10 +301,30 @@ def test_backfill_leaves_malformed_or_missing_json_null_and_counts(tmp_path):
 
 
 def _seed_executions(ledger: SqliteLedger) -> None:
-    _exec(ledger, "hi", executed=True, judgment={"verdict": "pass", "confidence": 0.95, "authoritative": True})
-    _exec(ledger, "lo", executed=True, judgment={"verdict": "pass", "confidence": 0.40, "authoritative": True})
-    _exec(ledger, "lo-nonauth", executed=True, judgment={"verdict": "pass", "confidence": 0.30, "authoritative": False})
-    _exec(ledger, "blocked", executed=False, judgment={"verdict": "fail", "confidence": 0.20, "authoritative": True})
+    _exec(
+        ledger,
+        "hi",
+        executed=True,
+        judgment={"verdict": "pass", "confidence": 0.95, "authoritative": True},
+    )
+    _exec(
+        ledger,
+        "lo",
+        executed=True,
+        judgment={"verdict": "pass", "confidence": 0.40, "authoritative": True},
+    )
+    _exec(
+        ledger,
+        "lo-nonauth",
+        executed=True,
+        judgment={"verdict": "pass", "confidence": 0.30, "authoritative": False},
+    )
+    _exec(
+        ledger,
+        "blocked",
+        executed=False,
+        judgment={"verdict": "fail", "confidence": 0.20, "authoritative": True},
+    )
 
 
 def test_executions_below_confidence_returns_exactly_the_executed_low_rows():
@@ -264,9 +332,11 @@ def test_executions_below_confidence_returns_exactly_the_executed_low_rows():
     try:
         _seed_executions(ledger)
         got = [r["subject_id"] for r in ledger.executions_below_confidence(0.5)]
-        assert got == ["lo", "lo-nonauth"]           # executed & <0.5; not hi, not blocked
+        assert got == ["lo", "lo-nonauth"]  # executed & <0.5; not hi, not blocked
         # boundary: strictly less-than
-        assert [r["subject_id"] for r in ledger.executions_below_confidence(0.40)] == ["lo-nonauth"]
+        assert [r["subject_id"] for r in ledger.executions_below_confidence(0.40)] == [
+            "lo-nonauth"
+        ]
         assert ledger.executions_below_confidence(0.30) == []
     finally:
         ledger.close()
@@ -277,7 +347,9 @@ def test_authoritative_pass_below_returns_only_authoritative_pass():
     try:
         _seed_executions(ledger)
         got = [r["subject_id"] for r in ledger.authoritative_pass_below(0.5)]
-        assert got == ["lo"]  # excludes lo-nonauth (non-authoritative) and blocked (not executed / FAIL)
+        assert got == [
+            "lo"
+        ]  # excludes lo-nonauth (non-authoritative) and blocked (not executed / FAIL)
     finally:
         ledger.close()
 
@@ -287,13 +359,29 @@ def test_human_decision_log_lists_resolved_holds():
     try:
         for subject in ("p/keep", "p/approve", "p/expire"):
             ledger.record_pending_action(
-                subject_id=subject, risk_class="low", reason="r", verdict="pass",
-                confidence=0.6, action={"kind": "python_code", "code": "x", "entry_point": ""},
+                subject_id=subject,
+                risk_class="low",
+                reason="r",
+                verdict="pass",
+                confidence=0.6,
+                action={"kind": "python_code", "code": "x", "entry_point": ""},
                 judgment={"verdict": "pass", "confidence": 0.6, "authoritative": True},
                 created_at="t0",
             )
-        ledger.resolve_pending_action(2, status="approved", decided_by="will@driivai.com", decided_at="t1", decision_reason="ok")
-        ledger.resolve_pending_action(3, status="expired", decided_by="system:sweep", decided_at="t2", decision_reason="expired after 1s TTL")
+        ledger.resolve_pending_action(
+            2,
+            status="approved",
+            decided_by="will@driivai.com",
+            decided_at="t1",
+            decision_reason="ok",
+        )
+        ledger.resolve_pending_action(
+            3,
+            status="expired",
+            decided_by="system:sweep",
+            decided_at="t2",
+            decision_reason="expired after 1s TTL",
+        )
         log = ledger.human_decisions()
         assert [(r["id"], r["status"], r["decided_by"]) for r in log] == [
             (2, "approved", "will@driivai.com"),
@@ -311,9 +399,14 @@ def test_audit_queries_mutate_no_state():
     try:
         _seed_executions(ledger)
         ledger.record_pending_action(
-            subject_id="p", risk_class="low", reason="r", verdict="pass", confidence=0.6,
+            subject_id="p",
+            risk_class="low",
+            reason="r",
+            verdict="pass",
+            confidence=0.6,
             action={"kind": "python_code", "code": "x", "entry_point": ""},
-            judgment={"verdict": "pass", "confidence": 0.6, "authoritative": True}, created_at="t0",
+            judgment={"verdict": "pass", "confidence": 0.6, "authoritative": True},
+            created_at="t0",
         )
 
         def snapshot():

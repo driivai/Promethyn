@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from prometheus_protocol.core.models import ExecutableAction, Judgment
+from prometheus_protocol.policy.execution import AuthorizedExecution
 
 
 class PendingStatus(str, Enum):
@@ -47,3 +48,4 @@ class PendingAction:
     status: PendingStatus
     created_at: str
     human_decision: HumanDecision | None = None
+    authorization: AuthorizedExecution[ExecutableAction] | None = None

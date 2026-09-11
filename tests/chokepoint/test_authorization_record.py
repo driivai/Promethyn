@@ -113,9 +113,16 @@ def authorize(runtime, outcome=None, **kwargs):
     # target passed alongside it, so these tests keep asserting recording,
     # signing and durability rather than re-testing the binding.
     return runtime.authority.authorize(
-        for_migration(PASS if outcome is None else outcome,
-                      artifact=ARTIFACT, target=TARGET.identity),
-        artifact=ARTIFACT, target=TARGET.identity, now=NOW, **kwargs
+        for_migration(
+            PASS if outcome is None else outcome,
+            artifact=ARTIFACT,
+            target=TARGET.identity,
+        ),
+        attempt_id="attempt-1",
+        artifact=ARTIFACT,
+        target=TARGET.identity,
+        now=NOW,
+        **kwargs,
     )
 
 
@@ -209,9 +216,13 @@ def test_runtime_persists_refusals(live, judgment, reason):
     runtime, ledger, kms, calls = live
     assert (
         runtime.authority.authorize(
-            judgment if judgment is None else for_migration(
-                judgment, artifact=ARTIFACT, target=TARGET.identity),
-            artifact=ARTIFACT, target=TARGET.identity, now=NOW
+            judgment
+            if judgment is None
+            else for_migration(judgment, artifact=ARTIFACT, target=TARGET.identity),
+            attempt_id="attempt-1",
+            artifact=ARTIFACT,
+            target=TARGET.identity,
+            now=NOW,
         )
         is None
     )
@@ -377,17 +388,23 @@ def test_private_storage_separately_mounted_file(tmp_path, monkeypatch, placemen
     fs = {"network": "nfs4", "unknown": "overlay", "local": "ext4"}[placement]
     table = f"10 10 8:1 / / rw - ext4 root rw\n20 10 0:20 /file {file} rw - {fs} source rw\n"
     queried = []
+
     def inspect(path):
         queried.append(path)
         assert path == file, "journal queried the parent instead of the existing file"
         return classify_path(str(path), table)
+
     monkeypatch.setattr(journal_module, "probe_file_substrate", inspect)
     try:
         if placement == "local":
-            journal_module.AuthorizationJournal(ledger, substrate_policy=SubstratePolicy(require_verified=True))
+            journal_module.AuthorizationJournal(
+                ledger, substrate_policy=SubstratePolicy(require_verified=True)
+            )
         else:
             with pytest.raises(ConfigError):
-                journal_module.AuthorizationJournal(ledger, substrate_policy=SubstratePolicy(require_verified=True))
+                journal_module.AuthorizationJournal(
+                    ledger, substrate_policy=SubstratePolicy(require_verified=True)
+                )
         assert queried == [file]
     finally:
         ledger.close()
@@ -469,7 +486,10 @@ def test_unavailable_verifier_has_a_durable_refusal(live):
     assert (
         runtime.authority.authorize(
             for_migration(judgment, artifact=ARTIFACT, target=TARGET.identity),
-            artifact=ARTIFACT, target=TARGET.identity, now=NOW
+            attempt_id="attempt-1",
+            artifact=ARTIFACT,
+            target=TARGET.identity,
+            now=NOW,
         )
         is None
     )
@@ -740,7 +760,9 @@ def test_oversized_request_is_durably_refused(live):
     runtime, ledger, kms, calls = live
     target = MigrationTarget("é" * 2048, 5432, "é" * 2048, "é" * 2048, "é" * 2048)
     assert (
-        runtime.authority.authorize(PASS, artifact=ARTIFACT, target=target, now=NOW)
+        runtime.authority.authorize(
+            PASS, attempt_id="attempt-1", artifact=ARTIFACT, target=target, now=NOW
+        )
         is None
     )
     value = decisions(ledger)[0].to_dict()

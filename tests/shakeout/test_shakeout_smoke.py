@@ -32,7 +32,11 @@ from prometheus_protocol.verifier.store import InMemoryTrustStore
 @pytest.fixture
 def orch(tmp_path):
     return build_orchestrator(
-        Config(registry_dir=tmp_path / "skills", ledger_path=":memory:", verifier_memory_mb=0)
+        Config(
+            registry_dir=tmp_path / "skills",
+            ledger_path=":memory:",
+            verifier_memory_mb=0,
+        )
     )
 
 
@@ -85,7 +89,9 @@ def _swarm_runtime(roles):
         synthesis=RoleSynthesisEngine(roles),
         debate=DebateLayer(),
         bank=VerifierBank(InMemoryTrustStore()),
-        gate=ActionGate(),
+        gate=ActionGate(
+            target_canonical="sandbox://swarm",
+        ),
         executor=RecordingExecutor(),
         ledger=SqliteLedger(":memory:"),
     )
@@ -100,11 +106,16 @@ def test_swarm_all_failing_proposals_execute_nothing():
 def test_wall_executor_rejects_non_decisions():
     executor = RecordingExecutor()
     proposal = Proposal(
-        id="x", role_id="r", kind=KIND_PROPOSED_ACTION, content="c", rationale="r",
+        id="x",
+        role_id="r",
+        kind=KIND_PROPOSED_ACTION,
+        content="c",
+        rationale="r",
         provenance=Provenance(content_hash=content_hash("c")),
     )
     with pytest.raises(TypeError):
         executor.execute(proposal)  # INV-SWARM-1: a raw proposal cannot execute
     with pytest.raises(ValueError):
         executor.execute(GateDecision(approved=False, subject_id="x"))
-    assert executor.execute(GateDecision(approved=True, subject_id="x")).executed is True
+    with pytest.raises(ValueError, match="validated execution descriptor"):
+        executor.execute(GateDecision(approved=True, subject_id="x"))

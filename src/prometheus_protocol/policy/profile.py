@@ -336,11 +336,24 @@ _BASELINE = VerificationPolicy(
     ),
 )
 
+_DEFENSE_IN_DEPTH = VerificationPolicy(
+    policy_id="defense-in-depth",
+    version=1,
+    requirements=_BASELINE.requirements + (
+        PolicyRequirement(
+            check_id=CHECK_STRUCTURAL,
+            permitted=(IMPL_SWARM_STRUCTURAL,),
+            applies_to=("sandbox.execute",),
+        ),
+    ),
+)
+
 #: Committed profiles by id. NOT read by the resolver — the resolver takes a
 #: policy VALUE (R1). This mapping is one supplier of such a value; a
 #: customer-supplied digest-pinned supplier is a later addition beside it.
 PROFILES: dict[str, VerificationPolicy] = {
     _BASELINE.policy_id: _BASELINE,
+    _DEFENSE_IN_DEPTH.policy_id: _DEFENSE_IN_DEPTH,
 }
 
 #: The profile selected when configuration does not name one.

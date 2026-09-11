@@ -27,7 +27,7 @@ from hearth_ledger import (
 
 from prometheus_protocol.benchmarks.judge_eval import compute_metrics, parse_confidence
 from prometheus_protocol.core.interfaces import Provider, Verifier
-from prometheus_protocol.core.models import Evidence, Skill, Tier, Verdict
+from prometheus_protocol.core.models import Evidence, Tier, Verdict
 from prometheus_protocol.gate.authorization import ActionGate
 from prometheus_protocol.gate.promotion import OUTCOME_BLOCK
 from prometheus_protocol.verifier.bank import VerifierBank
@@ -40,7 +40,9 @@ from prometheus_protocol.verifier.soft_levers import (
     parse_vote_fraction,
 )
 
-from tests.support.assessments import carrying
+from prometheus_protocol.policy.execution import ExecutionAuthorizer
+from prometheus_protocol.swarm.models import content_hash
+from tests.support.assessments import a_policy, carrying
 
 
 # --------------------------------------------------------------------------
@@ -59,9 +61,12 @@ class _StubJudge(Verifier):
 
     def verify(self, *, code, task) -> Evidence:
         return Evidence(
-            passed=(self._verdict == Verdict.PASS), total=1,
+            passed=(self._verdict == Verdict.PASS),
+            total=1,
             passed_count=1 if self._verdict == Verdict.PASS else 0,
-            verifier_id=self.verifier_id, verdict=self._verdict, tier=Tier.SOFT,
+            verifier_id=self.verifier_id,
+            verdict=self._verdict,
+            tier=Tier.SOFT,
             detail=self._detail,
         )
 
@@ -78,9 +83,15 @@ class _CyclingJudge(Verifier):
     def verify(self, *, code, task) -> Evidence:
         v = self._seq[self._i % len(self._seq)]
         self._i += 1
-        return Evidence(passed=(v == Verdict.PASS), total=1,
-                        passed_count=1 if v == Verdict.PASS else 0,
-                        verifier_id="cycling", verdict=v, tier=Tier.SOFT, detail=v.value)
+        return Evidence(
+            passed=(v == Verdict.PASS),
+            total=1,
+            passed_count=1 if v == Verdict.PASS else 0,
+            verifier_id="cycling",
+            verdict=v,
+            tier=Tier.SOFT,
+            detail=v.value,
+        )
 
 
 def _run(judge: Verifier) -> Evidence:
@@ -96,18 +107,23 @@ def _run(judge: Verifier) -> Evidence:
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("verdict,detail,expected", [
-    (Verdict.PASS, "PASS 0.90", Verdict.PASS),    # confident PASS survives
-    (Verdict.PASS, "PASS 0.80", Verdict.PASS),    # exactly at θ survives (strict <)
-    (Verdict.PASS, "PASS 0.79", Verdict.ABSTAIN), # just under -> withheld
-    (Verdict.PASS, "PASS", Verdict.ABSTAIN),      # unstated -> withheld
-    (Verdict.FAIL, "FAIL 0.90", Verdict.FAIL),    # FAIL untouched
-    (Verdict.FAIL, "FAIL 0.10", Verdict.FAIL),    # low-confidence FAIL untouched
-    (Verdict.ABSTAIN, "ABSTAIN", Verdict.ABSTAIN),
-])
+@pytest.mark.parametrize(
+    "verdict,detail,expected",
+    [
+        (Verdict.PASS, "PASS 0.90", Verdict.PASS),  # confident PASS survives
+        (Verdict.PASS, "PASS 0.80", Verdict.PASS),  # exactly at θ survives (strict <)
+        (Verdict.PASS, "PASS 0.79", Verdict.ABSTAIN),  # just under -> withheld
+        (Verdict.PASS, "PASS", Verdict.ABSTAIN),  # unstated -> withheld
+        (Verdict.FAIL, "FAIL 0.90", Verdict.FAIL),  # FAIL untouched
+        (Verdict.FAIL, "FAIL 0.10", Verdict.FAIL),  # low-confidence FAIL untouched
+        (Verdict.ABSTAIN, "ABSTAIN", Verdict.ABSTAIN),
+    ],
+)
 def test_threshold_downgrades_only_low_confidence_pass(verdict, detail, expected):
     j = ConfidenceThresholdJudge(
-        _StubJudge(verdict, detail), min_confidence=0.8, confidence_parser=parse_confidence
+        _StubJudge(verdict, detail),
+        min_confidence=0.8,
+        confidence_parser=parse_confidence,
     )
     ev = _run(j)
     assert ev.verdict == expected
@@ -117,7 +133,8 @@ def test_threshold_downgrades_only_low_confidence_pass(verdict, detail, expected
 
 def test_threshold_never_turns_fail_into_pass():
     j = ConfidenceThresholdJudge(
-        _StubJudge(Verdict.FAIL, "FAIL 0.05"), min_confidence=0.8,
+        _StubJudge(Verdict.FAIL, "FAIL 0.05"),
+        min_confidence=0.8,
         confidence_parser=parse_confidence,
     )
     assert _run(j).verdict == Verdict.FAIL
@@ -129,34 +146,43 @@ def test_threshold_never_turns_fail_into_pass():
 
 
 def _ensemble(verdicts, *, on_disagreement="abstain"):
-    judges = [_StubJudge(v, f"{v.value} 0.9", verifier_id=f"j{i}") for i, v in enumerate(verdicts)]
+    judges = [
+        _StubJudge(v, f"{v.value} 0.9", verifier_id=f"j{i}")
+        for i, v in enumerate(verdicts)
+    ]
     return EnsembleJudge(judges, on_disagreement=on_disagreement)
 
 
 P, F, A = Verdict.PASS, Verdict.FAIL, Verdict.ABSTAIN
 
 
-@pytest.mark.parametrize("verdicts,expected", [
-    ([P, P], P),        # unanimous PASS
-    ([P, P, P], P),
-    ([F, F], F),        # unanimous FAIL
-    ([P, F], A),        # disagreement -> abstain
-    ([P, A], A),        # a withheld vote breaks unanimity
-    ([F, A], A),        # not unanimous
-    ([A, A], A),        # nobody decided
-    ([P, P, F], A),     # one dissenter kills the PASS
-])
+@pytest.mark.parametrize(
+    "verdicts,expected",
+    [
+        ([P, P], P),  # unanimous PASS
+        ([P, P, P], P),
+        ([F, F], F),  # unanimous FAIL
+        ([P, F], A),  # disagreement -> abstain
+        ([P, A], A),  # a withheld vote breaks unanimity
+        ([F, A], A),  # not unanimous
+        ([A, A], A),  # nobody decided
+        ([P, P, F], A),  # one dissenter kills the PASS
+    ],
+)
 def test_ensemble_requires_unanimity_to_pass(verdicts, expected):
     assert _run(_ensemble(verdicts)).verdict == expected
 
 
-@pytest.mark.parametrize("verdicts,expected", [
-    ([P, F], F),        # disagreement -> fail mode
-    ([F, A], F),
-    ([P, A], F),        # a lone withheld vote among passes -> forced FAIL
-    ([A, A], A),        # all-abstain stays abstain even in fail mode
-    ([P, P], P),
-])
+@pytest.mark.parametrize(
+    "verdicts,expected",
+    [
+        ([P, F], F),  # disagreement -> fail mode
+        ([F, A], F),
+        ([P, A], F),  # a lone withheld vote among passes -> forced FAIL
+        ([A, A], A),  # all-abstain stays abstain even in fail mode
+        ([P, P], P),
+    ],
+)
 def test_ensemble_on_disagreement_fail_mode(verdicts, expected):
     assert _run(_ensemble(verdicts, on_disagreement="fail")).verdict == expected
 
@@ -175,8 +201,8 @@ def test_ensemble_forced_fail_vote_fraction_is_broken_unanimity_never_zero():
 def test_ensemble_pass_reports_vote_fraction_not_confidence_and_stays_soft():
     ev = _run(_ensemble([P, P, P]))
     assert ev.verdict == Verdict.PASS and ev.tier == Tier.SOFT
-    assert parse_vote_fraction(ev.detail) == 1.0     # agreement, exposed as a vote
-    assert parse_confidence(ev.detail) is None        # NOT a stated confidence
+    assert parse_vote_fraction(ev.detail) == 1.0  # agreement, exposed as a vote
+    assert parse_confidence(ev.detail) is None  # NOT a stated confidence
     assert _ensemble([P, P]).model_calls_per_item == 2
     assert _ensemble([P, P, P]).model_calls_per_item == 3
 
@@ -191,16 +217,19 @@ def test_ensemble_needs_two_judges():
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("seq,require,expected", [
-    ([P, P, P], "unanimous", P),
-    ([P, P, F], "unanimous", A),
-    ([F, F, F], "unanimous", F),
-    ([P, P, F], "majority", P),     # 2/3 pass
-    ([P, F, F], "majority", F),     # 2/3 fail
-    ([P, F, A], "majority", A),     # 1 pass, 1 fail -> no majority of 3
-    ([P, P, A], "majority", P),     # 2/3 pass
-    ([P, A, A], "majority", A),     # 1/3 pass -> abstain counts against
-])
+@pytest.mark.parametrize(
+    "seq,require,expected",
+    [
+        ([P, P, P], "unanimous", P),
+        ([P, P, F], "unanimous", A),
+        ([F, F, F], "unanimous", F),
+        ([P, P, F], "majority", P),  # 2/3 pass
+        ([P, F, F], "majority", F),  # 2/3 fail
+        ([P, F, A], "majority", A),  # 1 pass, 1 fail -> no majority of 3
+        ([P, P, A], "majority", P),  # 2/3 pass
+        ([P, A, A], "majority", A),  # 1/3 pass -> abstain counts against
+    ],
+)
 def test_k_sample_vote_rules(seq, require, expected):
     j = RepeatedSamplingJudge(_CyclingJudge(seq), k=3, require=require)
     ev = _run(j)
@@ -265,16 +294,18 @@ def test_adversarial_makes_two_calls_and_can_flip_pass_to_fail():
     wrapped = AdversarialSelfCheckProvider(inner)
     judge = ModelJudgeVerifier(wrapped, system_prompt="verdict system")
     ev = judge.verify(code="def f(): pass", task=_dummy_task())
-    assert ev.verdict == Verdict.FAIL          # the self-check flipped it
-    assert inner.calls == 2                     # critique + reconsider
+    assert ev.verdict == Verdict.FAIL  # the self-check flipped it
+    assert inner.calls == 2  # critique + reconsider
     assert wrapped.model_calls_per_item == 2
-    assert wrapped.model == "flip-model"        # identity preserved for actor split
+    assert wrapped.model == "flip-model"  # identity preserved for actor split
 
 
 def _dummy_task():
     from prometheus_protocol.core.models import Case, Task
 
-    return Task(id="t", entry_point="f", prompt="do it", split="train", cases=(Case((), None),))
+    return Task(
+        id="t", entry_point="f", prompt="do it", split="train", cases=(Case((), None),)
+    )
 
 
 # --------------------------------------------------------------------------
@@ -294,18 +325,31 @@ def test_threshold_cuts_low_confidence_false_pass_end_to_end():
 
     def judged(item_id, min_conf):
         base = _StubJudge(Verdict.PASS, replies[item_id])
-        j = ConfidenceThresholdJudge(base, min_confidence=min_conf,
-                                     confidence_parser=parse_confidence)
+        j = ConfidenceThresholdJudge(
+            base, min_confidence=min_conf, confidence_parser=parse_confidence
+        )
         ev = _run(j)
-        return JudgedRow(item_id=item_id, actor_model="-", reference=Verdict.FAIL,
-                         judged=ev.verdict, confidence=parse_confidence(ev.detail))
+        return JudgedRow(
+            item_id=item_id,
+            actor_model="-",
+            reference=Verdict.FAIL,
+            judged=ev.verdict,
+            confidence=parse_confidence(ev.detail),
+        )
 
-    baseline = compute_metrics([JudgedRow(k, "-", Verdict.FAIL, Verdict.PASS,
-                                          parse_confidence(v)) for k, v in replies.items()])
+    baseline = compute_metrics(
+        [
+            JudgedRow(k, "-", Verdict.FAIL, Verdict.PASS, parse_confidence(v))
+            for k, v in replies.items()
+        ]
+    )
     assert (baseline.false_pass, baseline.reference_fails_decided) == (3, 3)
 
     gated = compute_metrics([judged(k, 0.8) for k in replies])
-    assert (gated.false_pass, gated.reference_fails_decided) == (1, 1)  # only fp_hi survives
+    assert (gated.false_pass, gated.reference_fails_decided) == (
+        1,
+        1,
+    )  # only fp_hi survives
     assert gated.n_abstained == 2  # the two low-confidence false-PASSes withheld
 
 
@@ -314,12 +358,20 @@ def test_threshold_cuts_low_confidence_false_pass_end_to_end():
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("make", [
-    lambda: ConfidenceThresholdJudge(_StubJudge(P, "PASS 0.99"), min_confidence=0.8,
-                                     confidence_parser=parse_confidence),
-    lambda: _ensemble([P, P, P]),
-    lambda: RepeatedSamplingJudge(_CyclingJudge([P, P, P]), k=3, require="unanimous"),
-])
+@pytest.mark.parametrize(
+    "make",
+    [
+        lambda: ConfidenceThresholdJudge(
+            _StubJudge(P, "PASS 0.99"),
+            min_confidence=0.8,
+            confidence_parser=parse_confidence,
+        ),
+        lambda: _ensemble([P, P, P]),
+        lambda: RepeatedSamplingJudge(
+            _CyclingJudge([P, P, P]), k=3, require="unanimous"
+        ),
+    ],
+)
 def test_soft_stays_soft_no_lever_grants_authority(make):
     judge = make()
     ev = _run(judge)
@@ -330,11 +382,18 @@ def test_soft_stays_soft_no_lever_grants_authority(make):
     # ...and the gate blocks it (a soft PASS proposing anything cannot execute).
     from prometheus_protocol.core.models import ACTION_PYTHON_CODE, ExecutableAction
 
-    gate = ActionGate(escalate_below=0.75, route_high_risk=True)
+    action = ExecutableAction(kind=ACTION_PYTHON_CODE, code="print('x')")
+    gate = ActionGate(
+        target_canonical="sandbox://test",
+        escalate_below=0.75,
+        route_high_risk=True,
+        authorizer=ExecutionAuthorizer(lambda: a_policy()),
+    )
     decision = gate.decide(
-        carrying(judgment),
+        carrying(judgment, artifact_sha256=content_hash(action.code)),
+        attempt_id="attempt-1",
         risk_class="low",
-        action=ExecutableAction(kind=ACTION_PYTHON_CODE, code="print('x')"),
+        action=action,
     )
     assert decision.outcome == OUTCOME_BLOCK
 
@@ -355,7 +414,9 @@ def test_judge_temperature_defaults_to_zero_everywhere():
     p = RemoteModelProvider(api_base="https://x", model="m")
     assert p.assess_temperature == 0.0
     # 0.0 normalises to int 0 in the request payload -> byte-identical default.
-    assert (p.assess_temperature or 0) == 0 and isinstance(p.assess_temperature or 0, int)
+    assert (p.assess_temperature or 0) == 0 and isinstance(
+        p.assess_temperature or 0, int
+    )
 
 
 # --------------------------------------------------------------------------
@@ -388,6 +449,4 @@ def test_hearth_and_default_judge_path_are_the_sanctioned_content():
     """
 
     unsanctioned = unsanctioned_changes(_HEARTH_FILES)
-    assert unsanctioned == [], (
-        UNSANCTIONED_MESSAGE + "\n" + "\n".join(unsanctioned)
-    )
+    assert unsanctioned == [], UNSANCTIONED_MESSAGE + "\n" + "\n".join(unsanctioned)

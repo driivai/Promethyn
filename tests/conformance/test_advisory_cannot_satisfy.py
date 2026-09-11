@@ -358,7 +358,7 @@ def test_the_bank_reports_an_advisory_only_requirement_as_unavailable():
 
     policy = a_policy("soft-impl")
     snapshot = a_snapshot(policy)
-    bank = VerifierBank(InMemoryTrustStore())
+    bank = VerifierBank(InMemoryTrustStore(), policy_supplier=lambda: policy)
     outcome = bank.assess(snapshot, [
         bind(snapshot, "soft-impl", evidence("soft-impl", Tier.SOFT))
     ]).outcome
@@ -372,7 +372,7 @@ def test_the_bank_still_authorizes_a_properly_covered_action():
 
     policy = a_policy("hard-impl")
     snapshot = a_snapshot(policy)
-    bank = VerifierBank(InMemoryTrustStore())
+    bank = VerifierBank(InMemoryTrustStore(), policy_supplier=lambda: policy)
     outcome = bank.assess(snapshot, [
         bind(snapshot, "hard-impl", evidence("hard-impl", Tier.HARD))
     ]).outcome
@@ -404,7 +404,7 @@ class TestTheTierClaimResidual:
 
         policy = a_policy("liar")
         snapshot = a_snapshot(policy)
-        bank = VerifierBank(InMemoryTrustStore())
+        bank = VerifierBank(InMemoryTrustStore(), policy_supplier=lambda: policy)
         bank.register("liar", Tier.SOFT)
         with pytest.raises(ValueError, match="a verifier's tier is fixed"):
             bank.assess(snapshot, [bind(snapshot, "liar", self._lying())])
@@ -416,7 +416,7 @@ class TestTheTierClaimResidual:
 
         policy = a_policy("liar")
         snapshot = a_snapshot(policy)
-        bank = VerifierBank(InMemoryTrustStore())  # deliberately not registered
+        bank = VerifierBank(InMemoryTrustStore(), policy_supplier=lambda: policy)  # deliberately not registered
         outcome = bank.assess(snapshot, [bind(snapshot, "liar", self._lying())]).outcome
         assert isinstance(outcome, Judgment) and outcome.authoritative, (
             "if this now refuses, the residual is closed — say so and delete this "

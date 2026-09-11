@@ -79,7 +79,9 @@ class ScriptedGrader:
     tier: Tier
     passed: bool = True
 
-    def grade(self, proposal: AgentProposal, inputs: tuple[AgentMessage, ...]) -> Evidence:
+    def grade(
+        self, proposal: AgentProposal, inputs: tuple[AgentMessage, ...]
+    ) -> Evidence:
         return Evidence(
             passed=self.passed,
             total=1,
@@ -104,8 +106,10 @@ def build_workflow() -> Workflow:
     implement = AgentStep(
         step_id="implement",
         agent=ScriptedAgent(
-            "implementer", "computed 2 + 3 + 5 = 10",
-            action=_print_action("2 + 3 + 5 = 10"), risk_class="medium",
+            "implementer",
+            "computed 2 + 3 + 5 = 10",
+            action=_print_action("2 + 3 + 5 = 10"),
+            risk_class="medium",
         ),
         grader=ScriptedGrader(_IMPL_GRADER, Tier.HARD),
         task="Carry out the plan.",
@@ -114,8 +118,10 @@ def build_workflow() -> Workflow:
     export = AgentStep(
         step_id="export",
         agent=ScriptedAgent(
-            "exporter", "export the result to the shared record",
-            action=_print_action("EXPORT: 10"), risk_class="high",
+            "exporter",
+            "export the result to the shared record",
+            action=_print_action("EXPORT: 10"),
+            risk_class="high",
         ),
         grader=ScriptedGrader(_IMPL_GRADER, Tier.HARD),
         task="Publish the result (high-risk).",
@@ -127,7 +133,11 @@ def build_workflow() -> Workflow:
 def run_demo(*, out: Callable[[str], None] = print) -> dict:
     ledger = SqliteLedger(":memory:")
     controller = ExecutionController(
-        gate=ActionGate(escalate_below=0.75, route_high_risk=True),
+        gate=ActionGate(
+            escalate_below=0.75,
+            route_high_risk=True,
+            target_canonical="sandbox://workflow",
+        ),
         executor=SandboxExecutor(),
         ledger=ledger,
     )
@@ -140,8 +150,10 @@ def run_demo(*, out: Callable[[str], None] = print) -> dict:
     )
 
     workflow = build_workflow()
-    out(f"=== workflow {workflow.workflow_id}: "
-        f"{' -> '.join(s.step_id for s in workflow.order())} ===")
+    out(
+        f"=== workflow {workflow.workflow_id}: "
+        f"{' -> '.join(s.step_id for s in workflow.order())} ==="
+    )
     run = runtime.run(workflow)
 
     for rec in run.steps:
@@ -149,55 +161,71 @@ def run_demo(*, out: Callable[[str], None] = print) -> dict:
         # dependency) has no tier and no confidence — printing "tier=None" or
         # inventing 0.00 would read as a graded result. Say what happened instead.
         if rec.tier is None or rec.confidence is None:
-            why = "grader could not run" if rec.unavailable else (
-                "halted — a dependency could not run" if rec.halted
-                else "no graded result"
+            why = (
+                "grader could not run"
+                if rec.unavailable
+                else (
+                    "halted — a dependency could not run"
+                    if rec.halted
+                    else "no graded result"
+                )
             )
-            out(f"[step] {rec.step_id} ({rec.agent_id}): {why} "
-                f"-> {rec.outcome.upper()}")
+            out(
+                f"[step] {rec.step_id} ({rec.agent_id}): {why} -> {rec.outcome.upper()}"
+            )
             continue
-        out(f"[step] {rec.step_id} ({rec.agent_id}): "
+        out(
+            f"[step] {rec.step_id} ({rec.agent_id}): "
             f"tier={rec.tier.value} confidence={rec.confidence:.2f} "
             f"-> {rec.outcome.upper()}"
-            + (f" (held #{rec.pending_id} for a human)" if rec.pending_id else ""))
+            + (f" (held #{rec.pending_id} for a human)" if rec.pending_id else "")
+        )
     out("")
     out("[messages] what each downstream step actually received (never a bare fact):")
     for step in workflow.order():
         for dep in step.depends_on:
             out(f"  {step.step_id} <- {run.messages[dep].summary()}")
     out("")
-    out(f"[chain] conservative placeholder confidence (min of steps) = "
+    out(
+        f"[chain] conservative placeholder confidence (min of steps) = "
         f"{run.chain_confidence_placeholder:.2f}  "
-        f"— NOT a principled composition (see docs/orchestration.md)")
+        f"— NOT a principled composition (see docs/orchestration.md)"
+    )
 
     # The high-risk export was held; the operator approves it through the
     # existing controller (the orchestrator cannot).
-    held = [
-        (r, pid) for r in run.steps
-        if (pid := r.pending_id) is not None
-    ]
+    held = [(r, pid) for r in run.steps if (pid := r.pending_id) is not None]
     for rec, pending_id in held:
         out("")
-        out(f"[human] operator reviews held step {rec.step_id} "
-            f"(pending #{pending_id}) and approves it:")
-        result = controller.approve(pending_id, identity="demo-operator",
-                                    reason="reviewed and accepted")
-        out(f"[human]   executed in sandbox '{result.sandbox_name}' "
-            f"(exit {result.exit_status}); output {result.stdout.strip()!r}")
+        out(
+            f"[human] operator reviews held step {rec.step_id} "
+            f"(pending #{pending_id}) and approves it:"
+        )
+        result = controller.approve(
+            pending_id, identity="demo-operator", reason="reviewed and accepted"
+        )
+        out(
+            f"[human]   executed in sandbox '{result.sandbox_name}' "
+            f"(exit {result.exit_status}); output {result.stdout.strip()!r}"
+        )
 
     out("")
     out("=== workflow audit (one query: ledger.workflow_steps) ===")
     steps = ledger.workflow_steps(workflow.workflow_id)
     for row in steps:
-        out(f"[audit] {row['step_id']}/{row['agent_id']}: "
+        out(
+            f"[audit] {row['step_id']}/{row['agent_id']}: "
             f"tier={row['tier']} verdict={row['verdict']} "
             f"conf={row['confidence']:.2f} action={row['proposed_action']} "
             f"outcome={row['outcome']}"
-            + (f" pending#{row['pending_id']}" if row['pending_id'] else ""))
+            + (f" pending#{row['pending_id']}" if row["pending_id"] else "")
+        )
     execs = ledger.executions()
     executed = sum(1 for e in execs if e["executed"])
-    out(f"[audit] executions recorded: {len(execs)} "
-        f"(executed {executed}, held/blocked {len(execs) - executed})")
+    out(
+        f"[audit] executions recorded: {len(execs)} "
+        f"(executed {executed}, held/blocked {len(execs) - executed})"
+    )
 
     return {
         "steps": len(run.steps),
@@ -216,8 +244,10 @@ def main(argv=None) -> int:
         description="A governed multi-step workflow through the real Hearth.",
     ).parse_args(argv)
     if not NamespaceSandbox.available():
-        print("[demo] the namespace isolation runtime is unavailable; the "
-              "approved actions cannot run sandboxed, so the demo refuses to run.")
+        print(
+            "[demo] the namespace isolation runtime is unavailable; the "
+            "approved actions cannot run sandboxed, so the demo refuses to run."
+        )
         return 1
     summary = run_demo()
     ok = (
@@ -225,9 +255,16 @@ def main(argv=None) -> int:
         and summary["held"] == ["export"]
         and summary["executed"] == 2  # implement (auto) + export (after approval)
     )
-    print("[demo] " + ("governed workflow closed: tier-tagged messages, one "
-                       "action approved, one high-risk action held for a human, "
-                       "full per-step audit" if ok else "UNEXPECTED OUTCOME"))
+    print(
+        "[demo] "
+        + (
+            "governed workflow closed: tier-tagged messages, one "
+            "action approved, one high-risk action held for a human, "
+            "full per-step audit"
+            if ok
+            else "UNEXPECTED OUTCOME"
+        )
+    )
     return 0 if ok else 1
 
 

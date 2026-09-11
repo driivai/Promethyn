@@ -106,6 +106,7 @@ class Case:
         # PHASE-1.2b — bound to the same artifact and target passed alongside.
         return self.runtime.authority.authorize(
             for_migration(judgment, artifact=ARTIFACT, target=TARGET.identity),
+            attempt_id="attempt-1",
             artifact=ARTIFACT,
             target=TARGET.identity,
             now=self.clock.now_ns() / NS,

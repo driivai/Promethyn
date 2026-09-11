@@ -173,7 +173,12 @@ class WorkflowRuntime:
         # a caller-supplied grader must not be able to authorize a sandbox
         # execution unless a policy says that implementation may. A deployment
         # whose graders SHOULD authorize supplies a policy naming them.
-        self._policy = policy if policy is not None else load_profile(DEFAULT_PROFILE_ID)
+        self._policy = (
+            policy if policy is not None else load_profile(DEFAULT_PROFILE_ID)
+        )
+        if not self._bank.has_policy_supplier:
+            selected = self._policy
+            self._bank.bind_policy_supplier(lambda: selected)
         self._target_canonical = target_canonical
 
     def run(self, workflow: Workflow) -> WorkflowRun:
@@ -192,10 +197,17 @@ class WorkflowRuntime:
             halted_deps = [dep for dep in step.depends_on if dep in halted]
             if halted_deps:
                 halted.add(step.step_id)
-                records.append(self._halt_record(
-                    step, workflow, tier=None, proposed_action=False,
-                    subject_id="", unavailable=False, halted=True,
-                ))
+                records.append(
+                    self._halt_record(
+                        step,
+                        workflow,
+                        tier=None,
+                        proposed_action=False,
+                        subject_id="",
+                        unavailable=False,
+                        halted=True,
+                    )
+                )
                 continue
 
             inputs = tuple(messages[dep] for dep in step.depends_on)
@@ -216,12 +228,17 @@ class WorkflowRuntime:
             if isinstance(judgment, Unavailable):
                 halted.add(step.step_id)
                 subject_id = f"{workflow.workflow_id}:{step.step_id}"
-                records.append(self._halt_record(
-                    step, workflow, tier=judgment.tier,
-                    proposed_action=proposal.action is not None,
-                    subject_id=subject_id if proposal.action is not None else "",
-                    unavailable=True, halted=False,
-                ))
+                records.append(
+                    self._halt_record(
+                        step,
+                        workflow,
+                        tier=judgment.tier,
+                        proposed_action=proposal.action is not None,
+                        subject_id=subject_id if proposal.action is not None else "",
+                        unavailable=True,
+                        halted=False,
+                    )
+                )
                 continue
 
             tier = evidence.tier if evidence.tier is not None else Tier.SOFT
@@ -249,6 +266,7 @@ class WorkflowRuntime:
                     submit = self._gateway.route_action(
                         assessment=assessment,
                         action=proposal.action,
+                        attempt_id=subject_id,
                         risk_class=proposal.risk_class,
                         subject_id=subject_id,
                     )
@@ -282,18 +300,20 @@ class WorkflowRuntime:
                 pending_id=pending_id,
                 created_at=self._clock(),
             )
-            records.append(StepRecord(
-                step_id=step.step_id,
-                agent_id=step.agent.agent_id,
-                tier=tier,
-                verdict=judgment.verdict,
-                confidence=judgment.confidence,
-                proposed_action=proposal.action is not None,
-                outcome=outcome,
-                subject_id=subject_id if proposal.action is not None else "",
-                pending_id=pending_id,
-                message=message,
-            ))
+            records.append(
+                StepRecord(
+                    step_id=step.step_id,
+                    agent_id=step.agent.agent_id,
+                    tier=tier,
+                    verdict=judgment.verdict,
+                    confidence=judgment.confidence,
+                    proposed_action=proposal.action is not None,
+                    outcome=outcome,
+                    subject_id=subject_id if proposal.action is not None else "",
+                    pending_id=pending_id,
+                    message=message,
+                )
+            )
 
         chain = min(confidences) if confidences else 0.0  # PLACEHOLDER (see docstring)
         return WorkflowRun(

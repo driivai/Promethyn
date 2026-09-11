@@ -21,21 +21,15 @@ HOW STRUCTURAL THAT ACTUALLY IS — stated plainly, because overclaiming here is
 exactly the failure this repository keeps correcting.
 
 * At the INTERFACE it is a construction OF THE TYPE. No authorization surface
-  has a parameter that takes a ``Judgment``, so no caller can hand one over, and
-  no amount of forgetting a check reopens THAT route. This is the property the
-  completion tests assert — and it is a property of the type, never of the
-  CONTENT. Holding one of these proves a policy was resolved and coverage
-  validated against whatever snapshot was presented. It does not prove that
-  snapshot was the selected policy's, and it does not prove the assessment
-  describes the action about to run. Both gaps are measured and reproduced; see
-  the class docstring below and ``docs/execution-descriptor.md``.
-* The five migrated surfaces are not the whole of the system. The primitive
-  :func:`mint` and the public ``GateDecision`` port are trusted low-level
-  interfaces that take no assessment: ``PendingActionService.hold`` accepts a
-  ``GateDecision``, so the human-hold path never sees a ``PolicyAssessment`` at
-  all. Measured: a decision carrying ``Judgment(FAIL, 1.0, authoritative=True)``
-  is held, approved, and executed. "Every API capable of effecting an action
-  accepts a PolicyAssessment" is NOT a property of this build.
+  has a parameter that takes a ``Judgment``. Checkpoint B adds the content
+  enforcement: ``VerifierBank.assess`` re-resolves the configured policy before
+  minting, and ``ExecutionAuthorizer`` compares this assessment with the concrete
+  action, trusted target and mandatory attempt before producing the object an
+  executor accepts.
+* The human path consumes that same object. ``PendingActionService.hold`` refuses
+  a bare ``GateDecision`` and persists the validated binding; reload, approval
+  and retry re-resolve the selected policy before execution. A human resolves a
+  risk decision and has no API that manufactures completion of a required check.
 * At the CONSTRUCTOR it is a guard, not a construction. :class:`PolicyAssessment`
   refuses to be built except through :func:`mint`, which the bank calls after
   coverage has been validated. In-process Python can still reach past that —
@@ -90,29 +84,23 @@ class PolicyAssessment:
     committing to the policy, the policy's content, the artifact, the canonical
     target, the action class and the verification attempt.
 
-    READ THE VERB CAREFULLY. This docstring used to say the digest BINDS the
-    assessment to its action, and that "an assessment cannot be reused for a
-    different action without the digest disagreeing". The first half is
-    aspiration and the second half is false as stated — not because the digest
-    is weak, but because DISAGREEING IS NOT REFUSING. Nothing compares it.
-    ``ActionGate.decide`` reads :attr:`outcome` and no other field; measured, an
-    assessment resolved for artifact A approves the execution of unrelated code
-    B, and a ``sandbox.execute`` assessment approves a ``git_delete_branch``.
-    The fields below are, today, an accurate LABEL on the evidence and not a
-    constraint on its use. ``docs/execution-descriptor.md`` is the seam that
-    makes the comparison happen; until it lands, a reader must not take holding
-    one of these as proof that the action about to run is the action it names.
+    ENFORCEMENT. The assessment alone describes what the bank assessed. It
+    becomes authority only through ``ExecutionAuthorizer``, which re-resolves the
+    configured policy for the concrete action, trusted target and attempt, then
+    compares the snapshot digest and every identifying field. The resulting
+    ``AuthorizedExecution`` — not this value alone — is what action decisions,
+    holds and executors require.
     """
 
     #: The snapshot this assessment answers, in one value. Note that the
     #: snapshot itself is NOT carried: a holder of this assessment cannot
     #: re-derive which requirements were resolved, only that some set digesting
-    #: to this value was. No surface currently compares this field to anything.
+    #: to this value was. ExecutionAuthorizer compares it with a fresh resolve.
     snapshot_digest: str
     #: Carried for the audit record, all of it already committed to by the
     #: digest above. Kept as fields so a reader of a recorded decision does not
-    #: have to hold the snapshot to know what was assessed — though today no
-    #: authorization record persists any of them (see ``policy/snapshot.py``).
+    #: have to hold the snapshot to know what was assessed. The execution descriptor
+    #: and pending hold persist these identities.
     policy_id: str
     policy_digest: str
     action_class: str
@@ -148,7 +136,9 @@ class PolicyAssessment:
         # "bespoke copy helper" the 2d guard names as unconstrained.
         object.__setattr__(self, "_minted", None)
         object.__setattr__(
-            self, "snapshot_digest", _identity(self.snapshot_digest, what="snapshot_digest")
+            self,
+            "snapshot_digest",
+            _identity(self.snapshot_digest, what="snapshot_digest"),
         )
         if not isinstance(self.outcome, (Judgment, Unavailable)):
             raise UnboundAuthorization(
@@ -180,6 +170,37 @@ def mint(
         attempt_id=snapshot.attempt_id,
         artifact_sha256=snapshot.artifact_sha256,
         target_canonical=snapshot.target_canonical,
+        outcome=outcome,
+        _minted=_MINT,
+    )
+
+
+def _restore_persisted(
+    *,
+    snapshot_digest: str,
+    policy_id: str,
+    policy_digest: str,
+    action_class: str,
+    attempt_id: str,
+    artifact_sha256: str,
+    target_canonical: str,
+    outcome: Judgment | Unavailable,
+) -> PolicyAssessment:
+    """Reconstitute persisted data for ``ExecutionAuthorizer`` re-validation.
+
+    Private deliberately: no application API may turn a judgment into an
+    assessment. The execution authorizer is the sole consumer and never returns
+    this intermediate value without re-resolving the selected policy.
+    """
+
+    return PolicyAssessment(
+        snapshot_digest=snapshot_digest,
+        policy_id=policy_id,
+        policy_digest=policy_digest,
+        action_class=action_class,
+        attempt_id=attempt_id,
+        artifact_sha256=artifact_sha256,
+        target_canonical=target_canonical,
         outcome=outcome,
         _minted=_MINT,
     )

@@ -19,7 +19,6 @@ import pytest
 
 from prometheus_protocol.core.booleans import parse_env_bool
 from prometheus_protocol.core.models import (
-
     ACTION_PYTHON_CODE,
     ExecutableAction,
     Judgment,
@@ -30,16 +29,19 @@ from prometheus_protocol.execution.executor import SandboxExecutor
 from prometheus_protocol.execution.models import PendingStatus
 from prometheus_protocol.execution.pending import PendingActionService
 from prometheus_protocol.gate.authorization import ActionGate
+from prometheus_protocol.policy.execution import ExecutionAuthorizer
 from prometheus_protocol.gate.promotion import GateDecision
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
 from prometheus_protocol.sandbox import NamespaceSandbox
 from prometheus_protocol.sandbox.unsafe import NullSandbox
 from prometheus_protocol.swarm.executor import Executor
-from prometheus_protocol.swarm.models import ExecutionResult
+from prometheus_protocol.swarm.models import ExecutionResult, content_hash
 
-from tests.support.assessments import carrying
+from tests.support.assessments import a_policy, carrying
 
-_REQUIRE = parse_env_bool("PROM_REQUIRE_SANDBOX", os.environ.get("PROM_REQUIRE_SANDBOX"), default=False)
+_REQUIRE = parse_env_bool(
+    "PROM_REQUIRE_SANDBOX", os.environ.get("PROM_REQUIRE_SANDBOX"), default=False
+)
 _T0 = "2026-07-01T00:00:00Z"
 _T0_PLUS_200 = "2026-07-01T00:03:20Z"  # +200 seconds
 # PHASE-1.2b — these are ASSESSMENTS now. The gate reads a
@@ -47,7 +49,24 @@ _T0_PLUS_200 = "2026-07-01T00:03:20Z"  # +200 seconds
 # parameter to arrive through. ``carrying`` mints one around an exact
 # verdict so these tests keep asserting what they always asserted (gate
 # thresholds, TTL, retry) instead of re-testing the policy layer.
-_LOW = carrying(Judgment(verdict=Verdict.PASS, confidence=0.60, authoritative=True))
+_LOW = carrying(
+    Judgment(verdict=Verdict.PASS, confidence=0.60, authoritative=True),
+    artifact_sha256=content_hash("print('mark')"),
+)
+
+#: A distinctive marker for the test that asserts the sandbox really ran the
+#: code. It needs its own assessment: an assessment is bound to ONE artifact, so
+#: the shared ``_LOW`` above cannot authorize an action carrying other code.
+_APPROVED_CODE = "print('APPROVED-AND-RAN')"
+
+
+def _assessment_for(code: str):
+    """A low-confidence assessment bound to the artifact ``code`` hashes to."""
+
+    return carrying(
+        Judgment(verdict=Verdict.PASS, confidence=0.60, authoritative=True),
+        artifact_sha256=content_hash(code),
+    )
 
 
 class _Clock:
@@ -72,7 +91,9 @@ class _SpyExecutor(Executor):
         if not decision.approved:
             raise ValueError("refusing to execute an unapproved gate decision")
         self.calls.append(decision)
-        return ExecutionResult(executed=True, subject_id=decision.subject_id, detail="spy")
+        return ExecutionResult(
+            executed=True, subject_id=decision.subject_id, detail="spy"
+        )
 
 
 def _action(code: str = "print('mark')") -> ExecutableAction:
@@ -83,7 +104,12 @@ def _harness(*, ttl: int, clock: _Clock, executor: Executor | None = None):
     ledger = SqliteLedger(":memory:")
     executor = executor if executor is not None else _SpyExecutor()
     controller = ExecutionController(
-        gate=ActionGate(escalate_below=0.75, route_high_risk=True),
+        gate=ActionGate(
+            target_canonical="sandbox://test",
+            escalate_below=0.75,
+            route_high_risk=True,
+            authorizer=ExecutionAuthorizer(lambda: a_policy()),
+        ),
         executor=executor,
         ledger=ledger,
         clock=clock,
@@ -94,7 +120,9 @@ def _harness(*, ttl: int, clock: _Clock, executor: Executor | None = None):
 
 def _isolating_sandbox() -> NamespaceSandbox:
     if not NamespaceSandbox.available():
-        reason = "namespace isolation runtime (unprivileged user namespaces) unavailable"
+        reason = (
+            "namespace isolation runtime (unprivileged user namespaces) unavailable"
+        )
         if _REQUIRE:
             pytest.fail(f"PROM_REQUIRE_SANDBOX=1 but {reason}")
         pytest.skip(reason)
@@ -107,7 +135,9 @@ def _isolating_sandbox() -> NamespaceSandbox:
 def test_sweep_expires_lapsed_pending_and_audits_the_transition():
     clock = _Clock(_T0)
     controller, ledger, spy = _harness(ttl=100, clock=clock)
-    held = controller.submit(assessment=_LOW, action=_action(), subject_id="s").pending
+    held = controller.submit(
+        attempt_id="attempt-1", assessment=_LOW, action=_action(), subject_id="s"
+    ).pending
 
     clock.now = _T0_PLUS_200  # time passes beyond the 100s TTL
     expired = controller.sweep()
@@ -126,7 +156,9 @@ def test_sweep_expires_lapsed_pending_and_audits_the_transition():
 def test_sweep_is_idempotent():
     clock = _Clock(_T0)
     controller, _ledger, _spy = _harness(ttl=100, clock=clock)
-    controller.submit(assessment=_LOW, action=_action(), subject_id="s").pending
+    controller.submit(
+        attempt_id="attempt-1", assessment=_LOW, action=_action(), subject_id="s"
+    ).pending
     clock.now = _T0_PLUS_200
     assert len(controller.sweep()) == 1
     assert controller.sweep() == []  # already expired: a no-op
@@ -135,7 +167,9 @@ def test_sweep_is_idempotent():
 def test_ttl_zero_disables_expiry():
     clock = _Clock("2020-01-01T00:00:00Z")
     controller, _ledger, spy = _harness(ttl=0, clock=clock)
-    held = controller.submit(assessment=_LOW, action=_action(), subject_id="s").pending
+    held = controller.submit(
+        attempt_id="attempt-1", assessment=_LOW, action=_action(), subject_id="s"
+    ).pending
     clock.now = "2030-01-01T00:00:00Z"  # ten years later
     assert controller.sweep() == []
     assert controller.pending.get(held.id).status == PendingStatus.PENDING
@@ -151,15 +185,28 @@ def test_controller_startup_sweeps_lapsed_pendings():
     """A controller coming up expires lapsed holds with no explicit sweep call."""
 
     ledger = SqliteLedger(":memory:")
-    seed = PendingActionService(ledger, clock=lambda: _T0, ttl_seconds=100)
-    decision = ActionGate(escalate_below=0.75, route_high_risk=True).decide(
-        _LOW, risk_class="low", subject_id="s", action=_action()
+    authorizer = ExecutionAuthorizer(lambda: a_policy())
+    seed = PendingActionService(
+        ledger, clock=lambda: _T0, ttl_seconds=100, authorizer=authorizer
+    )
+    decision = ActionGate(
+        target_canonical="sandbox://test",
+        escalate_below=0.75,
+        route_high_risk=True,
+        authorizer=authorizer,
+    ).decide(
+        _LOW, attempt_id="attempt-1", risk_class="low", subject_id="s", action=_action()
     )
     held = seed.hold(decision, risk_class="low")
 
     # Time passes past the TTL; a fresh controller (startup touchpoint) sweeps.
     controller = ExecutionController(
-        gate=ActionGate(escalate_below=0.75, route_high_risk=True),
+        gate=ActionGate(
+            target_canonical="sandbox://test",
+            escalate_below=0.75,
+            route_high_risk=True,
+            authorizer=ExecutionAuthorizer(lambda: a_policy()),
+        ),
         executor=_SpyExecutor(),
         ledger=ledger,
         clock=_Clock(_T0_PLUS_200),
@@ -173,7 +220,9 @@ def test_controller_startup_sweeps_lapsed_pendings():
 def test_listing_sweeps_lapsed_pendings():
     clock = _Clock(_T0)
     controller, ledger, spy = _harness(ttl=100, clock=clock)
-    held = controller.submit(assessment=_LOW, action=_action(), subject_id="s").pending
+    held = controller.submit(
+        attempt_id="attempt-1", assessment=_LOW, action=_action(), subject_id="s"
+    ).pending
 
     clock.now = _T0_PLUS_200
     assert controller.list_pending() == []  # never shown as approvable
@@ -184,11 +233,17 @@ def test_listing_sweeps_lapsed_pendings():
 def test_approving_sweeps_other_lapsed_pendings():
     clock = _Clock(_T0)
     controller, ledger, spy = _harness(ttl=100, clock=clock)
-    old = controller.submit(assessment=_LOW, action=_action(), subject_id="s/old").pending
+    old = controller.submit(
+        attempt_id="attempt-1", assessment=_LOW, action=_action(), subject_id="s/old"
+    ).pending
     clock.now = "2026-07-01T00:01:20Z"  # +80s: old not yet lapsed
-    fresh = controller.submit(assessment=_LOW, action=_action(), subject_id="s/new").pending
+    fresh = controller.submit(
+        attempt_id="attempt-1", assessment=_LOW, action=_action(), subject_id="s/new"
+    ).pending
 
-    clock.now = "2026-07-01T00:02:30Z"  # +150s: old lapsed (150 > 100), fresh not (70 < 100)
+    clock.now = (
+        "2026-07-01T00:02:30Z"  # +150s: old lapsed (150 > 100), fresh not (70 < 100)
+    )
     controller.approve(fresh.id, identity="will@driivai.com")
 
     assert len(spy.calls) == 1  # the fresh approval executed
@@ -201,7 +256,9 @@ def test_service_level_stale_guard_remains_authoritative():
 
     clock = _Clock(_T0)
     controller, ledger, spy = _harness(ttl=100, clock=clock)
-    held = controller.submit(assessment=_LOW, action=_action(), subject_id="s").pending
+    held = controller.submit(
+        attempt_id="attempt-1", assessment=_LOW, action=_action(), subject_id="s"
+    ).pending
 
     clock.now = _T0_PLUS_200
     # Straight at the service — no controller sweep runs on this path.
@@ -215,7 +272,9 @@ def test_cli_pending_expires_lapsed_holds(tmp_path, monkeypatch, capsys):
     from prometheus_protocol.cli.main import main
 
     db = str(tmp_path / "ledger.db")
-    pid = _seed_pending(db, created_at="2020-01-01T00:00:00Z", subject="deploy/old", code="print('x')")
+    pid = _seed_pending(
+        db, created_at="2020-01-01T00:00:00Z", subject="deploy/old", code="print('x')"
+    )
     monkeypatch.setenv("PROM_LEDGER_PATH", db)
     monkeypatch.setenv("PROM_PENDING_TTL", "1")
 
@@ -232,7 +291,9 @@ def test_cli_pending_expires_lapsed_holds(tmp_path, monkeypatch, capsys):
 def test_expired_action_cannot_be_approved_or_executed():
     clock = _Clock(_T0)
     controller, _ledger, spy = _harness(ttl=100, clock=clock)
-    held = controller.submit(assessment=_LOW, action=_action(), subject_id="s").pending
+    held = controller.submit(
+        attempt_id="attempt-1", assessment=_LOW, action=_action(), subject_id="s"
+    ).pending
     clock.now = _T0_PLUS_200
     controller.sweep()  # -> EXPIRED
 
@@ -246,7 +307,9 @@ def test_stale_approval_is_refused_even_without_a_sweep():
 
     clock = _Clock(_T0)
     controller, _ledger, spy = _harness(ttl=100, clock=clock)
-    held = controller.submit(assessment=_LOW, action=_action(), subject_id="s").pending
+    held = controller.submit(
+        attempt_id="attempt-1", assessment=_LOW, action=_action(), subject_id="s"
+    ).pending
 
     clock.now = _T0_PLUS_200  # past TTL; sweep has NOT run
     with pytest.raises(ValueError, match="expired"):
@@ -260,7 +323,9 @@ def test_stale_approval_is_refused_even_without_a_sweep():
 def test_already_resolved_action_cannot_be_re_approved():
     clock = _Clock(_T0)
     controller, _ledger, spy = _harness(ttl=0, clock=clock)
-    held = controller.submit(assessment=_LOW, action=_action(), subject_id="s").pending
+    held = controller.submit(
+        attempt_id="attempt-1", assessment=_LOW, action=_action(), subject_id="s"
+    ).pending
     controller.approve(held.id, identity="will@driivai.com")
     with pytest.raises(ValueError):
         controller.approve(held.id, identity="someone-else")
@@ -276,7 +341,9 @@ def test_expiry_does_not_create_an_auto_execution_path():
     clock = _Clock(_T0)
     controller, _ledger, spy = _harness(ttl=100, clock=clock)
     # A low-confidence action still routes and holds — never auto-executes.
-    outcome = controller.submit(assessment=_LOW, action=_action(), subject_id="s")
+    outcome = controller.submit(
+        attempt_id="attempt-1", assessment=_LOW, action=_action(), subject_id="s"
+    )
     assert outcome.pending is not None and outcome.execution is None
     assert spy.calls == []
 
@@ -290,8 +357,15 @@ def test_approve_executes_through_the_sandbox():
     controller, ledger, _ = _harness(
         ttl=0, clock=clock, executor=SandboxExecutor(sandbox=sandbox)
     )
+    # The assessment must be bound to the code this action actually runs.
+    # ``_LOW`` is bound to the default ``print('mark')``; handing it to an action
+    # carrying different code is precisely the artifact mismatch the execution
+    # descriptor refuses, and before Checkpoint B nothing compared the two.
     held = controller.submit(
-        assessment=_LOW, action=_action("print('APPROVED-AND-RAN')"), subject_id="s"
+        attempt_id="attempt-1",
+        assessment=_assessment_for(_APPROVED_CODE),
+        action=_action(_APPROVED_CODE),
+        subject_id="s",
     ).pending
 
     result = controller.approve(held.id, identity="will@driivai.com", reason="ok")
@@ -309,24 +383,58 @@ def test_approve_fails_closed_without_an_isolating_sandbox():
     controller, ledger, _ = _harness(
         ttl=0, clock=clock, executor=SandboxExecutor(sandbox=NullSandbox())
     )
-    held = controller.submit(assessment=_LOW, action=_action(), subject_id="s").pending
+    held = controller.submit(
+        attempt_id="attempt-1", assessment=_LOW, action=_action(), subject_id="s"
+    ).pending
 
     result = controller.approve(held.id, identity="will@driivai.com")
     assert result.refused and not result.executed  # fail-closed, not degraded
     # The approval is recorded, and the refusal is recorded — nothing ran unsandboxed.
     assert controller.pending.get(held.id).status == PendingStatus.APPROVED
     execs = ledger.executions()
-    assert len(execs) == 1 and execs[0]["refused"] is True and execs[0]["executed"] is False
+    assert (
+        len(execs) == 1
+        and execs[0]["refused"] is True
+        and execs[0]["executed"] is False
+    )
 
 
 # -- CLI: sweep, expired-refuses, and record-only ---------------------------
 
 
 def _seed_pending(ledger_path: str, *, created_at: str, subject: str, code: str) -> int:
+    from prometheus_protocol.policy.assessment import mint
+    from prometheus_protocol.policy.profile import DEFAULT_PROFILE_ID, load_profile
+    from prometheus_protocol.policy.resolver import resolve
+
+    policy = load_profile(DEFAULT_PROFILE_ID)
+    selected_action = _action(code)
+    assessed = mint(
+        resolve(
+            policy,
+            artifact_sha256=content_hash(code),
+            target_canonical="sandbox://execution",
+            action_class="sandbox.execute",
+            attempt_id="attempt-1",
+        ),
+        Judgment(verdict=Verdict.PASS, confidence=0.60, authoritative=True),
+    )
+    authorizer = ExecutionAuthorizer(lambda: policy)
     ledger = SqliteLedger(ledger_path)
-    service = PendingActionService(ledger, clock=lambda: created_at, ttl_seconds=999_999)
-    decision = ActionGate(escalate_below=0.75, route_high_risk=True).decide(
-        _LOW, risk_class="low", subject_id=subject, action=_action(code)
+    service = PendingActionService(
+        ledger, clock=lambda: created_at, ttl_seconds=999_999, authorizer=authorizer
+    )
+    decision = ActionGate(
+        escalate_below=0.75,
+        route_high_risk=True,
+        authorizer=authorizer,
+        target_canonical="sandbox://execution",
+    ).decide(
+        assessed,
+        attempt_id="attempt-1",
+        risk_class="low",
+        subject_id=subject,
+        action=selected_action,
     )
     held = service.hold(decision, risk_class="low")
     ledger.close()
@@ -337,7 +445,9 @@ def test_cli_sweep_expires_then_approve_refuses(tmp_path, monkeypatch, capsys):
     from prometheus_protocol.cli.main import main
 
     db = str(tmp_path / "ledger.db")
-    pid = _seed_pending(db, created_at="2020-01-01T00:00:00Z", subject="deploy/old", code="print('x')")
+    pid = _seed_pending(
+        db, created_at="2020-01-01T00:00:00Z", subject="deploy/old", code="print('x')"
+    )
     monkeypatch.setenv("PROM_LEDGER_PATH", db)
     monkeypatch.setenv("PROM_PENDING_TTL", "1")
 
@@ -353,7 +463,9 @@ def test_cli_approve_no_exec_records_only(tmp_path, monkeypatch, capsys):
     from prometheus_protocol.cli.main import main
 
     db = str(tmp_path / "ledger.db")
-    pid = _seed_pending(db, created_at="2026-07-01T00:00:00Z", subject="deploy/x", code="print('x')")
+    pid = _seed_pending(
+        db, created_at="2026-07-01T00:00:00Z", subject="deploy/x", code="print('x')"
+    )
     monkeypatch.setenv("PROM_LEDGER_PATH", db)
     monkeypatch.setenv("PROM_PENDING_TTL", "0")  # disable expiry for a stable id
 
@@ -370,7 +482,10 @@ def test_cli_approve_executes_through_the_sandbox(tmp_path, monkeypatch, capsys)
 
     db = str(tmp_path / "ledger.db")
     pid = _seed_pending(
-        db, created_at="2026-07-01T00:00:00Z", subject="deploy/ok", code="print('CLI-RAN')"
+        db,
+        created_at="2026-07-01T00:00:00Z",
+        subject="deploy/ok",
+        code="print('CLI-RAN')",
     )
     monkeypatch.setenv("PROM_LEDGER_PATH", db)
     monkeypatch.setenv("PROM_PENDING_TTL", "0")
@@ -378,4 +493,8 @@ def test_cli_approve_executes_through_the_sandbox(tmp_path, monkeypatch, capsys)
     assert main(["approve", str(pid), "--by", "will@driivai.com"]) == 0
     assert "executed in sandbox" in capsys.readouterr().out
     execs = SqliteLedger(db).executions()
-    assert len(execs) == 1 and execs[0]["source"] == "human-approved" and execs[0]["executed"] is True
+    assert (
+        len(execs) == 1
+        and execs[0]["source"] == "human-approved"
+        and execs[0]["executed"] is True
+    )

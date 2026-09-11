@@ -30,7 +30,6 @@ import pytest
 
 from prometheus_protocol.core.models import (
     ACTION_PYTHON_CODE,
-    Evidence,
     ExecutableAction,
     Judgment,
     Tier,
@@ -48,9 +47,11 @@ from prometheus_protocol.policy.assessment import (
     UnboundAuthorization,
     mint,
 )
+from prometheus_protocol.policy.execution import ExecutionAuthorizer
+from prometheus_protocol.swarm.models import content_hash
 from prometheus_protocol.swarm.executor import RecordingExecutor
 
-from tests.support.assessments import a_snapshot, carrying, covered
+from tests.support.assessments import a_policy, a_snapshot, carrying, covered
 
 _ACTION = ExecutableAction(kind=ACTION_PYTHON_CODE, code="print('x')")
 
@@ -64,7 +65,12 @@ def _authoritative_pass() -> Judgment:
 
 def _controller(executor=None, ledger=None):
     return ExecutionController(
-        gate=ActionGate(escalate_below=0.75, route_high_risk=True),
+        gate=ActionGate(
+            target_canonical="sandbox://test",
+            escalate_below=0.75,
+            route_high_risk=True,
+            authorizer=ExecutionAuthorizer(lambda: a_policy()),
+        ),
         executor=executor if executor is not None else RecordingExecutor(),
         ledger=ledger if ledger is not None else SqliteLedger(":memory:"),
     )
@@ -114,7 +120,10 @@ class TestTheInterfaceHasNoParameterForIt:
         # BOTH implementations. The recorded one is what build_migration_runtime
         # actually constructs, and migrating only the base class would have left
         # production on the old surface while every test went green.
-        for surface in (ApprovalAuthority.authorize, RecordedApprovalAuthority.authorize):
+        for surface in (
+            ApprovalAuthority.authorize,
+            RecordedApprovalAuthority.authorize,
+        ):
             params = inspect.signature(surface).parameters
             assert "judgment" not in params, surface
             assert "assessment" in params, surface
@@ -125,19 +134,30 @@ class TestTheInterfaceHasNoParameterForIt:
             Judgment(verdict=Verdict.PASS, confidence=1.0, authoritative=True),
             Judgment(verdict=Verdict.PASS, confidence=0.5, authoritative=True),
             Unavailable(
-                verifier_id="v", tier=Tier.HARD,
-                reason=Unavailability.INFRA_FAULT, detail="down",
+                verifier_id="v",
+                tier=Tier.HARD,
+                reason=Unavailability.INFRA_FAULT,
+                detail="down",
             ),
         ],
     )
-    def test_presenting_one_anyway_raises_rather_than_returning_unapproved(self, outcome):
+    def test_presenting_one_anyway_raises_rather_than_returning_unapproved(
+        self, outcome
+    ):
         """A falsy return would be worse than useless: a caller could read it as
         a policy denial and keep handing over unbound verdicts forever."""
 
         with pytest.raises(UnboundAuthorization):
-            ActionGate().decide(outcome, risk_class="low", subject_id="s")
+            ActionGate(
+                target_canonical="sandbox://test",
+            ).decide(outcome, attempt_id="attempt-1", risk_class="low", subject_id="s")
         with pytest.raises(UnboundAuthorization):
-            _controller().submit(assessment=outcome, action=_ACTION, subject_id="s")
+            _controller().submit(
+                attempt_id="attempt-1",
+                assessment=outcome,
+                action=_ACTION,
+                subject_id="s",
+            )
 
 
 # ===========================================================================
@@ -201,7 +221,10 @@ class TestNothingExecutes:
         controller = _controller(executor)
         with pytest.raises(UnboundAuthorization):
             controller.submit(
-                assessment=_authoritative_pass(), action=_ACTION, subject_id="s"
+                attempt_id="attempt-1",
+                assessment=_authoritative_pass(),
+                action=_ACTION,
+                subject_id="s",
             )
         assert executor.executed == []
 
@@ -216,6 +239,7 @@ class TestNothingExecutes:
         with pytest.raises(UnboundAuthorization):
             authority.authorize(
                 _authoritative_pass(),
+                attempt_id="attempt-1",
                 artifact=_migration_artifact(),
                 target=_migration_target(),
                 now=1000.0,
@@ -236,13 +260,19 @@ class TestNothingExecutes:
         elsewhere = carrying(
             _authoritative_pass(),
             action_class=ACTION_DATABASE_MIGRATE,
-            artifact_sha256="b" * 64,          # a different artifact
+            artifact_sha256="b" * 64,  # a different artifact
             target_canonical=target.canonical,
         )
-        assert authority.authorize(
-            elsewhere, artifact=artifact, target=target, now=1000.0
-        ) is None
-
+        assert (
+            authority.authorize(
+                elsewhere,
+                attempt_id="attempt-1",
+                artifact=artifact,
+                target=target,
+                now=1000.0,
+            )
+            is None
+        )
 
     def test_an_assessment_for_a_DIFFERENT_ACTION_CLASS_mints_no_capability(self):
         """A sandbox execution and a database migration are different
@@ -258,13 +288,20 @@ class TestNothingExecutes:
         artifact, target = _migration_artifact(), _migration_target()
         wrong_class = carrying(
             _authoritative_pass(),
-            action_class=ACTION_SANDBOX_EXECUTE,      # not database.migrate
-            artifact_sha256=artifact.sha256,          # everything else matches
+            action_class=ACTION_SANDBOX_EXECUTE,  # not database.migrate
+            artifact_sha256=artifact.sha256,  # everything else matches
             target_canonical=target.canonical,
         )
-        assert authority.authorize(
-            wrong_class, artifact=artifact, target=target, now=1000.0
-        ) is None
+        assert (
+            authority.authorize(
+                wrong_class,
+                attempt_id="attempt-1",
+                artifact=artifact,
+                target=target,
+                now=1000.0,
+            )
+            is None
+        )
 
 
 # ===========================================================================
@@ -279,7 +316,11 @@ class TestThePositiveControl:
         executor = RecordingExecutor()
         controller = _controller(executor)
         outcome = controller.submit(
-            assessment=covered(), action=_ACTION, risk_class="low", subject_id="ok"
+            attempt_id="attempt-1",
+            assessment=covered(artifact_sha256=content_hash(_ACTION.code)),
+            action=_ACTION,
+            risk_class="low",
+            subject_id="ok",
         )
         assert outcome.outcome == OUTCOME_APPROVE
         assert outcome.execution is not None and executor.executed
@@ -290,12 +331,11 @@ class TestThePositiveControl:
 
         from tests.support.assessments import for_migration
 
-        authority = ApprovalAuthority(
-            signer=LocalHmacSigner(b"k" * 32)
-        )
+        authority = ApprovalAuthority(signer=LocalHmacSigner(b"k" * 32))
         artifact, target = _migration_artifact(), _migration_target()
         approval = authority.authorize(
             for_migration(_authoritative_pass(), artifact=artifact, target=target),
+            attempt_id="attempt-1",
             artifact=artifact,
             target=target,
             now=1000.0,
@@ -309,13 +349,22 @@ class TestThePositiveControl:
 
         executor = RecordingExecutor()
         controller = _controller(executor)
-        unavailable = covered(Unavailable(
-            verifier_id="test-verifier", tier=Tier.HARD,
-            reason=Unavailability.INFRA_FAULT, detail="down",
-        ))
+        unavailable = covered(
+            Unavailable(
+                verifier_id="test-verifier",
+                tier=Tier.HARD,
+                reason=Unavailability.INFRA_FAULT,
+                detail="down",
+            ),
+            artifact_sha256=content_hash(_ACTION.code),
+        )
         assert isinstance(unavailable.outcome, Unavailable)
         outcome = controller.submit(
-            assessment=unavailable, action=_ACTION, risk_class="low", subject_id="no"
+            attempt_id="attempt-1",
+            assessment=unavailable,
+            action=_ACTION,
+            risk_class="low",
+            subject_id="no",
         )
         assert outcome.outcome != OUTCOME_APPROVE
         assert executor.executed == []
@@ -330,5 +379,6 @@ def _migration_artifact():
 def _migration_target():
     from prometheus_protocol.chokepoint.approval import MigrationTarget
 
-    return MigrationTarget(host="127.0.0.1", port=5432, dbname="appdb",
-                           user="migrator", schema="public")
+    return MigrationTarget(
+        host="127.0.0.1", port=5432, dbname="appdb", user="migrator", schema="public"
+    )

@@ -35,6 +35,9 @@ class RecordingExecutor(Executor):
                 "Executor.execute accepts only a GateDecision; a proposal or "
                 "test plan cannot be executed"
             )
+        from prometheus_protocol.policy.execution import AuthorizedExecution
+        if not isinstance(decision.authorization, AuthorizedExecution):
+            raise ValueError("gate decision carries no validated execution descriptor")
         if not decision.approved:
             raise ValueError("refusing to execute an unapproved gate decision")
         self.executed.append(decision)

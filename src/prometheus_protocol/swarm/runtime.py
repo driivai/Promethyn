@@ -12,8 +12,10 @@ from dataclasses import dataclass
 
 from prometheus_protocol.core.interfaces import Ledger, Provider, Verifier
 from prometheus_protocol.core.models import (
+    ACTION_PYTHON_CODE,
     Attempt,
     Evidence,
+    ExecutableAction,
     Judgment,
     Task,
     Tier,
@@ -144,6 +146,9 @@ class SwarmRuntime:
         # customer-supplied digest-pinned supplier is a later addition beside it
         # rather than a rewrite of this class.
         self.policy = policy if policy is not None else load_profile(DEFAULT_PROFILE_ID)
+        if not self.bank.has_policy_supplier:
+            selected = self.policy
+            self.bank.bind_policy_supplier(lambda: selected)
         #: The principal this runtime acts against. The swarm executes inside the
         #: sandbox and touches no privileged target, so the canonical form names
         #: the sandbox rather than pretending to a principal it does not have.
@@ -267,10 +272,17 @@ class SwarmRuntime:
 
             # Only actions are routed to the gate and the executor.
             if entry.proposal.kind == KIND_PROPOSED_ACTION:
+                action = ExecutableAction(
+                    kind=ACTION_PYTHON_CODE,
+                    code=entry.proposal.content,
+                    entry_point=packet.entry_point,
+                )
                 decision = self.gate.decide(
                     assessment,
                     risk_class=packet.risk_class,
                     subject_id=entry.proposal.id,
+                    action=action,
+                    attempt_id=attempt_id,
                 )
                 if decision.approved:
                     execution = self.executor.execute(decision)
@@ -288,7 +300,9 @@ class SwarmRuntime:
             )
         return SwarmRun(packet=packet, plan=plan, records=tuple(records))
 
-    def _verify(self, entry: TestPlanEntry) -> tuple[Evidence | Unavailable, list[BoundResult]]:
+    def _verify(
+        self, entry: TestPlanEntry
+    ) -> tuple[Evidence | Unavailable, list[BoundResult]]:
         """Run the checks and report them SEPARATELY, bound to the snapshot.
 
         PHASE-1.2a — THE SWARM NO LONGER COMPUTES AN AGGREGATE.
@@ -360,7 +374,11 @@ class SwarmRuntime:
                 # checks produced, and "the HARD verifier could not run" is the
                 # most informative thing that happened.
                 reported_unavailable = outcome
-            if outcome is not None and self._snapshot is not None and self.code_verifier is not None:
+            if (
+                outcome is not None
+                and self._snapshot is not None
+                and self.code_verifier is not None
+            ):
                 # Reported under the CODE VERIFIER's own id, not the swarm's: the
                 # policy names which implementations may answer ``executable.cases``,
                 # and the swarm is not one of them. Claiming otherwise would be the
@@ -426,9 +444,7 @@ class SwarmRuntime:
             detail=detail,
         )
 
-    def _run_executable_checks(
-        self, proposal, checks
-    ) -> Evidence | Unavailable | None:
+    def _run_executable_checks(self, proposal, checks) -> Evidence | Unavailable | None:
         """Run pooled executable cases through the HARD code verifier.
 
         Returns the verifier's Evidence (PASS/FAIL/ABSTAIN); ``Unavailable``
