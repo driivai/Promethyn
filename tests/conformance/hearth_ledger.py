@@ -274,6 +274,16 @@ EXPECTED_PROTECTED_FILES = 21
 #:   constructions; they are reported rather than converted, because converting
 #:   twenty-odd classes is a separate change and this one is load-bearing.
 #:
+#:   FOLLOW-UP, same file: ``Judgment`` is now kw_only too. It is the value the
+#:   #95 raw-Judgment bypass was about and the one R3's human path carries, and
+#:   its first three fields are ``verdict, confidence, authoritative`` — a
+#:   reorder or a miscount there mis-assigns a VERDICT, which is the field the
+#:   gate reads. Eleven positional call sites converted, all in tests. Measured
+#:   blast radius before converting: Judgment 17 failures, SignEvent 104,
+#:   DbTarget 95. The latter two are filed rather than forced through in the
+#:   same commit; a 200-site mechanical sweep is its own change with its own
+#:   verification, not a rider on this one.
+#:
 #: Those sprints are why these bytes are what they are. They do NOT license the
 #: next edit to the same files: updating a digest below is a fresh decision, and
 #: the reason for it belongs beside it.
@@ -285,7 +295,7 @@ DIGESTS: dict[str, str] = {
     "src/prometheus_protocol/core/interfaces.py":
         "7098698aa935603b33ccbfc722ae3fe748d68e3ffdaa6adf35e00033a2f467e5",
     "src/prometheus_protocol/core/models.py":
-        "4204e479e5047a0ebfbf64fad178eef304d3aef7a0e663a8e253b56d7d1e975f",
+        "96fe20410439abdb87fd9a34becdffab032fd106a5fa70f80271527a79df5910",
     "src/prometheus_protocol/execution/controller.py":
         "a3003b73d63223a361b5f3c884908b642573948a9ec0cb4f036872aec169d0ed",
     "src/prometheus_protocol/execution/executor.py":

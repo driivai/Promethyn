@@ -355,9 +355,9 @@ jobs:
           python - <<'PY'
           import xml.etree.ElementTree as ET
           cases = list(ET.parse("execution-descriptor.xml").iter("testcase"))
-          assert len(cases) == 18, f"18 descriptor proofs required; observed {len(cases)}"
+          assert len(cases) == 22, f"22 descriptor proofs required; observed {len(cases)}"
           assert all(c.find(t) is None for c in cases for t in ("skipped", "failure", "error"))
-          print("Checkpoint B: 18 proofs; zero skips/failures/errors")
+          print("Checkpoint B: 22 proofs; zero skips/failures/errors")
           PY
 
       - name: PHASE-1.2c Checkpoint B seam mutations (must be caught)
