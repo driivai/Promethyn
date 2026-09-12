@@ -1,0 +1,46 @@
+# THE SANCTIONED SKIP SET for the full-suite step (`python -m pytest -q -rs
+# --junitxml=full-suite.xml` under PROM_REQUIRE_SANDBOX=1 PROM_REQUIRE_LINUX=1).
+#
+# Checked by scripts/check_skip_manifest.py on every matrix version: a skip not
+# listed here fails the build, and a listed test that ran fails it too. An
+# identical skip COUNT across 3.10, 3.11 and 3.12 (the 23 the matrix reported)
+# said nothing about composition; this is the composition, by name.
+#
+# Every entry carries the reason it skips in that step. None is version-gated:
+# the same 23 must skip on every supported Python, or the build is red.
+#
+# The live-database proofs. They RUN in the dedicated PostgreSQL step earlier in
+# the same job under PROM_REQUIRE_PG=1 (fail, not skip, there); the full-suite
+# step deliberately sets no PROM_CHOKEPOINT_PG_* coordinates, so here they skip.
+tests/chokepoint/test_isolation.py::test_agent_cannot_reach_db_by_any_path  # no configured DB coordinates for the isolation proof
+tests/chokepoint/test_migration_live.py::test_live_end_to_end_and_replay_refused  # no configured PostgreSQL
+tests/chokepoint/test_migration_live.py::test_live_executor_uses_exact_bound_schema  # no configured PostgreSQL
+tests/chokepoint/test_migration_live.py::test_live_executor_rolls_back_failed_migration  # no configured PostgreSQL
+tests/chokepoint/test_migration_live.py::test_live_executor_does_not_interpret_psql_meta_commands  # no configured PostgreSQL
+tests/chokepoint/test_migration_live.py::test_live_executor_rejects_transaction_control_before_migration  # no configured PostgreSQL
+tests/chokepoint/test_migration_live.py::test_live_restart_reconciles_commit_from_transaction_receipt  # no configured PostgreSQL
+tests/chokepoint/test_migration_live.py::test_live_restart_proves_failed_transaction_did_not_commit  # no configured PostgreSQL
+tests/chokepoint/test_migration_live.py::test_live_lost_commit_response_remains_pending_until_receipt_recovery  # no configured PostgreSQL
+tests/chokepoint/test_migration_live.py::test_live_suspended_owner_cannot_be_declared_rolled_back[False]  # no configured PostgreSQL
+tests/chokepoint/test_migration_live.py::test_live_suspended_owner_cannot_be_declared_rolled_back[True]  # no configured PostgreSQL
+tests/chokepoint/test_migration_live.py::test_live_dead_client_with_active_transaction_stays_pending  # no configured PostgreSQL
+tests/chokepoint/test_migration_live.py::test_live_an_expired_approval_makes_no_privileged_database_contact  # no configured PostgreSQL
+tests/chokepoint/test_migration_live.py::test_live_a_current_approval_still_executes  # no configured PostgreSQL
+#
+# The real-container proofs. Opt-in via PROM_REQUIRE_CONTAINER=1, which the
+# dedicated container-sandbox.yml workflow sets and this job does not
+# (docs/skip-sweep.md); the namespace backend is proven in this job instead.
+tests/conformance/test_sandbox_container_signal.py::test_real_container_run_confirms_candidate_start  # real-container run is opt-in
+tests/conformance/test_sandbox_container_signal.py::test_real_container_candidate_crash_classifies_fail  # real-container run is opt-in
+tests/conformance/test_sandbox_verifier_boundary.py::test_real_container_sandbox_verifier_boundary[def answer(): return 42-pass]  # real-container verification is opt-in
+tests/conformance/test_sandbox_verifier_boundary.py::test_real_container_sandbox_verifier_boundary[def answer(): return 0-fail]  # real-container verification is opt-in
+tests/conformance/test_sandbox_verifier_boundary.py::test_real_container_sandbox_verifier_boundary[import json, os\njson.dump({'passed':1,'total':1,'failures':[]}, open('result.json','w'))\nos._exit(0)-fail]  # real-container verification is opt-in
+tests/conformance/test_sandbox_verifier_boundary.py::test_real_container_sandbox_verifier_boundary[import sys\nsys.modules['__main__']._equal=lambda a,b: True\ndef answer(): return 0-fail]  # real-container verification is opt-in
+tests/conformance/test_sandbox_verifier_boundary.py::test_real_container_sandbox_verifier_boundary[from _value_codec import dumps\nimport os\nos.write(1, dumps([('ok',0)]).encode())\nos._exit(0)-fail]  # real-container verification is opt-in
+tests/conformance/test_sandbox_verifier_boundary.py::test_real_container_sandbox_verifier_boundary[class Liar:\n def __eq__(self,other): return True\ndef answer(): return Liar()-fail]  # real-container verification is opt-in
+#
+# Skips for want of a container RUNTIME (not the opt-in flag). Pinned from the
+# local CI-equivalent run, where no daemon is reachable; the ubuntu-latest
+# runner ships one, so the first CI run of this manifest decides whether this
+# entry runs there — a mismatch is the finding the manifest exists to surface.
+tests/conformance/test_sandbox_privilege.py::test_real_container_workspace_stays_owner_only_and_still_works  # no container runtime available

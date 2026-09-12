@@ -12,10 +12,11 @@ from __future__ import annotations
 import dataclasses
 from dataclasses import dataclass, field
 import hashlib
-from typing import TYPE_CHECKING, Generic, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Mapping, Protocol, TypeVar
 
 if TYPE_CHECKING:
     from prometheus_protocol.core.models import Judgment, Unavailable
+    from prometheus_protocol.policy.assessment import CoverageReport
 
 from prometheus_protocol.core.models import (
     ACTION_GIT_DELETE_BRANCH,
@@ -28,6 +29,7 @@ from prometheus_protocol.policy.resolver import resolve
 from prometheus_protocol.policy.snapshot import (
     ACTION_BRANCH_DELETE,
     ACTION_SANDBOX_EXECUTE,
+    BoundRequirement,
     _identity,
     snapshot_digest,
 )
@@ -35,6 +37,18 @@ from prometheus_protocol.policy.snapshot import (
 
 class ExecutionNotAuthorized(ValueError):
     """The assessment is not bound to the selected policy and concrete action."""
+
+
+class PinnedPolicySuperseded(ExecutionNotAuthorized):
+    """A hold is pinned to a policy the deployment no longer selects.
+
+    A distinct refusal so a caller can tell a ROTATION from a mismatch: the hold
+    was valid under the policy it was created under, and that policy has since
+    been replaced. The remedy is re-verification under the selected policy,
+    never approval of the stale hold — in either direction, since the new policy
+    may require more (the human approved something that no longer passes) or
+    less (the rotation silently weakened a pending authorization).
+    """
 
 
 class PolicySupplier(Protocol):
@@ -87,6 +101,13 @@ class AuthorizedExecution(Generic[ActionT]):
     assessment: PolicyAssessment
     action: ActionT
     _validated: object = field(default=None, repr=False, compare=False)
+    #: R5 — the requirements the SELECTED policy resolved for this descriptor and
+    #: that policy's version, read off the seam's OWN re-resolution and never off
+    #: the caller's snapshot. They are what the authorization record persists and
+    #: what a hold is pinned to. Keyword-only: the seam is the one construction
+    #: site and names them; nothing positional can miscount them.
+    requirements: tuple[BoundRequirement, ...] = field(kw_only=True)
+    policy_version: int = field(kw_only=True)
 
     def __post_init__(self) -> None:
         if self._validated is not _AUTHORIZED:
@@ -94,6 +115,17 @@ class AuthorizedExecution(Generic[ActionT]):
                 "AuthorizedExecution values are minted only by ExecutionAuthorizer"
             )
         object.__setattr__(self, "_validated", None)
+        if not isinstance(self.policy_version, int) or self.policy_version < 1:
+            raise ExecutionNotAuthorized(
+                "an authorized execution carries the selected policy's version (>= 1)"
+            )
+        if not self.requirements or not all(
+            isinstance(item, BoundRequirement) for item in self.requirements
+        ):
+            raise ExecutionNotAuthorized(
+                "an authorized execution carries the resolved requirements it was "
+                "authorized against; an empty set is satisfied by anything"
+            )
 
 
 def action_class_of(action: ExecutableAction) -> str:
@@ -197,7 +229,17 @@ class ExecutionAuthorizer:
                 raise ExecutionNotAuthorized(
                     f"assessment {name} does not match execution descriptor"
                 )
-        return AuthorizedExecution(descriptor, assessment, action, _AUTHORIZED)
+        # The requirements and version come off ``expected`` — the seam's own
+        # re-resolution of the SELECTED policy — so the record a hold pins to is
+        # what the deployment required, not what the caller said it required.
+        return AuthorizedExecution(
+            descriptor=descriptor,
+            assessment=assessment,
+            action=action,
+            _validated=_AUTHORIZED,
+            requirements=expected.requirements,
+            policy_version=policy.version,
+        )
 
     def revalidate(
         self, authorization: AuthorizedExecution[ActionT]
@@ -214,28 +256,40 @@ class ExecutionAuthorizer:
             attempt_id=d.attempt_id,
         )
 
+    def selected_policy(self) -> VerificationPolicy:
+        """The policy the deployment selects NOW, from the supplier, uncached.
+
+        What a pinned hold is compared against at approval: if this is not the
+        policy the hold was pinned to, the hold is superseded, and no amount of
+        re-resolution under the new policy makes the old authorization valid.
+        """
+
+        return self._supplier()
+
     def restore_persisted(
         self,
-        record: dict[str, str],
+        record: Mapping[str, Any],
         *,
         outcome: "Judgment | Unavailable",
         action: ExecutableAction,
         target_canonical: str,
         attempt_id: str,
+        coverage: "CoverageReport",
     ) -> AuthorizedExecution[ExecutableAction]:
         """Decode a hold only inside the seam and immediately re-authorize it."""
 
         from prometheus_protocol.policy.assessment import _restore_persisted
 
         assessment = _restore_persisted(
-            snapshot_digest=record["snapshot_digest"],
-            policy_id=record["policy_id"],
-            policy_digest=record["policy_digest"],
-            action_class=record["action_class"],
-            attempt_id=record["attempt_id"],
-            artifact_sha256=record["artifact_sha256"],
-            target_canonical=record["target_canonical"],
+            snapshot_digest=str(record["snapshot_digest"]),
+            policy_id=str(record["policy_id"]),
+            policy_digest=str(record["policy_digest"]),
+            action_class=str(record["action_class"]),
+            attempt_id=str(record["attempt_id"]),
+            artifact_sha256=str(record["artifact_sha256"]),
+            target_canonical=str(record["target_canonical"]),
             outcome=outcome,
+            coverage=coverage,
         )
         return self.authorize(
             assessment,

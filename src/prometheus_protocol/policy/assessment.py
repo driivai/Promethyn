@@ -50,11 +50,56 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from prometheus_protocol.core.models import Judgment, Unavailable
+from prometheus_protocol.policy.coverage import CoverageRefused, CoverageSatisfied
 from prometheus_protocol.policy.snapshot import (
     BoundRequirements,
     _identity,
     snapshot_digest,
 )
+
+
+@dataclass(frozen=True)
+class CoverageReport:
+    """What coverage validation produced, carried on the assessment for the
+    authorization record (R6).
+
+    ``CoverageSatisfied`` carries ``answered_by`` and ``recorded_unavailable``
+    and ``judge_covered`` used to drop both, passing only the graded results on
+    to fusion — measured: ``answered_by == {"check.a": "impl-weak"}`` at the
+    coverage layer and nothing downstream, so a reviewer could see that B
+    answered and never that A was down. This is the report, kept.
+
+    ``answered_by`` names WHICH permitted implementation satisfied each
+    requirement; ``unavailable`` names the permitted implementations that could
+    not answer (the R4 residual made visible); ``refusal`` is the enforcement
+    row that refused, when one did. ``recorded`` is False only for an assessment
+    minted around a caller-named outcome with no coverage validation behind it
+    — the in-process test forge — so a record can say "no coverage report was
+    recorded" rather than carry an empty one that reads as "nothing was
+    unavailable".
+    """
+
+    answered_by: tuple[tuple[str, str], ...] = ()
+    unavailable: tuple[tuple[str, str], ...] = ()
+    refusal: tuple[str, str, str] | None = None
+    recorded: bool = True
+
+
+#: The report of an assessment minted with no coverage validation behind it.
+UNRECORDED_COVERAGE = CoverageReport(recorded=False)
+
+
+def coverage_report(outcome: CoverageSatisfied | CoverageRefused) -> CoverageReport:
+    """The report for what ``validate_coverage`` returned."""
+
+    if isinstance(outcome, CoverageRefused):
+        return CoverageReport(
+            refusal=(outcome.reason, outcome.check_id, outcome.detail),
+        )
+    return CoverageReport(
+        answered_by=tuple(sorted(outcome.answered_by.items())),
+        unavailable=tuple(outcome.recorded_unavailable),
+    )
 
 
 class UnboundAuthorization(Exception):
@@ -112,6 +157,13 @@ class PolicyAssessment:
     #: ``Unavailable`` when there was no satisfactory result for a required
     #: check. Never a fabricated verdict.
     outcome: Judgment | Unavailable
+    #: What coverage validation produced (R6): which implementation answered
+    #: each requirement, which could not, and the refusing row if any. Carried
+    #: so the authorization record can say it; it decides nothing here. The
+    #: default is the explicit "unrecorded" report, so a direct construction
+    #: still reaches the minting check below rather than a missing-argument
+    #: TypeError that says nothing about why it was refused.
+    coverage: CoverageReport = UNRECORDED_COVERAGE
     #: The minting proof. Not data — the sole reason it is a field is that a
     #: dataclass validates its fields in ``__post_init__``, so a direct
     #: construction has to supply it and cannot. Excluded from ``repr`` and from
@@ -145,11 +197,17 @@ class PolicyAssessment:
                 "an assessment carries a Judgment or an Unavailable; anything else "
                 "would be an outcome kind no authorization surface knows how to read"
             )
+        if not isinstance(self.coverage, CoverageReport):
+            raise UnboundAuthorization(
+                "an assessment carries a CoverageReport; the record has to be able to "
+                "say what answered and what could not"
+            )
 
 
 def mint(
     snapshot: BoundRequirements,
     outcome: Judgment | Unavailable,
+    coverage: CoverageReport | None = None,
 ) -> PolicyAssessment:
     """Build an assessment. Called by the bank, after coverage was validated.
 
@@ -160,6 +218,10 @@ def mint(
     Every identifying field is read OFF the snapshot rather than accepted as an
     argument, so an assessment cannot describe one action while being bound to
     another — there is no parameter through which they could disagree.
+
+    ``coverage`` is the report the bank produced. Left ``None`` — the test
+    forge's shape — the assessment carries :data:`UNRECORDED_COVERAGE`, which
+    says so explicitly rather than presenting an empty report as a clean one.
     """
 
     return PolicyAssessment(
@@ -171,6 +233,7 @@ def mint(
         artifact_sha256=snapshot.artifact_sha256,
         target_canonical=snapshot.target_canonical,
         outcome=outcome,
+        coverage=coverage if coverage is not None else UNRECORDED_COVERAGE,
         _minted=_MINT,
     )
 
@@ -185,6 +248,7 @@ def _restore_persisted(
     artifact_sha256: str,
     target_canonical: str,
     outcome: Judgment | Unavailable,
+    coverage: CoverageReport,
 ) -> PolicyAssessment:
     """Reconstitute persisted data for ``ExecutionAuthorizer`` re-validation.
 
@@ -202,6 +266,7 @@ def _restore_persisted(
         artifact_sha256=artifact_sha256,
         target_canonical=target_canonical,
         outcome=outcome,
+        coverage=coverage,
         _minted=_MINT,
     )
 

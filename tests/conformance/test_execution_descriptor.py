@@ -269,7 +269,9 @@ def test_descriptor_refuses_each_cross_action_mismatch_before_execution():
             )
         }
         values[field] = value
-        forged = _restore_persisted(outcome=assessed.outcome, **values)
+        forged = _restore_persisted(
+            outcome=assessed.outcome, coverage=assessed.coverage, **values
+        )
         with pytest.raises(ExecutionNotAuthorized):
             gate().decide(forged, action=a, attempt_id=ATTEMPT)
     assert spy.calls == []
@@ -612,6 +614,18 @@ def test_nonbaseline_profile_is_injected_into_the_execution_factory():
 
 
 def test_hold_approval_re_resolves_the_policy_instead_of_redigesting_the_hold():
+    """A hold created under policy A must not be approved by re-digesting what
+    the hold says; the SELECTED policy decides. TASK 5 sharpened what happens
+    when the selected policy has moved: the hold is pinned to A, so after a
+    rotation to B approval is refused AS A ROTATION (``PinnedPolicySuperseded``,
+    a distinct refusal) and the hold is voided, rather than being silently
+    re-evaluated against B in either direction. ``tests/conformance/
+    test_hold_pinning.py`` carries the full rotation contract and its positive
+    control; this keeps the original property under its original name."""
+
+    from prometheus_protocol.execution.models import PendingStatus
+    from prometheus_protocol.policy.execution import PinnedPolicySuperseded
+
     current = [POLICY]
     authorizer = ExecutionAuthorizer(lambda: current[0])
     a = action()
@@ -647,9 +661,11 @@ def test_hold_approval_re_resolves_the_policy_instead_of_redigesting_the_hold():
         ),
         require_verification=(ACTION_SANDBOX_EXECUTE,),
     )
-    with pytest.raises(ExecutionNotAuthorized, match="re-resolved"):
+    with pytest.raises(PinnedPolicySuperseded, match="policy rotated"):
         controller.pending._revalidate(held)
-    with pytest.raises(ExecutionNotAuthorized, match="re-resolved"):
+    voided = controller.pending.get(held.id)
+    assert voided is not None and voided.status == PendingStatus.INVALIDATED
+    with pytest.raises(ValueError, match="already invalidated"):
         controller.approve(held.id, identity="human")
 
 

@@ -483,7 +483,19 @@ _ALLOWED_JOB_KEYS: dict[str, object] = {
     # workflow into a skip while every guard in this file still passed. So this
     # entry permits exactly one mapping and nothing else; a new flag is a
     # deliberate edit here, with the reason, like every other entry.
-    "env": {"PROM_REQUIRE_LINUX": "1"},
+    #
+    # PROM_CI_PG_*: the ONE SOURCE of the throwaway CI database's coordinates,
+    # which the Postgres service container and the live-database step both read
+    # by expression (`${{ env.PROM_CI_PG_DB }}`) so a producer and a consumer
+    # typed separately can never disagree. Pinned here as exact values because a
+    # job-level env entry is precisely where a second copy would reappear; the
+    # consumers' references are pinned by tests/conformance/test_ci_single_source.py.
+    "env": {
+        "PROM_REQUIRE_LINUX": "1",
+        "PROM_CI_PG_DB": "appdb",
+        "PROM_CI_PG_USER": "migrator",
+        "PROM_CI_PG_PASSWORD": "chokepoint-ci-password",
+    },
 }
 
 #: The database fixture, pinned. Not because the type gate depends on Postgres,

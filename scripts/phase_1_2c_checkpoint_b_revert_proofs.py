@@ -105,12 +105,20 @@ def mutations():
             "hold_admission_refuses",
         ),
         (
-            "hold-policy-re-resolution-removed",
-            ExecutionAuthorizer.revalidate,
+            # Re-expressed for TASK 5. This used to make ``revalidate`` return
+            # early, and the approval path caught it because approval re-ran
+            # ``revalidate``. Approval now checks the hold's PINNED policy first
+            # (``_require_pinned_policy``) and re-resolves through
+            # ``restore_persisted`` afterwards, so the mutation that decides
+            # whether a rotated policy is silently inherited is the pinned
+            # comparison itself. Same property, expressed against the code that
+            # now carries it. Four spaces: a method's source is dedented.
+            "hold-pinned-policy-comparison-removed",
+            PendingActionService._require_pinned_policy,
             [
                 (
-                    "    d = authorization.descriptor",
-                    "    return authorization\n    d = authorization.descriptor",
+                    "    if self._pinned_to(pending, current):\n        return",
+                    "    if True:\n        return",
                 )
             ],
             TEST,

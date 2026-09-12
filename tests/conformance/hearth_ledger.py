@@ -284,6 +284,43 @@ EXPECTED_PROTECTED_FILES = 21
 #:   same commit; a 200-site mechanical sweep is its own change with its own
 #:   verification, not a rider on this one.
 #:
+#: * **PHASE-1.2c TASK 5/6 (the authorization record and the pinned hold)** —
+#:   four files, one seam widened on the audit side and one refusal added on
+#:   the approval side. No fusion decision moved: ``bank_decision_surface.json``
+#:   is unchanged at 240 rows.
+#:
+#:   - ``verifier/bank.py`` — ``assess`` keeps the coverage REPORT (which
+#:     implementation answered, which could not, which row refused) beside the
+#:     outcome and mints it into the assessment; the validate-then-fuse body
+#:     moves from ``judge_covered`` into ``_judge_with_coverage`` and
+#:     ``judge_covered`` delegates to it. Same validation, same outcome; only
+#:     what is reported grew. (R6)
+#:   - ``core/interfaces.py`` — ``record_execution`` takes the authorization
+#:     record; the port gains ``invalidate_pending_action`` and the audit-chain
+#:     trio (``record_chained``, ``chained_events``, ``verify_chain``), because
+#:     the pending service binds every hold's record into the chain and a
+#:     ledger that could hold an action but not chain its record would leave
+#:     the record in a JSON column, trusted because it is there.
+#:   - ``execution/pending.py`` — ``hold`` writes the versioned record and its
+#:     chain entry; approval and retry check the row against the entry on a
+#:     chain that verifies, then the pinned policy against the selected one (a
+#:     rotation is refused as ``PinnedPolicySuperseded`` and the hold voided,
+#:     in either direction), and only then decode the record inside the seam,
+#:     which re-resolves exactly as before. Loading a row no longer
+#:     re-authorizes it, so listing holds after a rotation works and approval
+#:     can name the rotation rather than a bare mismatch. ``invalidate_superseded``
+#:     is the explicit half. The TTL path is untouched.
+#:   - ``execution/controller.py`` — every ``executions`` row carries the record
+#:     (the hold's PINNED record for human-approved and retried executions);
+#:     ``invalidate_superseded_holds`` delegates to the pending service.
+#:
+#:   Proven in ``test_execution_authorization_record.py`` (15) and
+#:   ``test_hold_pinning.py`` (7), with six executed mutations in
+#:   ``scripts/phase_1_2c_record_revert_proofs.py``. The Checkpoint-B mutation
+#:   "hold-policy-re-resolution-removed" is re-expressed as
+#:   "hold-pinned-policy-comparison-removed" against the code that now carries
+#:   that property.
+#:
 #: Those sprints are why these bytes are what they are. They do NOT license the
 #: next edit to the same files: updating a digest below is a fresh decision, and
 #: the reason for it belongs beside it.
@@ -293,15 +330,15 @@ DIGESTS: dict[str, str] = {
     "src/prometheus_protocol/benchmarks/judge_eval.py":
         "25430b5645aff6f655cfaccf33edd9e1cea3e5b4d0c62ef7f23183d9da9f3866",
     "src/prometheus_protocol/core/interfaces.py":
-        "7098698aa935603b33ccbfc722ae3fe748d68e3ffdaa6adf35e00033a2f467e5",
+        "a4c79dcda974c8bd969374e970333698b681c3f9c2b0f850a0425417d270915b",
     "src/prometheus_protocol/core/models.py":
         "96fe20410439abdb87fd9a34becdffab032fd106a5fa70f80271527a79df5910",
     "src/prometheus_protocol/execution/controller.py":
-        "a3003b73d63223a361b5f3c884908b642573948a9ec0cb4f036872aec169d0ed",
+        "3e97f7a6c70d30f4f20d777b3e5ec6a88483b52c62424736c2484ba035598dcf",
     "src/prometheus_protocol/execution/executor.py":
         "7fc5ee28f1a76417a9350ee9a0ab1913483991a89d60d9670ffd8149ab6afb0f",
     "src/prometheus_protocol/execution/pending.py":
-        "78207d452d3020614d7032844a274a4c8dfc8edb73c9df7de328513e923aadb0",
+        "2bc60089af63395d0084d231820d0eea89f333c5b38799bab074a333ef92a0ce",
     "src/prometheus_protocol/forge/miner.py":
         "b0e2a53440df5b38a1031cc9648e19b3f9df20081ee34d4e035beda2b6973a29",
     "src/prometheus_protocol/gate/authorization.py":
@@ -319,7 +356,7 @@ DIGESTS: dict[str, str] = {
     "src/prometheus_protocol/verifier/aggregate.py":
         "5963bb6b4047c0ec2c900b10187e861ad95541dca87c0b98bdb5db34dcd1c37c",
     "src/prometheus_protocol/verifier/bank.py":
-        "477b55b0c9b4c78612bdaada064565e344a29897aca65713fc87c05cb71c216a",
+        "10dd21123b3a635ea3f028b2bb8a1c04572cee95856e237436db5ed36a4d39cd",
     "src/prometheus_protocol/verifier/grounding.py":
         "edb44c93c371cbf4a5099e607f4de0332d1bb902d47913bdd3708d5be1b4da3f",
     "src/prometheus_protocol/verifier/model_judge.py":

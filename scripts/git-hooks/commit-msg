@@ -1,0 +1,12 @@
+#!/bin/sh
+# commit-msg hook: refuse a commit whose message carries a banned tooling or
+# vendor token. Installed per clone by scripts/install_git_hooks.py (it sets
+# core.hooksPath to this directory); CI runs the same checker over every commit
+# in a pull request, so a clone without the hook is still refused at the PR.
+#
+# The message file is the hook's single argument. Nothing here edits it: a
+# message that trips the check is refused with the token named, and the author
+# rewrites it. Stripping would be the "strip and verify" vigilance this replaces.
+set -eu
+repo_root="$(git rev-parse --show-toplevel)"
+exec "${PYTHON:-python3}" "$repo_root/scripts/check_message_hygiene.py" --message-file "$1"

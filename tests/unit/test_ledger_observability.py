@@ -233,6 +233,11 @@ def test_opening_an_old_ledger_adds_the_columns(tmp_path):
             "attempts.unavailable",
             "pending_actions.execution_committed_at",
             "pending_actions.authorization",
+            # PHASE-1.2c TASK 5/6: the authorization record the outcome was
+            # decided under, and the policy-rotation invalidation columns.
+            "executions.authorization",
+            "pending_actions.invalidated_at",
+            "pending_actions.invalidated_reason",
         }
         cols = {r["name"] for r in ledger._conn.execute("PRAGMA table_info(attempts)")}
         assert {"verdict", "confidence", "unavailable"} <= cols

@@ -40,7 +40,14 @@ ENCODE = "tests/conformance/test_bound_requirements_encoding.py"
 #: Observed first, then pinned — never predicted. Both a shortfall and an excess
 #: are refused.
 EXPECTED_REVERTS = 11
-EXPECTED_CALL_FAILURES = 25
+# 25 -> 26 (PHASE-1.2c TASK 5/6). The swarm fault matrix's "returns FAIL" row
+# now asserts the gate WAS reached and blocked (the pinned state-to-row mapping
+# in test_policy_enforcement_regression.py); under the fuse-without-validating-
+# coverage mutation the bank raises before any decision exists, so that row is
+# red where it used to be indifferent. Measured through the mutation worktree:
+# 10 red for that mutation (the structural-pass proof plus nine matrix rows)
+# where there were 9.
+EXPECTED_CALL_FAILURES = 26
 
 
 def enforce_expected(caught: int, failures: int) -> None:
@@ -105,7 +112,10 @@ def mutations():
             # THE ORDER IS THE POINT. Fuse first and the missing check is a
             # question nobody was owed an answer to.
             "bank-fuses-without-validating-coverage",
-            bank.VerifierBank.judge_covered,
+            # The validate-then-fuse body moved from ``judge_covered`` into
+            # ``_judge_with_coverage`` (TASK 6, which returns the coverage
+            # report beside the outcome); ``judge_covered`` now delegates to it.
+            bank.VerifierBank._judge_with_coverage,
             [(
                 "    if isinstance(outcome, CoverageRefused):",
                 "    if False:",

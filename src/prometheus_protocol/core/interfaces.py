@@ -9,7 +9,7 @@ downstream code can program against the interfaces, not the implementations.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Generic, Protocol, Sequence, TypeVar
+from typing import TYPE_CHECKING, Generic, Protocol, Sequence, TypeVar
 
 from prometheus_protocol.core.models import (
     Attempt,
@@ -18,6 +18,9 @@ from prometheus_protocol.core.models import (
     Tier,
     Unavailable,
 )
+
+if TYPE_CHECKING:  # pragma: no cover - the chain's types, for the port's signatures
+    from prometheus_protocol.ledger.audit_chain import ChainTip, ChainVerification
 
 
 class LearnableTask(Protocol):
@@ -276,6 +279,19 @@ class Ledger(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def invalidate_pending_action(
+        self, pending_id: int, *, invalidated_at: str, reason: str
+    ) -> bool:
+        """Void a still-pending hold on a policy rotation; True iff it was pending.
+
+        Not a human decision: the hold becomes ``invalidated`` with the rotation
+        as its reason, recorded in flat columns (``invalidated_at``,
+        ``invalidated_reason``) a sweep can query without parsing the record.
+        Never touches a decided hold — a rotation cannot rewrite a decision.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     def claim_pending_execution(self, pending_id: int, claimed_at: str) -> bool:
         """Atomically claim the right to execute a hold; True iff this call won.
 
@@ -314,6 +330,7 @@ class Ledger(ABC):
         created_at: str,
         judgment: dict | None = None,
         pending_id: int | None = None,
+        authorization: dict | None = None,
     ) -> int:
         """Record one executor outcome (executed, refused, or blocked).
 
@@ -321,7 +338,11 @@ class Ledger(ABC):
         JSON and promoted to queryable verdict/confidence columns.
         ``pending_id`` links the outcome to the pending hold it resolves, when
         it came from one — it is what makes "this approved hold has never
-        executed" answerable from the ledger alone.
+        executed" answerable from the ledger alone. ``authorization`` is the
+        versioned authorization record (``policy/record.py``) the outcome was
+        decided under — for a human-approved or retried execution, the hold's
+        PINNED record — so the row that says a side effect happened also says
+        what authorized it.
         """
         raise NotImplementedError
 
@@ -355,4 +376,33 @@ class Ledger(ABC):
     @abstractmethod
     def backfill(self) -> dict:
         """Idempotently fill judgment columns for historical rows from their JSON."""
+        raise NotImplementedError
+
+    # -- tamper-evident audit chain (docs/ledger-integrity.md) ----------------
+    #
+    # Part of the port because the pending service binds every hold's pinned
+    # authorization record into the chain and checks it at approval. A ledger
+    # that could hold a pending action but not chain its record would let the
+    # record sit in a JSON column, trusted because it is there.
+
+    @abstractmethod
+    def record_chained(
+        self, *, event: str, subject: str, payload: dict, created_at: str
+    ) -> int:
+        """Append one entry to the hash chain and return its seq."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def chained_events(self) -> list[dict]:
+        """Every chain entry in insertion order — the order verify walks."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def verify_chain(
+        self,
+        *,
+        expected_tip: "ChainTip | None" = None,
+        expected_tips: "list[ChainTip] | None" = None,
+    ) -> "ChainVerification":
+        """Walk and verify the chain; never VALID for a chain it could not check."""
         raise NotImplementedError

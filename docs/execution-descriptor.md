@@ -177,11 +177,17 @@ The historical reproduction entered through `PendingActionService.hold`: a
 routed decision carrying a FAIL was held, approved and executed. The implemented
 human path consumes the **same** `AuthorizedExecution`:
 
-- `hold` takes the `AuthorizedExecution` and **persists the descriptor with the
-  hold**, so the record says what was held and under which policy and attempt.
-- `approve` **re-validates before executing**. Re-validation, not a stored "was
-  valid" flag: a hold outlives the process, the policy may have been changed or
-  withdrawn in the interval, and a human approving a stale authorization is the
+- `hold` takes the `AuthorizedExecution` and **persists the pinned authorization
+  record with the hold** — the descriptor, the requirements the selected policy
+  resolved, its version and the coverage report — and binds it into the audit
+  chain (`docs/execution-authorization-record.md`).
+- `approve` **checks the pinned record, then re-validates before executing**.
+  The row must match its chain entry on a chain that verifies; the deployment
+  must still select the pinned policy (a rotation is refused as
+  `PinnedPolicySuperseded` and the hold voided, in either direction); and only
+  then is the record decoded inside the seam and the selected policy
+  re-resolved for the action. Re-validation, not a stored "was valid" flag: a
+  hold outlives the process, and a human approving a stale authorization is the
   case the TTL exists for but does not cover.
 - `retry_execution` re-drives the same validated path and can approve nothing,
   which it already cannot.
@@ -299,14 +305,15 @@ still taking no `Judgment` parameter.
 
 ## 11. What this does not close
 
-- **R5 and R6, deferred.** The authorization record still will not carry the
-  snapshot digest, attempt id and requirements (R5), and the structured coverage
-  report — `answered_by`, `recorded_unavailable` — is still dropped before the
-  assessment exists (R6). **These are the AUDIT consequences of this same gap
-  and must follow promptly**: enforcement without a record leaves a system that
-  decides correctly and cannot show that it did.
-- **R7, the mint-sweep alias.** `_resolve_bindings` resolves imports, not
-  assignments, so `_m = mint` is invisible to the sweep. Queued behind R5/R6.
+- **R5 and R6 — CLOSED by TASK 6** (`docs/execution-authorization-record.md`).
+  The record carries the snapshot digest, attempt, resolved requirements and
+  policy version (R5) and the coverage report — `answered_by`, the unavailable
+  implementations, the refusing row (R6) — on every hold and every execution
+  row, bound into the audit chain. Kept here so a reader who remembers the
+  deferral finds what happened to it.
+- **R7, the mint-sweep alias — CLOSED.** `_resolve_bindings` now resolves a
+  plain rebinding (`_m = mint`) to the symbol its right-hand side is bound to,
+  with a planted control.
 - Everything in § A6.
 
 ## Checkpoint B implementation
@@ -332,11 +339,13 @@ against itself.
 Human review resolves only the risk decision.  `PendingActionService.hold`
 accepts only a routed decision already carrying `AuthorizedExecution`, refuses
 an action argument different from the validated action, and persists the full
-binding.  Approval, reload and retry restore that context and re-run the same
-authorizer against the currently selected policy before producing an approving
-decision.  Legacy rows without an authorization binding are refused with
-"re-verification required": manufacturing a completed mandatory check from a
-human click would collapse two different authorities.
+binding as a pinned, chain-bound record.  Approval and retry check the record
+against its chain entry and the pinned policy against the selected one, then
+re-run the same authorizer before producing an approving decision; a rotated
+policy is refused as such rather than inherited (TASK 5).  Legacy rows without a
+versioned record are refused with "re-verification required": manufacturing a
+completed mandatory check from a human click would collapse two different
+authorities.
 
 Production migration issuance also invokes the same authorizer before the
 recorded authority may sign.  Unknown profiles are loaded at supported factory

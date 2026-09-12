@@ -5,10 +5,35 @@ also the *only* place a held action becomes an approved decision the executor
 may run — and only after the human's approval has been written to the ledger.
 Constructing that approving :class:`GateDecision` here (never on the swarm side)
 keeps the proposer/judge wall intact: the human is the HUMAN-tier authority.
+
+THE PINNED RECORD (PHASE-1.2c, TASK 5/6). A hold persists a versioned
+authorization record (``policy/record.py``): the snapshot digest, the attempt,
+the requirements the SELECTED policy resolved, that policy's version, and the
+coverage report. It is written at hold creation and never rewritten, and it is
+bound into the tamper-evident audit chain under the hold's own identity.
+
+Approval compares against that PINNED resolution, in this order:
+
+1. the row's record must equal its chain entry, and the chain must verify —
+   pinning removes re-resolution from the approval path, so the stored
+   requirements are trusted BECAUSE they are in the record, and a JSON column
+   that anyone with a database handle can rewrite is not a record;
+2. the deployment must still select the policy the hold is pinned to — a hold
+   pinned to a superseded policy is refused as such (a distinct refusal) and
+   marked ``invalidated``, in either direction, because the new policy may
+   require more or less and neither is what the human was shown;
+3. only then is the record decoded inside the seam and the selected policy
+   re-resolved for the concrete action, exactly as at hold time.
+
+A rotation can also invalidate the whole pending backlog explicitly
+(:meth:`PendingActionService.invalidate_superseded`). The TTL is unchanged: a
+lapsed hold expires, an invalidated hold is voided, and the ledger tells the
+two apart.
 """
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Callable
 
@@ -36,6 +61,14 @@ from prometheus_protocol.policy.execution import (
     AuthorizedExecution,
     ExecutionAuthorizer,
     ExecutionNotAuthorized,
+    PinnedPolicySuperseded,
+)
+from prometheus_protocol.policy.profile import VerificationPolicy, policy_digest
+from prometheus_protocol.policy.record import (
+    PINNED_HOLD_EVENT,
+    authorization_record,
+    is_versioned_record,
+    restore_coverage,
 )
 
 
@@ -125,17 +158,10 @@ def _judgment_from_dict(data: dict) -> Judgment:
     )
 
 
-def _authorization_to_dict(value: AuthorizedExecution[ExecutableAction]) -> dict:
-    d = value.descriptor
-    return {
-        "snapshot_digest": value.assessment.snapshot_digest,
-        "policy_id": d.policy_id,
-        "policy_digest": d.policy_digest,
-        "artifact_sha256": d.artifact_sha256,
-        "target_canonical": d.target_canonical,
-        "action_class": d.action_class,
-        "attempt_id": d.attempt_id,
-    }
+def _hold_subject(pending_id: int) -> str:
+    """The chain subject a hold's record is bound under."""
+
+    return f"pending:{pending_id}"
 
 
 class PendingActionService:
@@ -195,6 +221,10 @@ class PendingActionService:
         authorization = self._authorizer.revalidate(authorization)
 
         created = self._clock()
+        # THE PINNED RECORD, built from the seam's own re-resolution (the
+        # requirements and policy version on the AuthorizedExecution) — never
+        # from anything the caller supplied. Written once, here.
+        record = authorization_record(authorization, pinned_at=created)
         pending_id = self._ledger.record_pending_action(
             subject_id=decision.subject_id,
             risk_class=risk_class,
@@ -203,7 +233,20 @@ class PendingActionService:
             confidence=judgment.confidence,
             action=_action_to_dict(action),
             judgment=_judgment_to_dict(judgment),
-            authorization=_authorization_to_dict(authorization),
+            authorization=record,
+            created_at=created,
+        )
+        # THE TAMPER-EVIDENCE BINDING. The same record goes into the audit
+        # chain under this hold's identity. Approval requires the row to match
+        # this entry and the chain to verify (see ``_require_chain_binding``),
+        # so a database write that weakens the row's requirements is detected
+        # rather than trusted. If this append raises — an anchor that cannot be
+        # written, say — the row exists with no entry and can never be
+        # approved, which is the fail-closed direction; the TTL expires it.
+        self._ledger.record_chained(
+            event=PINNED_HOLD_EVENT,
+            subject=_hold_subject(pending_id),
+            payload=record,
             created_at=created,
         )
         return PendingAction(
@@ -217,6 +260,7 @@ class PendingActionService:
             created_at=created,
             human_decision=None,
             authorization=authorization,
+            record=record,
         )
 
     # -- reading -----------------------------------------------------------
@@ -319,12 +363,12 @@ class PendingActionService:
         an approval a human already recorded, for a hold whose execution was
         refused (fail-closed) or deferred and has therefore **never** executed.
         Anything else is refused: a still-pending hold (the halt is not
-        bypassable), a rejected or expired hold (decided-stays-decided), a hold
-        that already executed, or an approval older than the TTL (an approval
-        does not authorize execution indefinitely — the same window that bounds
-        how long a hold may wait for its decision bounds how long a decision may
-        wait for its execution; ``ttl_seconds <= 0`` disables both). The human
-        decision record itself is never touched.
+        bypassable), a rejected, expired or invalidated hold (decided-stays-
+        decided), a hold that already executed, or an approval older than the
+        TTL (an approval does not authorize execution indefinitely — the same
+        window that bounds how long a hold may wait for its decision bounds how
+        long a decision may wait for its execution; ``ttl_seconds <= 0`` disables
+        both). The human decision record itself is never touched.
         """
 
         timestamp = now or self._clock()
@@ -440,6 +484,73 @@ class PendingActionService:
             decision_reason=f"expired after {self._ttl_seconds}s TTL",
         )
 
+    # -- rotation ------------------------------------------------------------
+
+    def invalidate_superseded(self, *, now: str | None = None) -> list[PendingAction]:
+        """Invalidate every PENDING hold pinned to a policy no longer selected.
+
+        The explicit half of rotation. Approval refuses such a hold anyway (and
+        marks it as it does); this lets an operator who has just rotated the
+        policy void the whole backlog at once, so the queue does not carry holds
+        that read as approvable and are not. Idempotent, and it never touches a
+        decided hold. A legacy hold with no record is left for approval to
+        refuse as re-verification required. Returns the holds voided by this
+        call.
+        """
+
+        timestamp = now or self._clock()
+        current = self._selected_policy()
+        invalidated: list[PendingAction] = []
+        for row in self._ledger.pending_actions(status=PendingStatus.PENDING.value):
+            pending = self._from_row(row)
+            if pending.record is None or self._pinned_to(pending, current):
+                continue
+            self._invalidate(pending, current=current, now=timestamp)
+            refreshed = self.get(pending.id)
+            if refreshed is not None:
+                invalidated.append(refreshed)
+        return invalidated
+
+    def _selected_policy(self) -> VerificationPolicy:
+        if self._authorizer is None:
+            raise ExecutionNotAuthorized(
+                "pending service has no trusted policy supplier"
+            )
+        return self._authorizer.selected_policy()
+
+    @staticmethod
+    def _pinned_to(pending: PendingAction, policy: VerificationPolicy) -> bool:
+        """Whether ``pending`` is pinned to exactly ``policy`` — its identity AND
+        its content digest, which commits to its version and requirements."""
+
+        record = pending.record
+        return (
+            record is not None
+            and record.get("policy_id") == policy.policy_id
+            and record.get("policy_digest") == policy_digest(policy)
+        )
+
+    def _invalidate(
+        self, pending: PendingAction, *, current: VerificationPolicy, now: str
+    ) -> str:
+        record = pending.record or {}
+        pinned_digest = str(record.get("policy_digest", ""))
+        reason = (
+            f"policy rotated: hold pinned to {record.get('policy_id')!r} "
+            f"v{record.get('policy_version')} ({pinned_digest[:12]}); the deployment "
+            f"now selects {current.policy_id!r} v{current.version} "
+            f"({policy_digest(current)[:12]}). Re-run verification under the "
+            "selected policy; the hold cannot be approved."
+        )
+        # Only a still-pending row transitions; an approved hold on a retry
+        # keeps its decision record and is simply refused.
+        self._ledger.invalidate_pending_action(
+            pending.id, invalidated_at=now, reason=reason
+        )
+        return reason
+
+    # -- the checks approval and retry run, in order ----------------------------
+
     def _require_pending(self, pending_id: int) -> PendingAction:
         pending = self.get(pending_id)
         if pending is None:
@@ -453,16 +564,84 @@ class PendingActionService:
     def _revalidate(
         self, pending: PendingAction
     ) -> AuthorizedExecution[ExecutableAction]:
-        if self._authorizer is None or pending.authorization is None:
+        """Chain binding, then the pinned policy, then the seam's re-resolution."""
+
+        if self._authorizer is None or pending.record is None:
             raise ExecutionNotAuthorized(
                 "legacy hold has no trusted execution descriptor; re-verification is required"
             )
-        return self._authorizer.revalidate(pending.authorization)
+        self._require_chain_binding(pending)
+        self._require_pinned_policy(pending)
+        # Decode the pinned record inside the seam, which re-resolves the (now
+        # confirmed) selected policy for the concrete action, exactly as at hold
+        # time. The identities come off the record the chain just vouched for.
+        record = pending.record
+        return self._authorizer.restore_persisted(
+            record,
+            outcome=pending.judgment,
+            action=pending.action,
+            target_canonical=str(record["target_canonical"]),
+            attempt_id=str(record["attempt_id"]),
+            coverage=restore_coverage(record),
+        )
+
+    def _require_chain_binding(self, pending: PendingAction) -> None:
+        """The row's record must be the chain's record, on a chain that verifies.
+
+        Detection, not prevention: a writer with a database handle can still
+        change the row. What this guarantees is that approval sees the change —
+        a mismatch between the row and its chain entry, or a chain that no
+        longer verifies — and refuses. Its limit is the chain's (see
+        ``docs/ledger-integrity.md``): an adversary who rewrites the row, the
+        entry AND every later hash is caught only by an external anchor.
+        """
+
+        subject = _hold_subject(pending.id)
+        entries = [
+            entry
+            for entry in self._ledger.chained_events()
+            if entry.get("event") == PINNED_HOLD_EVENT and entry.get("subject") == subject
+        ]
+        if len(entries) != 1:
+            raise ExecutionNotAuthorized(
+                f"hold #{pending.id} has {len(entries)} tamper-evident chain "
+                "entries where exactly one is required; the pinned record cannot "
+                "be trusted"
+            )
+        payload = entries[0].get("payload")
+        stored: object = payload
+        if isinstance(payload, str):
+            try:
+                stored = json.loads(payload)
+            except ValueError:
+                stored = None
+        if stored != pending.record:
+            raise ExecutionNotAuthorized(
+                f"hold #{pending.id}: the pinned authorization record does not "
+                "match its tamper-evident chain entry; the row was altered after "
+                "it was written"
+            )
+        verification = self._ledger.verify_chain()
+        if not verification.ok:
+            raise ExecutionNotAuthorized(
+                f"hold #{pending.id}: the tamper-evident chain did not verify "
+                f"({verification.render()}); the pinned record cannot be trusted"
+            )
+
+    def _require_pinned_policy(self, pending: PendingAction) -> None:
+        """The deployment must still select the policy the hold is pinned to."""
+
+        current = self._selected_policy()
+        if self._pinned_to(pending, current):
+            return
+        reason = self._invalidate(pending, current=current, now=self._clock())
+        raise PinnedPolicySuperseded(f"hold #{pending.id} is refused: {reason}")
 
     def _from_row(self, row: dict) -> PendingAction:
         # A human_decision records an actual human approve/reject. A system
-        # expiry is a transition audited in the row (status/decided_at/reason),
-        # not a human decision, so it is not surfaced here.
+        # expiry or invalidation is a transition audited in the row
+        # (status/decided_at/reason), not a human decision, so it is not
+        # surfaced here.
         human_decision = None
         if row["status"] in (
             PendingStatus.APPROVED.value,
@@ -476,17 +655,13 @@ class PendingActionService:
             )
         action = _action_from_dict(row["action"])
         judgment = _judgment_from_dict(row["judgment"])
+        # The record is carried as persisted and checked at approval; it is not
+        # re-authorized on read, so listing holds after a rotation still works
+        # and approval can name the rotation rather than a bare mismatch. A
+        # pre-record blob (the seven identity fields) is not a record: it is
+        # refused at approval as re-verification required.
         raw = row.get("authorization")
-        authorization = None
-        if isinstance(raw, dict):
-            if self._authorizer is not None:
-                authorization = self._authorizer.restore_persisted(
-                    raw,
-                    outcome=judgment,
-                    action=action,
-                    target_canonical=raw["target_canonical"],
-                    attempt_id=raw["attempt_id"],
-                )
+        record = raw if is_versioned_record(raw) else None
         return PendingAction(
             id=row["id"],
             subject_id=row["subject_id"],
@@ -497,5 +672,6 @@ class PendingActionService:
             status=PendingStatus(row["status"]),
             created_at=row["created_at"],
             human_decision=human_decision,
-            authorization=authorization,
+            authorization=None,
+            record=record,
         )

@@ -63,6 +63,6 @@ def test_mutations_cover_every_named_load_bearing_join(runner):
         "action-class-comparison-removed",
         "attempt-id-comparison-removed",
         "hold-admission-check-removed",
-        "hold-policy-re-resolution-removed",
+        "hold-pinned-policy-comparison-removed",
         "selected-profile-injection-unwired",
     }
