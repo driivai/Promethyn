@@ -83,6 +83,23 @@ SUBSTRATE_SAFE = "safe"
 SUBSTRATE_UNSAFE = "unsafe"
 SUBSTRATE_UNKNOWN = "unknown"
 
+
+class UnsupportedPlatform(ConfigError):
+    """The refusal that is about the PLATFORM, not about this store.
+
+    A subclass, so it is still a ``ConfigError`` to every existing handler and
+    to every caller that catches one — nothing downstream changes. What it adds
+    is a fact a consumer can test with ``isinstance`` instead of matching the
+    wording of a message.
+
+    That distinction is load-bearing for anything that treats "this platform has
+    no probe" differently from "the probe ran and refused". Keying such a
+    decision on ``detail`` text makes it an enumeration of sentences, and the
+    first rewording reclassifies it silently — the allowlist failure this
+    repository has already recorded for file basenames, trigger names and
+    identifier spellings. The type cannot be reworded.
+    """
+
 #: Production posture: refuse the opt-out below. The OR of its sources.
 VERIFIED_SUBSTRATE_REQUIRED_ENV = "PROM_REQUIRE_VERIFIED_SUBSTRATE"
 #: The explicit, logged opt-out for an ``unknown`` (never an ``unsafe``) substrate.
@@ -221,6 +238,15 @@ class SubstrateReport:
     inode: int | None = None
     mount_id: int | None = None
     set_aside: tuple[UnparsedEntry, ...] = ()
+    #: TYPED, because ``detail`` is prose. An ``unknown`` verdict has two very
+    #: different causes: this platform has no probe implemented at all, or a
+    #: probe ran here and could not establish the answer. Both refuse, and only
+    #: the first is a statement about the PLATFORM rather than about the store.
+    #: Consumers that need to tell them apart previously had to match on the
+    #: wording of ``detail``, which is an enumeration of sentences — the first
+    #: rewording silently reclassifies them. This field is the fact; ``detail``
+    #: stays the human sentence and is free to change.
+    platform_unsupported: bool = False
 
     def set_aside_summary(self) -> str:
         """What was ignored, for the refusal text, the warning and the audit."""
@@ -685,7 +711,7 @@ def probe_opened_substrate(fd: int) -> SubstrateReport:
             pass
     return SubstrateReport("opened object", SUBSTRATE_UNKNOWN, None, None,
                            "descriptor mount metadata unavailable on this platform",
-                           info.st_dev, info.st_ino)
+                           info.st_dev, info.st_ino, platform_unsupported=True)
 
 
 def probe_file_substrate(path: Path) -> SubstrateReport:
@@ -697,7 +723,8 @@ def probe_file_substrate(path: Path) -> SubstrateReport:
     """
     if not sys.platform.startswith("linux") or not hasattr(os, "O_PATH"):
         return SubstrateReport(str(path), SUBSTRATE_UNKNOWN, None, None,
-                               "Linux O_PATH inspection is unavailable")
+                               "Linux O_PATH inspection is unavailable",
+                               platform_unsupported=True)
     fd = os.open(path, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC)
     try:
         return probe_opened_substrate(fd)
@@ -731,6 +758,7 @@ def probe_substrate(path: str | os.PathLike[str]) -> SubstrateReport:
             fs_type=None,
             mount_point=None,
             detail=f"no filesystem probe is implemented for {sys.platform}",
+            platform_unsupported=True,
         )
     try:
         table = Path(MOUNTINFO_PATH).read_text(encoding="utf-8", errors="replace")
@@ -818,15 +846,21 @@ def enforce_substrate(
             "Place the store and its lock file on a local filesystem of one "
             f"trusted host; there is no opt-out for a known-unsafe substrate.{note}"
         )
+    # The SAME refusal, in the same place, on the same conditions — raised as
+    # UnsupportedPlatform when the report says this platform has no probe at
+    # all. It subclasses ConfigError, so every existing handler is unaffected;
+    # what it gains is a consumer's ability to tell "unsupported platform" from
+    # "probe ran and could not establish the answer" without reading prose.
+    refusal = UnsupportedPlatform if report.platform_unsupported else ConfigError
     if policy.require_verified:
-        raise ConfigError(
+        raise refusal(
             "require_verified_substrate=True cannot be honoured: the filesystem "
             f"behind the consumed-approval store at {where} could not be "
             f"verified ({report.detail}). Move the store to a known local "
             f"filesystem, or withdraw the requirement.{note}"
         )
     if not policy.allow_unverified:
-        raise ConfigError(
+        raise refusal(
             "the filesystem behind the consumed-approval store at "
             f"{where} could not be verified: {report.detail}. Couldn't-verify "
             "is not verified-safe, so the runner refuses to build by default. If "

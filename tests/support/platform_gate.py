@@ -70,35 +70,52 @@ def require_or_skip(reason: str) -> None:
     pytest.skip(reason)
 
 
-#: The substrate probe's own words when it has no implementation for the running
-#: platform, and the ownership probe's marker. Keyed on the CAUSE the production
-#: code reports rather than on a list of test names, because the tests that hit
-#: it cannot be enumerated at module or function granularity: measured on this
-#: tree, the affected tests are 1 of 105 in one module, 5 of 142 in another, and
-#: within a single parametrised function some parameters hit it and others do
-#: not. A name-keyed allowlist would be a list over exactly the thing that
-#: varies — the failure the threat model already records.
-PLATFORM_UNSUPPORTED_MARKERS = (
-    "no filesystem probe is implemented for",
-    "descriptor mount metadata unavailable on this platform",
-    "Linux O_PATH inspection is unavailable",
-    "_PlatformUnsupported",
-)
+def _unsupported_platform_types() -> tuple[type[BaseException], ...]:
+    """The TYPES that mean "this platform has no implementation".
+
+    Imported lazily so this module stays importable on a machine where the
+    chokepoint's dependencies are not installed.
+
+    TYPED, NOT TEXTUAL, and that is the whole point. An earlier version of this
+    matched four substrings of the probe's diagnostics —
+    ``"no filesystem probe is implemented for"`` and friends. A cause set
+    spelled as prose is an enumeration of sentences: the first rewording of a
+    diagnostic silently drops a case out of the set, and the gate stops
+    recognising a refusal it used to convert. Nothing fails when that happens;
+    the platform mismatch simply becomes indistinguishable from a regression
+    again, which is precisely the condition this gate exists to remove. It is
+    the allowlist failure this repository has already recorded three times —
+    file basenames, trigger names, identifier spellings — in its fourth
+    costume.
+
+    ``UnsupportedPlatform`` (a ``ConfigError`` subclass, so every existing
+    handler is unaffected) and ``_PlatformUnsupported`` are facts the production
+    code asserts about itself. They cannot be reworded.
+    """
+
+    from prometheus_protocol.chokepoint.runner import _PlatformUnsupported
+    from prometheus_protocol.chokepoint.substrate import UnsupportedPlatform
+
+    return (UnsupportedPlatform, _PlatformUnsupported)
 
 
 def is_platform_refusal(exc: BaseException) -> bool:
     """Whether ``exc`` is the fail-closed refusal of an unsupported platform.
 
-    Deliberately narrow. It matches the substrate/ownership probe's own
-    diagnostic text, so an ordinary ``ConfigError`` — a real misconfiguration —
-    is never converted into a skip. On Linux the probe succeeds and this cannot
-    fire at all, which is why it adds no risk to the platform CI actually runs.
+    Walks the ``__cause__``/``__context__` chain, because the refusal is
+    usually re-raised wrapped and testing only the outermost type would miss
+    it. Deliberately narrow: an ordinary ``ConfigError`` — a real
+    misconfiguration — is never converted into a skip. On Linux the probe
+    succeeds, so this cannot fire at all, which is why it adds no risk to the
+    platform CI actually runs on.
     """
 
-    seen: list[str] = []
+    types = _unsupported_platform_types()
     cursor: BaseException | None = exc
-    while cursor is not None and len(seen) < 8:
-        seen.append(f"{type(cursor).__name__}: {cursor}")
+    for _ in range(8):  # bounded: a cause cycle must not hang the run
+        if cursor is None:
+            return False
+        if isinstance(cursor, types):
+            return True
         cursor = cursor.__cause__ or cursor.__context__
-    blob = " || ".join(seen)
-    return any(marker in blob for marker in PLATFORM_UNSUPPORTED_MARKERS)
+    return False

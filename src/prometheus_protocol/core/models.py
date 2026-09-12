@@ -146,9 +146,26 @@ class Skill:
     source: str = ""
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class Evidence:
     """The outcome produced by one verifier for one attempt.
+
+    KEYWORD-ONLY, DELIBERATELY. Fourteen fields, four of them optional and
+    sitting between the ones callers actually set, made positional construction
+    miscountable in a way nothing caught: ``Evidence(True, 1, 1, (), "runner",
+    Verdict.PASS, tier=Tier.HARD)`` reads as though ``"runner"`` is the verifier
+    id, and it is ``stdout``. The value lands in a plausible slot, ``verifier_id``
+    silently keeps its default, and nothing raises. Measured: that spelling
+    appeared in the Checkpoint B proofs and was INVISIBLE, because every path it
+    sat on refused before coverage compared the implementation with the evidence.
+    The moment a test expected coverage to HOLD it surfaced as
+    ``coverage.invalid_evidence`` — "the result names one implementation and the
+    evidence another".
+
+    A field this class carries is read by the coverage decision, so a silently
+    mis-slotted one is a policy input set by accident. ``kw_only=True`` removes
+    the shape rather than the instance: there is no longer a positional form to
+    miscount, on any call site, including ones nobody has written yet.
 
     Contract note (additive, pre-1.0): the trailing fields below were added to
     let multiple verifiers' verdicts be fused and ranked. They all have

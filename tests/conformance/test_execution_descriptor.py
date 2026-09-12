@@ -109,7 +109,7 @@ def test_bank_re_resolves_and_rejects_honestly_redigested_weakened_snapshot():
         check_id="structural",
         snapshot_digest=snapshot_digest(weakened),
         implementation="structural",
-        outcome=Evidence(True, 1, 1, (), "structural", Verdict.PASS, tier=Tier.HARD),
+        outcome=_hard_pass("structural"),
     )
     with pytest.raises(ExecutionNotAuthorized, match="re-resolved"):
         VerifierBank(policy_supplier=lambda: POLICY).assess(weakened, [bound])

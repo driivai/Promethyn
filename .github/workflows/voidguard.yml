@@ -11,62 +11,54 @@ name: voidguard
 # also the byte-for-byte proof that the standalone repo carries the approved
 # history. Bump the pin deliberately when the standalone repo advances.
 
+# WHY THERE IS NO `paths:` FILTER ANY MORE.
+#
+# This job used to run only when a PR touched one of ~35 enumerated paths. That
+# is an allowlist over the thing that varies — which files a change happens to
+# touch — and its failure mode is silent: a PR touching nothing on the list got
+# NO SCAN AT ALL and still showed every check green. An absent scan is
+# Unavailable, not clean, and this repository's own doctrine is that
+# couldn't-verify is never verified-clean. The filter made the instrument
+# report "clean" for runs where it had not looked.
+#
+# The list was also stale by construction: every sprint that added a guard had
+# to remember to add its path, and a forgotten entry disarmed the scan for
+# exactly the new code it was meant to cover. It now runs on every pull request.
+#
+# RE-SANCTIONED COUNTS, WITH THE RATIONALE RATHER THAN JUST THE NUMBERS.
+# The last observed summary was `0 VOID, 3 WARN, 2 UNKNOWN`. Two things move it:
+#
+#  * The platform gate (PROM_REQUIRE_LINUX) adds skip conditions, and VG-1-001
+#    aggregates skipif guards as UNKNOWN with the objection: "for capability
+#    probes, ensure at least one CI job provides the capability and would FAIL
+#    (not skip) without it." That objection is ANSWERED here rather than
+#    suppressed: ci.yml sets PROM_REQUIRE_LINUX=1 on the build job, under which
+#    a gated test that cannot run is a FAILURE, not a skip. The UNKNOWN may
+#    still be reported — it is a static finding and the answer is dynamic — and
+#    it is accepted on that basis, not baselined away.
+#  * Running on every PR means the scan now covers PRs it previously skipped, so
+#    a count that only ever came from filtered runs was never the whole picture.
+#
+# Only VOID blocks. WARN and UNKNOWN stay visible and are not a claim of
+# complete verification.
+#
+# THE THREE POSTGRES_* WARNINGS, CLASSIFIED. VG-3-001/002/003 report
+# POSTGRES_DB, POSTGRES_USER and POSTGRES_PASSWORD in ci.yml as "set and read
+# nowhere". They are NOT dead config: they sit under `services.postgres.env` and
+# are consumed by the postgres image's own entrypoint, which is outside the 297
+# repo files the scan searches. The finding is a true observation with a reader
+# the scanner cannot see.
+#
+# There is a real coupling underneath it, which is worth more than the warning:
+# those three values are duplicated by PROM_CHOKEPOINT_PG_DB / _USER / _PASSWORD
+# on the live-migration step, and the two sets must agree or the live proofs
+# cannot connect. Nothing enforces that agreement today — a wiring gap rather
+# than dead config, and named here rather than closed, because closing it means
+# deciding where the single source of those values should live.
 on:
   push:
     branches: [main]
   pull_request:
-    paths:
-      - ".github/workflows/voidguard.yml"
-      - "tools/voidguard/**"
-      - "src/prometheus_protocol/chokepoint/audit_*.py"
-      - "tests/chokepoint/test_audit_source.py"
-      - "scripts/f11_source_revert_proofs.py"
-      - "src/prometheus_protocol/chokepoint/reconcil*.py"
-      - "src/prometheus_protocol/cli/reconcile.py"
-      - "tests/chokepoint/test_reconciliation.py"
-      - "scripts/f11_reconcile_revert_proofs.py"
-      - "scripts/fix_b_revert_proofs.py"
-      - "scripts/substrate_revert_proofs.py"
-      - "src/prometheus_protocol/chokepoint/substrate.py"
-      - "src/prometheus_protocol/chokepoint/runner.py"
-      - "src/prometheus_protocol/chokepoint/authorization_journal.py"
-      - "tests/chokepoint/test_*substrate*.py"
-      - "tests/chokepoint/test_mount_relevance.py"
-      - "scripts/mountinfo_diagnostic.py"
-      - "scripts/pih4a_revert_proofs.py"
-      - "src/prometheus_protocol/attestation/**"
-      - "tests/conformance/test_config_attestation.py"
-      - "scripts/prod_fix_1_revert_proofs.py"
-      # F8. The scan looks for guards that cannot fail; a secret sweep that
-      # discovers nothing, or a reason-code allowlist that refuses nothing, is
-      # exactly that shape, and both are new here.
-      - "scripts/prod_fix_2_revert_proofs.py"
-      - "src/prometheus_protocol/core/secrets.py"
-      - "src/prometheus_protocol/core/diagnostics.py"
-      - "tests/conformance/test_secret_canary_sweep.py"
-      - "tests/conformance/test_secret_sink_regressions.py"
-      - "scripts/phase_1_2a_revert_proofs.py"
-      - "scripts/phase_1_2b_revert_proofs.py"
-      - "scripts/phase_1_2c_revert_proofs.py"
-      # CHECKPOINT 3. An acceptance condition that refuses nothing is a guard
-      # that cannot fail — exactly what the scan looks for.
-      - "tests/conformance/test_advisory_cannot_satisfy.py"
-      # PHASE-1.2b. The scan looks for guards that cannot fail. A mint guard
-      # that refuses nothing, or an authorization surface that accepts anything
-      # while claiming a type, is exactly that shape.
-      - "src/prometheus_protocol/policy/assessment.py"
-      - "src/prometheus_protocol/chokepoint/approval.py"
-      - "src/prometheus_protocol/chokepoint/recorded_authority.py"
-      - "tests/conformance/test_unbound_authorization_closed.py"
-      # PHASE-1.2a. The scan looks for guards that cannot fail; a coverage
-      # validator that refuses nothing, or a no-second-aggregator sweep that
-      # finds nothing, is exactly that shape, and both are new here.
-      - "src/prometheus_protocol/policy/**"
-      - "src/prometheus_protocol/verifier/bank.py"
-      - "src/prometheus_protocol/swarm/runtime.py"
-      - "tests/conformance/test_coverage_enforcement.py"
-      - "tests/conformance/test_no_second_aggregator.py"
-      - ".github/workflows/ci.yml"
 
 permissions:
   contents: read
