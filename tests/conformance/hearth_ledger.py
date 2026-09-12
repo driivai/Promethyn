@@ -250,6 +250,30 @@ EXPECTED_PROTECTED_FILES = 21
 #:   legitimately move together because sanctioning only one side would leave
 #:   the direct-gate, human-hold or executor join open.
 #:
+#:
+#: * **PHASE-1.2c REMEDIATION (Evidence by construction)** — ``core/models.py``.
+#:   One decorator: ``@dataclass(frozen=True)`` became
+#:   ``@dataclass(frozen=True, kw_only=True)`` on ``Evidence``. No field, no
+#:   default, no method and no ``__post_init__`` changed; the class's behaviour
+#:   is identical for every correctly-constructed instance.
+#:
+#:   What it removes is a SHAPE. ``Evidence`` carries fourteen fields with four
+#:   optional ones between the commonly-set ones, so
+#:   ``Evidence(True, 1, 1, (), "runner", Verdict.PASS, tier=Tier.HARD)`` reads
+#:   as though "runner" is the verifier id when it is ``stdout``. Nothing raises:
+#:   the value lands in a plausible slot and ``verifier_id`` keeps its default.
+#:   Measured — that spelling was live in the Checkpoint B proofs and invisible,
+#:   because every path it sat on refused BEFORE coverage compared the result's
+#:   implementation with the evidence's verifier id. It surfaced only when a
+#:   positive control expected coverage to hold.
+#:
+#:   A mis-slotted field here is a policy input set by accident, so the fix is at
+#:   the constructor rather than at the call sites: there is no positional form
+#:   left to miscount, including in code nobody has written yet. A sweep for the
+#:   same shape across every dataclass of six or more fields found 59 positional
+#:   constructions; they are reported rather than converted, because converting
+#:   twenty-odd classes is a separate change and this one is load-bearing.
+#:
 #: Those sprints are why these bytes are what they are. They do NOT license the
 #: next edit to the same files: updating a digest below is a fresh decision, and
 #: the reason for it belongs beside it.
@@ -261,7 +285,7 @@ DIGESTS: dict[str, str] = {
     "src/prometheus_protocol/core/interfaces.py":
         "7098698aa935603b33ccbfc722ae3fe748d68e3ffdaa6adf35e00033a2f467e5",
     "src/prometheus_protocol/core/models.py":
-        "1355a91dfdbc0cd1ad4e3f12c9d4bb02b0548858973e1b583a82daebbc61e48c",
+        "4204e479e5047a0ebfbf64fad178eef304d3aef7a0e663a8e253b56d7d1e975f",
     "src/prometheus_protocol/execution/controller.py":
         "a3003b73d63223a361b5f3c884908b642573948a9ec0cb4f036872aec169d0ed",
     "src/prometheus_protocol/execution/executor.py":

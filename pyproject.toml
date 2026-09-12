@@ -25,7 +25,14 @@ keywords = [
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "Operating System :: POSIX",
+    # THE PLATFORM CONTRACT, stated rather than implied. This was
+    # "Operating System :: POSIX", which macOS satisfies — so it promised support
+    # this code does not deliver. The chokepoint's execution-ownership proof rests
+    # on /proc/self/mountinfo, O_PATH descriptor inspection and namespace
+    # identities, which have no portable equivalent; off Linux the runner
+    # correctly REFUSES to build rather than proceed on an unverified substrate.
+    # See tests/support/platform_gate.py and docs/security-model.md.
+    "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",

@@ -15,6 +15,21 @@ from prometheus_protocol import Config, build_orchestrator
 
 
 @pytest.fixture
+def linux_only():
+    """Gate a test on the repository's declared platform contract.
+
+    Applied per-module as ``pytestmark = pytest.mark.usefixtures("linux_only")``
+    or per-test as a decorator. It runs at setup rather than at collection, so
+    the condition is evaluated when the test is about to run — which is also
+    what lets it FAIL under ``PROM_REQUIRE_LINUX=1`` instead of only skipping.
+    """
+
+    from tests.support.platform_gate import require_linux
+
+    require_linux()
+
+
+@pytest.fixture
 def config(tmp_path):
     return Config(
         provider="mock",

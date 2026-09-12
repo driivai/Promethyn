@@ -109,10 +109,128 @@ def test_bank_re_resolves_and_rejects_honestly_redigested_weakened_snapshot():
         check_id="structural",
         snapshot_digest=snapshot_digest(weakened),
         implementation="structural",
-        outcome=Evidence(True, 1, 1, (), "structural", Verdict.PASS, tier=Tier.HARD),
+        outcome=_hard_pass("structural"),
     )
     with pytest.raises(ExecutionNotAuthorized, match="re-resolved"):
         VerifierBank(policy_supplier=lambda: POLICY).assess(weakened, [bound])
+
+
+def _hard_pass(verifier_id: str) -> Evidence:
+    """A passing HARD result whose verifier_id is set BY KEYWORD.
+
+    ``Evidence`` is ``(passed, total, passed_count, failures, stdout, stderr,
+    duration_s, timed_out, verifier_id, verdict, ...)``, so the positional form
+    used elsewhere in this file puts the implementation name into ``stdout`` and
+    leaves ``verifier_id`` at its default. That is invisible wherever the seam
+    refuses BEFORE coverage runs, and becomes ``coverage.invalid_evidence`` — the
+    result names one implementation and the evidence another — as soon as a test
+    expects coverage to hold. A positive control is exactly such a test.
+    """
+
+    return Evidence(
+        passed=True,
+        total=1,
+        passed_count=1,
+        failures=(),
+        verifier_id=verifier_id,
+        verdict=Verdict.PASS,
+        tier=Tier.HARD,
+    )
+
+
+#: Two requirements, so ONE can be dropped and the snapshot still be non-empty.
+#: ``POLICY`` above has a single requirement, which makes ``requirements=()`` the
+#: only weakening expressible against it — and an implementation that merely
+#: REJECTED EMPTY SNAPSHOTS would pass the test above while closing nothing. The
+#: design names "rejecting only an empty snapshot" as an insufficient fix, so the
+#: proof of the sufficient one has to weaken partially.
+_TWO_REQUIREMENT_POLICY = VerificationPolicy(
+    policy_id="descriptor-test-two",
+    version=1,
+    requirements=(
+        PolicyRequirement(
+            check_id="run", permitted=("runner",), applies_to=(ACTION_SANDBOX_EXECUTE,)
+        ),
+        PolicyRequirement(
+            check_id="audit",
+            permitted=("auditor",),
+            applies_to=(ACTION_SANDBOX_EXECUTE,),
+        ),
+    ),
+    require_verification=(ACTION_SANDBOX_EXECUTE,),
+)
+
+
+def test_bank_re_resolves_and_rejects_a_PARTIALLY_weakened_snapshot():
+    """The reproduced R1 attack, at its actual strength: drop ONE of two.
+
+    This is the negative half of the pair; the positive control is
+    :func:`test_bank_mints_for_the_unweakened_two_requirement_snapshot` below.
+    Without the positive control a seam that refused everything would pass this.
+    """
+
+    original = resolve(
+        _TWO_REQUIREMENT_POLICY,
+        artifact_sha256=content_hash(action().code),
+        target_canonical=TARGET,
+        action_class=ACTION_SANDBOX_EXECUTE,
+        attempt_id=ATTEMPT,
+    )
+    weakened = replace(
+        original,
+        requirements=tuple(r for r in original.requirements if r.check_id != "audit"),
+    )
+    # Still non-empty, and still citing the policy it no longer satisfies — the
+    # signature of the reproduced attack, not a degenerate case.
+    assert [r.check_id for r in weakened.requirements] == ["run"]
+    assert (
+        weakened.policy_id == original.policy_id
+        and weakened.policy_digest == original.policy_digest
+    )
+    bound = BoundResult(
+        check_id="run",
+        snapshot_digest=snapshot_digest(weakened),
+        implementation="runner",
+        outcome=_hard_pass("runner"),
+    )
+    with pytest.raises(ExecutionNotAuthorized, match="re-resolved"):
+        VerifierBank(policy_supplier=lambda: _TWO_REQUIREMENT_POLICY).assess(
+            weakened, [bound]
+        )
+
+
+def test_bank_mints_for_the_unweakened_two_requirement_snapshot():
+    """POSITIVE CONTROL for the partial-weakening refusal above.
+
+    The same policy, the same artifact, nothing dropped, and a result for BOTH
+    requirements: the bank mints. A refusal here would mean the test above
+    proves only that the seam refuses, never that it discriminates.
+    """
+
+    intact = resolve(
+        _TWO_REQUIREMENT_POLICY,
+        artifact_sha256=content_hash(action().code),
+        target_canonical=TARGET,
+        action_class=ACTION_SANDBOX_EXECUTE,
+        attempt_id=ATTEMPT,
+    )
+    digest = snapshot_digest(intact)
+    results = [
+        BoundResult(
+            check_id=check,
+            snapshot_digest=digest,
+            implementation=impl,
+            outcome=_hard_pass(impl),
+        )
+        for check, impl in (("run", "runner"), ("audit", "auditor"))
+    ]
+    assessed = VerifierBank(policy_supplier=lambda: _TWO_REQUIREMENT_POLICY).assess(
+        intact, results
+    )
+    assert assessed.snapshot_digest == digest
+    assert assessed.policy_id == "descriptor-test-two"
+    assert isinstance(assessed.outcome, Judgment)
+    assert assessed.outcome.verdict == Verdict.PASS
 
 
 def test_descriptor_refuses_each_cross_action_mismatch_before_execution():

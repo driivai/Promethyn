@@ -11,6 +11,14 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      # THE PLATFORM CONTRACT, enforced where it is promised. The platform gate
+      # (tests/support/platform_gate.py) SKIPS off Linux so a developer on macOS
+      # can tell a platform mismatch from a regression. Under this flag it FAILS
+      # instead — so on the platform this project actually supports, the gate can
+      # never be a silent no-op, and a skip here is a broken promise rather than
+      # a shrug. Same idiom as PROM_REQUIRE_SANDBOX / PROM_REQUIRE_PG below.
+      PROM_REQUIRE_LINUX: "1"
     services:
       postgres:
         image: postgres:16-alpine
@@ -347,9 +355,9 @@ jobs:
           python - <<'PY'
           import xml.etree.ElementTree as ET
           cases = list(ET.parse("execution-descriptor.xml").iter("testcase"))
-          assert len(cases) == 16, f"16 descriptor proofs required; observed {len(cases)}"
+          assert len(cases) == 18, f"18 descriptor proofs required; observed {len(cases)}"
           assert all(c.find(t) is None for c in cases for t in ("skipped", "failure", "error"))
-          print("Checkpoint B: 16 proofs; zero skips/failures/errors")
+          print("Checkpoint B: 18 proofs; zero skips/failures/errors")
           PY
 
       - name: PHASE-1.2c Checkpoint B seam mutations (must be caught)

@@ -461,6 +461,17 @@ _ALLOWED_JOB_KEYS: dict[str, object] = {
     "services": _PinnedBy("test_the_job_declares_exactly_the_expected_services"),
     "strategy": _PinnedBy("test_the_gate_runs_in_every_matrix_job_on_every_supported_python"),
     "steps": _PinnedBy("test_the_gate_step_command_is_exactly_the_gate_and_nothing_else"),
+    # Job-level env carries the platform contract's CI half: PROM_REQUIRE_LINUX=1
+    # turns the platform gate from "skip off Linux" into "FAIL off Linux", so the
+    # gate can never be a silent no-op on the platform this project supports.
+    #
+    # The VALUE is pinned rather than delegated, and that is the point. Job-level
+    # env is precisely where a guard would be disarmed one scope up — a single
+    # `PROM_REQUIRE_SANDBOX: "0"` here would turn every isolation proof in this
+    # workflow into a skip while every guard in this file still passed. So this
+    # entry permits exactly one mapping and nothing else; a new flag is a
+    # deliberate edit here, with the reason, like every other entry.
+    "env": {"PROM_REQUIRE_LINUX": "1"},
 }
 
 #: The database fixture, pinned. Not because the type gate depends on Postgres,
