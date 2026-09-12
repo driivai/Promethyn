@@ -11,10 +11,13 @@ Turning that flag off surfaces 25 first-party module-resolution errors (scripts
 and tests importing siblings), none of them third-party. This docstring used
 to say silencing those "needs per-module ``[mypy-...]`` sections", which
 ``test_type_gate.py::test_mypy_ini_has_no_per_module_sections`` forbids. That
-claim was WRONG and is withdrawn: measured on this tree, widening ``mypy_path``
-to the directories those siblings live in (``scripts``, ``tests/conformance``,
-``tests/chokepoint``) resolves all 25 with the flag off — ``Success: no issues
-found in 290 source files`` — with no per-module section at all. The change is
+claim was WRONG and is withdrawn: measured 2026-09-12, when the gate checked
+290 files, widening ``mypy_path`` to the directories those siblings live in
+(``scripts``, ``tests/conformance``, ``tests/chokepoint``) resolved all 25 with
+the flag off — ``Success: no issues found in 290 source files`` — with no
+per-module section at all. (The tree has grown since; the observation is dated
+rather than re-stated, because re-running it is a measurement and repeating its
+number is not.) The change is
 recorded in ``docs/OPEN-GAPS.md`` as the closure and deliberately not applied
 here, because it re-shapes the type gate's config (an allowlisted file) and
 makes the gate depend on every third-party package shipping types, which is a

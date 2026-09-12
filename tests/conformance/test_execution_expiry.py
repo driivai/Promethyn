@@ -44,6 +44,13 @@ _REQUIRE = parse_env_bool(
 )
 _T0 = "2026-07-01T00:00:00Z"
 _T0_PLUS_200 = "2026-07-01T00:03:20Z"  # +200 seconds
+#: The TTL boundary, for a 100-second TTL: one second short of it, exactly on
+#: it, and one second past. The comparison is ``elapsed >= ttl_seconds``, so
+#: "exactly on it" is LAPSED — an inclusive edge, pinned by the tests below
+#: rather than left to whichever side a future edit happens to land on.
+_T0_PLUS_99 = "2026-07-01T00:01:39Z"
+_T0_PLUS_100 = "2026-07-01T00:01:40Z"
+_T0_PLUS_101 = "2026-07-01T00:01:41Z"
 # PHASE-1.2b — these are ASSESSMENTS now. The gate reads a
 # policy-evaluated, action-bound assessment; a bare Judgment has no
 # parameter to arrive through. ``carrying`` mints one around an exact
@@ -300,6 +307,72 @@ def test_expired_action_cannot_be_approved_or_executed():
     with pytest.raises(ValueError):
         controller.approve(held.id, identity="will@driivai.com")
     assert spy.calls == []  # an expired hold never executes
+
+
+def test_the_TTL_boundary_is_inclusive_one_second_short_approves_and_exactly_on_it_does_not():
+    """The edge itself, both sides, and the positive control is the near side.
+
+    Every other expiry test here jumps well past the TTL (100 -> 200), which
+    proves the guard exists and says nothing about where it fires. The
+    comparison is ``elapsed >= ttl_seconds``: at 99 seconds a hold is still
+    approvable, at exactly 100 it is not. Pinned in both directions so an edit
+    to either side of the comparison fails rather than silently moving the
+    window by a second.
+    """
+
+    clock = _Clock(_T0)
+    near, ledger_near, spy_near = _harness(ttl=100, clock=clock)
+    held_near = near.submit(
+        attempt_id="attempt-1", assessment=_LOW, action=_action(), subject_id="s"
+    ).pending
+    clock.now = _T0_PLUS_99
+    decision = near.pending.approve(held_near.id, identity="will@driivai.com")
+    assert decision.approved
+    assert ledger_near.pending_action(held_near.id)["status"] == "approved"
+
+    # A second, independent ledger for the far side of the edge. The attempt id
+    # stays "attempt-1": ``_LOW`` is bound to that attempt, and submitting it
+    # under another one is refused by the descriptor seam long before the TTL
+    # is consulted — measured, and the reason this test reads as it does.
+    edge_clock = _Clock(_T0)
+    edge, ledger_edge, spy_edge = _harness(ttl=100, clock=edge_clock)
+    held_edge = edge.submit(
+        attempt_id="attempt-1", assessment=_LOW, action=_action(), subject_id="s"
+    ).pending
+    edge_clock.now = _T0_PLUS_100
+    with pytest.raises(ValueError, match="expired"):
+        edge.pending.approve(held_edge.id, identity="will@driivai.com")
+    assert ledger_edge.pending_action(held_edge.id)["status"] == "expired"
+    assert spy_edge.calls == []
+
+
+def test_a_hold_past_the_TTL_but_UNSWEPT_reads_as_pending_and_still_cannot_approve():
+    """What the state IS between lapsing and the sweep noticing.
+
+    Nothing rewrites the row when a hold lapses: until something touches it,
+    its stored status is still ``pending`` and it appears in the pending
+    listing's underlying table. That is only safe because the decision-time
+    guard, not the sweep, is the control — so the same hold refuses approval
+    and is expired on the spot, audited, by the refusal itself.
+    """
+
+    clock = _Clock(_T0)
+    controller, ledger, spy = _harness(ttl=100, clock=clock)
+    held = controller.submit(
+        attempt_id="attempt-1", assessment=_LOW, action=_action(), subject_id="s"
+    ).pending
+
+    clock.now = _T0_PLUS_101  # lapsed; nothing has swept, nothing has looked
+    assert ledger.pending_action(held.id)["status"] == "pending"
+    assert ledger.pending_action(held.id)["decided_at"] in (None, "")
+
+    with pytest.raises(ValueError, match="expired"):
+        controller.pending.approve(held.id, identity="will@driivai.com")
+
+    row = ledger.pending_action(held.id)
+    assert row["status"] == "expired"
+    assert row["decided_at"]  # the refusal recorded the transition, not a sweep
+    assert spy.calls == []
 
 
 def test_stale_approval_is_refused_even_without_a_sweep():

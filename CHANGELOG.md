@@ -40,6 +40,37 @@ in `spec/invariants.md` is a major version bump.
   (nine refusals, one legitimate execution).
 
 ### Fixed
+- **A withdrawn claim in `execution/pending.py`.** Its module docstring said
+  "pinning removes re-resolution from the approval path" in the first clause of
+  the approval order while step 3 of the same list, and the code, re-resolved.
+  The claim is withdrawn in place and what pinning does *not* do is now stated
+  explicitly: the chain check and the rotation refusal sit in FRONT of the
+  seam's re-resolution, never instead of it, because trusting the stored
+  requirements on their own would reintroduce R1 with the JSON column as the
+  forgeable input. Documentation only — verified by comparing the module's AST
+  with docstrings stripped, which is byte-identical across the change.
+- **The TTL is written down once, and its boundary is pinned.** Evaluated at
+  BOTH decision time and by the sweep; the boundary is inclusive
+  (`elapsed >= ttl_seconds`); and a hold that has lapsed but not been swept
+  still reads `pending` while being unapprovable. That last state had no test;
+  it now has two, alongside a boundary pair at one second short of the TTL and
+  exactly on it. Both mutations that move the comparison are caught.
+- **`coverage.ambiguous` is proven end to end.** Five of the six reasons in the
+  closed refusal vocabulary had a submission proving what they RECORD; the
+  sixth was exercised only against `validate_coverage`'s return value. It now
+  has a refusing row of its own, and
+  `test_every_refusal_reason_in_the_closed_set_has_an_end_to_end_row` fails if
+  a seventh reason is added without one.
+- **The pull-request text check now fires on `edited`.** `ci.yml`'s trigger
+  must stay bare (its allowlist refuses filters, deliberately), so the check
+  also lives in `.github/workflows/pr-text-hygiene.yml`, which fires on
+  `opened`, `edited`, `reopened` and `synchronize` and runs the checker alone.
+  Its trigger list is itself allowlisted, because a filter that quietly lost
+  `edited` would put the window back. Measured: #101's body was edited twice
+  after its last passing check. Named limit, `docs/OPEN-GAPS.md` G13: this is
+  not how a banned token reached `main` — that was the squash message, composed
+  at merge time from the branch's commit messages with a co-authorship
+  trailer GitHub appends after every pre-merge check has passed.
 - **The sanctioned skip set is per-host where it has to be, and proven where it
   is excused.** The manifest was pinned from a local run; its first CI run
   refused, and was right twice over — `ubuntu-latest` ships a container daemon

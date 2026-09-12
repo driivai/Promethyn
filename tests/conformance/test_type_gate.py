@@ -575,6 +575,44 @@ def test_the_workflow_answers_to_exactly_the_permitted_triggers():
         )
 
 
+#: The second workflow's triggers, allowlisted the same way and for the same
+#: reason. ``pr-text-hygiene.yml`` exists BECAUSE ci.yml's trigger must stay
+#: bare: event types are per-workflow, so covering ``edited`` there would mean
+#: either a ``types`` filter on ci.yml (refused above, on purpose) or re-running
+#: the whole matrix for a description edit. Here the filter is the point, so the
+#: exact list is pinned instead of forbidden — a filter that quietly loses
+#: ``edited`` would put the gap straight back.
+_PR_TEXT_WORKFLOW = REPO / ".github" / "workflows" / "pr-text-hygiene.yml"
+_PR_TEXT_TRIGGERS: dict[str, object] = {
+    "pull_request": {"types": ["opened", "edited", "reopened", "synchronize"]},
+}
+
+
+def test_the_pr_text_workflow_answers_to_exactly_the_permitted_events():
+    """The events that carry the risk, pinned by name.
+
+    A pull request's title and body change on ``edited`` and on nothing else.
+    A check that reads them and does not fire on that event reports green
+    against text that no longer exists.
+    """
+
+    import yaml  # declared in the dev extra and pinned in constraints.txt
+
+    assert _PR_TEXT_WORKFLOW.is_file(), f"{_PR_TEXT_WORKFLOW} is missing"
+    workflow = yaml.safe_load(_PR_TEXT_WORKFLOW.read_text(encoding="utf-8"))
+    triggers = workflow[_TRIGGER_KEY]
+    assert triggers == _PR_TEXT_TRIGGERS, (
+        f"pr-text-hygiene.yml triggers are {triggers!r}; permitted is "
+        f"{_PR_TEXT_TRIGGERS!r}. Dropping `edited` re-opens the window this "
+        "workflow exists to close; adding a paths or branches filter stops it "
+        "firing on the pull requests it is meant to read."
+    )
+    step_text = _PR_TEXT_WORKFLOW.read_text(encoding="utf-8")
+    assert "scripts/check_message_hygiene.py" in step_text, (
+        "the workflow no longer runs the checker it exists to run"
+    )
+
+
 def test_the_build_job_carries_exactly_the_permitted_keys():
     """An allowlist over job-level keys, not a list of forbidden ones.
 

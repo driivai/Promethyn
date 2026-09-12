@@ -38,8 +38,10 @@ from prometheus_protocol.gate.promotion import GateDecision
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
 from prometheus_protocol.ledger.tip_anchor import FileTipAnchor
 from prometheus_protocol.policy.coverage import (
+    REFUSAL_REASONS,
     REFUSED_ABSTAINED,
     REFUSED_ADVISORY_ONLY,
+    REFUSED_AMBIGUOUS,
     REFUSED_INCOMPLETE,
     REFUSED_INVALID_EVIDENCE,
     REFUSED_UNSATISFACTORY,
@@ -305,6 +307,15 @@ def _results_for(kind: str, s):
         return [audit]
     if kind == "advisory_only":
         return [bound(s, "run", "runner-a", evidence("runner-a", tier=Tier.SOFT)), audit]
+    if kind == "ambiguous":
+        # One permitted implementation reporting TWICE for one requirement.
+        # Coverage cannot decide which report answered it, so it refuses rather
+        # than picking — the row that had no end-to-end proof until now.
+        return [
+            bound(s, "run", "runner-a", evidence("runner-a")),
+            bound(s, "run", "runner-a", evidence("runner-a")),
+            audit,
+        ]
     if kind == "unsatisfactory":
         return [bound(s, "run", "runner-a", evidence("runner-a", Verdict.FAIL)), audit]
     raise AssertionError(kind)
@@ -315,6 +326,11 @@ _REFUSING_ROWS = {
     "abstained": (REFUSED_ABSTAINED, "unavailable", Unavailability.POLICY_REFUSAL),
     "incomplete": (REFUSED_INCOMPLETE, "unavailable", Unavailability.INFRA_FAULT),
     "advisory_only": (REFUSED_ADVISORY_ONLY, "unavailable", Unavailability.POLICY_REFUSAL),
+    # PHASE-1.2c FINAL. The sixth refusal reason had been exercised only against
+    # validate_coverage's own return value, never through a submission, so no
+    # test said what an ambiguous refusal RECORDS. Every other reason in the
+    # closed set now has an end-to-end row; this one completes it.
+    "ambiguous": (REFUSED_AMBIGUOUS, "unavailable", Unavailability.POLICY_REFUSAL),
 }
 
 
@@ -360,6 +376,26 @@ def test_a_FAILED_required_check_is_refused_at_the_gate_and_the_row_records_the_
     coverage = row["authorization"]["coverage"]
     assert coverage["refusal"]["reason"] == REFUSED_UNSATISFACTORY
     assert coverage["outcome_kind"] == "judgment" and coverage["verdict"] == "fail"
+
+
+def test_every_refusal_reason_in_the_closed_set_has_an_end_to_end_row():
+    """The allowlist over the refusal vocabulary, in the doctrine's direction.
+
+    ``REFUSAL_REASONS`` is closed, and each reason names one row of the
+    enforcement table. A reason exercised only against ``validate_coverage``'s
+    return value has never been shown to reach a RECORD — which is how
+    ``coverage.ambiguous`` sat uncovered while the other five were proven end to
+    end. This fails when a seventh reason is added without a submission proving
+    what it records, rather than leaving the gap to be noticed later.
+    """
+
+    covered = {reason for reason, _source, _unavailability in _REFUSING_ROWS.values()}
+    covered.add(REFUSED_UNSATISFACTORY)  # the one that yields a FAIL, tested just above
+    assert covered == set(REFUSAL_REASONS), (
+        "refusal reasons with no end-to-end record proof: "
+        f"{sorted(set(REFUSAL_REASONS) - covered)}; "
+        f"proofs naming a reason that no longer exists: {sorted(covered - set(REFUSAL_REASONS))}"
+    )
 
 
 def test_an_assessment_minted_without_coverage_validation_says_so_in_the_record():

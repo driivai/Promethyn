@@ -81,7 +81,22 @@ mechanisms enforce the TTL, layered from most to least authoritative:
 
 Every expiry, whichever path triggered it, is the same audited transition:
 `pending -> expired`, recorded with `decided_by = system:sweep` and visible in
-`audit --human-log`.
+`audit --human-log`. That identity is written even when the approval-time guard
+is what noticed — one resolver writes the transition, so an expiry looks the
+same in the ledger however it was reached, and the `decision_reason` names the
+TTL.
+
+**The boundary is inclusive.** A hold lapses when its age has REACHED the TTL,
+not after it has passed: `elapsed >= PROM_PENDING_TTL`. At one second short it
+is still approvable.
+
+**What an operator sees between lapsing and a sweep.** Nothing rewrites the row
+when the clock passes the TTL, so until something touches it the hold still
+reads `pending` — in the ledger, and in a listing that does not sweep first.
+It is nonetheless unapprovable: mechanism 1 refuses it and expires it on the
+spot. So a `pending` row older than the TTL is not a hold that might still be
+approved; it is one whose expiry has not yet been written down. Read
+mechanism 1, not the status column, as the control.
 
 ### Scheduling the explicit sweep
 
