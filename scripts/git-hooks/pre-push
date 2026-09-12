@@ -1,0 +1,62 @@
+#!/bin/sh
+# pre-push hook: two refusals, both by construction rather than by care.
+#
+# 1. BRANCH RESURRECTION. Twice in one sprint a `git push -u origin <branch>`
+#    re-created a remote branch that had been merged and deleted, on a product
+#    whose three action classes include branch.delete. git cannot tell a first
+#    push of a new branch from a re-push of a deleted one by the remote alone —
+#    both show the remote ref as absent — but it CAN tell them apart locally: a
+#    branch that has been pushed before carries an upstream (branch.<name>.merge
+#    is set), and a brand-new branch does not. So: remote ref absent AND upstream
+#    configured means the remote branch was deleted under this clone, and the
+#    push is refused. Start a new branch from origin/main instead.
+#
+#    The upstream must name THIS branch. A branch created with
+#    `git checkout -b X origin/main` tracks main (branch.X.merge is
+#    refs/heads/main), which is a first push, not a resurrection; the first
+#    version of this hook refused exactly that, observed on this repository's
+#    own sprint branch, so the rule is: remote ref absent AND
+#    branch.X.remote is this remote AND branch.X.merge is refs/heads/X.
+#
+# 2. BANNED TOKENS. Every commit about to be pushed is checked for banned
+#    tooling/vendor tokens in its message, author and committer — the same
+#    checker CI runs, one step earlier.
+#
+# stdin: one line per ref being pushed:
+#   <local ref> <local sha> <remote ref> <remote sha>
+# A remote sha of all zeros means the remote ref does not exist.
+set -eu
+remote_name="$1"
+repo_root="$(git rev-parse --show-toplevel)"
+zero="0000000000000000000000000000000000000000"
+status=0
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+    [ -n "$local_ref" ] || continue
+    if [ "$local_sha" = "$zero" ]; then
+        continue  # a deletion; nothing to scan, nothing to resurrect
+    fi
+    branch="${local_ref#refs/heads/}"
+    if [ "$remote_sha" = "$zero" ]; then
+        upstream_remote="$(git config --get "branch.$branch.remote" 2>/dev/null || true)"
+        upstream="$(git config --get "branch.$branch.merge" 2>/dev/null || true)"
+        if [ "$upstream_remote" = "$remote_name" ] && [ "$upstream" = "refs/heads/$branch" ]; then
+            echo "pre-push: REFUSED. '$branch' has an upstream ($upstream on $remote_name)" >&2
+            echo "  but the remote branch no longer exists: it was merged and deleted," >&2
+            echo "  and this push would RESURRECT it. Start a fresh branch from" >&2
+            echo "  origin/main (git checkout -b <new-name> origin/main) and push that." >&2
+            echo "  If this really is a new branch that happens to carry an upstream," >&2
+            echo "  clear it first: git branch --unset-upstream '$branch'." >&2
+            status=1
+            continue
+        fi
+        range="origin/main..$local_sha"
+    else
+        range="$remote_sha..$local_sha"
+    fi
+    if ! "${PYTHON:-python3}" "$repo_root/scripts/check_message_hygiene.py" --commits "$range"; then
+        echo "pre-push: REFUSED. A commit in $range carries a banned token (see above)." >&2
+        status=1
+    fi
+done
+exit $status

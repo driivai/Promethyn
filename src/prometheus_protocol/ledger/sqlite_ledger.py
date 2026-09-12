@@ -87,7 +87,12 @@ CREATE TABLE IF NOT EXISTS pending_actions (
     -- set when an execution for this hold is claimed (approve or retry), so two
     -- concurrent drivers cannot both execute. NULL = not yet executed; a
     -- fail-closed refusal releases it back to NULL so a retry can re-drive.
-    execution_committed_at TEXT
+    execution_committed_at TEXT,
+    -- Set when a policy rotation voided a still-pending hold: a system
+    -- transition (status 'invalidated'), separate from expiry, in flat columns
+    -- so a sweep can find rotated-out holds without parsing the record.
+    invalidated_at     TEXT,
+    invalidated_reason TEXT
 );
 
 CREATE TABLE IF NOT EXISTS executions (
@@ -109,7 +114,11 @@ CREATE TABLE IF NOT EXISTS executions (
     -- The pending hold this execution resolves, when it came from one
     -- (human-approved or retried). NULL for auto-approved/blocked rows and for
     -- rows written before the link existed.
-    pending_id    INTEGER
+    pending_id    INTEGER,
+    -- JSON: the versioned authorization record (policy/record.py) this outcome
+    -- was decided under. For a human-approved or retried execution it is the
+    -- hold's PINNED record. NULL for rows written before records existed.
+    authorization TEXT
 );
 
 -- Workflow attribution for the governed orchestration layer (additive; the
@@ -198,10 +207,15 @@ _ADDITIVE_COLUMNS: dict[str, list[tuple[str, str]]] = {
         # and a real abstention wrote byte-identical rows; this column, derived
         # from the recorded source, makes them permanently separable.
         ("unavailable", "INTEGER"),
+        # The versioned authorization record the outcome was decided under.
+        ("authorization", "TEXT"),
     ],
     "pending_actions": [
         ("execution_committed_at", "TEXT"),
         ("authorization", "TEXT"),
+        # Policy-rotation invalidation, in flat columns.
+        ("invalidated_at", "TEXT"),
+        ("invalidated_reason", "TEXT"),
     ],
 }
 
@@ -509,6 +523,37 @@ class SqliteLedger(Ledger):
                 "or has already been decided"
             )
 
+    def invalidate_pending_action(
+        self, pending_id: int, *, invalidated_at: str, reason: str
+    ) -> bool:
+        """Void a still-pending hold on a policy rotation; True iff it was pending.
+
+        The same still-pending guard as ``resolve_pending_action``: a decided
+        hold is never re-opened or rewritten by a rotation. The flat columns
+        carry the same timestamp and reason as the audited transition.
+        """
+
+        cur = self._conn.execute(
+            """
+            UPDATE pending_actions
+               SET status = ?, decided_by = ?, decided_at = ?, decision_reason = ?,
+                   invalidated_at = ?, invalidated_reason = ?
+             WHERE id = ? AND status = ?
+            """,
+            (
+                "invalidated",
+                "system:policy-rotation",
+                invalidated_at,
+                reason,
+                invalidated_at,
+                reason,
+                pending_id,
+                _PENDING_STATUS,
+            ),
+        )
+        self._conn.commit()
+        return cur.rowcount == 1
+
     def claim_pending_execution(self, pending_id: int, claimed_at: str) -> bool:
         """Atomically claim the right to execute a hold; True iff this call won.
 
@@ -571,6 +616,7 @@ class SqliteLedger(Ledger):
         created_at: str,
         judgment: dict | None = None,
         pending_id: int | None = None,
+        authorization: dict | None = None,
     ) -> int:
         # The judgment JSON is the source of record; verdict/confidence/
         # authoritative are promoted from it into queryable columns, from the
@@ -588,8 +634,9 @@ class SqliteLedger(Ledger):
             INSERT INTO executions (
                 subject_id, source, executed, refused, sandbox,
                 exit_status, detail, created_at,
-                verdict, confidence, authoritative, judgment, pending_id, unavailable
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                verdict, confidence, authoritative, judgment, pending_id, unavailable,
+                authorization
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 subject_id,
@@ -606,6 +653,7 @@ class SqliteLedger(Ledger):
                 json.dumps(judgment) if judgment is not None else None,
                 pending_id,
                 unavailable,
+                json.dumps(authorization) if authorization is not None else None,
             ),
         )
         self._conn.commit()
@@ -961,6 +1009,8 @@ class SqliteLedger(Ledger):
             record["unavailable"] = bool(record["unavailable"])
         if record.get("judgment"):
             record["judgment"] = _load_json(record["judgment"])
+        if record.get("authorization"):
+            record["authorization"] = _load_json(record["authorization"])
         return record
 
 

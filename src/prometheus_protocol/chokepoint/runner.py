@@ -110,6 +110,7 @@ from prometheus_protocol.chokepoint.signer import ApprovalSigner, LocalHmacSigne
 from prometheus_protocol.chokepoint.substrate import (
     SubstratePolicy,
     SubstrateReport,
+    UnsupportedPlatform,
     enforce_substrate,
     probe_opened_substrate,
     probe_substrate,
@@ -266,6 +267,34 @@ class MigrationResult:
     execution_id: str | None = None
     # None on pre-execution refusals; never infer rollback from executed=False.
     execution_state: str | None = None
+    #: TYPED, because ``detail`` is prose. True when the refusal is a statement
+    #: about the PLATFORM — the execution guard needs Linux ``flock`` semantics
+    #: (``_PlatformUnsupported``), or the opened-store probe has no
+    #: implementation here (``SubstrateReport.platform_unsupported``, carried as
+    #: ``UnsupportedPlatform``) — and never when it is a statement about the
+    #: store. Derived from the cause's TYPE by :func:`_platform_refusal`, so a
+    #: consumer never reads it out of ``detail``, which is free to be reworded.
+    #: The test platform gate keys its return-value channel on this field.
+    platform_unsupported: bool = False
+
+
+def _platform_refusal(exc: BaseException) -> bool:
+    """Whether ``exc`` (or a cause behind it) is a typed platform refusal.
+
+    Bounded walk of ``__cause__``/``__context__``: ``execution_guard`` wraps
+    whatever stopped it in ``_OwnershipUnavailable``, so the platform fact is
+    one link down. Keyed on the two TYPES the production code raises for "this
+    platform has no implementation", never on their wording.
+    """
+
+    cursor: BaseException | None = exc
+    for _ in range(8):
+        if cursor is None:
+            return False
+        if isinstance(cursor, (_PlatformUnsupported, UnsupportedPlatform)):
+            return True
+        cursor = cursor.__cause__ or cursor.__context__
+    return False
 
 
 @dataclass(frozen=True)
@@ -303,6 +332,9 @@ class ReconciliationResult:
     state: str
     resolved: bool
     audit_recorded: bool = False
+    #: Same typed fact as ``MigrationResult.platform_unsupported``: reconciliation
+    #: that could not take execution ownership because this is not Linux.
+    platform_unsupported: bool = False
     detail: str = ""
 
 
@@ -1483,6 +1515,7 @@ class BrokeredMigrationRunner:
                     STORE_UNAVAILABLE,
                     False,
                     detail=f"execution ownership unavailable: {exc}",
+                    platform_unsupported=_platform_refusal(exc),
                 ),
             )
 
@@ -1856,6 +1889,7 @@ class BrokeredMigrationRunner:
                 STORE_UNAVAILABLE,
                 f"execution ownership unavailable: {exc}",
                 audit_recorded=audit.recorded,
+                platform_unsupported=_platform_refusal(exc),
             )
 
     def _execute_owned(

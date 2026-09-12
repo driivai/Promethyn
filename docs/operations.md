@@ -38,6 +38,29 @@ alike. What the anchor detects, and what it does not (an adversary with
 authority over the anchor medium itself), is stated in `docs/threat-model.md`
 §3.3–§3.5.
 
+## Policy rotation and pending holds
+
+A hold is **pinned** at creation to the verification policy the deployment
+selected — its identity, its content digest and its version — together with
+the requirements that policy resolved and the coverage report
+(`docs/execution-authorization-record.md`). Approval compares against that pin
+first: if the deployment now selects a different policy, the hold is refused as
+`PinnedPolicySuperseded` and voided (`status = invalidated`,
+`decided_by = system:policy-rotation`, `invalidated_at`/`invalidated_reason`
+set), whether the new policy requires more or less. A voided hold is never
+approvable; the action is re-submitted and verified under the selected policy.
+
+After rotating a policy, void the backlog explicitly rather than letting each
+hold be refused at its own approval:
+
+```python
+controller.invalidate_superseded_holds()   # returns the holds it voided
+```
+
+Idempotent; a hold created under the new policy is untouched; a hold already
+decided is never rewritten (a retry of an approved-but-unexecuted hold after a
+rotation is refused, and the human's approval record stays as they left it).
+
 ## Pending-action expiry (TTL)
 
 A routed action halts as a *pending* hold and stays approvable for

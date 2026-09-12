@@ -19,17 +19,32 @@ jobs:
       # never be a silent no-op, and a skip here is a broken promise rather than
       # a shrug. Same idiom as PROM_REQUIRE_SANDBOX / PROM_REQUIRE_PG below.
       PROM_REQUIRE_LINUX: "1"
+      # ONE SOURCE for the throwaway CI database's coordinates. The service
+      # container below and the live-database step both read these by
+      # expression, so the producer and the consumer cannot disagree. They used
+      # to be typed twice — in the service env and again in the step env — with
+      # nothing enforcing that the two copies matched (docs/pre-disclosure-audit.md
+      # L2/L3). tests/conformance/test_ci_single_source.py asserts the shape:
+      # each literal appears exactly once, here, and every consumer references
+      # it. The value is a CI-only throwaway for a container that does not
+      # outlive the job, not a credential.
+      PROM_CI_PG_DB: appdb
+      PROM_CI_PG_USER: migrator
+      PROM_CI_PG_PASSWORD: chokepoint-ci-password
     services:
       postgres:
         image: postgres:16-alpine
         env:
-          POSTGRES_DB: appdb
-          POSTGRES_USER: migrator
-          POSTGRES_PASSWORD: chokepoint-ci-password
+          POSTGRES_DB: ${{ env.PROM_CI_PG_DB }}
+          POSTGRES_USER: ${{ env.PROM_CI_PG_USER }}
+          POSTGRES_PASSWORD: ${{ env.PROM_CI_PG_PASSWORD }}
         ports:
           - 5432:5432
+        # The health command runs INSIDE the container, where POSTGRES_USER and
+        # POSTGRES_DB are its own environment — read there rather than retyped
+        # here, for the same one-source reason.
         options: >-
-          --health-cmd "pg_isready -U migrator -d appdb"
+          --health-cmd "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 12
@@ -92,6 +107,38 @@ jobs:
 
       - name: Repository hygiene
         run: python scripts/check_hygiene.py
+
+      - name: Message hygiene (commit messages, identities, PR title and body)
+        # The tree checker above cannot see a commit message or a PR body, and
+        # both reached main carrying banned tokens (#100's squash merge). This
+        # REFUSES rather than strips: every commit in a pull request — message,
+        # author and committer identity — and the PR's title and body. On a push
+        # to main it re-checks what landed, which is detection after the fact:
+        # the squash-merge commit is written by GitHub after these checks pass
+        # and can carry a co-authorship trailer no pre-merge check can refuse.
+        # That limit is named in scripts/check_message_hygiene.py and in
+        # docs/OPEN-GAPS.md. The PR text goes through environment variables, not
+        # shell interpolation, so its content cannot become a command.
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.sha }}
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            printf '%s\n' "$PR_TITLE" > pr-title.txt
+            printf '%s\n' "$PR_BODY" > pr-body.txt
+            python scripts/check_message_hygiene.py --commits "$PR_BASE..$PR_HEAD" \
+              --text-file pr-title.txt --text-file pr-body.txt
+          else
+            case "$PUSH_BEFORE" in
+              0000000000000000000000000000000000000000|"") range="$PUSH_AFTER~1..$PUSH_AFTER" ;;
+              *) range="$PUSH_BEFORE..$PUSH_AFTER" ;;
+            esac
+            python scripts/check_message_hygiene.py --commits "$range"
+          fi
 
       - name: Linux mount-metadata compatibility (observed distribution)
         # Prints the shape of this runner's real mount table per row — driver,
@@ -264,13 +311,26 @@ jobs:
           cases = list(ET.parse("phase-1-2a.xml").iter("testcase"))
           expected = {"test_bound_requirements_encoding": 21,
                       "test_coverage_enforcement": 33,
-                      "test_policy_enforcement_regression": 19,
+                      # PHASE-1.2c — 19 -> 20: the ten-row matrix mapping is
+                      # pinned by a test of its own (every row mapped to one
+                      # of three kinds; nine refusals to one execution).
+                      "test_policy_enforcement_regression": 20,
                       # PHASE-1.2b — 9 -> 11. Closing the unbound-judgment route
                       # moved the interesting capability from constructing a
                       # verdict to MINTING an assessment, so the 2d guard gained
                       # a second sweep (permitted minters, and its staleness
                       # check). Re-pinned in the same change that added them.
-                      "test_no_second_aggregator": 11,
+                      # PHASE-1.2c — 11 -> 12: the mint sweep resolves an alias
+                      # assignment (`_m = mint`), and a test says so.
+                      #
+                      # Both 1.2c tests landed with these two numbers unchanged;
+                      # run 34701799636 refused all three matrix jobs on
+                      # ('test_policy_enforcement_regression', 20, 19) after a
+                      # green local suite, and the 12 was found in the JUnit
+                      # file behind it (the loop stops at the first mismatch).
+                      # Re-pinned from those observations; the pin lives only
+                      # here, which is docs/OPEN-GAPS.md G12.
+                      "test_no_second_aggregator": 12,
                       "test_phase_1_2a_revert_pins": 7}
           for module, count in expected.items():
               actual = sum(c.get("classname", "").endswith(module) for c in cases)
@@ -363,6 +423,32 @@ jobs:
       - name: PHASE-1.2c Checkpoint B seam mutations (must be caught)
         run: python scripts/phase_1_2c_checkpoint_b_revert_proofs.py
 
+      - name: PHASE-1.2c authorization record and pinned-hold proofs
+        # TASK 6 (the record, its chain binding, and coverage running to
+        # completion on the refusing path) and TASK 5 (approval against the
+        # pinned resolution; rotation refused and invalidated; the positive
+        # control beside every refusal). Pinned by exact count and zero skips:
+        # everything here runs in-process on SQLite.
+        run: |
+          python -m pytest -q \
+            tests/conformance/test_execution_authorization_record.py \
+            tests/conformance/test_hold_pinning.py \
+            --junitxml=authorization-record.xml
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          cases = list(ET.parse("authorization-record.xml").iter("testcase"))
+          expected = {"test_execution_authorization_record": 15, "test_hold_pinning": 7}
+          for module, count in expected.items():
+              actual = sum(module in c.get("classname", "") for c in cases)
+              assert actual == count, (module, actual, count)
+          assert len(cases) == sum(expected.values())
+          assert all(c.find(t) is None for c in cases for t in ("skipped", "failure", "error"))
+          print(f"Authorization record: {len(cases)} proofs; zero skips/failures/errors")
+          PY
+
+      - name: PHASE-1.2c record and pinning mutations (must be caught)
+        run: python scripts/phase_1_2c_record_revert_proofs.py
+
       - name: The bank decision surface has not moved
         # verifier/bank.py came out from under its net-diff-empty guard in this
         # sprint. judge() is UNCHANGED and this is what says so: 240 enumerated
@@ -438,9 +524,10 @@ jobs:
           PROM_REQUIRE_PG: "1"
           PROM_CHOKEPOINT_PG_HOST: 127.0.0.1
           PROM_CHOKEPOINT_PG_PORT: "5432"
-          PROM_CHOKEPOINT_PG_DB: appdb
-          PROM_CHOKEPOINT_PG_USER: migrator
-          PROM_CHOKEPOINT_PG_PASSWORD: chokepoint-ci-password
+          # Derived from the job-level source, never retyped (see jobs.build.env).
+          PROM_CHOKEPOINT_PG_DB: ${{ env.PROM_CI_PG_DB }}
+          PROM_CHOKEPOINT_PG_USER: ${{ env.PROM_CI_PG_USER }}
+          PROM_CHOKEPOINT_PG_PASSWORD: ${{ env.PROM_CI_PG_PASSWORD }}
           PROM_CHOKEPOINT_PG_SCHEMA: public
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
@@ -505,7 +592,25 @@ jobs:
           # Fail rather than skip the sandbox conformance tests if the isolation
           # runtime is missing, so green here always means isolation was proven.
           PROM_REQUIRE_SANDBOX: "1"
-        run: python -m pytest -q
+        # -rs prints every skip by name, and the JUnit report is what the next
+        # step compares against the sanctioned skip set.
+        run: python -m pytest -q -rs --junitxml=full-suite.xml
+
+      - name: Skip manifest (the skip SET is sanctioned by name, on every version)
+        # "2372 passed, 23 skipped" on three Pythons said nothing about whether
+        # they were the SAME 23. This compares the skipped tests of the run
+        # above, by name, against tests/conformance/skip_manifest.txt, and the
+        # same manifest is checked on every matrix version.
+        #
+        # An unsanctioned skip fails. A [required] entry that RAN fails too.
+        # A [conditional] entry — a skip that depends on a host fact, of which
+        # there are exactly two — may skip or run, and must name the step that
+        # proves the test elsewhere under a PROM_REQUIRE_* flag; a proof that
+        # does not resolve fails the build. That split was forced by this step's
+        # own first run: this runner ships a container daemon and is
+        # unprivileged, so it skips a different member of the pair than the
+        # host the manifest was written on, and both report 23 (OPEN-GAPS G7).
+        run: python scripts/check_skip_manifest.py full-suite.xml
 
       - name: Build
         run: python -m build

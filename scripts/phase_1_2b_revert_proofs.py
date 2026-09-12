@@ -143,7 +143,11 @@ def mutations():
             bank.VerifierBank.assess,
             [
                 (
-                    "    return mint(expected, self.judge_covered(expected, results))",
+                    # TASK 6: ``assess`` now keeps the coverage report beside
+                    # the outcome; the mutation still mints around a verdict
+                    # coverage never validated.
+                    "    outcome, report = self._judge_with_coverage(expected, results)\n"
+                    "    return mint(expected, outcome, coverage=report)",
                     "    from prometheus_protocol.core.models import Judgment, Verdict\n"
                     "    return mint(snapshot, Judgment(\n"
                     "        verdict=Verdict.PASS, confidence=1.0, authoritative=True))",

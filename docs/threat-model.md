@@ -861,6 +861,45 @@ controls both.
   negatives, which reached the same branch by accident, are now refused. An
   operator can still switch those caps off on purpose.
 
+### 3.6 An adversary with write access to `pending_actions` (PHASE-1.2c TASK 6)
+
+**The change that created this case.** A human hold now persists a pinned
+authorization record — the requirements the selected policy resolved, the
+policy's version, the coverage report (`docs/execution-authorization-record.md`)
+— and approval refuses a hold whose pinned policy the deployment no longer
+selects. The record is trusted because it is in the record. So a writer who can
+reach `pending_actions` — the same access as this class, one table over — can
+weaken a pending hold's record, where before this change there was nothing in
+the row worth weakening.
+
+**Position: in scope for detection, out of scope for prevention** — the same
+position as the rest of §3, and stated the same way.
+
+- **Detected.** The record is bound into the audit chain at `hold` and approval
+  requires the row to equal its chain entry on a chain that verifies. A
+  weakened row is refused (`test_an_altered_pinned_requirement_set_is_detected_at_approval`);
+  a row and entry edited together break the chain and are refused
+  (`test_an_altered_chain_entry_breaks_the_chain_and_approval_refuses`); a row
+  relabelled to the new policy after a rotation is refused by the seam's
+  re-resolution, because the assessment's snapshot digest commits to the old
+  requirements (`test_relabelling_a_hold_to_the_new_policy_does_not_get_it_approved`).
+- **Not detected, as a passing test.** The row, the entry AND every later hash
+  rewritten is a self-consistent chain, and without an external anchor approval
+  proceeds on the lying record; with an anchor it is `BROKEN` at the anchored
+  seq and refused (`test_the_named_limit_a_full_rewrite_is_NOT_detected_without_an_anchor_and_IS_with_one`).
+  This is §3.3's last two rows, unchanged, inherited by the record.
+- **What the lying record does not buy.** Enforcement still re-resolves the
+  selected policy at approval (`ExecutionAuthorizer.restore_persisted`), so a
+  weakened requirement list authorizes nothing extra; it misleads a reviewer.
+  The record's integrity is the asset, and the anchor is what protects it.
+- **Not prevention.** Nothing stops the write. PIH-1's medium separation is
+  what turns a rewrite from silent into witnessed, here as everywhere in §3.
+
+Re-swept after this landed (doctrine #9, `docs/execution-descriptor.md` §6 and
+§11, `docs/observability.md`, `docs/operations.md`): the claims that approval
+"re-validates against the currently selected policy" now read "against the
+pinned policy, then re-resolves"; R5/R6 are no longer deferred.
+
 ---
 
 ## Attacker 4 — the network between Promethyn and its endpoints

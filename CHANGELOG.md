@@ -7,7 +7,76 @@ in `spec/invariants.md` is a major version bump.
 
 ## [Unreleased]
 
+### Added
+- **PHASE-1.2c TASK 5/6 — the execution authorization record, and the pinned
+  hold.** Every human hold now persists a versioned record of what it was
+  decided under — the policy and its version, the requirements it resolved,
+  and the coverage report saying which implementation answered each one and
+  which could not — and every `executions` row carries the record it was
+  decided under (the hold's PINNED record for human-approved and retried
+  executions; blocked and unavailable rows name the coverage row that refused).
+  The record is bound into the tamper-evident audit chain at hold creation and
+  checked against it at approval. Approval compares against the pin: a hold
+  whose policy the deployment no longer selects is refused as a rotation
+  (`PinnedPolicySuperseded`) and voided, in either direction;
+  `ExecutionController.invalidate_superseded_holds()` voids the backlog
+  explicitly. New columns: `executions.authorization`,
+  `pending_actions.invalidated_at` / `invalidated_reason` (additive, ensured on
+  open). `docs/execution-authorization-record.md`; threat model §3.6.
+- **`docs/OPEN-GAPS.md`** — the cross-sprint tracker of measured engineering
+  gaps, each with its number, its instrument, and where it is a passing test.
+- **Message hygiene.** `scripts/check_message_hygiene.py` refuses banned
+  tooling/vendor tokens in commit messages, commit identities and PR
+  title/body — in CI on every pull request and push to `main`, and as
+  `commit-msg`/`pre-push` hooks (`python scripts/install_git_hooks.py`). The
+  `pre-push` hook also refuses to resurrect a merged-and-deleted branch.
+- **The sanctioned skip set is a manifest** (`tests/conformance/skip_manifest.txt`,
+  `scripts/check_skip_manifest.py`), checked by name on every matrix version.
+- **The platform gate converts three channels** — a refusal raised, returned
+  as a result (keyed on the new typed `MigrationResult.platform_unsupported` /
+  `ReconciliationResult.platform_unsupported` fields), or raised in a worker
+  thread — each proven skipping without `PROM_REQUIRE_LINUX` and failing under
+  it. The ten-row swarm fault matrix now carries a pinned state-to-row mapping
+  (nine refusals, one legitimate execution).
+
 ### Fixed
+- **The sanctioned skip set is per-host where it has to be, and proven where it
+  is excused.** The manifest was pinned from a local run; its first CI run
+  refused, and was right twice over — `ubuntu-latest` ships a container daemon
+  (so the real-container workspace test ran there, as predicted) and is
+  unprivileged (so the cross-user denial test skipped there, which was not).
+  Both hosts report 23 skips composed differently. `skip_manifest.txt` now has
+  a `[required]` section with the original rule and a `[conditional]` section
+  for a skip that depends on a host fact — each conditional entry naming the
+  step that runs the test under a `PROM_REQUIRE_*` flag, which
+  `scripts/check_skip_manifest.py` resolves and refuses if it does not hold.
+  `tests/conformance/test_skip_manifest_guard.py` drives the checker over both
+  recorded host compositions and over the mutations that must be refused.
+  `docs/OPEN-GAPS.md` G7 closed, with the container proof's nightly cadence as
+  its named limit.
+- **The workflow's collection pins are checkable before pushing.** Ten CI steps
+  pin how many tests each module must contribute; the numbers lived only in
+  `.github/workflows/ci.yml`, so a locally green suite could not see a stale
+  one. Observed: a full local run (`2419 passed, 23 skipped`, three
+  interpreters) followed by a CI run that refused all three matrix jobs on
+  `('test_policy_enforcement_regression', 20, 19)`, twenty-three steps never
+  reached. `tests/conformance/test_ci_collection_pins.py` now parses the pins
+  out of the workflow and compares them against what pytest collects, in the
+  ordinary suite. The two stale pins are corrected
+  (`test_policy_enforcement_regression` 19 → 20, `test_no_second_aggregator`
+  11 → 12) and the miss is recorded as `docs/OPEN-GAPS.md` G12.
+- **The mutation worktree ran the primary tree's code.** `scripts/mutation_worktree.py`
+  ran the worktree's tests against the editable install's package, so a `src/`
+  mutation applied in the worktree reddened nothing (measured). It now puts
+  the worktree's `src` first on `PYTHONPATH`, with a planted-mutation test.
+- **CI's Postgres coordinates have one source.** The service container and the
+  live-database step both read `jobs.build.env` by expression; each literal
+  appears once (`tests/conformance/test_ci_single_source.py`).
+- **The mint sweep resolves an alias assignment** (`_m = mint`), R7.
+- **A withdrawn claim:** the stdlib-floor guard's docstring said the 25
+  first-party import errors under a strict type gate need forbidden
+  per-module sections; measured, widening `mypy_path` resolves all 25
+  (`docs/OPEN-GAPS.md` G1).
 - **PHASE-1.2c COMMIT ONE — the docs corrected to what the code enforces
   today.** An independent review of PHASE-1.2a–Checkpoint 3 (pinned at
   `458fb4b6`) concluded that the two original failure patterns are closed for

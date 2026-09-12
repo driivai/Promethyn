@@ -73,6 +73,24 @@ needs conformance tests under `tests/conformance/`.
 contains a banned tooling or vendor token. Describe work by its engineering
 outcome and keep the codebase neutral.
 
+The same rule holds for what is NOT a tracked file: commit messages, commit
+author and committer identities, and pull request titles and bodies.
+`scripts/check_message_hygiene.py` refuses a banned token in any of them, and CI
+runs it over every commit in a pull request and over the PR's title and body.
+To be refused before a push rather than at the PR, point your clone at the
+repository's hooks once:
+
+```bash
+python scripts/install_git_hooks.py
+```
+
+That sets `core.hooksPath` to `scripts/git-hooks`, which installs two hooks:
+`commit-msg` (refuses a message carrying a banned token) and `pre-push`
+(refuses the same in any commit being pushed, and refuses to push a branch whose
+remote counterpart was merged and deleted — start a new branch from
+`origin/main` instead). Hooks are per clone; CI is the check that does not
+depend on you having run this.
+
 The hygiene gate and the conformance gate are conditions of acceptance for any
 contribution; see `docs/open-core-boundary.md` for the open/commercial boundary
 they protect.

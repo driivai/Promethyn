@@ -491,6 +491,55 @@ def test_the_two_timeout_rows_really_are_two_different_outcomes():
     assert len(reasons) == 2, f"both timeout rows refused identically: {reasons}"
 
 
+#: WHAT EACH ROW ASSERTS — the state-to-row mapping, pinned. Three kinds:
+#:
+#:   REFUSED_BEFORE_GATE  coverage refuses before any verdict exists; the gate
+#:                        is never consulted (decision is None), nothing runs;
+#:   REFUSED_AT_GATE      the required check FAILED — a real answer — so
+#:                        coverage refuses as unsatisfactory, the bank reports
+#:                        an authoritative FAIL, and the GATE blocks it;
+#:   EXECUTES             the requirement is genuinely satisfied and the action
+#:                        runs — the positive control, without which the nine
+#:                        refusals would be satisfied by a runtime that refuses
+#:                        everything.
+#:
+#: Nine rows are refusals and one is a legitimate execution. An all-green
+#: matrix means something only because the mapping says which is which; the
+#: previous version derived the kind from the row LABEL's spelling
+#: (``endswith("(positive control)")``, ``label != "returns FAIL"``), which is a
+#: rule over a string. Every row must be mapped; an unmapped row fails.
+REFUSED_BEFORE_GATE = "refused before the gate (coverage refused; decision None)"
+REFUSED_AT_GATE = "refused at the gate (authoritative FAIL; blocked)"
+EXECUTES = "legitimate execution (positive control)"
+
+_ROW_KIND: dict[str, str] = {
+    "missing verifier": REFUSED_BEFORE_GATE,  # incomplete: no result at all
+    "raises": REFUSED_BEFORE_GATE,  # incomplete: the exception became Unavailable
+    "raises TimeoutError": REFUSED_BEFORE_GATE,  # incomplete: same
+    "returns Unavailable": REFUSED_BEFORE_GATE,  # incomplete: could-not-run
+    "returns ABSTAIN": REFUSED_BEFORE_GATE,  # abstained: ran, no conclusion
+    "returns FAIL": REFUSED_AT_GATE,  # unsatisfactory: ran, said no
+    "SubprocessVerifier timeout BEFORE confirmed candidate start": REFUSED_BEFORE_GATE,  # incomplete (INFRA_FAULT)
+    "SubprocessVerifier timeout AFTER confirmed candidate start": REFUSED_BEFORE_GATE,  # abstained (the candidate's hang)
+    "SubprocessVerifier refuses (no isolation)": REFUSED_BEFORE_GATE,  # incomplete (POLICY_REFUSAL)
+    "SubprocessVerifier runs (positive control)": EXECUTES,
+}
+
+
+def test_every_matrix_row_is_mapped_and_the_mapping_is_nine_refusals_to_one_execution():
+    """The mapping covers exactly the matrix, and its shape is pinned: a matrix
+    where every row refused would be a guard that passes by refusing everything."""
+
+    labels = [label for label, _ in _MATRIX]
+    assert set(_ROW_KIND) == set(labels), (
+        f"unmapped or stale rows: {sorted(set(labels) ^ set(_ROW_KIND))}"
+    )
+    kinds = list(_ROW_KIND.values())
+    assert kinds.count(EXECUTES) == 1
+    assert kinds.count(REFUSED_AT_GATE) == 1
+    assert kinds.count(REFUSED_BEFORE_GATE) == 8
+
+
 @pytest.mark.parametrize("label,verifier", _MATRIX, ids=[m[0] for m in _MATRIX])
 def test_the_swarm_matrix_authorizes_only_where_policy_is_satisfied(label, verifier):
     """MEASURED at 68d80df, the commit before enforcement: SIX of these ten
@@ -501,33 +550,38 @@ def test_the_swarm_matrix_authorizes_only_where_policy_is_satisfied(label, verif
     raising, abstaining, hanging after start) was approved.
 
     Now: an approval happens only where a policy requirement is genuinely
-    satisfied, which is the last row alone.
+    satisfied, which is the last row alone. Which rows assert a REFUSAL and
+    which assert a LEGITIMATE EXECUTION is the pinned mapping ``_ROW_KIND``.
     """
 
     runtime = _runtime(verifier)
     run = runtime.run(TaskPacket(goal="add two integers", budget=5, entry_point="add"))
     action = next(r for r in run.records if r.proposal.kind == KIND_PROPOSED_ACTION)
 
-    should_authorize = label.endswith("(positive control)")
-    if should_authorize:
+    kind = _ROW_KIND[label]
+    if kind == EXECUTES:
         assert action.decision is not None and action.decision.approved, label
         assert runtime.executor.executed, label
+        return
+    # The property is NO APPROVAL and ZERO EXECUTOR CALLS — not "the gate was
+    # never consulted". A FAILED required check is a real answer: coverage
+    # refuses as unsatisfactory, the bank reports an authoritative FAIL, and
+    # the gate sees it and blocks. Every other row refuses before any verdict
+    # exists, so the gate is not reached at all; asserting the stronger shape
+    # for every row would have been asserting an implementation detail rather
+    # than the guarantee.
+    approved = action.decision is not None and action.decision.approved
+    assert not approved, f"{label}: an approval was issued"
+    assert action.execution is None, f"{label}: something executed"
+    assert runtime.executor.executed == [], f"{label}: the executor was called"
+    if kind == REFUSED_BEFORE_GATE:
+        assert action.decision is None, (
+            f"{label}: the gate was consulted with no verdict to judge"
+        )
     else:
-        # The property is NO APPROVAL and ZERO EXECUTOR CALLS — not "the gate was
-        # never consulted". A FAILED required check is a real answer: coverage
-        # refuses as unsatisfactory, the bank reports an authoritative FAIL, and
-        # the gate sees it and blocks. Every other row refuses before any verdict
-        # exists, so the gate is not reached at all; asserting the stronger shape
-        # for every row would have been asserting an implementation detail rather
-        # than the guarantee.
-        approved = action.decision is not None and action.decision.approved
-        assert not approved, f"{label}: an approval was issued"
-        assert action.execution is None, f"{label}: something executed"
-        assert runtime.executor.executed == [], f"{label}: the executor was called"
-        if label != "returns FAIL":
-            assert action.decision is None, (
-                f"{label}: the gate was consulted with no verdict to judge"
-            )
+        assert kind == REFUSED_AT_GATE
+        assert action.decision is not None, f"{label}: the gate was never reached"
+        assert action.decision.effective_outcome == "block", label
 
 
 def test_the_matrix_positive_control_really_authorizes():

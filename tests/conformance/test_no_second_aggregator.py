@@ -86,7 +86,11 @@ _TARGET_NAMES = frozenset({"Judgment"})
 #: ``module::qualified-function``, each with the reason it is permitted.
 _PERMITTED_CONSTRUCTORS: dict[str, str] = {
     "prometheus_protocol.verifier.bank::VerifierBank._authoritative_judgment": "THE aggregator. Fusion of authoritative evidence is what this function is.",
-    "prometheus_protocol.verifier.bank::VerifierBank.judge_covered": "The coverage refusal for a FAILED required check. A failure is a real "
+    # TASK 6 moved the validate-then-fuse body from ``judge_covered`` into
+    # ``_judge_with_coverage`` (which returns the coverage report beside the
+    # outcome; ``judge_covered`` delegates to it). The construction is the same
+    # one, at the same row, one function name over.
+    "prometheus_protocol.verifier.bank::VerifierBank._judge_with_coverage": "The coverage refusal for a FAILED required check. A failure is a real "
     "answer and is reported as one; it refuses authorization either way.",
 }
 # PHASE-1.2b — THE SANCTION IS GONE, not commented out. It read
@@ -124,6 +128,15 @@ def _resolve_bindings(tree: ast.Module) -> dict[str, str]:
         elif isinstance(node, ast.Import):
             for alias in node.names:
                 bindings[alias.asname or alias.name] = alias.name
+        elif isinstance(node, ast.Assign) and isinstance(node.value, ast.Name):
+            # R7: a plain rebinding — ``_m = mint`` — resolves to whatever the
+            # right-hand name is bound to. Imports come first in a module, and
+            # ast.walk is breadth-first, so the import is resolved by the time
+            # the alias is seen. Recorded as a gap in docs/execution-descriptor.md
+            # §11 until this line existed; the control test below plants one.
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    bindings[target.id] = bindings.get(node.value.id, node.value.id)
     return bindings
 
 
@@ -294,7 +307,7 @@ def test_the_unbound_judgment_route_is_closed():
 
     assert set(_PERMITTED_CONSTRUCTORS) == {
         "prometheus_protocol.verifier.bank::VerifierBank._authoritative_judgment",
-        "prometheus_protocol.verifier.bank::VerifierBank.judge_covered",
+        "prometheus_protocol.verifier.bank::VerifierBank._judge_with_coverage",
     }, (
         "the permitted set is no longer exactly the bank. Every entry here is a "
         "module that can authorize an action without the policy layer."
@@ -362,6 +375,27 @@ def test_no_permitted_minter_outlives_the_call_it_excuses():
     found = _mint_calls()
     stale = sorted(set(_PERMITTED_MINTERS) - set(found))
     assert stale == [], f"permitted minters with no call behind them: {stale}"
+
+
+def test_the_mint_sweep_sees_an_alias_assignment():
+    """R7's control. ``_m = mint`` used to be invisible to the sweep, because
+    ``_resolve_bindings`` resolved imports and nothing else — a module could
+    rebind the name once and mint under it. Planted here, resolved here."""
+
+    planted = ast.parse(
+        "from prometheus_protocol.policy.assessment import mint\n"
+        "_m = mint\n"
+        "def sneak(snapshot, verdict):\n"
+        "    return _m(snapshot, verdict)\n"
+    )
+    bindings = _resolve_bindings(planted)
+    calls = [node for node in ast.walk(planted) if isinstance(node, ast.Call)]
+    assert len(calls) == 1
+    assert _callee_symbol(calls[0], bindings) == "prometheus_protocol.policy.assessment.mint"
+    # And a rebinding of something that is NOT mint stays not-mint.
+    other = ast.parse("import os\n_p = os\n_p.getcwd()\n")
+    call = next(node for node in ast.walk(other) if isinstance(node, ast.Call))
+    assert _callee_symbol(call, _resolve_bindings(other)) == "os.getcwd"
 
 
 def test_the_guard_names_what_it_does_not_constrain():

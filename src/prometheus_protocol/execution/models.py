@@ -17,12 +17,20 @@ from prometheus_protocol.policy.execution import AuthorizedExecution
 
 
 class PendingStatus(str, Enum):
-    """Lifecycle of a routed action. ``PENDING`` is the only open state."""
+    """Lifecycle of a routed action. ``PENDING`` is the only open state.
+
+    ``INVALIDATED`` is a system transition, like ``EXPIRED``: the policy the
+    hold was pinned to is no longer the one the deployment selects, so the
+    hold can never be approved and verification must be re-run. It is kept
+    separate from ``EXPIRED`` so the ledger can tell "this lapsed" from "this
+    was voided by a rotation".
+    """
 
     PENDING = "pending"
     APPROVED = "approved"
     REJECTED = "rejected"
     EXPIRED = "expired"
+    INVALIDATED = "invalidated"
 
 
 @dataclass(frozen=True)
@@ -48,4 +56,12 @@ class PendingAction:
     status: PendingStatus
     created_at: str
     human_decision: HumanDecision | None = None
+    #: The seam-minted authorization. Set on the value ``hold`` returns; on a
+    #: hold reloaded from the ledger it is minted again only by revalidation
+    #: (approval, retry), after the pinned record has been checked against its
+    #: chain entry and the selected policy.
     authorization: AuthorizedExecution[ExecutableAction] | None = None
+    #: The pinned authorization record, exactly as persisted (``policy/record.py``).
+    #: ``None`` for a legacy hold written before records existed, which is
+    #: refused at approval as re-verification required.
+    record: dict | None = None

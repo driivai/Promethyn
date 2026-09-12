@@ -128,7 +128,9 @@ def test_every_mutation_reopens_something_phase_1_2b_closed(runner):
         "checked.artifact_sha256",  # the binding: artifact
         "self._minted is not _MINT",  # the mint guard
         'object.__setattr__(self, "_minted", None)',  # the consumed token
-        "mint(expected, self.judge_covered",  # only the bank mints
+        # only the bank mints — and since TASK 6 it mints WITH the coverage
+        # report, so the reverted text is the two-line tail of ``assess``
+        "return mint(expected, outcome, coverage=report)",
     )
     for name, _function, edits, _file, _selection in runner.mutations():
         for old, new in edits:
