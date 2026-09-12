@@ -113,9 +113,9 @@ def test_registered_tier_is_the_source_of_truth():
 
 def test_needs_escalation():
     bank = VerifierBank(escalate_below=0.75)
-    low = Judgment(Verdict.PASS, 0.5, authoritative=False)
-    high = Judgment(Verdict.PASS, 0.9, authoritative=False)
-    authoritative = Judgment(Verdict.PASS, 0.5, authoritative=True)
+    low = Judgment(verdict=Verdict.PASS, confidence=0.5, authoritative=False)
+    high = Judgment(verdict=Verdict.PASS, confidence=0.9, authoritative=False)
+    authoritative = Judgment(verdict=Verdict.PASS, confidence=0.5, authoritative=True)
     assert bank.needs_escalation(low) is True
     assert bank.needs_escalation(high) is False
     # Authoritative judgments are binding and never escalate.

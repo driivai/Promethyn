@@ -135,6 +135,18 @@ _ALLOWED_CONFIG = {
     "warn_unused_ignores": "True",
     "warn_redundant_casts": "True",
     "files": "src/prometheus_protocol, scripts, tests",
+    # The SUPPORTED FLOOR, pinned to the lowest version in requires-python and
+    # the CI matrix. Unpinned, mypy targets whichever interpreter runs it, so a
+    # 3.11-only symbol passes on the 3.12 job and fails at import on the 3.10
+    # one — which is exactly what happened with `import tomllib`.
+    #
+    # This value is NOT free: tests/conformance/test_stdlib_floor.py asserts it
+    # equals the requires-python floor and the matrix minimum, so raising it
+    # here alone fails rather than quietly narrowing what the gate targets.
+    # Note also that it is necessary and not sufficient — measured, the pin
+    # alone does not catch a missing stdlib module while ignore_missing_imports
+    # is True, which is why that file exists beside it.
+    "python_version": "3.10",
 }
 
 

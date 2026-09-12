@@ -417,7 +417,7 @@ def test_human_hold_requires_same_proof_and_revalidates_on_approval_and_retry():
     # Genuine low-confidence PASS routes; the human resolves risk, not coverage.
     from prometheus_protocol.policy.assessment import mint
 
-    low = mint(snapshot(a), Judgment(Verdict.PASS, 0.6, True))
+    low = mint(snapshot(a), Judgment(verdict=Verdict.PASS, confidence=0.6, authoritative=True))
     held = controller.submit(attempt_id="attempt-1", assessment=low, action=a).pending
     assert held is not None and spy.calls == []
     controller.approve(held.id, identity="human")
@@ -435,7 +435,7 @@ def test_human_cannot_hold_a_failure_or_replace_the_validated_action():
     g = gate()
     from prometheus_protocol.policy.assessment import mint
 
-    failed = mint(snapshot(a), Judgment(Verdict.FAIL, 1.0, True))
+    failed = mint(snapshot(a), Judgment(verdict=Verdict.FAIL, confidence=1.0, authoritative=True))
     decision = g.decide(failed, action=a, attempt_id=ATTEMPT)
     assert decision.effective_outcome == "block"
     with pytest.raises(ValueError, match="only a routed"):
@@ -443,7 +443,7 @@ def test_human_cannot_hold_a_failure_or_replace_the_validated_action():
             gate=g, executor=Spy(), ledger=SqliteLedger(":memory:")
         ).pending.hold(decision)
     routed = g.decide(
-        mint(snapshot(a), Judgment(Verdict.PASS, 0.6, True)),
+        mint(snapshot(a), Judgment(verdict=Verdict.PASS, confidence=0.6, authoritative=True)),
         action=a,
         attempt_id=ATTEMPT,
     )
@@ -564,7 +564,7 @@ def test_hold_admission_refuses_a_routed_decision_without_the_seam_proof():
         subject_id="s",
         outcome="route",
         action=a,
-        judgment=Judgment(Verdict.FAIL, 1.0, True),
+        judgment=Judgment(verdict=Verdict.FAIL, confidence=1.0, authoritative=True),
     )
     controller = ExecutionController(
         gate=gate(), executor=Spy(), ledger=SqliteLedger(":memory:")
@@ -617,7 +617,7 @@ def test_hold_approval_re_resolves_the_policy_instead_of_redigesting_the_hold():
     a = action()
     from prometheus_protocol.policy.assessment import mint
 
-    low = mint(snapshot(a), Judgment(Verdict.PASS, 0.6, True))
+    low = mint(snapshot(a), Judgment(verdict=Verdict.PASS, confidence=0.6, authoritative=True))
     ledger = SqliteLedger(":memory:")
     controller = ExecutionController(
         gate=ActionGate(

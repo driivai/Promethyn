@@ -82,7 +82,7 @@ def test_attempt_columns_equal_the_evidence_json():
     ledger = SqliteLedger(":memory:")
     try:
         ledger.record_attempt(
-            _attempt(Judgment(Verdict.PASS, 0.83, authoritative=True)),
+            _attempt(Judgment(verdict=Verdict.PASS, confidence=0.83, authoritative=True)),
             cycle=1,
             kind="k",
         )
@@ -195,7 +195,7 @@ def test_controller_execution_is_queryable_by_confidence():
     controller.submit(
         attempt_id="attempt-1",
         assessment=carrying(
-            Judgment(Verdict.PASS, 0.44, authoritative=True),
+            Judgment(verdict=Verdict.PASS, confidence=0.44, authoritative=True),
             artifact_sha256=content_hash(action.code),
         ),
         action=action,

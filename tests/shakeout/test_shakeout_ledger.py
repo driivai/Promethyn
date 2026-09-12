@@ -24,7 +24,7 @@ def test_confidence_is_a_queryable_column_matching_the_json():
         )
         attempt = Attempt(
             task_id="t", split="train", entry_point="f", code="x", evidence=evidence,
-            judgment=Judgment(Verdict.PASS, 0.95, authoritative=True),
+            judgment=Judgment(verdict=Verdict.PASS, confidence=0.95, authoritative=True),
         )
         ledger.record_attempt(attempt, cycle=1, kind="baseline")
 
