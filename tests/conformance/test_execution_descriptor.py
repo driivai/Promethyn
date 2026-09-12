@@ -275,6 +275,127 @@ def test_descriptor_refuses_each_cross_action_mismatch_before_execution():
     assert spy.calls == []
 
 
+@pytest.mark.parametrize(
+    "label,minted_target,minted_attempt,gate_target,presented_attempt",
+    [
+        ("target", "sandbox://other", ATTEMPT, TARGET, ATTEMPT),
+        ("attempt", TARGET, "attempt-OLD", TARGET, "attempt-NEW"),
+    ],
+)
+def test_a_LEGITIMATELY_minted_assessment_does_not_cross_target_or_attempt(
+    label, minted_target, minted_attempt, gate_target, presented_attempt
+):
+    """The two R2 dimensions the suite did not cover, found by mutation.
+
+    ``test_descriptor_refuses_each_cross_action_mismatch_before_execution``
+    forges an assessment by replacing ONE field while keeping the original
+    snapshot digest, so the digest comparison catches it whatever the descriptor
+    is built from. That makes it blind to how the descriptor sourced the field:
+    measured, taking ``target_canonical`` and ``attempt_id`` from the assessment
+    instead of from the gate's configured target and the caller's attempt left
+    the whole suite GREEN.
+
+    This presents a LEGITIMATELY MINTED assessment — correct digest, correct
+    policy, minted by the real bank — for a different target or attempt, which
+    is the shape the digest is actually protecting against. Under the same
+    mutation this authorizes: measured, ``approved=True`` for both rows.
+    """
+
+    snapshot = resolve(
+        POLICY,
+        artifact_sha256=content_hash(action().code),
+        target_canonical=minted_target,
+        action_class=ACTION_SANDBOX_EXECUTE,
+        attempt_id=minted_attempt,
+    )
+    assessed = VerifierBank(policy_supplier=lambda: POLICY).assess(
+        snapshot,
+        [
+            BoundResult(
+                check_id="run",
+                snapshot_digest=snapshot_digest(snapshot),
+                implementation="runner",
+                outcome=_hard_pass("runner"),
+            )
+        ],
+    )
+    guarded = ActionGate(
+        authorizer=ExecutionAuthorizer(lambda: POLICY),
+        target_canonical=gate_target,
+        escalate_below=0.75,
+    )
+    with pytest.raises(ExecutionNotAuthorized):
+        guarded.decide(assessed, action=action(), attempt_id=presented_attempt)
+
+
+def test_a_legitimately_minted_assessment_on_its_OWN_target_and_attempt_passes():
+    """POSITIVE CONTROL for the pair above.
+
+    Same policy, same artifact, minted for the gate's own target and presented
+    under its own attempt: it authorizes. Without this the two refusals above
+    would be satisfied by a seam that refused everything.
+    """
+
+    snapshot = resolve(
+        POLICY,
+        artifact_sha256=content_hash(action().code),
+        target_canonical=TARGET,
+        action_class=ACTION_SANDBOX_EXECUTE,
+        attempt_id=ATTEMPT,
+    )
+    assessed = VerifierBank(policy_supplier=lambda: POLICY).assess(
+        snapshot,
+        [
+            BoundResult(
+                check_id="run",
+                snapshot_digest=snapshot_digest(snapshot),
+                implementation="runner",
+                outcome=_hard_pass("runner"),
+            )
+        ],
+    )
+    decision = gate().decide(assessed, action=action(), attempt_id=ATTEMPT)
+    assert decision.approved
+
+
+def test_the_snapshot_digest_covers_every_descriptor_field():
+    """Doctrine #8 applied to the digest: what varies here is the FIELD LIST.
+
+    TWO LAYERS, MEASURED — and the first measurement of this was wrong, so the
+    correction is recorded rather than quietly applied. Deleting any one of the
+    six names from the per-field loop leaves the whole suite green, which looks
+    like the loop being decorative. It is not: it is REDUNDANT WHILE THE DIGEST
+    IS PRESENT. Removing the digest comparison instead leaves the R2 behavioural
+    proofs still passing, and a direct probe then refuses with "assessment
+    target_canonical does not match execution descriptor" — the loop carrying
+    the load. Both layers independently cover the same six fields.
+
+    That redundancy is exactly why the field LIST is what has to be pinned. A
+    seventh descriptor field added tomorrow would be covered by NEITHER layer:
+    not by the digest, which commits to ``SNAPSHOT_FIELDS``, and not by the
+    loop, whose tuple is written out by hand. Two layers that both enumerate the
+    same six fields give no protection at all against the set changing, which is
+    the one thing that varies here.
+    """
+
+    from dataclasses import fields
+
+    from prometheus_protocol.policy.execution import ExecutionDescriptor
+    from prometheus_protocol.policy.snapshot import SNAPSHOT_FIELDS
+
+    descriptor_fields = {f.name for f in fields(ExecutionDescriptor)}
+    digested = set(SNAPSHOT_FIELDS)
+    uncovered = descriptor_fields - digested
+    assert uncovered == set(), (
+        f"descriptor field(s) {sorted(uncovered)} are not committed to by the "
+        "snapshot digest. Enforcement is single-layer through that digest, so a "
+        "field outside it is enforced by nothing — the per-field loop in "
+        "authorize_context is unreachable. Either add the field to the snapshot "
+        "encoding (a deliberate digest change) or record here why it carries no "
+        "authority."
+    )
+
+
 def test_correct_binding_authorizes_and_executes():
     a = action()
     spy = Spy()
@@ -296,7 +417,7 @@ def test_human_hold_requires_same_proof_and_revalidates_on_approval_and_retry():
     # Genuine low-confidence PASS routes; the human resolves risk, not coverage.
     from prometheus_protocol.policy.assessment import mint
 
-    low = mint(snapshot(a), Judgment(Verdict.PASS, 0.6, True))
+    low = mint(snapshot(a), Judgment(verdict=Verdict.PASS, confidence=0.6, authoritative=True))
     held = controller.submit(attempt_id="attempt-1", assessment=low, action=a).pending
     assert held is not None and spy.calls == []
     controller.approve(held.id, identity="human")
@@ -314,7 +435,7 @@ def test_human_cannot_hold_a_failure_or_replace_the_validated_action():
     g = gate()
     from prometheus_protocol.policy.assessment import mint
 
-    failed = mint(snapshot(a), Judgment(Verdict.FAIL, 1.0, True))
+    failed = mint(snapshot(a), Judgment(verdict=Verdict.FAIL, confidence=1.0, authoritative=True))
     decision = g.decide(failed, action=a, attempt_id=ATTEMPT)
     assert decision.effective_outcome == "block"
     with pytest.raises(ValueError, match="only a routed"):
@@ -322,7 +443,7 @@ def test_human_cannot_hold_a_failure_or_replace_the_validated_action():
             gate=g, executor=Spy(), ledger=SqliteLedger(":memory:")
         ).pending.hold(decision)
     routed = g.decide(
-        mint(snapshot(a), Judgment(Verdict.PASS, 0.6, True)),
+        mint(snapshot(a), Judgment(verdict=Verdict.PASS, confidence=0.6, authoritative=True)),
         action=a,
         attempt_id=ATTEMPT,
     )
@@ -443,7 +564,7 @@ def test_hold_admission_refuses_a_routed_decision_without_the_seam_proof():
         subject_id="s",
         outcome="route",
         action=a,
-        judgment=Judgment(Verdict.FAIL, 1.0, True),
+        judgment=Judgment(verdict=Verdict.FAIL, confidence=1.0, authoritative=True),
     )
     controller = ExecutionController(
         gate=gate(), executor=Spy(), ledger=SqliteLedger(":memory:")
@@ -496,7 +617,7 @@ def test_hold_approval_re_resolves_the_policy_instead_of_redigesting_the_hold():
     a = action()
     from prometheus_protocol.policy.assessment import mint
 
-    low = mint(snapshot(a), Judgment(Verdict.PASS, 0.6, True))
+    low = mint(snapshot(a), Judgment(verdict=Verdict.PASS, confidence=0.6, authoritative=True))
     ledger = SqliteLedger(":memory:")
     controller = ExecutionController(
         gate=ActionGate(

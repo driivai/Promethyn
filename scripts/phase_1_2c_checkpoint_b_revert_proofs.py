@@ -54,12 +54,26 @@ def mutations():
             "honestly_redigested_weakened",
         ),
         (
+            # The comparison loop used to iterate a hand-written tuple of the six
+            # field names, and this mutation deleted one entry from it. That tuple
+            # is gone: all three copies of the field list (this loop, the
+            # descriptor's __post_init__, and the descriptor's own fields) now
+            # derive from dataclasses.fields(ExecutionDescriptor), so a seventh
+            # field cannot be added to one and missed by the others.
+            #
+            # The equivalent mutation is therefore to narrow what the loop
+            # iterates rather than to delete a literal. Same defect, expressed
+            # against the construction that replaced the literal.
             "action-class-comparison-removed",
             ExecutionAuthorizer.authorize_context,
             [
                 (
-                    '        "action_class",\n',
-                    "",
+                    # FOUR spaces, not eight: the runner reads
+                    # inspect.getsource of a METHOD and dedents it, so a line
+                    # written at eight in the file appears at four here.
+                    "    for name in _DESCRIPTOR_FIELDS:\n",
+                    '    for name in [f for f in _DESCRIPTOR_FIELDS '
+                    'if f != "action_class"]:\n',
                 )
             ],
             TEST,
@@ -68,9 +82,15 @@ def mutations():
         (
             "attempt-id-comparison-removed",
             ExecutionAuthorizer.authorize_context,
-            [('        "attempt_id",\n', "")],
+            [
+                (
+                    "    for name in _DESCRIPTOR_FIELDS:\n",
+                    '    for name in [f for f in _DESCRIPTOR_FIELDS '
+                    'if f != "attempt_id"]:\n',
+                )
+            ],
             TEST,
-            "cross_action_mismatch",
+            "cross_action_mismatch or LEGITIMATELY_minted",
         ),
         (
             "hold-admission-check-removed",

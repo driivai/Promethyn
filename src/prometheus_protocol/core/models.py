@@ -274,7 +274,7 @@ class Attempt:
     judgment: "Judgment | None" = None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class Judgment:
     """The fused result of weighing several verifiers' evidence.
 
