@@ -21,21 +21,58 @@ against ``tests/conformance/skip_manifest.txt``:
   * the same manifest is checked on every matrix version, so the three skip
     sets are the same set or the build is red.
 
-The manifest names test ids, one per line, ``#`` for comments. A line may
-carry a trailing ``# reason``. Nothing here decides whether a skip is
-legitimate; it decides whether it was SANCTIONED, which is the property that
-was missing.
+TWO SECTIONS, because the second rule was measured to be too strong. The
+manifest was pinned from a local run and the first CI run of it refused, for a
+reason worth keeping: the skip SET is not a property of the tree alone, it is a
+property of the tree ON A HOST. Observed (run 34707644343), the same 23 skips
+both places, composed differently — ``ubuntu-latest`` ships a container daemon
+and runs as an unprivileged user, the local CI-equivalent host has no daemon and
+runs as root, so the real-container workspace test RAN there and skipped here
+while the cross-user denial test did the exact opposite.
+
+So an entry lives in one of two sections:
+
+  ``[required]`` (the default)
+      must skip in every environment. A test that ran makes the entry stale and
+      fails the build, as before.
+
+  ``[conditional]``
+      skips or runs depending on a named host fact. It must carry
+      ``proof: <workflow file> :: <step name>`` — a step in a real workflow that
+      runs the test under a ``PROM_REQUIRE_*`` flag, which is what turns a skip
+      into a FAILURE there. A conditional sanction whose proof does not resolve,
+      or resolves to a step carrying no such flag, fails the build: that is a
+      hole, not a sanction. Where the test runs anyway, that is reported, not
+      failed.
+
+The manifest names test ids, one per line, ``#`` for comments, ``[section]`` for
+a section header. A line may carry a trailing ``# reason``. Nothing here decides
+whether a skip is legitimate; it decides whether it was SANCTIONED, which is the
+property that was missing.
 """
 
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+import yaml
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_MANIFEST = REPO_ROOT / "tests" / "conformance" / "skip_manifest.txt"
+WORKFLOWS = REPO_ROOT / ".github" / "workflows"
+
+REQUIRED = "required"
+CONDITIONAL = "conditional"
+SECTIONS = (REQUIRED, CONDITIONAL)
+
+#: ``proof: <workflow file> :: <step name>`` inside a conditional entry's reason.
+_PROOF = re.compile(r"proof:\s*(?P<workflow>[\w.-]+\.ya?ml)\s*::\s*(?P<step>.+?)\s*$")
+#: The flags that turn a skip into a failure. A proof step must set one to "1".
+_REQUIRE_FLAG = re.compile(r"^PROM_REQUIRE_[A-Z_]+$")
 
 
 def node_id(case: ET.Element) -> str:
@@ -70,20 +107,83 @@ def skipped_ids(report: Path) -> dict[str, str]:
     return found
 
 
-def manifest_ids(path: Path) -> set[str]:
-    """Test ids from the manifest. A comment line starts with ``#``; a trailing
-    reason is introduced by two spaces and ``#``, so a ``#`` inside a
-    parametrised id is never read as one."""
+def manifest_entries(path: Path) -> dict[str, tuple[str, str]]:
+    """``id -> (section, reason)``.
 
-    ids: set[str] = set()
+    A comment line starts with ``#``; a section header is ``[required]`` or
+    ``[conditional]`` on its own line; a trailing reason is introduced by two
+    spaces and ``#``, so a ``#`` inside a parametrised id is never read as one.
+    """
+
+    entries: dict[str, tuple[str, str]] = {}
+    section = REQUIRED
     for raw in path.read_text(encoding="utf-8").splitlines():
+        stripped = raw.strip()
+        if stripped.startswith("["):
+            header = stripped.strip("[]").strip().lower()
+            if header not in SECTIONS:
+                raise SystemExit(f"{path}: unknown section [{header}]; expected one of {SECTIONS}")
+            section = header
+            continue
         if raw.lstrip().startswith("#"):
             continue
         cut = raw.find("  #")
         line = (raw[:cut] if cut >= 0 else raw).strip()
+        reason = raw[cut + 3 :].strip() if cut >= 0 else ""
         if line:
-            ids.add(line)
-    return ids
+            entries[line] = (section, reason)
+    return entries
+
+
+def manifest_ids(path: Path) -> set[str]:
+    """Every sanctioned id, both sections. Kept for callers that only ask
+    whether a skip is sanctioned at all."""
+
+    return set(manifest_entries(path))
+
+
+def _workflow_steps(workflow: Path) -> dict[str, dict]:
+    """``step name -> step`` across every job in a workflow."""
+
+    document = yaml.safe_load(workflow.read_text(encoding="utf-8")) or {}
+    steps: dict[str, dict] = {}
+    for job in (document.get("jobs") or {}).values():
+        for step in job.get("steps") or []:
+            name = step.get("name")
+            if name:
+                steps[name] = step
+    return steps
+
+
+def proof_problem(test_id: str, reason: str) -> str | None:
+    """Why this conditional entry's proof does not hold, or ``None``.
+
+    A conditional sanction says "this skip is acceptable HERE because the test
+    is proven THERE". That claim is checked, not taken: the workflow must
+    exist, the step must exist in it, and the step must set a ``PROM_REQUIRE_*``
+    flag — the mechanism that makes the test FAIL rather than skip in the place
+    it is proven. Without the flag the proof step would skip just as quietly as
+    the run being excused here.
+    """
+
+    match = _PROOF.search(reason)
+    if match is None:
+        return f"{test_id}: conditional entry carries no `proof: <workflow> :: <step>`"
+    workflow = WORKFLOWS / match.group("workflow")
+    if not workflow.is_file():
+        return f"{test_id}: proof names {match.group('workflow')}, which is not a workflow in .github/workflows"
+    steps = _workflow_steps(workflow)
+    step_name = match.group("step")
+    if step_name not in steps:
+        return f"{test_id}: proof names step {step_name!r}, which {match.group('workflow')} does not define"
+    env = steps[step_name].get("env") or {}
+    flags = [key for key, value in env.items() if _REQUIRE_FLAG.match(str(key)) and str(value) == "1"]
+    if not flags:
+        return (
+            f"{test_id}: proof step {step_name!r} sets no PROM_REQUIRE_* flag, so the test "
+            "would skip there too — a sanction with no proof behind it"
+        )
+    return None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -93,27 +193,45 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     observed = skipped_ids(Path(args.report))
-    sanctioned = manifest_ids(Path(args.manifest))
+    entries = manifest_entries(Path(args.manifest))
 
-    unsanctioned = sorted(set(observed) - sanctioned)
-    stale = sorted(sanctioned - set(observed))
+    required = {i for i, (section, _) in entries.items() if section == REQUIRED}
+    conditional = {i for i, (section, _) in entries.items() if section == CONDITIONAL}
+
+    unsanctioned = sorted(set(observed) - set(entries))
+    stale = sorted(required - set(observed))
+    unproven = sorted(
+        problem
+        for test_id in conditional
+        if (problem := proof_problem(test_id, entries[test_id][1])) is not None
+    )
+    ran_here = sorted(conditional - set(observed))
+
     if unsanctioned:
         print(f"skip manifest FAILED: {len(unsanctioned)} skip(s) not sanctioned:")
         for test_id in unsanctioned:
             print(f"  {test_id}  ({observed[test_id][:100]})")
     if stale:
-        print(f"skip manifest FAILED: {len(stale)} sanctioned entr{'y' if len(stale) == 1 else 'ies'} did not skip (ran, or no longer exists):")
+        print(f"skip manifest FAILED: {len(stale)} required entr{'y' if len(stale) == 1 else 'ies'} did not skip (ran, or no longer exists):")
         for test_id in stale:
             print(f"  {test_id}")
-    if unsanctioned or stale:
+    if unproven:
+        print(f"skip manifest FAILED: {len(unproven)} conditional entr{'y' if len(unproven) == 1 else 'ies'} without a proof:")
+        for problem in unproven:
+            print(f"  {problem}")
+    if unsanctioned or stale or unproven:
         print(
             "Sanction a new skip in tests/conformance/skip_manifest.txt WITH its reason, "
-            "or make the test run; remove an entry whose test now runs."
+            "or make the test run; remove an entry whose test now runs; a host-dependent "
+            "skip belongs in [conditional] with the step that proves it under a "
+            "PROM_REQUIRE_* flag."
         )
         return 1
+    for test_id in ran_here:
+        print(f"skip manifest: conditional entry RAN in this environment: {test_id}")
     print(
-        f"skip manifest passed: {len(observed)} skip(s) observed, all {len(sanctioned)} "
-        "sanctioned, none stale"
+        f"skip manifest passed: {len(observed)} skip(s) observed, all sanctioned "
+        f"({len(required)} required, {len(conditional)} conditional, {len(ran_here)} of them ran here)"
     )
     return 0
 

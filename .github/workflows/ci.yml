@@ -599,9 +599,17 @@ jobs:
       - name: Skip manifest (the skip SET is sanctioned by name, on every version)
         # "2372 passed, 23 skipped" on three Pythons said nothing about whether
         # they were the SAME 23. This compares the skipped tests of the run
-        # above, by name, against tests/conformance/skip_manifest.txt: an
-        # unsanctioned skip fails, a sanctioned test that ran fails, and the
+        # above, by name, against tests/conformance/skip_manifest.txt, and the
         # same manifest is checked on every matrix version.
+        #
+        # An unsanctioned skip fails. A [required] entry that RAN fails too.
+        # A [conditional] entry — a skip that depends on a host fact, of which
+        # there are exactly two — may skip or run, and must name the step that
+        # proves the test elsewhere under a PROM_REQUIRE_* flag; a proof that
+        # does not resolve fails the build. That split was forced by this step's
+        # own first run: this runner ships a container daemon and is
+        # unprivileged, so it skips a different member of the pair than the
+        # host the manifest was written on, and both report 23 (OPEN-GAPS G7).
         run: python scripts/check_skip_manifest.py full-suite.xml
 
       - name: Build

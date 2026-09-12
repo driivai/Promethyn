@@ -40,6 +40,20 @@ in `spec/invariants.md` is a major version bump.
   (nine refusals, one legitimate execution).
 
 ### Fixed
+- **The sanctioned skip set is per-host where it has to be, and proven where it
+  is excused.** The manifest was pinned from a local run; its first CI run
+  refused, and was right twice over — `ubuntu-latest` ships a container daemon
+  (so the real-container workspace test ran there, as predicted) and is
+  unprivileged (so the cross-user denial test skipped there, which was not).
+  Both hosts report 23 skips composed differently. `skip_manifest.txt` now has
+  a `[required]` section with the original rule and a `[conditional]` section
+  for a skip that depends on a host fact — each conditional entry naming the
+  step that runs the test under a `PROM_REQUIRE_*` flag, which
+  `scripts/check_skip_manifest.py` resolves and refuses if it does not hold.
+  `tests/conformance/test_skip_manifest_guard.py` drives the checker over both
+  recorded host compositions and over the mutations that must be refused.
+  `docs/OPEN-GAPS.md` G7 closed, with the container proof's nightly cadence as
+  its named limit.
 - **The workflow's collection pins are checkable before pushing.** Ten CI steps
   pin how many tests each module must contribute; the numbers lived only in
   `.github/workflows/ci.yml`, so a locally green suite could not see a stale

@@ -253,7 +253,7 @@ refusal is the next hardening of this entry.
 
 ---
 
-## G7 — the sanctioned skip set is pinned from a local run; CI decides one entry
+## G7 — the skip set is a property of the tree ON A HOST (CLOSED by measurement, with a named limit)
 
 **What.** `2372 passed, 23 skipped` on 3.10, 3.11 and 3.12 said nothing about
 COMPOSITION. It is now a manifest (`tests/conformance/skip_manifest.txt`),
@@ -266,12 +266,46 @@ SAME 23 by name on all three — 14 live-database proofs (they run in the
 dedicated PostgreSQL step), 8 real-container opt-ins, 1 real-container test
 skipping for want of a daemon.
 
-**Named limit.** That last entry
-(`test_sandbox_privilege.py::test_real_container_workspace_stays_owner_only_and_still_works`)
-skips here because no container daemon is reachable; `ubuntu-latest` ships
-one. The first CI run of the manifest decides whether it runs there — a
-mismatch is the finding the manifest exists to surface, and the manifest is
-corrected from the observed report, never predicted.
+**What the first CI run decided** (run `34707644343`, `build (3.11)`, the step
+that exists to surface exactly this). It refused, with **two** findings, and the
+manifest was wrong in a more interesting way than predicted:
+
+```
+2424 passed, 23 skipped in 191.19s
+skip manifest FAILED: 1 skip(s) not sanctioned:
+  ...::test_another_local_user_cannot_read_or_write_the_workspace  (dropping to another uid requires privilege)
+skip manifest FAILED: 1 sanctioned entry did not skip (ran, or no longer exists):
+  ...::test_real_container_workspace_stays_owner_only_and_still_works
+```
+
+The predicted half happened: `ubuntu-latest` ships a container daemon, so the
+container test RAN there. The unpredicted half is the finding: that runner is
+also **unprivileged**, so the cross-user denial test skipped there — and this
+host runs as root, so it runs here. Both hosts report 23 skips. A count could
+never have separated them; the manifest by name did, on its first run.
+
+**The correction.** The manifest has two sections. `[required]` keeps the
+original rule (must skip everywhere; an entry that ran is stale and fails).
+`[conditional]` is for a skip that depends on a named HOST fact, and each such
+entry must carry `proof: <workflow> :: <step>` naming a step that runs the test
+under a `PROM_REQUIRE_*` flag — the flag that turns a skip into a FAILURE there.
+The checker resolves the workflow, the step, and the flag; a conditional entry
+whose proof does not resolve fails the build, because a sanction with nothing
+behind it is a hole. Exactly two entries are conditional: the two that swap.
+
+**Named limit** (a passing test,
+`test_skip_manifest_guard.py::test_the_named_limit_a_conditional_skip_is_excused_on_EVERY_host`).
+A conditional entry is excused wherever it skips, including for a reason nobody
+intended. What bounds that is the proof step — and for the container test that
+step lives in `container-sandbox.yml`, which runs nightly and on sandbox-path
+pull requests, not on every build. So a container runtime vanishing from
+`ubuntu-latest` would be caught within a day, not within a build. The privilege
+proof has no such gap: its step is in `ci.yml` and runs every time.
+
+**Test.** `tests/conformance/test_skip_manifest_guard.py` drives the checker
+over both recorded host compositions (both must pass), over an unsanctioned
+skip and a stale required entry (both must fail), and over four broken proofs
+with a fifth that resolves as the positive control.
 
 Also measured on the way: a virtualenv under `/tmp` cannot be used for this
 measurement at all — the namespace sandbox hides `/tmp` under an empty tmpfs,

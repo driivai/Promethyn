@@ -7,7 +7,16 @@
 # said nothing about composition; this is the composition, by name.
 #
 # Every entry carries the reason it skips in that step. None is version-gated:
-# the same 23 must skip on every supported Python, or the build is red.
+# the same set must skip on every supported Python, or the build is red.
+#
+# TWO SECTIONS. [required] entries must skip everywhere; an entry that ran is
+# stale and fails the build. [conditional] entries skip or run depending on a
+# named HOST fact, and each must name the step that proves the test elsewhere
+# under a PROM_REQUIRE_* flag — a sanction with no proof behind it fails the
+# build. The split was forced by measurement, not foreseen: see the section
+# header below and docs/OPEN-GAPS.md G7.
+#
+[required]
 #
 # The live-database proofs. They RUN in the dedicated PostgreSQL step earlier in
 # the same job under PROM_REQUIRE_PG=1 (fail, not skip, there); the full-suite
@@ -39,8 +48,22 @@ tests/conformance/test_sandbox_verifier_boundary.py::test_real_container_sandbox
 tests/conformance/test_sandbox_verifier_boundary.py::test_real_container_sandbox_verifier_boundary[from _value_codec import dumps\nimport os\nos.write(1, dumps([('ok',0)]).encode())\nos._exit(0)-fail]  # real-container verification is opt-in
 tests/conformance/test_sandbox_verifier_boundary.py::test_real_container_sandbox_verifier_boundary[class Liar:\n def __eq__(self,other): return True\ndef answer(): return Liar()-fail]  # real-container verification is opt-in
 #
-# Skips for want of a container RUNTIME (not the opt-in flag). Pinned from the
-# local CI-equivalent run, where no daemon is reachable; the ubuntu-latest
-# runner ships one, so the first CI run of this manifest decides whether this
-# entry runs there — a mismatch is the finding the manifest exists to surface.
-tests/conformance/test_sandbox_privilege.py::test_real_container_workspace_stays_owner_only_and_still_works  # no container runtime available
+[conditional]
+#
+# MEASURED, run 34707644343 (the first CI run of this manifest, which refused):
+# the skip set is a property of the tree ON A HOST, and these two tests swap
+# places between the two hosts this repository runs on. Locally (root, no
+# container daemon) the container test skips and the cross-user test runs; on
+# ubuntu-latest (unprivileged, docker present) it is the other way round. Both
+# hosts report 23 skips, which is why a COUNT proved nothing.
+#
+# Neither skip hides anything: each test carries a PROM_REQUIRE_* flag that
+# turns its skip into a FAILURE, and each is run under that flag in the step
+# named below. The checker resolves the step and refuses a proof that does not
+# set such a flag.
+#
+# Named limit: the container proof runs nightly and on sandbox-path pull
+# requests, not on every build, so a container runtime disappearing from
+# ubuntu-latest would be caught there rather than here (docs/OPEN-GAPS.md G7).
+tests/conformance/test_sandbox_privilege.py::test_real_container_workspace_stays_owner_only_and_still_works  # skips without a container runtime; proof: container-sandbox.yml :: Real-container isolation (fail, do not skip)
+tests/conformance/test_sandbox_privilege.py::test_another_local_user_cannot_read_or_write_the_workspace  # skips off root, and the runner is unprivileged; proof: ci.yml :: Cross-user workspace denial (must RUN as root, not skip)

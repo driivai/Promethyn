@@ -85,7 +85,7 @@ RECEIPT = REPO / "type-gate-receipt.json"
 #: grows it. Never lower it to accommodate a narrowing — a smaller tree passing
 #: is not this tree passing. The tolerance absorbs a file or two in flight; it is
 #: not a budget for removing directories.
-EXPECTED_CHECKED_FILES = 303
+EXPECTED_CHECKED_FILES = 304
 CHECKED_FILE_TOLERANCE = 2
 MINIMUM_CHECKED_FILES = EXPECTED_CHECKED_FILES - CHECKED_FILE_TOLERANCE
 
