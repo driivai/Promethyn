@@ -367,8 +367,67 @@ on Linux — a cost decision, recorded here rather than assumed.
 - Two branches prefixed with the vendor's name (`docs/pre-disclosure-audit.md`
   M3), 3 commits with the vendor identity.
 
+### The `pre-push` hook
+
 The `pre-push` hook now refuses to RESURRECT a merged-and-deleted branch — a
 push re-created one twice in one sprint, on a product whose three action
-classes include `branch.delete` — keyed on "remote ref absent AND an upstream
-configured", which is the one local fact that distinguishes a re-push from a
-first push. Observed refusing `DriivAIDev/phase-1-2c-block1-r2-verdict`.
+classes include `branch.delete` — keyed on "remote ref absent AND
+`branch.<name>.remote` is this remote AND `branch.<name>.merge` is
+`refs/heads/<name>`": an upstream that names the branch itself is the one
+local fact that distinguishes a re-push from a first push. The first version
+keyed on "any upstream configured" and refused this repository's own sprint
+branch's first push (a branch created from `origin/main` tracks main); it was
+narrowed in the same pull request. Observed refusing
+`DriivAIDev/phase-1-2c-block1-r2-verdict` under both versions; observed
+allowing `DriivAIDev/phase-1-2c-record-and-rotation` under the second.
+
+---
+
+## G12 — the workflow's collection pins were checkable only by pushing
+
+**What.** Ten CI steps pin how many tests each module must contribute
+(`expected = {"test_coverage_enforcement": 33, ...}`), so a proof that stops
+being collected fails the build instead of passing quietly. The number lives in
+`.github/workflows/ci.yml` and nowhere else, which made it a second copy of a
+fact with nothing local comparing the two: the suite an author runs before
+pushing cannot see a stale pin, because the pin is not part of the suite.
+
+**Measured** (2026-09-12). A full local run reported `2419 passed, 23 skipped`
+on 3.10, 3.11 and 3.12 from a detached worktree, and the next CI run
+(`34701799636`, head `77669ad`) refused **all three** matrix jobs at the
+PHASE-1.2a step:
+
+```
+AssertionError: ('test_policy_enforcement_regression', 20, 19)
+```
+
+Two tests had been added to pinned modules in the same change
+(`test_every_matrix_row_is_mapped_and_the_mapping_is_nine_refusals_to_one_execution`
+and `test_the_mint_sweep_sees_an_alias_assignment`) and the pins had not moved.
+The step's loop stops at the first mismatch, so CI reported one of the two; the
+second (`test_no_second_aggregator`, 12 against a pinned 11) was found in the
+JUnit file behind it. Everything after that step — twenty-three steps, the full
+suite, the skip manifest, the build — never ran on that commit: cost, one
+complete CI cycle across three interpreters, for a defect with no runtime
+consequence.
+
+**What closes it — done here.** `tests/conformance/test_ci_collection_pins.py`
+parses the pins out of the workflow (both shapes it uses: the per-module mapping
+and a bare `assert len(cases) == N`), collects the files each step runs in one
+`--collect-only` pass, and compares. It runs in the ordinary suite, so a stale
+pin now fails where the author can see it, with the message CI would print.
+Probed directly rather than assumed: against the tree at `77669ad` the guard
+reports both mismatches; against the corrected pins it is silent.
+
+**Named limits** (each a passing test in that module):
+
+- It reads **collection**, not outcomes. Every pinned step also demands zero
+  skips, failures and errors; that needs the run, and the run is CI's.
+- It reads the two pin **shapes** the workflow uses today. The set of steps it
+  can read is itself pinned in both directions, so a step whose pin the parser
+  stops seeing fails here rather than becoming a number nothing checks.
+
+**Also recorded.** The same class of number lives in
+`scripts/type_gate.py` (`EXPECTED_CHECKED_FILES`, raised 302 → 303 here) and in
+`tests/conformance/hearth_ledger.py` (content digests). Those two are already
+read by tests that run locally; this entry is closed for the workflow pins only.

@@ -40,6 +40,17 @@ in `spec/invariants.md` is a major version bump.
   (nine refusals, one legitimate execution).
 
 ### Fixed
+- **The workflow's collection pins are checkable before pushing.** Ten CI steps
+  pin how many tests each module must contribute; the numbers lived only in
+  `.github/workflows/ci.yml`, so a locally green suite could not see a stale
+  one. Observed: a full local run (`2419 passed, 23 skipped`, three
+  interpreters) followed by a CI run that refused all three matrix jobs on
+  `('test_policy_enforcement_regression', 20, 19)`, twenty-three steps never
+  reached. `tests/conformance/test_ci_collection_pins.py` now parses the pins
+  out of the workflow and compares them against what pytest collects, in the
+  ordinary suite. The two stale pins are corrected
+  (`test_policy_enforcement_regression` 19 → 20, `test_no_second_aggregator`
+  11 → 12) and the miss is recorded as `docs/OPEN-GAPS.md` G12.
 - **The mutation worktree ran the primary tree's code.** `scripts/mutation_worktree.py`
   ran the worktree's tests against the editable install's package, so a `src/`
   mutation applied in the worktree reddened nothing (measured). It now puts

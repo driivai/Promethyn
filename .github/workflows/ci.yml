@@ -311,13 +311,26 @@ jobs:
           cases = list(ET.parse("phase-1-2a.xml").iter("testcase"))
           expected = {"test_bound_requirements_encoding": 21,
                       "test_coverage_enforcement": 33,
-                      "test_policy_enforcement_regression": 19,
+                      # PHASE-1.2c — 19 -> 20: the ten-row matrix mapping is
+                      # pinned by a test of its own (every row mapped to one
+                      # of three kinds; nine refusals to one execution).
+                      "test_policy_enforcement_regression": 20,
                       # PHASE-1.2b — 9 -> 11. Closing the unbound-judgment route
                       # moved the interesting capability from constructing a
                       # verdict to MINTING an assessment, so the 2d guard gained
                       # a second sweep (permitted minters, and its staleness
                       # check). Re-pinned in the same change that added them.
-                      "test_no_second_aggregator": 11,
+                      # PHASE-1.2c — 11 -> 12: the mint sweep resolves an alias
+                      # assignment (`_m = mint`), and a test says so.
+                      #
+                      # Both 1.2c tests landed with these two numbers unchanged;
+                      # run 34701799636 refused all three matrix jobs on
+                      # ('test_policy_enforcement_regression', 20, 19) after a
+                      # green local suite, and the 12 was found in the JUnit
+                      # file behind it (the loop stops at the first mismatch).
+                      # Re-pinned from those observations; the pin lives only
+                      # here, which is docs/OPEN-GAPS.md G12.
+                      "test_no_second_aggregator": 12,
                       "test_phase_1_2a_revert_pins": 7}
           for module, count in expected.items():
               actual = sum(c.get("classname", "").endswith(module) for c in cases)
