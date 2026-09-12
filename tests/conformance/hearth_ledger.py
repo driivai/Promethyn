@@ -314,12 +314,31 @@ EXPECTED_PROTECTED_FILES = 21
 #:     (the hold's PINNED record for human-approved and retried executions);
 #:     ``invalidate_superseded_holds`` delegates to the pending service.
 #:
-#:   Proven in ``test_execution_authorization_record.py`` (15) and
+#:   Proven in ``test_execution_authorization_record.py`` (17) and
 #:   ``test_hold_pinning.py`` (7), with six executed mutations in
 #:   ``scripts/phase_1_2c_record_revert_proofs.py``. The Checkpoint-B mutation
 #:   "hold-policy-re-resolution-removed" is re-expressed as
 #:   "hold-pinned-policy-comparison-removed" against the code that now carries
 #:   that property.
+#:
+#: * **PHASE-1.2c FINAL (a withdrawn claim, and the TTL written down)** — one
+#:   file, ``execution/pending.py``, DOCSTRING ONLY. No statement, expression or
+#:   import changed; ``git diff`` on this sanction touches nothing but the module
+#:   docstring, and the behaviour it describes is the behaviour that was already
+#:   there. Two reasons, both about what the file CLAIMS:
+#:
+#:   - The first clause of the approval order said "pinning removes
+#:     re-resolution from the approval path" while step 3 of the same list, and
+#:     the code, re-resolved. A reader who believed the first clause would think
+#:     the stored requirements were authoritative on their own, which is exactly
+#:     the direction that reintroduces R1 one layer down. The claim is withdrawn
+#:     in place, and what pinning does NOT do is now stated explicitly, because
+#:     the same assumption has arrived twice from outside.
+#:   - The TTL's semantics were spread across three method docstrings and
+#:     ``_is_lapsed``. Now said once: evaluated at BOTH decision time and by the
+#:     sweep, the boundary inclusive (``elapsed >= ttl_seconds``), and a hold
+#:     that has lapsed but not been swept still reads ``pending`` while being
+#:     unapprovable — the state that had no test and now has two.
 #:
 #: Those sprints are why these bytes are what they are. They do NOT license the
 #: next edit to the same files: updating a digest below is a fresh decision, and
@@ -338,7 +357,7 @@ DIGESTS: dict[str, str] = {
     "src/prometheus_protocol/execution/executor.py":
         "7fc5ee28f1a76417a9350ee9a0ab1913483991a89d60d9670ffd8149ab6afb0f",
     "src/prometheus_protocol/execution/pending.py":
-        "2bc60089af63395d0084d231820d0eea89f333c5b38799bab074a333ef92a0ce",
+        "1be12c6452942365ac9aaeae9f67eba3b52e4239d4387c2f17e419d977eb69de",
     "src/prometheus_protocol/forge/miner.py":
         "b0e2a53440df5b38a1031cc9648e19b3f9df20081ee34d4e035beda2b6973a29",
     "src/prometheus_protocol/gate/authorization.py":

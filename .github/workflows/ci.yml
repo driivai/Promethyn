@@ -437,7 +437,10 @@ jobs:
           python - <<'PY'
           import xml.etree.ElementTree as ET
           cases = list(ET.parse("authorization-record.xml").iter("testcase"))
-          expected = {"test_execution_authorization_record": 15, "test_hold_pinning": 7}
+          # PHASE-1.2c FINAL — 15 -> 17: a sixth refusing-coverage row
+          # (coverage.ambiguous, which had never been proven end to end) and the
+          # allowlist test that keeps the closed refusal vocabulary covered.
+          expected = {"test_execution_authorization_record": 17, "test_hold_pinning": 7}
           for module, count in expected.items():
               actual = sum(module in c.get("classname", "") for c in cases)
               assert actual == count, (module, actual, count)

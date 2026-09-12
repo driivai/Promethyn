@@ -17,7 +17,12 @@ import fix_b_revert_proofs as harness
 RECORD = "tests/conformance/test_execution_authorization_record.py"
 PINNING = "tests/conformance/test_hold_pinning.py"
 EXPECTED_REVERTS = 6
-EXPECTED_CALL_FAILURES = 14
+#: PHASE-1.2c FINAL — 14 -> 15. The sixth refusing-coverage row
+#: (``coverage.ambiguous``) adds one parametrisation to
+#: ``refused_by_a_real_coverage_row``, so "coverage-report-dropped-at-mint"
+#: reddens six tests where it reddened five. No mutation changed, and no
+#: mutation's SELECTION changed; one more test stands behind one of them.
+EXPECTED_CALL_FAILURES = 15
 
 
 def enforce_expected(caught: int, failures: int) -> None:

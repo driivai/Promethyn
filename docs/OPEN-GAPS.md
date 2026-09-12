@@ -194,6 +194,25 @@ origin/main` and `--history=--all`):
 | `origin/main` | 85 | 74 | 74 sites | 8 sites (+1 "…code" variant) | 1 |
 | all refs | 304 | 110 | 88 | 40 | 12 |
 
+**Re-measured after #101 merged** (2026-09-12, same commands, `main` at
+`c846272`). This is the sizing PROM-IP Part B asked for, and it grew by exactly
+the amount the mechanism below predicts — one commit, one trailer:
+
+| scope | commits reachable | carrying ≥ 1 term | co-authorship trailer | vendor name | vendor domain |
+|---|---|---|---|---|---|
+| `origin/main` | 86 | 75 | 75 sites | 8 sites (+1 variant) | 1 |
+| all refs | 310 | 111 | 89 | 40 | 12 |
+
+The five branch commits of #101 are clean — `check_message_hygiene.py` over
+`af93238..fbae17b` reports `5 commit(s) … no banned tokens in any message or
+identity`. The squash commit is not: it carries one
+one co-authorship trailer crediting `DriivAIDev <will@driivai.com>`, written
+by GitHub. Compared
+with #100's squash, which carried five sites (the vendor name four times plus a
+co-authorship line), the branch-side control removed everything it can reach.
+**No history rewrite has been executed**; Part B still waits on the final
+entity name.
+
 Two mechanisms, independent of each other:
 
 1. The assistant-session trailer in the bodies of #87, #88, #89, #97, #98, #99
@@ -239,13 +258,31 @@ message hygiene FAILED: pr-body.txt contains banned token(s) [...]
 ```
 
 That is the control catching the exact thing that reached `main` through
-#100. The body was stripped by editing the PR, and re-read to confirm. A
-limit surfaced with it: the workflow's bare `pull_request:` trigger fires on
-`opened`, `synchronize` and `reopened`, not on `edited`, so a body corrected
-after opening is re-checked only on the next push — which is why this entry
-was pushed as a commit rather than left as a comment. Adding `types` to the
-trigger would be a filter, which the trigger allowlist in `test_type_gate.py`
-refuses on purpose; the trade is recorded here rather than made quietly.
+#100. The body was stripped by editing the PR, and re-read to confirm.
+
+**The `edited` window, now closed.** The limit recorded here was that ci.yml's
+bare `pull_request:` trigger fires on `opened`, `synchronize` and `reopened`,
+not on `edited`, so a body rewritten after the last check is unguarded. That is
+real and was exercised: #101's body was edited twice after its last passing
+check (both edits clean, so nothing was smuggled — the window was open, not
+used). It could not be closed by adding `types` to ci.yml, because event types
+are per-workflow and the trigger allowlist in `test_type_gate.py` requires that
+trigger to stay bare, deliberately. So the check now also lives in
+`.github/workflows/pr-text-hygiene.yml`, which fires on `opened`, `edited`,
+`reopened` and `synchronize` and runs the checker alone in seconds rather than
+re-running a three-interpreter matrix for a description edit. Its trigger list
+is itself allowlisted
+(`test_type_gate.py::test_the_pr_text_workflow_answers_to_exactly_the_permitted_events`),
+because a filter that quietly loses `edited` would put the window straight back.
+
+**What the `edited` window was NOT.** It is not how a banned token reached
+`main`. Measured on `c846272`: the squash message is composed from the five
+branch COMMIT messages (five `* ` entries, and the PR body's own opening
+sentence appears nowhere in it), with a co-authorship trailer appended by
+GitHub after
+a `---------` separator. So the route is the squash composition, not the PR
+text, and no pull-request-event check can refuse a commit that does not exist
+until the merge button is pressed. That is G13.
 
 **Test.** The refusal above is the observation; `tests/conformance/test_ci_single_source.py`
 does not cover this. A test that plants a token in a message and asserts the
@@ -335,6 +372,15 @@ database, **0 failures**. Before the returned and thread channels existed: 18
 failures (17 whose assertion text quoted the result's repr — the population
 the first, string-matching gate had been converting as if they were platform
 refusals — and 1 thread test).
+
+**The older ledger does not reconcile, and the difference is not recoverable.**
+An earlier sprint recorded "107 / 97 / 9 / 18" for this simulation. Those
+totals were taken on a different tree with a different test population, and the
+nine could not be recovered BY NAME from the record that survives — so the
+accounting above is a fresh per-test ledger on today's tree rather than an
+arithmetic reconciliation of the old one. Recorded here because it was
+previously stated only in a pull-request body, which is not the tracker: a
+number nobody can re-derive is a number that should stop being cited.
 
 **Named limits.**
 - The returned channel observes exactly `BrokeredMigrationRunner.execute` and
@@ -462,6 +508,73 @@ reports both mismatches; against the corrected pins it is silent.
   stops seeing fails here rather than becoming a number nothing checks.
 
 **Also recorded.** The same class of number lives in
-`scripts/type_gate.py` (`EXPECTED_CHECKED_FILES`, raised 302 → 303 here) and in
+`scripts/type_gate.py` (`EXPECTED_CHECKED_FILES`) and in
 `tests/conformance/hearth_ledger.py` (content digests). Those two are already
 read by tests that run locally; this entry is closed for the workflow pins only.
+
+That first parenthesis said "raised 302 → 303 here" and was **stale within the
+same pull request** — two further commits took the gate to 304 and the sentence
+was not re-read. Corrected, and the lesson kept rather than the number: a
+tracker entry that states a moving figure in prose has no test behind it (nothing
+parses these headings for numbers), so it drifts exactly like the workflow pin
+this entry was written about. The figure now lives only in `type_gate.py`, which
+the gate itself checks; over this sprint it went 290 → 304, and the 14 is the
+count of Python files the sprint added under the three checked roots.
+
+---
+
+## G13 — every squash merge writes a banned token into `main`, and `main`'s CI goes red for it
+
+**What.** GitHub composes a squash-merge commit at merge time, after every
+pre-merge check has passed, and appends a co-authorship trailer for each
+commit author who is not the merging account. That trailer's key is a banned
+term
+(`scripts/check_hygiene.py`'s term list), and `ci.yml`'s message-hygiene step
+re-checks what landed on every push to `main`. So the push check refuses the
+merge commit — correctly, by its own rule — and `main` goes red.
+
+**Measured** (2026-09-12, `main` at `c846272`, the squash of #101):
+
+```
+message hygiene FAILED over af93238..c846272 (1 commit(s)):
+  c846272a93 message: contains a banned token ('co-author…')
+```
+
+(The term is truncated in that quote, and only there: writing it in full would
+make this file fail `scripts/check_hygiene.py`, which is the tree-side half of
+the same control. A document describing a banned token cannot quote it — worth
+knowing before the next entry tries.)
+
+CI run `34720178244`, all three matrix jobs, failed at step 10 of 47; every
+later step was skipped. The trailer is at line 274 of the message, after a
+`---------` separator; the commit's author and committer identities are clean.
+The five branch commits behind it pass the same checker.
+
+**This is new behaviour, introduced by the control itself.** The main-push
+check landed in #101, so #100's squash carried five banned-token sites and
+nothing went red. It will now recur on **every** squash merge of a pull request
+whose author is not the merging account, because the push check reads the range
+from the previous head to the new one.
+
+**Why it is not fixed here.** Each available option is either a repository
+setting or a deliberate narrowing of a control, and both are the owner's call:
+
+1. change the squash-message setting so GitHub does not copy commit bodies —
+   unverified, and it may append co-author trailers regardless, so it needs
+   testing on one merge before being relied on;
+2. stop squashing pull requests authored by another account;
+3. narrow the **push** path to tolerate the trailer GitHub generates while
+   still refusing vendor tokens and identities — a weakening, to be sanctioned
+   explicitly and recorded with its reason;
+4. accept a red `main` after each merge and read it as a notice.
+
+**Recommendation, recorded rather than taken:** (3), written as an allowlist of
+GitHub-generated trailers on the push path only, with the pull-request path
+unchanged — the refusal stays everywhere a human or an agent can still act on
+it, and the one commit nobody can act on before it exists stops failing the
+branch for a line the repository did not write.
+
+**Test.** None yet: the behaviour is correct per the current rule, so there is
+nothing to assert until the rule changes. Whichever option is chosen, the change
+lands with a test that a GitHub-generated trailer is treated as decided, and a
+control that a vendor token in the same position is still refused.

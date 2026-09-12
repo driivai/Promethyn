@@ -14,10 +14,10 @@ bound into the tamper-evident audit chain under the hold's own identity.
 
 Approval compares against that PINNED resolution, in this order:
 
-1. the row's record must equal its chain entry, and the chain must verify —
-   pinning removes re-resolution from the approval path, so the stored
-   requirements are trusted BECAUSE they are in the record, and a JSON column
-   that anyone with a database handle can rewrite is not a record;
+1. the row's record must equal its chain entry, and the chain must verify — a
+   JSON column that anyone with a database handle can rewrite is not a record,
+   so the pinned requirements are worth reading only once the chain vouches
+   for them;
 2. the deployment must still select the policy the hold is pinned to — a hold
    pinned to a superseded policy is refused as such (a distinct refusal) and
    marked ``invalidated``, in either direction, because the new policy may
@@ -25,10 +25,30 @@ Approval compares against that PINNED resolution, in this order:
 3. only then is the record decoded inside the seam and the selected policy
    re-resolved for the concrete action, exactly as at hold time.
 
+WHAT PINNING DOES NOT DO — stated here because it has been assumed twice, and
+the assumption is the dangerous direction. Pinning does **not** remove
+re-resolution from the approval path. Step 3 above re-resolves the selected
+policy for the concrete action, exactly as at hold time; the chain check and the
+rotation refusal are added IN FRONT of it, never instead of it.
+Re-resolve-don't-re-digest is what closes R1, and a version of this path that
+trusted the stored requirements *instead* of re-resolving would reintroduce R1
+one layer down, with the JSON column as the new forgeable input. The record's
+integrity is what makes the record readable; the seam is what makes it
+authoritative. An earlier revision of this docstring said the opposite in its
+first clause while the code did what is written here; the claim is withdrawn.
+
 A rotation can also invalidate the whole pending backlog explicitly
-(:meth:`PendingActionService.invalidate_superseded`). The TTL is unchanged: a
-lapsed hold expires, an invalidated hold is voided, and the ledger tells the
-two apart.
+(:meth:`PendingActionService.invalidate_superseded`).
+
+THE TTL, and where it is evaluated. Both, deliberately: :meth:`approve` and
+:meth:`retry_decision` check the hold's age at decision time, and
+:meth:`expire_lapsed` sweeps the backlog. Between the moment a hold lapses and
+the moment a sweep notices, its stored status is still ``pending`` — the row has
+not been touched — but it is no longer approvable: the decision-time guard
+refuses it and expires it on the spot, audited. So an expired-but-unswept hold
+cannot approve, and the sweep is housekeeping rather than the control. The
+boundary is inclusive: a hold whose age has REACHED the TTL has lapsed
+(``elapsed >= ttl_seconds``); ``ttl_seconds <= 0`` disables expiry entirely.
 """
 
 from __future__ import annotations

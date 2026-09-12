@@ -1,0 +1,61 @@
+name: PR text hygiene
+
+# THE EVENT THE OTHER CHECK DOES NOT COVER.
+#
+# `ci.yml` checks a pull request's title and body for banned tokens, but its
+# trigger is a bare `pull_request:`, which GitHub expands to opened,
+# synchronize and reopened — NOT `edited`. So the body could be checked once at
+# opening and then rewritten, and nothing would look again: a check that runs,
+# but not on the event that carries the risk.
+#
+# Measured on #101 (2026-09-12): the body WAS edited twice after the last
+# passing check, and both edits were clean, so nothing was smuggled — but the
+# window was real and nothing was watching it. This workflow closes it.
+#
+# WHAT IT IS NOT. It is not what let a banned token reach `main`. That token
+# (a co-authorship trailer) was appended by GitHub to the SQUASH MESSAGE,
+# composed from the branch's commit messages at merge time, after every pre-merge check
+# had passed. No pull-request-event check can refuse a commit that does not
+# exist until the merge button is pressed; `docs/OPEN-GAPS.md` G6 carries that
+# limit and the push-to-main check is what detects it.
+#
+# WHY ITS OWN WORKFLOW rather than adding `edited` to ci.yml's trigger: event
+# types are per-workflow, not per-job, so `edited` there would re-run the whole
+# three-interpreter matrix — forty-odd steps including a database and a sandbox
+# — every time someone fixes a typo in a description. This runs one checker in
+# a few seconds. ci.yml keeps its own text check on its own events: this is a
+# duplicated CHECK, not a duplicated VALUE, and losing the covered events to a
+# job that branch protection may not require would be the worse trade.
+#
+# Named limit, outside this file: whether a pull request can merge while this is
+# red is a branch-protection setting, not a workflow property.
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  pr-text:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Banned tokens in the pull request's title and body
+        # The text goes through environment variables, never shell
+        # interpolation, so a title or body cannot become a command.
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          printf '%s\n' "$PR_TITLE" > pr-title.txt
+          printf '%s\n' "$PR_BODY" > pr-body.txt
+          python scripts/check_message_hygiene.py \
+            --text-file pr-title.txt --text-file pr-body.txt

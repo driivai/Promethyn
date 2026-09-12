@@ -223,7 +223,7 @@ Promethyn fits wherever **work recurs and success is checkable**. It is *less* u
 ```bash
 pip install -e ".[dev]"          # install the runtime + dev tools
 
-python -m pytest -q              # run the suite (385 passed, 2 skipped — the skips are opt-in container tests)
+python -m pytest -q              # run the suite (2431 passed, 23 skipped on 2026-09-12)
 
 # the demo (needs the namespace isolation runtime):
 python -m prometheus_protocol.tools.stale_branch_demo hero
