@@ -226,10 +226,30 @@ request (the PR's commits, title and body), and on every push to `main`.
   destructive rewrite, pending the maintainer's go, `docs/IP-READINESS.md`);
   the sweep above is its measured scope.
 
-**Test.** `tests/conformance/test_ci_single_source.py` does not cover this; the
-checker's refusal is observed in the hooks and CI (recorded in the PR that
-landed it). A test that plants a token in a message and asserts the refusal is
-the next hardening of this entry.
+**Observed firing in CI, on the PR that landed it** (#101, run 34701678262,
+every matrix job, step "Message hygiene"): the harness that opens pull requests
+appended a footer carrying the vendor's name to the PR body at creation — the
+body I posted did not contain it — and the step refused it:
+
+```
+message hygiene passed: 2 commit(s) in af93238..2991f63, 17 terms, no banned tokens in any message or identity
+message hygiene passed: pr-title.txt (130 chars), no banned tokens
+message hygiene FAILED: pr-body.txt contains banned token(s) [...]
+##[error]Process completed with exit code 1.
+```
+
+That is the control catching the exact thing that reached `main` through
+#100. The body was stripped by editing the PR, and re-read to confirm. A
+limit surfaced with it: the workflow's bare `pull_request:` trigger fires on
+`opened`, `synchronize` and `reopened`, not on `edited`, so a body corrected
+after opening is re-checked only on the next push — which is why this entry
+was pushed as a commit rather than left as a comment. Adding `types` to the
+trigger would be a filter, which the trigger allowlist in `test_type_gate.py`
+refuses on purpose; the trade is recorded here rather than made quietly.
+
+**Test.** The refusal above is the observation; `tests/conformance/test_ci_single_source.py`
+does not cover this. A test that plants a token in a message and asserts the
+refusal is the next hardening of this entry.
 
 ---
 
