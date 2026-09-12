@@ -57,7 +57,7 @@ from prometheus_protocol.verifier.trust import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle: policy imports core.models
-    from prometheus_protocol.policy.assessment import PolicyAssessment
+    from prometheus_protocol.policy.assessment import CoverageReport, PolicyAssessment
     from prometheus_protocol.policy.coverage import BoundResult
     from prometheus_protocol.policy.profile import VerificationPolicy
     from prometheus_protocol.policy.snapshot import BoundRequirements
@@ -218,7 +218,12 @@ class VerifierBank:
                 "snapshot differs from requirements re-resolved from selected policy"
             )
 
-        return mint(expected, self.judge_covered(expected, results))
+        # R6: the coverage REPORT travels with the outcome. ``judge_covered``
+        # returned only the outcome and dropped what coverage had established
+        # (which implementation answered, which could not), so the record could
+        # never say it. Same validation, same decision; the report is kept.
+        outcome, report = self._judge_with_coverage(expected, results)
+        return mint(expected, outcome, coverage=report)
 
     def judge_covered(
         self,
@@ -251,6 +256,19 @@ class VerifierBank:
         deliberately declining to treat what it has as sufficient.
         """
 
+        outcome, _report = self._judge_with_coverage(snapshot, results)
+        return outcome
+
+    def _judge_with_coverage(
+        self,
+        snapshot: "BoundRequirements",
+        results: "Sequence[BoundResult]",
+    ) -> "tuple[Judgment | Unavailable, CoverageReport]":
+        """``judge_covered``'s body, returning the coverage report beside the
+        outcome. The decision is exactly ``judge_covered``'s; only what is
+        REPORTED about it grew."""
+
+        from prometheus_protocol.policy.assessment import coverage_report
         from prometheus_protocol.policy.coverage import (
             REFUSED_INCOMPLETE,
             REFUSED_UNSATISFACTORY,
@@ -259,6 +277,7 @@ class VerifierBank:
         )
 
         outcome = validate_coverage(snapshot, tuple(results))
+        report = coverage_report(outcome)
         if isinstance(outcome, CoverageRefused):
             if outcome.reason == REFUSED_UNSATISFACTORY:
                 return Judgment(
@@ -266,7 +285,7 @@ class VerifierBank:
                     confidence=1.0,
                     authoritative=True,
                     contributing=(outcome.check_id,),
-                )
+                ), report
             reason = (
                 Unavailability.INFRA_FAULT
                 if outcome.reason == REFUSED_INCOMPLETE
@@ -277,12 +296,12 @@ class VerifierBank:
                 tier=Tier.HARD,
                 reason=reason,
                 detail=f"{outcome.reason} check={outcome.check_id} {outcome.detail}".strip(),
-            )
+            ), report
 
         # Coverage holds. Only now does anything get fused, and it is fused by
         # the SAME code path every other caller uses — a second aggregator here
         # would be the defect this sprint exists to remove, wearing a fix.
-        return self.judge(outcome.graded)
+        return self.judge(outcome.graded), report
 
     def judge(
         self, evidence: Sequence[Evidence | Unavailable]

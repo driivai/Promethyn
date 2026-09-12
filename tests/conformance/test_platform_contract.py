@@ -223,3 +223,262 @@ def test_an_ordinary_misconfiguration_is_NEVER_converted_to_a_skip():
 # here rather than reaching into ``_pytest`` at each call site.
 Skipped = pytest.skip.Exception
 Failed = pytest.fail.Exception
+
+
+# ---------------------------------------------------------------------------
+# The channels: a refusal RAISED, RETURNED as a result, or RAISED IN A THREAD.
+#
+# Every test above exercises the gate's pieces in this process. The ones below
+# run the REAL gate — the hook and the autouse fixture the chokepoint conftest
+# imports — in a sub-session, and observe what pytest reports for a test that
+# meets the refusal each way, with and without the CI flag. That is the only way
+# to show the flag firing on a channel rather than on a helper.
+# ---------------------------------------------------------------------------
+
+pytest_plugins = ("pytester",)
+
+_SUB_CONFTEST = """
+from tests.support.platform_gate import (  # noqa: F401 - registered by name
+    convert_returned_platform_refusals,
+    pytest_runtest_call,
+)
+"""
+
+#: Channel 1. The refusal is RAISED, as the substrate probe raises it.
+_RAISED = """
+from prometheus_protocol.chokepoint.substrate import UnsupportedPlatform
+
+def test_probe():
+    raise UnsupportedPlatform("no probe is implemented here")
+"""
+
+#: Channel 2. The refusal is RETURNED, as the execution guard's refusal comes
+#: back from the runner, and the test asserts an outcome it made impossible —
+#: the exact shape of the 18 residuals. The class attribute is replaced at
+#: MODULE level so it is in place before the autouse fixture wraps it, which is
+#: also why these sub-sessions are subprocesses: an in-process session would
+#: leave the production class patched for every later test in this one.
+_RETURNED = """
+from prometheus_protocol.chokepoint import runner as R
+
+_RESULT = R.MigrationResult(
+    executed=False, refused=True, reason=R.STORE_UNAVAILABLE,
+    detail="wording that mentions no platform at all",
+    platform_unsupported=True,
+)
+
+def _refused(self, *, approval, artifact):
+    return _RESULT
+
+R.BrokeredMigrationRunner.execute = _refused
+
+def test_probe():
+    result = R.BrokeredMigrationRunner.execute(object(), approval=None, artifact=None)
+    assert result.executed
+"""
+
+#: Channel 3. The refusal is RAISED IN A WORKER THREAD: the thread dies, the
+#: test waits on an event that is never set, and its own traceback carries no
+#: marker at all. The one residual the first two channels left.
+_IN_THREAD = """
+import threading
+from prometheus_protocol.chokepoint.substrate import UnsupportedPlatform
+
+def test_probe():
+    entered = threading.Event()
+
+    def work():
+        raise UnsupportedPlatform("no probe is implemented here")
+        entered.set()
+
+    thread = threading.Thread(target=work)
+    thread.start()
+    thread.join(5)
+    assert entered.wait(0.1)
+"""
+
+#: The control: a real misconfiguration must keep failing on both settings.
+_CONTROL = """
+from prometheus_protocol.core.errors import ConfigError
+
+def test_probe():
+    raise ConfigError("ledger_anchor is required")
+"""
+
+
+def _sub_session(pytester, monkeypatch, body: str, *, flag: str | None):
+    monkeypatch.setenv("PYTHONPATH", str(REPO))
+    if flag is None:
+        monkeypatch.delenv(REQUIRE_LINUX_ENV, raising=False)
+    else:
+        monkeypatch.setenv(REQUIRE_LINUX_ENV, flag)
+    pytester.makeconftest(_SUB_CONFTEST)
+    pytester.makepyfile(test_probe=body)
+    return pytester.runpytest_subprocess("-q", "-p", "no:cacheprovider", "test_probe.py")
+
+
+@pytest.mark.parametrize("flag", [None, "1"], ids=["without-flag", "PROM_REQUIRE_LINUX=1"])
+def test_the_RAISED_channel_skips_without_the_flag_and_fails_with_it(
+    pytester, monkeypatch, flag
+):
+    result = _sub_session(pytester, monkeypatch, _RAISED, flag=flag)
+    outcomes = result.parseoutcomes()
+    if flag is None:
+        assert outcomes.get("skipped") == 1 and not outcomes.get("failed"), outcomes
+    else:
+        assert outcomes.get("failed") == 1 and not outcomes.get("skipped"), outcomes
+        result.stdout.fnmatch_lines([f"*{REQUIRE_LINUX_ENV}=1 but unsupported platform*raised*"])
+
+
+@pytest.mark.parametrize("flag", [None, "1"], ids=["without-flag", "PROM_REQUIRE_LINUX=1"])
+def test_the_RETURNED_channel_skips_without_the_flag_and_fails_with_it(
+    pytester, monkeypatch, flag
+):
+    result = _sub_session(pytester, monkeypatch, _RETURNED, flag=flag)
+    outcomes = result.parseoutcomes()
+    if flag is None:
+        assert outcomes.get("skipped") == 1 and not outcomes.get("failed"), outcomes
+    else:
+        assert outcomes.get("failed") == 1 and not outcomes.get("skipped"), outcomes
+        result.stdout.fnmatch_lines(
+            [f"*{REQUIRE_LINUX_ENV}=1 but unsupported platform*returned as MigrationResult*"]
+        )
+
+
+@pytest.mark.parametrize("flag", [None, "1"], ids=["without-flag", "PROM_REQUIRE_LINUX=1"])
+def test_the_WORKER_THREAD_channel_skips_without_the_flag_and_fails_with_it(
+    pytester, monkeypatch, flag
+):
+    result = _sub_session(pytester, monkeypatch, _IN_THREAD, flag=flag)
+    outcomes = result.parseoutcomes()
+    if flag is None:
+        assert outcomes.get("skipped") == 1 and not outcomes.get("failed"), outcomes
+    else:
+        assert outcomes.get("failed") == 1 and not outcomes.get("skipped"), outcomes
+        result.stdout.fnmatch_lines(
+            [f"*{REQUIRE_LINUX_ENV}=1 but unsupported platform*raised in a worker thread*"]
+        )
+
+
+@pytest.mark.parametrize("flag", [None, "1"], ids=["without-flag", "PROM_REQUIRE_LINUX=1"])
+def test_a_real_misconfiguration_is_converted_on_NEITHER_channel(pytester, monkeypatch, flag):
+    result = _sub_session(pytester, monkeypatch, _CONTROL, flag=flag)
+    outcomes = result.parseoutcomes()
+    assert outcomes.get("failed") == 1 and not outcomes.get("skipped"), outcomes
+    assert "unsupported platform" not in result.stdout.str()
+
+
+def test_the_returned_channel_keys_on_the_typed_field_not_on_the_detail():
+    """The field, never the repr — the control the string matcher lacked."""
+
+    from prometheus_protocol.chokepoint.runner import (
+        STORE_UNAVAILABLE,
+        MigrationResult,
+        ReconciliationResult,
+    )
+    from tests.support.platform_gate import is_returned_platform_refusal
+
+    quoted = MigrationResult(
+        executed=False,
+        refused=True,
+        reason=STORE_UNAVAILABLE,
+        detail="execution ownership unavailable: _PlatformUnsupported",
+    )
+    assert quoted.platform_unsupported is False
+    assert not is_returned_platform_refusal(quoted)
+    typed = MigrationResult(
+        executed=False,
+        refused=True,
+        reason=STORE_UNAVAILABLE,
+        detail="reworded entirely",
+        platform_unsupported=True,
+    )
+    assert is_returned_platform_refusal(typed)
+    reconciled = (
+        ReconciliationResult(
+            execution_id="",
+            intent_seq=None,
+            state=STORE_UNAVAILABLE,
+            resolved=False,
+            platform_unsupported=True,
+        ),
+    )
+    assert is_returned_platform_refusal(reconciled)
+    assert not is_returned_platform_refusal("a string that says _PlatformUnsupported")
+
+
+def test_the_runner_derives_the_field_from_the_cause_TYPE():
+    """``_platform_refusal`` walks the cause chain and keys on types."""
+
+    from prometheus_protocol.chokepoint.runner import (
+        _OwnershipUnavailable,
+        _platform_refusal,
+    )
+
+    platform = _OwnershipUnavailable("_PlatformUnsupported")
+    platform.__cause__ = _PlatformUnsupported("execution ownership needs Linux flock")
+    assert _platform_refusal(platform)
+    substrate = _OwnershipUnavailable("UnsupportedPlatform")
+    substrate.__cause__ = UnsupportedPlatform("no opened-store probe here")
+    assert _platform_refusal(substrate)
+    store = _OwnershipUnavailable("OSError")
+    store.__cause__ = OSError("unsafe approval store")
+    assert not _platform_refusal(store)
+    # The message alone — the same NAME the wrapper carries — is not the cause.
+    assert not _platform_refusal(_OwnershipUnavailable("_PlatformUnsupported"))
+
+
+def test_a_real_runner_marks_a_platform_refusal_on_the_result_it_returns(
+    tmp_path, monkeypatch
+):
+    """End to end on the production path: the guard's typed refusal becomes the
+    typed field on the RETURNED result, for ``execute`` and for
+    ``reconcile_unfinished``. The platform is flipped after the store has been
+    built on this host, which is exactly the situation the 18 residuals are in."""
+
+    from prometheus_protocol.chokepoint import runner as runner_module
+    from prometheus_protocol.chokepoint import (
+        STORE_UNAVAILABLE,
+        ApprovalAuthority,
+        BrokeredMigrationRunner,
+        ConsumedApprovals,
+        DbTarget,
+        MigrationArtifact,
+        ReceiptStatus,
+        RECEIPT_NOT_FOUND,
+    )
+    from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
+
+    key = b"platform-contract-test-key-32-bytes!"
+    target = DbTarget(
+        host="localhost",
+        port=5432,
+        dbname="appdb",
+        user="migrator",
+        password="synthetic-secret",
+    )
+    artifact = MigrationArtifact("SELECT 1")
+    approval = ApprovalAuthority(key=key).mint(
+        artifact_sha256=artifact.sha256, target=target.identity, now=1000
+    )
+    audit = SqliteLedger(tmp_path / "audit.db")
+    runner = BrokeredMigrationRunner(
+        authority=ApprovalAuthority(key=key),
+        target=target,
+        consumed=ConsumedApprovals(tmp_path / "store.db"),
+        executor=lambda *a: (True, "ok"),
+        receipt_lookup=lambda *a: ReceiptStatus(RECEIPT_NOT_FOUND),
+        audit=audit,
+        clock=lambda: 1001,
+    )
+    try:
+        monkeypatch.setattr(runner_module.sys, "platform", "darwin")
+        result = runner.execute(approval=approval, artifact=artifact)
+        assert result.refused and result.reason == STORE_UNAVAILABLE
+        assert result.platform_unsupported is True
+        reconciled = runner.reconcile_unfinished()
+        assert reconciled[0].state == STORE_UNAVAILABLE
+        assert reconciled[0].platform_unsupported is True
+    finally:
+        runner.close()
+        audit.close()

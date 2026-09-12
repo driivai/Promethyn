@@ -8,11 +8,27 @@ for genuine third-party packages — also swallows a stdlib module that does not
 exist at the target version.
 
 Turning that flag off surfaces 25 first-party module-resolution errors (scripts
-and tests importing siblings), none of them third-party, and silencing those
-needs per-module ``[mypy-...]`` sections, which
-``test_type_gate.py::test_mypy_ini_has_no_per_module_sections`` forbids outright
-— a per-module section being the one-line way to un-check a file. That rule
-protects more than this check is worth, so the check is built beside it.
+and tests importing siblings), none of them third-party. This docstring used
+to say silencing those "needs per-module ``[mypy-...]`` sections", which
+``test_type_gate.py::test_mypy_ini_has_no_per_module_sections`` forbids. That
+claim was WRONG and is withdrawn: measured on this tree, widening ``mypy_path``
+to the directories those siblings live in (``scripts``, ``tests/conformance``,
+``tests/chokepoint``) resolves all 25 with the flag off — ``Success: no issues
+found in 290 source files`` — with no per-module section at all. The change is
+recorded in ``docs/OPEN-GAPS.md`` as the closure and deliberately not applied
+here, because it re-shapes the type gate's config (an allowlisted file) and
+makes the gate depend on every third-party package shipping types, which is a
+trade to be made on its own evidence. This check stands beside the gate either
+way: it is built over typeshed's table and does not need the flag off.
+
+WHAT IT COVERS AND WHAT IT DOES NOT. It covers STANDARD-LIBRARY MODULE
+availability at the floor, and only that. Two limits, each a passing test
+below rather than a sentence here: it does not see a third-party package that
+is absent or too new at the floor (that is pip's ``requires-python`` and the
+3.10 CI job's to catch), and it does not see a SYMBOL added to an existing
+stdlib module (``datetime.UTC`` is 3.11+; typeshed's ``VERSIONS`` says
+``datetime`` is 3.0+, so ``from datetime import UTC`` passes this check and
+fails at import on 3.10).
 
 NOT AN ENUMERATION. The obvious spelling is a hand-kept list of "modules added
 after 3.10", which is a list over exactly the thing that varies and goes stale
@@ -29,6 +45,7 @@ from __future__ import annotations
 import ast
 import pathlib
 import re
+import sys
 
 import pytest
 
@@ -185,3 +202,46 @@ def test_the_check_would_catch_tomllib_at_a_3_10_floor():
         "the import walk found neither pytest nor ast; it is not reaching the "
         "tree and the check above proves nothing"
     )
+
+
+# ---------------------------------------------------------------------------
+# The guard's SCOPE, as passing tests (docs/OPEN-GAPS.md, "stdlib-floor scope").
+# A limit that is only prose erodes: someone reads "no import needs a newer
+# stdlib" as "no import breaks on 3.10", and the second is not what is proven.
+# ---------------------------------------------------------------------------
+
+
+def test_named_limit_the_guard_does_NOT_cover_third_party_resolvability():
+    """A third-party package is invisible to the guard: typeshed's VERSIONS is
+    the standard library's table and has no row for ``psycopg`` or ``pytest``,
+    both of which this tree imports. Whether a dependency exists, or is new
+    enough, at the floor is decided by pip's ``requires-python`` on the
+    dependency and by the 3.10 CI job actually importing it — not here."""
+
+    minimums = _stdlib_minimums()
+    imported = _imported_top_level_modules()
+    third_party = [name for name in ("psycopg", "pytest", "yaml") if name in imported]
+    assert third_party, "the tree imports no third-party module this test knows; re-pick"
+    for name in third_party:
+        assert name not in minimums, (
+            f"typeshed now lists {name!r} as stdlib; this limit has changed shape"
+        )
+
+
+def test_named_limit_the_guard_does_NOT_see_symbol_level_additions():
+    """``datetime.UTC`` exists only from 3.11. typeshed's table is per MODULE,
+    and ``datetime`` is 3.0+, so an import of the symbol passes the guard at a
+    3.10 floor. What catches it is the 3.10 matrix job importing the module.
+    Asserted against the table, so the limit is measured rather than assumed."""
+
+    minimums = _stdlib_minimums()
+    floor = _declared_floor()
+    assert minimums["datetime"] <= floor, "datetime is not older than the floor?"
+    # The module-level check has nothing to say about the symbol: the guard's
+    # own classification of ``datetime`` is "fine at the floor".
+    needed = minimums.get("datetime")
+    assert needed is not None and not needed > floor
+    # And the symbol really is version-gated, so the limit is a real one.
+    import datetime as _datetime
+
+    assert (hasattr(_datetime, "UTC")) == (sys.version_info >= (3, 11))

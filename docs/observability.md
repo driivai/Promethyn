@@ -33,6 +33,17 @@ never executed" answerable from the ledger alone (`executions_for_pending`),
 which the `retry-execution` verb's eligibility check relies on; `NULL` for
 auto-approved/blocked rows and for rows written before the link existed.
 
+`executions.authorization` (additive, PHASE-1.2c TASK 6) is the versioned
+authorization record the outcome was decided under — the policy and its
+version, the requirements it resolved, and the coverage report saying which
+implementation answered each one and which could not
+(`docs/execution-authorization-record.md`). For a human-approved or retried
+execution it is the hold's PINNED record, byte for byte; blocked and
+unavailable rows carry it too, so a refusal says which coverage row refused.
+`pending_actions` gains `invalidated_at` / `invalidated_reason` (flat columns)
+for holds voided by a policy rotation, separable from expiry. `NULL` for rows
+written before records existed.
+
 ## What `detail` contains, and what it deliberately does not (F8)
 
 A judge result's `Evidence.detail` used to be the model's reply, verbatim. It is

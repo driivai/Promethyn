@@ -40,6 +40,8 @@ from prometheus_protocol.gate.promotion import (
     OUTCOME_ROUTE,
     GateDecision,
 )
+from prometheus_protocol.policy.execution import AuthorizedExecution
+from prometheus_protocol.policy.record import authorization_record
 from prometheus_protocol.swarm.executor import Executor
 from prometheus_protocol.swarm.models import ExecutionResult
 
@@ -50,6 +52,17 @@ def _judgment_or_none(decision: GateDecision) -> dict | None:
     return (
         _judgment_to_dict(decision.judgment) if decision.judgment is not None else None
     )
+
+
+def _record_or_none(decision: GateDecision, *, at: str) -> dict | None:
+    """The decision's authorization as a ledger record, or None when it carries
+    none. Every outcome the gate produces carries one — the gate authorizes
+    before it reads the verdict — so blocked and unavailable rows say what they
+    were decided under too, coverage refusal included."""
+
+    if isinstance(decision.authorization, AuthorizedExecution):
+        return authorization_record(decision.authorization, pinned_at=at)
+    return None
 
 
 @dataclass(frozen=True)
@@ -157,6 +170,7 @@ class ExecutionController:
             # a human must not be able to approve execution of an action whose
             # HARD verification never ran. The remedy is to repair the runtime and
             # re-verify, not to approve blind.
+            now = self._clock()
             self._ledger.record_execution(
                 subject_id=subject_id,
                 source="unavailable",
@@ -165,11 +179,13 @@ class ExecutionController:
                 sandbox_name="",
                 exit_status=None,
                 detail=decision.reason,
-                created_at=self._clock(),
+                created_at=now,
                 judgment=_judgment_or_none(decision),
+                authorization=_record_or_none(decision, at=now),
             )
             return SubmitOutcome(outcome=outcome, decision=decision)
         # Blocked: recorded for audit, never executed.
+        now = self._clock()
         self._ledger.record_execution(
             subject_id=subject_id,
             source="blocked",
@@ -178,8 +194,9 @@ class ExecutionController:
             sandbox_name="",
             exit_status=None,
             detail=decision.reason,
-            created_at=self._clock(),
+            created_at=now,
             judgment=_judgment_or_none(decision),
+            authorization=_record_or_none(decision, at=now),
         )
         return SubmitOutcome(outcome=outcome, decision=decision)
 
@@ -194,12 +211,35 @@ class ExecutionController:
         # lapsed hold is refused even when this sweep is bypassed.
         self._pending.sweep()
         decision = self._pending.approve(pending_id, identity=identity, reason=reason)
-        return self._execute(decision, source="human-approved", pending_id=pending_id)
+        return self._execute(
+            decision,
+            source="human-approved",
+            pending_id=pending_id,
+            record=self._pinned_record(pending_id),
+        )
 
     def reject(self, pending_id: int, *, identity: str, reason: str = "") -> None:
         """Record a human rejection. The action is never executed."""
 
         self._pending.reject(pending_id, identity=identity, reason=reason)
+
+    def invalidate_superseded_holds(self) -> list[PendingAction]:
+        """Void every pending hold pinned to a policy no longer selected.
+
+        The operator's verb after a policy rotation (delegates to the pending
+        service). Approval refuses a superseded hold regardless; this clears
+        the backlog so nothing reads as approvable that is not.
+        """
+
+        return self._pending.invalidate_superseded()
+
+    def _pinned_record(self, pending_id: int) -> dict | None:
+        """The hold's PINNED record, as persisted — what the execution row
+        carries, so the row that says a side effect happened says what the
+        human was shown when they approved it."""
+
+        pending = self._pending.get(pending_id)
+        return pending.record if pending is not None else None
 
     def retry_execution(
         self, pending_id: int, *, identity: str, reason: str = ""
@@ -235,6 +275,7 @@ class ExecutionController:
                     _judgment_to_dict(pending.judgment) if pending is not None else None
                 ),
                 pending_id=pending_id,
+                authorization=pending.record if pending is not None else None,
             )
             raise
         prefix = f"retry of hold #{pending_id} by {identity}"
@@ -245,6 +286,7 @@ class ExecutionController:
             source="human-approved-retry",
             pending_id=pending_id,
             detail_prefix=f"{prefix}: ",
+            record=self._pinned_record(pending_id),
         )
 
     def sweep(self, *, now: str | None = None) -> list[PendingAction]:
@@ -259,7 +301,12 @@ class ExecutionController:
         source: str,
         pending_id: int | None = None,
         detail_prefix: str = "",
+        record: dict | None = None,
     ) -> ExecutionResult:
+        # The authorization record the execution row carries: the hold's PINNED
+        # record when it came from one, otherwise the decision's own.
+        if record is None:
+            record = _record_or_none(decision, at=self._clock())
         # At-most-once execution per hold: atomically claim the right to run
         # before calling the executor, so two concurrent drivers (a second
         # approve racing the first, or concurrent retries) cannot both execute.
@@ -288,6 +335,7 @@ class ExecutionController:
                 created_at=self._clock(),
                 judgment=_judgment_or_none(decision),
                 pending_id=pending_id,
+                authorization=record,
             )
             return refused
         result = self._executor.execute(decision)
@@ -302,6 +350,7 @@ class ExecutionController:
             created_at=self._clock(),
             judgment=_judgment_or_none(decision),
             pending_id=pending_id,
+            authorization=record,
         )
         # A fail-closed refusal has no side-effect: release the claim so the
         # approved hold stays retry-eligible. A successful execution keeps its
