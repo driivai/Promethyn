@@ -314,7 +314,12 @@ jobs:
                       # PHASE-1.2c — 19 -> 20: the ten-row matrix mapping is
                       # pinned by a test of its own (every row mapped to one
                       # of three kinds; nine refusals to one execution).
-                      "test_policy_enforcement_regression": 20,
+                      # 20 -> 21: the state-to-row mapping for the swarm
+                      # matrix (OPEN-GAPS G15). _ROW_KIND says what each row
+                      # asserts; _ROW_STATE now says which coverage state it
+                      # drives, and the new test pins that the two agree
+                      # about which row is the positive control.
+                      "test_policy_enforcement_regression": 21,
                       # PHASE-1.2b — 9 -> 11. Closing the unbound-judgment route
                       # moved the interesting capability from constructing a
                       # verdict to MINTING an assessment, so the 2d guard gained

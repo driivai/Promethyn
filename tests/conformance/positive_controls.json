@@ -1,0 +1,225 @@
+{
+  "_why": [
+    "THE NAMED SET. Doctrine #4: every negative has a positive control. Twenty-five",
+    "tests in this tree declare themselves one; until now they were twenty-five tests",
+    "that happened to exist, with no record of WHICH refusal each one controls for.",
+    "A positive control whose negative nobody wrote down is a test that looks like",
+    "rigour and proves only that something passes.",
+    "",
+    "Each entry pairs a positive control with at least one negative it stands beside,",
+    "and states the property the pair establishes together. test_positive_control_set.py",
+    "asserts every entry resolves to a real collected test, and — the half that keeps",
+    "this honest — that every self-declared positive control in the tree is registered",
+    "here, so the set cannot fall behind the code."
+  ],
+  "controls": [
+    {
+      "module": "tests/chokepoint/test_approval_expiry_across_preparation.py",
+      "positive": "test_boundary_2a_admits_a_live_approval",
+      "negatives": [
+        "test_the_reviews_reproduction_no_longer_executes"
+      ],
+      "property": "expiry refuses a stale approval without refusing a live one"
+    },
+    {
+      "module": "tests/chokepoint/test_authorization_record.py",
+      "positive": "test_record_failure_leaves_database_untouched_with_positive_control",
+      "negatives": [
+        "test_record_failure_stops_real_runtime"
+      ],
+      "property": "a failed record write stops the runtime and leaves no partial state, while a successful one proceeds"
+    },
+    {
+      "module": "tests/chokepoint/test_lock_identity.py",
+      "positive": "test_positive_control_a_single_linked_store_recovers_its_own_dead_owner",
+      "negatives": [
+        "test_review_reproduction_a_hard_link_alias_cannot_recover_a_live_owner",
+        "test_a_multiply_linked_store_is_refused_at_construction"
+      ],
+      "property": "lock identity refuses an aliased store without refusing legitimate recovery"
+    },
+    {
+      "module": "tests/chokepoint/test_migration_live.py",
+      "positive": "test_live_a_current_approval_still_executes",
+      "negatives": [
+        "test_live_end_to_end_and_replay_refused"
+      ],
+      "property": "replay is refused on a live database while a current approval still executes"
+    },
+    {
+      "module": "tests/chokepoint/test_mount_relevance.py",
+      "positive": "test_positive_control_a_table_with_no_unread_rows_is_unchanged",
+      "negatives": [
+        "test_an_unreadable_row_on_the_resolution_path_refuses"
+      ],
+      "property": "an unreadable mount row refuses only when it is on the resolution path"
+    },
+    {
+      "module": "tests/chokepoint/test_opened_substrate.py",
+      "positive": "test_visible_local_descendant_positive_control",
+      "negatives": [
+        "test_hidden_descendant_is_not_visible",
+        "test_unresolvable_topology_refuses"
+      ],
+      "property": "topology resolution refuses what it cannot see without refusing what it can"
+    },
+    {
+      "module": "tests/chokepoint/test_reconciliation.py",
+      "positive": "test_the_positive_control_the_same_empty_range_IS_clean_on_a_real_substrate",
+      "negatives": [
+        "test_air_gapped_pkcs11_never_reports_clean_with_an_authorization_to_explain",
+        "test_air_gapped_pkcs11_refuses_even_with_NOTHING_to_reconcile",
+        "test_incomplete_source_never_empty_clean"
+      ],
+      "property": "an empty range over NO substrate refuses, while the same empty range over a real one is clean (OPEN-GAPS G5)"
+    },
+    {
+      "module": "tests/chokepoint/test_substrate.py",
+      "positive": "test_a_safe_substrate_constructs_normally_under_every_policy",
+      "negatives": [
+        "test_an_unsafe_substrate_refuses_construction_and_creates_nothing"
+      ],
+      "property": "substrate policy refuses an unsafe filesystem without refusing a safe one"
+    },
+    {
+      "module": "tests/chokepoint/test_substrate.py",
+      "positive": "test_the_real_probe_reports_this_checkout",
+      "negatives": [
+        "test_an_unreadable_mount_table_is_unknown_not_safe"
+      ],
+      "property": "the probe answers on a real checkout and reports unknown rather than safe when it cannot read"
+    },
+    {
+      "module": "tests/conformance/test_advisory_cannot_satisfy.py",
+      "positive": "test_authoritative_evidence_satisfies",
+      "negatives": [
+        "test_advisory_evidence_does_not_satisfy"
+      ],
+      "property": "advisory evidence cannot satisfy a requirement that authoritative evidence can"
+    },
+    {
+      "module": "tests/conformance/test_advisory_cannot_satisfy.py",
+      "positive": "test_each_wrapper_still_works_as_advisory_calibration",
+      "negatives": [
+        "test_no_wrapper_can_satisfy_a_requirement_even_when_permitted"
+      ],
+      "property": "a wrapper stays useful as calibration while never satisfying"
+    },
+    {
+      "module": "tests/conformance/test_advisory_cannot_satisfy.py",
+      "positive": "test_the_bank_still_authorizes_a_properly_covered_action",
+      "negatives": [
+        "test_a_missing_tier_fails_closed"
+      ],
+      "property": "the bank fails closed on a missing tier without refusing a covered action"
+    },
+    {
+      "module": "tests/conformance/test_attestation_chronology.py",
+      "positive": "test_the_rollback_case_is_green_when_the_stamps_differ",
+      "negatives": [
+        "test_a_rollback_to_an_older_posture_is_not_reported_as_attested"
+      ],
+      "property": "a rollback is caught by chronology, and differing stamps are not a false alarm"
+    },
+    {
+      "module": "tests/conformance/test_ci_collection_pins.py",
+      "positive": "test_a_pin_that_is_one_too_low_is_REPORTED_and_the_true_pin_is_not",
+      "negatives": [
+        "test_the_named_limit_this_guard_does_NOT_see_skips_failures_or_errors"
+      ],
+      "property": "the pin guard reports a wrong pin and not a right one, within its stated blind spot"
+    },
+    {
+      "module": "tests/conformance/test_execution_descriptor.py",
+      "positive": "test_bank_mints_for_the_unweakened_two_requirement_snapshot",
+      "negatives": [
+        "test_bank_re_resolves_and_rejects_honestly_redigested_weakened_snapshot"
+      ],
+      "property": "re-resolution rejects a weakened snapshot and mints for an unweakened one"
+    },
+    {
+      "module": "tests/conformance/test_execution_descriptor.py",
+      "positive": "test_bank_re_resolves_and_rejects_a_PARTIALLY_weakened_snapshot",
+      "negatives": [
+        "test_bank_re_resolves_and_rejects_honestly_redigested_weakened_snapshot"
+      ],
+      "property": "partial weakening is caught, not only wholesale weakening"
+    },
+    {
+      "module": "tests/conformance/test_execution_descriptor.py",
+      "positive": "test_a_legitimately_minted_assessment_on_its_OWN_target_and_attempt_passes",
+      "negatives": [
+        "test_a_LEGITIMATELY_minted_assessment_does_not_cross_target_or_attempt",
+        "test_descriptor_refuses_each_cross_action_mismatch_before_execution"
+      ],
+      "property": "the descriptor binds an assessment to its own target and attempt without refusing that binding"
+    },
+    {
+      "module": "tests/conformance/test_execution_expiry.py",
+      "positive": "test_the_TTL_boundary_is_inclusive_one_second_short_approves_and_exactly_on_it_does_not",
+      "negatives": [
+        "test_expired_action_cannot_be_approved_or_executed",
+        "test_a_hold_past_the_TTL_but_UNSWEPT_reads_as_pending_and_still_cannot_approve"
+      ],
+      "property": "the TTL boundary is inclusive and an unswept expiry still refuses"
+    },
+    {
+      "module": "tests/conformance/test_hold_pinning.py",
+      "positive": "test_a_hold_approved_under_an_unrotated_policy_still_executes",
+      "negatives": [
+        "test_a_hold_pinned_to_a_superseded_policy_is_refused_and_invalidated",
+        "test_explicit_rotation_invalidates_every_pending_hold_pinned_to_the_old_policy_and_only_those"
+      ],
+      "property": "rotation refuses a hold pinned to a superseded policy without refusing one whose policy has not moved"
+    },
+    {
+      "module": "tests/conformance/test_mutation_worktree.py",
+      "positive": "test_the_unmutated_worktree_is_green_for_the_selected_proof",
+      "negatives": [
+        "test_a_mutation_applied_in_the_worktree_is_what_the_run_sees"
+      ],
+      "property": "the mutation harness reddens under a mutation and is green without one"
+    },
+    {
+      "module": "tests/conformance/test_platform_contract.py",
+      "positive": "test_on_linux_the_gate_does_nothing",
+      "negatives": [
+        "test_off_linux_the_gate_skips_with_a_reason",
+        "test_off_linux_under_the_ci_flag_the_gate_FAILS"
+      ],
+      "property": "the platform gate converts off Linux and is inert on it"
+    },
+    {
+      "module": "tests/conformance/test_policy_enforcement_regression.py",
+      "positive": "test_the_matrix_positive_control_really_authorizes",
+      "negatives": [
+        "test_the_swarm_matrix_authorizes_only_where_policy_is_satisfied"
+      ],
+      "property": "nine matrix rows refuse and the tenth genuinely authorizes (the _ROW_KIND mapping)"
+    },
+    {
+      "module": "tests/conformance/test_response_integrity.py",
+      "positive": "test_complete_response_positive_controls",
+      "negatives": [
+        "test_incomplete_or_ambiguous_response_is_not_parsed"
+      ],
+      "property": "an incomplete response is refused and a complete one parses"
+    },
+    {
+      "module": "tests/conformance/test_secret_canary_sweep.py",
+      "positive": "test_the_credential_is_still_reachable_where_it_is_needed",
+      "negatives": [
+        "test_no_plain_class_stores_a_credential_unwrapped"
+      ],
+      "property": "credentials are wrapped everywhere without becoming unreachable where they are needed"
+    },
+    {
+      "module": "tests/conformance/test_transport_hardening.py",
+      "positive": "test_a_working_endpoint_still_yields_a_verdict",
+      "negatives": [
+        "test_remote_plaintext_with_a_credential_is_refused_at_construction"
+      ],
+      "property": "plaintext transport is refused without refusing a working endpoint"
+    }
+  ]
+}

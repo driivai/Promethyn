@@ -129,9 +129,14 @@ def test_the_checked_tree_really_is_every_module_in_the_package():
 #: Adding a key here is a deliberate change to this file, reviewed on its own
 #: merits. Changing one is the same. Nothing else is admitted.
 _ALLOWED_CONFIG = {
-    "mypy_path": "src",
+    "mypy_path": "src:scripts:tests/conformance:tests/chokepoint",
     "explicit_package_bases": "True",
-    "ignore_missing_imports": "True",
+    # OFF since the G1 closure. The four roots above are what let it go off
+    # without per-module sections: scripts and tests import each other, and
+    # mypy could not resolve those siblings from ``src`` alone. Turning this
+    # back to True would re-hide both first-party sibling imports and stdlib
+    # modules absent at the floor.
+    "ignore_missing_imports": "False",
     "warn_unused_ignores": "True",
     "warn_redundant_casts": "True",
     "files": "src/prometheus_protocol, scripts, tests",

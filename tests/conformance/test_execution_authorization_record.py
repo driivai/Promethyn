@@ -423,10 +423,24 @@ def test_an_altered_pinned_requirement_set_is_detected_at_approval():
     """A database write weakens the row's requirements. The chain entry still
     carries the real ones, so approval sees the mismatch and refuses. Nothing
     executes, the chain itself is still valid (only the row was touched), and
-    the hold is left pending — this is tampering, not a rotation."""
+    the hold is left pending — this is tampering, not a rotation.
+
+    THE ``match=`` BELOW IS LOAD-BEARING, and that was measured rather than
+    assumed. Remove the chain append from ``hold()`` — leaving the record in
+    the JSON column — and approval STILL refuses, because a hold with no chain
+    entry cannot be approved either. With the ``match=`` dropped this test
+    goes green under that mutation: it would be asserting that approval
+    refused, not that the BINDING is what detected the change. The precondition
+    below is the structural half, so the proof does not rest on one literal.
+    ``scripts/phase_1_2c_record_revert_proofs.py`` carries the mutation.
+    """
 
     ctl, spy, ledger = controller(route_high_risk=True)
     held = hold(ctl, action())
+    # Precondition: the binding exists and carries the REAL requirements. If
+    # this fails, everything below is about some other mechanism.
+    bound = chain_entry_for(ledger, held.id)
+    assert json.loads(bound["payload"]) == held.record
     ledger._conn.execute(
         "UPDATE pending_actions SET authorization = ? WHERE id = ?",
         (json.dumps(weakened(held.record)), held.id),

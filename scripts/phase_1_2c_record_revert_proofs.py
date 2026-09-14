@@ -2,10 +2,11 @@
 
 Each mutation removes one load-bearing join in memory, runs the behavioural
 test that must fail, restores the function, and refuses count drift in either
-direction. Six mutations: the two halves of the chain binding, the pinned
-policy comparison, the invalidation write, the coverage report at minting, and
-the execution row's record. As with the Checkpoint-B runner, this proves these
-mutations are caught; it does not claim the set is complete.
+direction. Seven mutations: the two halves of the chain binding's CHECK, the
+binding's WRITE, the pinned policy comparison, the invalidation write, the
+coverage report at minting, and the execution row's record. As with the
+Checkpoint-B runner, this proves these mutations are caught; it does not claim
+the set is complete.
 """
 
 from prometheus_protocol.execution.controller import ExecutionController
@@ -16,13 +17,17 @@ import fix_b_revert_proofs as harness
 
 RECORD = "tests/conformance/test_execution_authorization_record.py"
 PINNING = "tests/conformance/test_hold_pinning.py"
-EXPECTED_REVERTS = 6
+EXPECTED_REVERTS = 7
 #: PHASE-1.2c FINAL — 14 -> 15. The sixth refusing-coverage row
 #: (``coverage.ambiguous``) adds one parametrisation to
 #: ``refused_by_a_real_coverage_row``, so "coverage-report-dropped-at-mint"
 #: reddens six tests where it reddened five. No mutation changed, and no
 #: mutation's SELECTION changed; one more test stands behind one of them.
-EXPECTED_CALL_FAILURES = 15
+#:
+#: CLOSE-OUT — 15 -> 18. "chain-append-removed-at-hold" is the seventh
+#: mutation and reddens three tests: the altered-requirements detection, the
+#: no-chain-entry refusal, and the binding's own structural test.
+EXPECTED_CALL_FAILURES = 18
 
 
 def enforce_expected(caught: int, failures: int) -> None:
@@ -51,6 +56,40 @@ def mutations():
             [("    if not verification.ok:", "    if False:")],
             RECORD,
             "altered_chain_entry",
+        ),
+        (
+            # 1a's RULING, mutated rather than argued. The two above disable the
+            # CHECK at approval; this removes the BINDING at write time — the
+            # record still goes into pending_actions.authorization, it just
+            # never reaches the chain. If the detection survived that, it would
+            # be keyed on something other than the binding and 1a would not be
+            # closed whatever the test is called.
+            #
+            # It does not survive: the refusal changes from "does not match its
+            # tamper-evident chain entry" to "has 0 tamper-evident chain
+            # entries", and the test's ``match=`` refuses the substitution.
+            # Measured second-order, because that is a thin thread to hang a
+            # ruling on: with the SAME mutation and the ``match=`` dropped, the
+            # test goes GREEN — approval still refuses, just not for this
+            # reason. So the string is load-bearing, and
+            # ``test_the_hold_record_is_bound_into_the_audit_chain_under_the_holds_identity``
+            # now asserts the entry structurally as well, so the proof does not
+            # rest on one literal.
+            "chain-append-removed-at-hold",
+            PendingActionService.hold,
+            [
+                (
+                    "    self._ledger.record_chained(\n"
+                    "        event=PINNED_HOLD_EVENT,\n"
+                    "        subject=_hold_subject(pending_id),\n"
+                    "        payload=record,\n"
+                    "        created_at=created,\n"
+                    "    )",
+                    "    pass",
+                )
+            ],
+            RECORD,
+            "altered_pinned_requirement_set or no_chain_entry or bound_into_the_audit_chain",
         ),
         (
             "pinned-policy-comparison-removed",
