@@ -220,6 +220,15 @@
         "test_remote_plaintext_with_a_credential_is_refused_at_construction"
       ],
       "property": "plaintext transport is refused without refusing a working endpoint"
+    },
+    {
+      "module": "tests/conformance/test_resource_bound_outcomes.py",
+      "positive": "test_the_positive_control_an_unbreached_bound_still_returns_a_real_verdict",
+      "negatives": [
+        "test_removing_a_resource_bound_turns_a_FAIL_into_a_PASS",
+        "test_a_confirmed_start_that_runs_past_the_wall_clock_is_ABSTAIN_not_FAIL"
+      ],
+      "property": "a breached bound changes the verdict while an unbreached one still returns real verdicts in both directions (OPEN-GAPS G21)"
     }
   ]
 }

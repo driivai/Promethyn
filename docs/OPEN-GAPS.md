@@ -1192,6 +1192,17 @@ work happens, never whether it was authorized.
 | `ledger_anchor_retention_days` | retention of the anchor; no decision reads it |
 | `max_role_calls` | bounds swarm iterations; exceeding it stops work, it authorizes nothing |
 
+**2c — these two are SPELLING-CHECKED ONLY, and that is the whole claim made
+about them.** They are covered by
+`test_every_declared_security_field_is_SPELLED_somewhere_outside_config`, which
+proves their name appears as an attribute outside `config.py` and nothing more.
+No behavioural proof exists for either and none is planned: a proof would have
+to assert that neutralizing them changes *nothing*, which is a claim about the
+absence of an effect and is not provable by a test. If either later grows a
+consumer that decides something, it moves into the outcome-affecting set and
+gets a proof then. A named partial is the honest state; a uniform claim over 22
+fields that holds for none of them was not.
+
 **UNCLASSIFIED — 6, and the reason is a definition I should not pick alone.**
 Each bounds a verifier or provider. Neutralizing one does not flip an
 authorize/refuse directly — but a verifier that hangs or is killed produces
@@ -1355,9 +1366,108 @@ said", which is the question that matters when the finding is cited to a third
 party — a diligence reader, an auditor, or the next engineer deciding whether a
 closure is honest.
 
+### What can and cannot be claimed about R1–R7, in a diligence setting
+
+This is the practical consequence, and it should be written down before someone
+has to answer it live.
+
+**CAN be claimed, and is well supported:** *"An independent review found real
+defects in five consecutive rounds, and each one is reproduced in this
+repository with the reproduction and the observed outcome recorded."* Every part
+of that is checkable here: the reproductions run, `docs/execution-descriptor.md`
+carries what was done and what was seen, and the mutation proofs show the fixes
+are load-bearing. A reader can re-run them.
+
+**CANNOT be claimed:** *"Here is what the reviewers found, in their words."* We
+do not hold their words. What we hold is our reproduction of what we understood
+them to mean — written by the party with an interest in the finding being
+closeable. That is a real limitation and stating it plainly is stronger than
+having it discovered: a diligence reader who asks for the original reports and
+is told they cannot be produced will reasonably discount the closures too.
+
+**The difference matters most where a closure is contested.** If a reviewer's
+finding was broader than our reproduction, the reproduction passes and the
+finding is not closed — and nothing in this repository could detect that.
+`G4` is the worked example: F10's paraphrase turned out to be the only record,
+and its citation pointed at an unrelated commit for three sprints.
+
 **What closes it.** Either the original documents attached to the repository,
 or — if they are genuinely gone — an entry per orphaned number recording what
 evidence survives and that the text does not, so nobody re-derives it from a
 paraphrase a third time. F10 already has that treatment in G4; F12 does not.
 
 **Test.** None. A test cannot know whether a document was ever received.
+
+---
+
+## G21 — three resource bounds accept "no bound", and removing one turns a FAIL into a PASS
+
+**What.** `verifier_memory_mb`, `verifier_cpu_seconds` and
+`verifier_max_processes` accept `0` at `Config` load, meaning "no bound".
+Measured on the real `SubprocessVerifier` with byte-identical candidate code:
+
+| bound | enforced | set to 0 |
+|---|---|---|
+| `verifier_memory_mb` (64) | `Verdict.FAIL` | **`Verdict.PASS`** |
+| `verifier_cpu_seconds` (2) | `Verdict.FAIL` | **`Verdict.PASS`** |
+| `verifier_max_processes` (4) | `Verdict.FAIL` | **`Verdict.PASS`** |
+
+So these fields are outcome-affecting in the strongest sense: they do not merely
+remove a refusal path, they change the verdict. An operator who zeroes one
+silently widens what passes.
+
+**The other three of the six are fail-closed and cannot be neutralized at all.**
+`verifier_timeout_s`, `request_timeout_s` and `provider_max_response_bytes`
+refuse both `0` and `-1` at load. The asymmetry is the finding as much as the
+table is.
+
+### What this is NOT, stated because the sprint that found it expected otherwise
+
+The G17 ruling asked for proofs showing an Unavailable path — "neutralize the
+bound, show the verifier fails to yield a verdict, show coverage reports
+incomplete" — and named the risk as couldn't-verify collapsing into
+verified-clean at the resource layer.
+
+**That path does not exist here, and its absence is deliberate rather than a
+defect.** A resource-limit kill is a FAIL, a verdict about the candidate.
+`runner.py`'s docstring says so exactly, and all four measurements match it:
+
+* FAIL — "the candidate crashing / being killed by a resource limit on its own
+  code (a *confirmed* candidate start that produced no verdict)";
+* ABSTAIN — "the candidate started and then ran past the wall clock";
+* Unavailable — "a wall-clock timeout *before* the candidate started".
+
+Measured: a confirmed start that runs past the wall clock returns
+`Verdict.ABSTAIN`, not FAIL and not Unavailable. There is therefore no
+couldn't-verify state on this path to collapse from, and the prescribed proof
+shape cannot be built for these six without manufacturing it.
+
+(An earlier reading of mine, withdrawn: I first reported the docstring as
+claiming wall-clock timeouts are Unavailable and therefore false. It says
+*before the candidate started*, which my probe did not exercise. The docstring
+is accurate; the misreading was mine.)
+
+### The control that exists
+
+Every one of these values is captured in the startup posture record
+(`attestation/runtime.py`), so the budget a verdict was produced under is
+recorded rather than implicit. That is what those fields are doing in the
+attestation snapshot — a point that reads as "recorded, not enforced" until you
+need to know which budget produced a PASS.
+
+**Why it is not fixed here.** Whether zero should remain accepted is a product
+decision with a real cost either way: `Limits` documents that a disabled
+address-space cap "can prevent some legitimate workloads" from being refused,
+and this repository's own unit tests use `memory_mb=0` for exactly that reason
+(a 256 MiB cap makes ordinary test candidates flaky). Refusing zero would make
+those tests specify a real budget; permitting it keeps a foot-gun reachable from
+`Config`. Three shapes are available — refuse zero outright, require an explicit
+`allow_unbounded_verifier=True` beside it, or leave it and rely on the posture
+record — and choosing is not a scoping pass's call.
+
+**Test.** `tests/conformance/test_resource_bound_outcomes.py`, nine tests: the
+FAIL→PASS flip per bound, that zero is reachable through `Config` per bound,
+that the other three refuse zero, the ABSTAIN split, and a positive control that
+an unbreached bound still returns real verdicts in both directions — without
+which every assertion above is consistent with a verifier that fails everything
+under a bound and passes everything without one.
