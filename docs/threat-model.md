@@ -190,7 +190,24 @@ coverage.
    Where one tool serves both, the modes are separated and a test pins that the
    measuring one was not narrowed
    (`test_composed_message_guard.py::test_the_history_sweep_is_NOT_allowlisted`).
-7. **A byte comparison catches what a shape assertion cannot.** `--composed`
+8. **An instrument that returns an empty set reads downstream as a pass.**
+   Emptiness and success are the same value to a caller that only asks "were
+   there findings?", so every guard that iterates a collected set must be driven
+   with that set empty and shown to fail closed. Three instances, all measured
+   in this repository rather than imagined:
+   * a sweep that collected **0 nodes** and reported no mismatches, which was
+     read as 18 pins agreeing until the collector was fixed;
+   * a CSS gradient computing as `transparent`, so a DOM walker reported the
+     colour BEHIND it and an accessibility audit scored 96 while three of four
+     surfaces failed;
+   * `_routes.json` not covering a path, so quota exhaustion on that path
+     returned the static asset instead of the function's refusal.
+   Measured 2026-09-14 on the security-posture guards: with `SECURITY_FIELDS`
+   emptied, three of five pass vacuously — and the edit that empties it is
+   caught by three OTHER tests, which is the right shape. The guard need not
+   itself refuse the empty set as long as something does, and the pass is only
+   a finding when nothing does.
+9. **A byte comparison catches what a shape assertion cannot.** `--composed`
    models the squash message GitHub writes. It was wrong twice — a missing blank
    line before the trailer, and a separator asserted as ten hyphens that is nine
    — and both were caught only by comparing bytes against the real commit. Every
