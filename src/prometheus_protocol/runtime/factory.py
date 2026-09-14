@@ -159,7 +159,8 @@ def build_sandbox_for(config: Config, *, env=None) -> Sandbox:
         raise ConfigError(
             f"provider=remote resolved to the non-isolating {sandbox.name!r} sandbox: "
             "a remote model's output will not be executed without isolation. "
-            "Provide an isolating runtime or use the mock provider."
+            "Provide an isolating runtime or use the mock provider.",
+            reason="unsafe_with_remote",
         )
     return sandbox
 

@@ -10,6 +10,8 @@ reuse it; this sprint wires it only into the verifier.
 
 from __future__ import annotations
 
+from prometheus_protocol.core.errors import ConfigError
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -104,10 +106,15 @@ class Limits:
         # lower isolation is not a setting, it is a request that will not be
         # honoured, and it must say so (threat model §5).
         if self.deny_network is not True:
-            raise ValueError(
+            # ConfigError, not a bare ValueError: it IS a ValueError subclass,
+            # so every existing caller and test that catches ValueError is
+            # unaffected, and it can carry the typed refusal reason a test
+            # needs to assert WHICH refusal fired (OPEN-GAPS G19).
+            raise ConfigError(
                 "deny_network=False cannot be honoured: no isolating adapter "
                 "grants a candidate network access. The field exists to state "
-                "the invariant, not to switch it off."
+                "the invariant, not to switch it off.",
+                reason="deny_network_unhonourable",
             )
 
 

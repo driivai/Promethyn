@@ -224,7 +224,7 @@ coverage.
 | 2 | The runner host (and, with PIH-2, the insider who reads its memory) | workspace mode, secrets in `repr`, spawn env, artifact bytes, the signing key | `0700` workspace; redacted secrets; every spawn env-clean; bytes-not-paths; approval signing through an external KMS whose key never exists on the host; a KMS failure mints nothing | service account, filesystem/network confinement; the KMS access policy (invoke ≠ administer ≠ audit); KMS audit logging enabled, delivered and retained — a Sign is logged only where the deployment made the KMS log it, which this code cannot enforce (`docs/key-custody.md`); `PROM_REQUIRE_EXTERNAL_SIGNER=1` | `test_sandbox_privilege.py`, `test_credential_hygiene.py`, `test_artifact_integrity.py`, `test_key_custody.py` | an insider holding Sign-invoke gets a valid signature (witnessed, not prevented); root still holds the database credential |
 | 3 | The ledger file (and, with PIH-1, the insider who rewrites it) | chain rewrite, deletion, numeric settings | tip anchored to an external append-only target after every append; the whole anchor history pinned on verify; refuses to rewind; a failed anchor write raised, the runner refuses; NaN/inf/range refused | object-lock retention that outlasts the audit horizon, or a log run by another party; `PROM_REQUIRE_LEDGER_ANCHOR=1` | `test_external_anchor.py`, `test_tip_anchor.py`, `test_ledger_verify_failure_modes.py`, `test_numeric_config_validation.py` | authority over the anchor medium: retention lapsed or bypassed, the log's operator |
 | 4 | The network | credentialed HTTP | `https://` required; redirects refused; bounded reads under a deadline; failures typed and `Unavailable` | certificate pinning per deployment | `test_transport_hardening.py` | system trust store; proxy env is host-controlled |
-| 5 | Misconfiguration | every security flag and combination | requirement honoured or refused; dead-flag mechanism; coherent combinations; hardened defaults | pin the sandbox image | `test_security_posture.py` | `require_digest_pin` and `require_ledger_anchor` off by default |
+| 5 | Misconfiguration | every security flag and combination | requirement honoured or refused; dead-flag SPELLING check (G17); coherent combinations; hardened defaults | pin the sandbox image | `test_security_posture.py` | `require_digest_pin` and `require_ledger_anchor` off by default |
 
 ---
 
@@ -1368,10 +1368,20 @@ Asserted by `test_defaults_are_the_hardened_posture` and
   record holds, so a later downgrade of it is not detectable — with an `ERROR`
   whenever an attestation was attempted and failed, and nothing at all when none
   was configured.
-- **The dead-flag mechanism sees attribute reads, not enforcement.** It proves
-  a field is *consumed* somewhere; whether the consumer honours it correctly is
-  what the per-flag tests in §5.3 are for. A field read only to be logged would
-  pass the mechanism and fail nothing else — a limit of static reading, named.
+- **The dead-flag mechanism is a SPELLING CHECK, and understating it here was
+  itself a false claim.** This paragraph used to say it "proves a field is
+  *consumed* somewhere", with a field read only to be logged as the worst case.
+  Measured 2026-09-14 (OPEN-GAPS G17): the collector keeps `node.attr` for every
+  `ast.Attribute`, so it also counts an attribute on an unrelated object, on a
+  literal, a WRITE rather than a read, a body under `if False:`, and a function
+  nobody calls. Probed end to end — every genuine consumption of
+  `require_ledger_anchor` removed from `src/`, one dead store left under
+  `if False:` — the file reported 26 passed. So the worst case is not "read only
+  to be logged"; it is **never read at all**. The test is now named
+  `test_every_declared_security_field_is_SPELLED_somewhere_outside_config`, and
+  whether a consumer honours a field is what the per-flag tests in §5.3 are for.
+  Which fields have behavioural proof, and which are spelling-checked only, is
+  tracked in G17.
 - **Environment-only settings bypass `Config`.** `PROM_SANDBOX_IMAGE` and
   `PROM_ALLOW_UNSAFE_EXEC` are read from the environment directly. They are
   validated where they are read, but they are not on `SECURITY_FIELDS` because
