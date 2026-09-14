@@ -693,6 +693,43 @@ for byte — `4451aa1` (one commit) and `c846272` (five) — so it is a model of
 the artifact rather than a guess about it. Wired into `pr-text-hygiene.yml`,
 which needed `fetch-depth: 0` to see the commits at all.
 
+**It shipped broken, and the way it broke is the point.** Run `34860607395`
+refused all three jobs at step 34, identically:
+
+```
+SystemExit: git log --reverse c846272..8f29b1d --format=... failed:
+  fatal: ambiguous argument 'c846272..8f29b1d': unknown revision or path
+  not in the working tree
+```
+
+The guard read each squash's SOURCE commits out of history. **A squash merge
+does not keep its source commits.** Once the branch is deleted they are
+reachable from no ref, so no checkout fetches them however deep it goes —
+`fetch-depth: 0` does not help, because depth is not the problem. Measured:
+`8f29b1d` and `fbae17b` are reachable only from merged feature branches still
+sitting on `origin`, and absent from a clone made the way the runner makes one.
+It passed locally because that clone still carried those branches: a fixture
+verified in the one checkout that happens to have it. The module's docstring
+even anticipated the symptom and filed it under a future history rewrite; the
+ordinary cause is a merged branch being deleted, and that was not considered.
+
+Fixed by splitting composition from the git query and capturing the source rows
+in `tests/conformance/composed_message_fixture.json`. The EXPECTED output is
+deliberately NOT captured — it is still read live from the squash commit, which
+is permanent — so GitHub's real bytes anchor the fixture and a tampered body
+turns the byte comparison red. That is one of the mutations.
+
+**And the fix's first version repeated the mistake.** The new anchor check
+asked whether each anchor was an ancestor of `origin/main`. A pull-request
+checkout has no `origin/main` remote-tracking ref at all — measured in the
+CI-shaped clone: `fatal: ambiguous argument 'origin/main'` — so it would have
+refused a second time for a reason unrelated to its subject. It asks
+reachability from `HEAD` now, which is the property actually wanted: "on main"
+was only ever a proxy for "will a checkout contain it". **The generalisable
+lesson is narrower than "pin durable things": a guard must be exercised in a
+checkout shaped like the one it will run in, because the local clone's extra
+refs are invisible privilege.**
+
 **The allowlist, and why (3) was the right option.** Measured across all refs:
 **90 co-authorship trailers, 89 naming `DriivAIDev <will@driivai.com>` — the
 repository's own author — and one naming a vendor.** That one is independently
@@ -719,11 +756,23 @@ unchanged as the backstop for both; the `---------` separator rule is derived
 from the ONE multi-commit squash this repository has; and whether a red run
 can block a merge is branch protection, not a workflow property.
 
-**Test.** `tests/conformance/test_composed_message_guard.py`, 13 tests, and
-`scripts/composed_message_revert_proofs.py`, 9 executed mutations in a
+**Test.** `tests/conformance/test_composed_message_guard.py`, 16 tests, and
+`scripts/composed_message_revert_proofs.py`, 11 executed mutations in a
 throwaway worktree — the nine-hyphen separator, the blank line before the
-trailer, commit order, the allowlist widened to a vendor identity, the
-allowlist disabled, the allowlist defanged, the merging-account exclusion, the
-sweep quietly allowlisted, and the workflow's checkout back to shallow. All
-nine redden their named test; none stayed green, so no field here is resting
-on a mutation that proved nothing.
+trailer, commit order, an anchor pointed at an unreachable commit, a tampered
+fixture body, the allowlist widened to a vendor identity, the allowlist
+disabled, the allowlist defanged, the merging-account exclusion, the sweep
+quietly allowlisted, and the workflow's checkout back to shallow. All eleven
+redden their named test; none stayed green.
+
+One of them had to be rewritten to earn that. The anchor mutation first
+relaxed the assertion itself (`== 0` → `in (0, 1)`) and stayed GREEN — it could
+not have fired, because every anchor returns 0 and widening the accepted set
+changes no outcome. Probed the field directly on unmutated code instead:
+`git merge-base --is-ancestor` returns 0 for `4451aa1` and `c846272` and 1 for
+the two commits that broke CI, so the assertion's subject is real and the
+mutation was the empty part. It mutates the subject now. The fixture is keyed
+by pull-request number rather than by squash sha for the same reason — keying
+on a value under test makes any mutation of it an import-time `KeyError`
+rather than a red test, and a mutation that only proves Python raises on a
+missing key proves nothing.
