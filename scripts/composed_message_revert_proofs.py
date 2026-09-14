@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Executed-mutation proofs for the composed-squash-message guard.
 
-Thirteen passing tests are thirteen assertions that nothing has gone wrong
-YET. They are not evidence that anything would be caught. This applies nine
-mutations to the guard — eight to the checker, one to the workflow that runs
-it — in a throwaway worktree, and refuses unless each one turns the named test
-RED. A mutation that stays green names a field nobody is watching.
+Sixteen passing tests are sixteen assertions that nothing has gone wrong
+YET. They are not evidence that anything would be caught. This applies eleven
+mutations to the guard — seven to the checker, two to the captured fixture, one
+to the workflow — in a throwaway worktree, and refuses unless each turns the
+named test RED. A mutation that stays green names an unwatched field.
 
 Run: python scripts/composed_message_revert_proofs.py
 
@@ -58,11 +58,46 @@ MUTATIONS: list[tuple[str, str, str, str, str]] = [
         "test_the_composer_reproduces_the_real_one_commit_squash",
     ),
     (
+        # The fixture rows are stored oldest-first, as git --reverse produced
+        # them. Reversing the composer's iteration is the same defect the
+        # dropped --reverse flag used to be, reachable now that the byte tests
+        # no longer run a git query.
         "multi-commit-bullets-become-newest-first",
         CHECKER,
-        '        "--reverse",\n',
-        "",
+        'chunks = "\\n".join(f"* {row[1]}\\n\\n{row[2].strip(chr(10))}\\n" for row in rows)',
+        'chunks = "\\n".join(\n'
+        '            f"* {row[1]}\\n\\n{row[2].strip(chr(10))}\\n" for row in reversed(rows)\n'
+        "        )",
         "test_the_composer_reproduces_the_real_five_commit_squash",
+    ),
+    (
+        # The anchor check is what stops the CI refusal recurring silently.
+        #
+        # The FIRST mutation written here relaxed the assertion itself
+        # (`== 0` -> `in (0, 1)`) and stayed GREEN. It could not have done
+        # anything else: every anchor in the fixture returns 0, so widening the
+        # accepted set changes no outcome. Probed directly on unmutated code
+        # instead — `git merge-base --is-ancestor` returns 0 for 4451aa1 and
+        # c846272 and 1 for 8f29b1d and fbae17b, the two that broke run
+        # 34860607395 — which says the assertion's subject is real and the
+        # mutation was the vacuous part. So mutate the SUBJECT: point an anchor
+        # at a commit that is not an ancestor of main, which is exactly the
+        # mistake this test exists to catch.
+        "anchor-points-at-a-commit-that-is-not-on-main",
+        "tests/conformance/composed_message_fixture.json",
+        '"squash_sha": "4451aa1"',
+        '"squash_sha": "8f29b1d"',
+        "test_every_anchor_commit_is_reachable_from_HEAD_so_a_checkout_has_it",
+    ),
+    (
+        # A fixture body edited to say something else must break the byte
+        # comparison against the real squash on main. That is what makes the
+        # fixture safe to keep in the tree.
+        "fixture-body-tampered",
+        "tests/conformance/composed_message_fixture.json",
+        "THE WITHDRAWN CLAIM",
+        "THE TAMPERED CLAIM",
+        "test_the_composer_reproduces_the_real_one_commit_squash",
     ),
     (
         "allowlist-widened-to-a-vendor-identity",

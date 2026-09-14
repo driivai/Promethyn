@@ -57,6 +57,7 @@ PINNED_STEPS = (
     "PHASE-1.2 CHECKPOINT 3 proofs (advisory evidence cannot satisfy)",
     "PHASE-1.2c Checkpoint B execution-descriptor proofs",
     "PHASE-1.2c authorization record and pinned-hold proofs",
+    "The composed squash message is refused before the merge writes it",
     "Linux opened-store and lock mount integration (must run, zero skips)",
 )
 

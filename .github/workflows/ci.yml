@@ -455,10 +455,18 @@ jobs:
       - name: The composed squash message is refused before the merge writes it
         # G13's closure. The guard reconstructs the squash message GitHub will
         # write and checks THAT, so the one commit no pre-merge check could see
-        # is refused before it exists. Pinned at 13 because the two byte-for-byte
+        # is refused before it exists. Pinned at 16 because the two byte-for-byte
         # reconstructions (4451aa1, one commit; c846272, five) are what make this
         # a model of the real artifact rather than a guess, and losing either to
         # a rename would leave the rest asserting a shape nobody checked.
+        #
+        # 13 -> 16: the first version of this step refused all three jobs of run
+        # 34860607395 with `unknown revision`, because it read each squash's
+        # SOURCE commits out of history and a squash merge does not keep them —
+        # once the branch is deleted no checkout can fetch them. The rows are
+        # fixtured now and three tests were added, including one asserting that
+        # every anchor commit is an ancestor of origin/main so the same thing
+        # cannot happen quietly again.
         run: |
           python -m pytest -q tests/conformance/test_composed_message_guard.py \
             --junitxml=composed-message-proofs.xml
@@ -466,13 +474,15 @@ jobs:
           import xml.etree.ElementTree as ET
           cases = ET.parse("composed-message-proofs.xml").getroot().iter("testcase")
           cases = list(cases)
-          assert len(cases) == 13, len(cases)
+          assert len(cases) == 16, len(cases)
           assert all(c.find(t) is None for c in cases for t in ("skipped", "failure", "error"))
           names = {c.get("name") for c in cases}
           for required in (
               "test_the_composer_reproduces_the_real_one_commit_squash",
               "test_the_composer_reproduces_the_real_five_commit_squash",
               "test_the_history_sweep_is_NOT_allowlisted",
+              "test_every_anchor_commit_is_reachable_from_HEAD_so_a_checkout_has_it",
+              "test_the_clean_case_returns_zero",
           ):
               assert required in names, required
           print(f"Composed message: {len(cases)} proofs; zero skips/failures/errors")

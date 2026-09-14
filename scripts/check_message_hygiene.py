@@ -269,9 +269,36 @@ def compose_squash_message(
     anything — which is the point of pinning it to real artifacts.
     """
 
-    rows = squashed_commits(rev_range)
+    return compose_from_rows(
+        squashed_commits(rev_range),
+        pr_number,
+        title=title,
+        merged_by=merged_by,
+        source=rev_range,
+    )
+
+
+def compose_from_rows(
+    rows: list[tuple[str, str, str, str, str]],
+    pr_number: int,
+    *,
+    title: str | None = None,
+    merged_by: str | None = None,
+    source: str = "the given rows",
+) -> str:
+    """``compose_squash_message`` without the git query, so it can be driven.
+
+    THE SOURCE COMMITS OF A SQUASH DO NOT SURVIVE THE MERGE. Once the branch is
+    deleted they are reachable from no ref, so a CI checkout does not have them
+    however deep it fetches — measured on run 34860607395, where all three jobs
+    refused with ``unknown revision`` on a range this file's own tests pinned.
+    Splitting the query off means the composition can be proven against rows
+    captured while they existed, and the expected output still read live from
+    the squash commit on ``main``, which is permanent.
+    """
+
     if not rows:
-        raise SystemExit(f"no commits in {rev_range}: nothing would be squashed")
+        raise SystemExit(f"no commits in {source}: nothing would be squashed")
     subject = f"{title if title is not None else rows[0][1]} (#{pr_number})"
     if len(rows) == 1:
         body = rows[0][2] + "\n"
