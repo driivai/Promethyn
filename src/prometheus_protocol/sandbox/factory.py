@@ -81,12 +81,14 @@ def build_sandbox(
             raise ConfigError(
                 "require_digest_pin is set, and the unsafe sandbox runs no image "
                 "to pin: the requirement cannot be honoured, so it is refused "
-                "rather than dropped. Select sandbox=container or withdraw it."
+                "rather than dropped. Select sandbox=container or withdraw it.",
+                reason="digest_pin_unhonourable",
             )
         if not allow_unsafe:
             raise ConfigError(
                 "the unsafe sandbox runs untrusted code without isolation and "
-                "requires PROM_ALLOW_UNSAFE_EXEC=1 to select"
+                "requires PROM_ALLOW_UNSAFE_EXEC=1 to select",
+                reason="unsafe_not_opted_in",
             )
         _LOG.warning("sandbox=unsafe selected explicitly (no isolation)")
         return UnsafeLocalSandbox()
@@ -100,14 +102,16 @@ def build_sandbox(
                 "require_digest_pin is set, and the namespace sandbox runs the "
                 "host interpreter, not an image: the requirement cannot be "
                 "honoured, so it is refused rather than dropped. Select "
-                "sandbox=container or withdraw it."
+                "sandbox=container or withdraw it.",
+                reason="digest_pin_unhonourable",
             )
         return NamespaceSandbox()
 
     if name != SANDBOX_AUTO:
         raise ConfigError(
             f"unknown sandbox {name!r}; expected one of "
-            f"auto, {NamespaceSandbox.name}, {ContainerSandbox.name}, unsafe"
+            f"auto, {NamespaceSandbox.name}, {ContainerSandbox.name}, unsafe",
+            reason="unknown_sandbox",
         )
 
     if pin_required:
@@ -119,7 +123,8 @@ def build_sandbox(
             return ContainerSandbox(require_digest_pin=True)
         raise ConfigError(
             "require_digest_pin is set but no container runtime is available; "
-            "refusing to fall back to an adapter that cannot honour it"
+            "refusing to fall back to an adapter that cannot honour it",
+            reason="no_container_runtime",
         )
 
     # auto: prefer a functioning isolating adapter; never silently unsafe.

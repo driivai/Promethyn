@@ -343,28 +343,32 @@ class Config:
         sandbox = (self.sandbox or "auto").strip().lower()
         if sandbox not in SANDBOX_NAMES:
             raise ConfigError(
-                f"unknown sandbox {self.sandbox!r}; expected one of {', '.join(SANDBOX_NAMES)}"
+                f"unknown sandbox {self.sandbox!r}; expected one of {', '.join(SANDBOX_NAMES)}",
+                reason="unknown_sandbox",
             )
         if self.require_digest_pin and sandbox in ("namespace", "unsafe"):
             raise ConfigError(
                 f"require_digest_pin=True cannot be honoured by sandbox={sandbox!r}: "
                 "digest pinning is a property of a container image, and that "
                 "adapter runs none. Select sandbox=container (or auto, which "
-                "will then insist on it) or withdraw the requirement."
+                "will then insist on it) or withdraw the requirement.",
+                reason="digest_pin_unhonourable",
             )
         if self.provider == PROVIDER_REMOTE and sandbox == "unsafe":
             raise ConfigError(
                 "provider=remote with sandbox=unsafe would execute a remote "
                 "model's output with no isolation at all. The unsafe adapter "
                 "exists for offline development against the mock provider; "
-                "it is refused for remote output even with PROM_ALLOW_UNSAFE_EXEC."
+                "it is refused for remote output even with PROM_ALLOW_UNSAFE_EXEC.",
+                reason="unsafe_with_remote",
             )
         if self.require_verified_substrate and self.allow_unverified_substrate:
             raise ConfigError(
                 "require_verified_substrate=True cannot be honoured alongside "
                 "allow_unverified_substrate=True: the opt-out for an unverified "
                 "approval-store substrate would never take effect under the "
-                "requirement. Withdraw one."
+                "requirement. Withdraw one.",
+                reason="substrate_requirement_contradiction",
             )
 
         # -- the ledger anchor: parsed at load, and a requirement it cannot

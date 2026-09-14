@@ -1123,10 +1123,88 @@ they are not equivalent:
 (3) is the smallest honest step and is NOT free: it is a decision to accept that
 this control is unproven, which belongs to the owner, not to the scoping pass.
 
-**What closes it.** A ruling on which of the three, then the work. Until then
-this is a named gap, which is the point of the file.
+### Ruled 2026-09-14: do (3) then (2). Do NOT narrow the AST walk
 
-**Test.** None yet, deliberately — see G4's closing note.
+Narrowing the walk would be another enumeration of forbidden shapes, and C1–C3
+are the measured evidence that enumerations lose: `if False:` today, a decorator
+or a dict lookup tomorrow.
+
+**(3) LANDED.** The test is
+`test_every_declared_security_field_is_SPELLED_somewhere_outside_config`, and it
+says in its own docstring what it cannot catch, with the probe that showed it.
+`test_the_mechanism_has_teeth` became
+`test_the_spelling_check_is_not_universally_true`, which is what it actually
+establishes. The collector keeps its misleading name deliberately — renaming it
+would suggest its semantics changed, and they have not.
+
+Docs corrected in the same change (doctrine #9). The sweep found one live false
+claim: `docs/threat-model.md` §5.5 said the mechanism "proves a field is
+*consumed* somewhere", with "read only to be logged" as its worst case. The
+measured worst case is **never read at all**. Corrected in place with the
+measurement. The §5 summary row now reads "dead-flag SPELLING check (G17)".
+`docs/sandbox.md:103` was checked and is accurate — it describes the pre-fix
+state historically.
+
+**(2) PARTITIONED, NOT BUILT.** The 22 fields split by whether neutralizing the
+field changes an authorization outcome — 14 yes, 2 no, 6 UNCLASSIFIED. The
+partition is a CLASSIFICATION BY READING each consumer, not a measurement, and
+it is stated that way on purpose: the behavioural proofs in 2b are what measure
+it, and they await a ruling on the six. See the table below.
+
+**What closes it.** The 14 outcome-affecting fields getting behavioural proofs
+(neutralize the field, a named test reddens), the remainder recorded as
+SPELLING-CHECKED ONLY, and a ruling on the six unclassified.
+
+**Test.** The rename has landed and is covered by the suite. The behavioural
+proofs are 2b and are not built.
+
+### The partition (2a), for ruling
+
+Classified by reading each consumption site outside the attestation snapshot
+block (`attestation/runtime.py:195-250`, which records config into a posture
+record and enforces nothing), and outside `cli/` and `benchmarks/`.
+
+**OUTCOME-AFFECTING — 14.** Neutralizing changes whether something is
+authorized, refused, or executed.
+
+| field | the consumer that decides |
+|---|---|
+| `sandbox` | `runtime/factory.py:157` selects the adapter; a non-isolating one is refused for a remote provider |
+| `require_digest_pin` | `sandbox/container.py:244` refuses an unpinned image |
+| `allow_insecure_loopback` | `provider/remote.py:215` — plaintext remote refused at construction |
+| `escalate_below` | `verifier/bank.py:441` `judgment.confidence < self.escalate_below` routes to a human |
+| `gate_threshold` | `runtime/factory.py:336` is the `PromotionGate` threshold |
+| `pending_ttl_seconds` | `runtime/factory.py:439` — an expired hold cannot be approved |
+| `ledger_anchor` | `runtime/factory.py:192` `if not config.ledger_anchor:` refuses when one is required |
+| `require_ledger_anchor` | `runtime/factory.py:191` raises that requirement |
+| `require_external_signer` | `chokepoint/runner.py:499` refuses a non-external signer |
+| `require_verified_substrate` | `chokepoint/runner.py:511`, `substrate.py:792` refuses an unverified substrate |
+| `allow_unverified_substrate` | same pair — it LOWERS the bar, which is why it is here |
+| `require_config_attestation` | `attestation/runtime.py:82` refuses at startup |
+| `config_attestation_target` | `attestation/runtime.py:83` `if not …:` refuses when attestation is required |
+| `verification_profile` | `runtime/factory.py:273` selects the profile, so it selects which requirements must be satisfied |
+
+**NOT OUTCOME-AFFECTING — 2.** Neutralizing changes what is recorded or how much
+work happens, never whether it was authorized.
+
+| field | why |
+|---|---|
+| `ledger_anchor_retention_days` | retention of the anchor; no decision reads it |
+| `max_role_calls` | bounds swarm iterations; exceeding it stops work, it authorizes nothing |
+
+**UNCLASSIFIED — 6, and the reason is a definition I should not pick alone.**
+Each bounds a verifier or provider. Neutralizing one does not flip an
+authorize/refuse directly — but a verifier that hangs or is killed produces
+`Unavailable`, which makes coverage incomplete, which IS a refusal. So they
+remove a refusal PATH without being a decision.
+
+`verifier_timeout_s` · `verifier_memory_mb` · `verifier_cpu_seconds` ·
+`verifier_max_processes` · `request_timeout_s` · `provider_max_response_bytes`
+
+Whether "removes a refusal path that runs through coverage" counts as
+outcome-affecting decides whether 2b is 14 proofs or 20. That is a scoping
+call, and distributing these into either side to make the table tidy is exactly
+what the UNCLASSIFIED category exists to prevent.
 
 ---
 
@@ -1196,9 +1274,90 @@ distinction between "refused for this reason" and "refused" is currently
 carried by a string in every one of them, so a reworded diagnostic silently
 converts eight reason-assertions into existence-assertions.
 
-**What closes it.** Either a typed refusal reason these can assert
-structurally (the pattern the coverage vocabulary already uses), or an explicit
-note that the raise alone is the property here. Not a rewrite of eight tests
-into eight longer tests asserting the same string in another shape.
+### CLOSED 2026-09-14 — converted to a typed reason
 
-**Test.** None yet; the probe above is the record.
+`ConfigError` now carries an optional `reason` from `CONFIG_REFUSAL_REASONS`, a
+six-entry closed set in `core/errors.py`; an unknown reason is refused at
+construction. Nine raise sites across `sandbox/factory.py`, `core/config.py`,
+`runtime/factory.py` and `sandbox/base.py` set it. All eight `match=` arguments
+are GONE rather than kept alongside — a message assertion that no longer carries
+the property is a second thing to maintain that proves nothing.
+
+`sandbox/base.py`'s `deny_network` refusal was a bare `ValueError`; it is now a
+`ConfigError`, which IS a `ValueError` subclass, so every existing caller and
+test that catches `ValueError` is unaffected.
+
+**Second-order probes, all three run:**
+
+| probe | observed |
+|---|---|
+| drop all 8 `match=`, keep the reasons | 26 passed — the reason carries it |
+| swap every raise site's reason to one wrong-but-valid value | **9 tests red** |
+| drop the reason assertions (pre-conversion state) | 26 passed |
+
+The third needs its honest reading: dropping a reason assertion leaves
+`pytest.raises(ConfigError)`, which still passes — not because the test is weak,
+but because **the raise is genuinely half the property**. The reason assertion
+is what distinguishes "refused for this reason" from "refused". The brief's
+diagnostic ("if it stays green the refusal fires for more than one reason")
+does not separate those two cases, and the second probe is what does: a wrong
+reason reddens nine tests.
+
+One test did not redden under the swap —
+`test_config_rejects_an_unknown_sandbox_at_load` — because its expected reason
+IS `unknown_sandbox`, which was the value I swapped everything TO. An artifact
+of the probe's choice of target, not a weakness in that test.
+
+**The conversion caught one of my own errors immediately.** I mapped
+`match="no isolation"` to `digest_pin_unhonourable`; the refusal it exercises is
+actually `unsafe_with_remote`. The message contains "no isolation" and so does a
+different refusal. That is precisely the failure mode this closes.
+
+---
+
+## G20 — findings cited by NUMBER whose text this repository does not hold
+
+**What.** F10's text exists nowhere in the tree, in any commit, or in any pull
+request body (G4 records the search). The only evidence it existed is PR #78's
+not-in-scope line: *"F7, F8, F9, F10, F12 untouched."* That line proves those
+numbers were live on 2026-09-07 and preserves **not one word of any of them**.
+
+So F10 is not a special case. Any of those numbers may be carrying a paraphrase
+whose accuracy nothing here can check — including a paraphrase written by
+whoever last touched it, from memory, which is how G4's citation came to point
+at a relicensing commit.
+
+**Swept 2026-09-14, every finding series cited in the tree:**
+
+| series | where | is the finding's OWN TEXT held? |
+|---|---|---|
+| F1–F9 | `docs/shakeout-report.md` | **yes** — it is our own register and each finding is written out. Internal, not external |
+| L1–L5 | `docs/pre-disclosure-audit.md` | **yes**, in full, with severity and location |
+| M1–M3 | `docs/pre-disclosure-audit.md` | **yes** |
+| E5-x | `docs/threat-model.md` §5 | **yes** |
+| R1–R7 | `docs/execution-descriptor.md` | **no — but REPRODUCED.** Each is a table row of "what was done" and "what was observed". That is stronger than text for engineering purposes (a reproduction is re-runnable and does not rot with wording) and weaker for provenance: nobody can check our reproduction against what was actually reported |
+| F11 | `docs/reviews/PROM-F11-*.md`, `docs/audit-source-acceptance.md` | **no.** Five documents describe our RESPONSE and what remains open. None quotes the finding. Cited "with detail", and the detail is ours |
+| **F10** | nowhere | **no** |
+| **F12** | nowhere | **no** |
+
+**F10 and F12 hold nothing. F11 and R1–R7 hold our reading, not the source.**
+
+**THE RULE THIS SETTLES.** *A finding arriving from outside gets its TEXT
+committed on arrival, not its number.* A number without its text is an
+unverifiable claim that reads as a tracked item — it survives sprints, gets
+paraphrased, and the paraphrase becomes the thing people work from. Verbatim
+text, in `docs/reviews/`, at the commit that first responds to it. Where the
+source cannot be republished, commit the closest artifact and say which it is.
+
+**Why the existing state is not equally fine.** A reproduction (R1–R7) answers
+"is this real and does it still happen". It does not answer "is this what they
+said", which is the question that matters when the finding is cited to a third
+party — a diligence reader, an auditor, or the next engineer deciding whether a
+closure is honest.
+
+**What closes it.** Either the original documents attached to the repository,
+or — if they are genuinely gone — an entry per orphaned number recording what
+evidence survives and that the text does not, so nobody re-derives it from a
+paraphrase a third time. F10 already has that treatment in G4; F12 does not.
+
+**Test.** None. A test cannot know whether a document was ever received.

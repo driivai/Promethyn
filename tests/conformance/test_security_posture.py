@@ -12,17 +12,36 @@ Three things are held to account here:
    sandbox, and an adapter that *cannot* provide it (namespace, unsafe, or
    ``auto`` with no container runtime) refuses to construct rather than
    returning something that quietly lacks it.
-2. **The class**, as a mechanism: ``Config.SECURITY_FIELDS`` declares every
-   security-relevant field, and a test parses the source tree to prove each one
-   is consumed somewhere outside ``config.py`` — so the next dead flag fails CI
-   instead of shipping. A second test proves every field whose *name* looks like
-   a security flag is on that list, so the list cannot quietly miss one.
+2. **The class**, as a mechanism, and stated at its real strength:
+   ``Config.SECURITY_FIELDS`` declares every security-relevant field, and a test
+   parses the source tree to prove each one's NAME is SPELLED somewhere outside
+   ``config.py``. That catches a field nobody mentions — the original defect —
+   and it does **not** prove consumption or enforcement; it was named as though
+   it did until 2026-09-14, and `OPEN-GAPS.md` G17 carries the measurement and
+   the behavioural proof that would. A second test proves every field whose
+   *name* looks like a security flag is on that list, so the list cannot quietly
+   miss one.
 3. **Coherence and defaults**: combinations that are each valid and jointly
    unsafe are refused at load, and a ``Config()`` with nothing set lands in the
    hardened posture — with the one permissive default named rather than hidden.
 
-Every refusal is asserted with ``pytest.raises``: the wrong outcome is not a
-failing assertion on a returned object, it is a returned object at all.
+Every refusal is asserted with ``pytest.raises`` AND on a typed
+``ConfigError.reason`` from the closed set in ``core/errors.py``. It used to be
+asserted with ``match="..."`` on the message. Measured 2026-09-14: stripping all
+eight ``match=`` arguments left all eight GREEN, so each proved only that SOME
+ConfigError was raised and a reworded diagnostic would have silently converted
+eight reason-assertions into existence-assertions (`OPEN-GAPS.md` G19). The
+matches are gone rather than kept alongside: a message assertion that no longer
+carries the property is a second thing to maintain that proves nothing.
+
+Probed after converting: swapping every raise site's reason to one
+wrong-but-valid value reddens nine tests here. The structural assertions are
+load-bearing.
+
+NAMED LIMIT. Dropping a ``reason`` assertion leaves ``pytest.raises(ConfigError)``,
+which still passes — not because the test is weak, but because the raise IS half
+the property. The reason assertion is what distinguishes "refused for this
+reason" from "refused"; neither half is redundant.
 """
 
 from __future__ import annotations
@@ -90,10 +109,11 @@ def test_what_the_factory_used_to_return(no_pin_env):
 
 @pytest.mark.parametrize("adapter", ["namespace", "unsafe"])
 def test_an_adapter_that_cannot_pin_is_refused_not_downgraded(adapter, no_pin_env):
-    with pytest.raises(ConfigError, match="cannot be honoured"):
+    with pytest.raises(ConfigError) as refusal:
         build_sandbox(adapter, env=UNSAFE_OPT_IN, require_digest_pin=True)
 
 
+    assert refusal.value.reason == "digest_pin_unhonourable", refusal.value.reason
 def test_auto_refuses_when_pinning_is_required_and_no_container_runtime(monkeypatch, no_pin_env):
     _availability(monkeypatch, namespace=True, container=False)
 
@@ -101,10 +121,11 @@ def test_auto_refuses_when_pinning_is_required_and_no_container_runtime(monkeypa
     # a sandbox here — so the refusal below is the requirement's doing.
     assert isinstance(build_sandbox("auto", env={}), NamespaceSandbox)
 
-    with pytest.raises(ConfigError, match="no container runtime"):
+    with pytest.raises(ConfigError) as refusal:
         build_sandbox("auto", env={}, require_digest_pin=True)
 
 
+    assert refusal.value.reason == "no_container_runtime", refusal.value.reason
 def test_auto_selects_the_only_adapter_that_can_pin_when_required(monkeypatch, no_pin_env):
     _availability(monkeypatch, namespace=True, container=True)
 
@@ -142,27 +163,30 @@ def test_the_requirement_is_the_or_of_its_sources(env, argument, expected, no_pi
 
 @pytest.mark.parametrize("adapter", ["namespace", "unsafe"])
 def test_config_refuses_pinning_with_an_adapter_that_cannot_pin(adapter):
-    with pytest.raises(ConfigError, match="cannot be honoured"):
+    with pytest.raises(ConfigError) as refusal:
         Config(sandbox=adapter, require_digest_pin=True)
 
 
+    assert refusal.value.reason == "digest_pin_unhonourable", refusal.value.reason
 @pytest.mark.parametrize("adapter", ["container", "auto"])
 def test_config_accepts_pinning_with_an_adapter_that_can(adapter):
     assert Config(sandbox=adapter, require_digest_pin=True).require_digest_pin is True
 
 
 def test_config_refuses_a_remote_provider_with_the_unsafe_sandbox():
-    with pytest.raises(ConfigError, match="no isolation"):
+    with pytest.raises(ConfigError) as refusal:
         Config(sandbox="unsafe", **REMOTE)
 
 
+    assert refusal.value.reason == "unsafe_with_remote", refusal.value.reason
 def test_config_still_allows_the_mock_provider_with_the_unsafe_sandbox():
     """The documented development path stays open at load; the runtime opt-in
     (PROM_ALLOW_UNSAFE_EXEC) is still required to actually build it."""
 
     assert Config(sandbox="unsafe").sandbox == "unsafe"
-    with pytest.raises(ConfigError, match="PROM_ALLOW_UNSAFE_EXEC"):
+    with pytest.raises(ConfigError) as refusal:
         build_sandbox_for(Config(sandbox="unsafe"), env={})
+    assert refusal.value.reason == "unsafe_not_opted_in", refusal.value.reason
     assert isinstance(build_sandbox_for(Config(sandbox="unsafe"), env=UNSAFE_OPT_IN), UnsafeLocalSandbox)
 
 
@@ -175,13 +199,15 @@ def test_auto_never_falls_back_to_unsafe_for_a_remote_provider(monkeypatch, no_p
 
     assert isinstance(build_sandbox_for(Config(), env=UNSAFE_OPT_IN), UnsafeLocalSandbox)
 
-    with pytest.raises(ConfigError, match="without isolation"):
+    with pytest.raises(ConfigError) as refusal:
         build_sandbox_for(Config(**REMOTE), env=UNSAFE_OPT_IN)
 
 
+    assert refusal.value.reason == "unsafe_with_remote", refusal.value.reason
 def test_config_rejects_an_unknown_sandbox_at_load():
-    with pytest.raises(ConfigError, match="unknown sandbox"):
+    with pytest.raises(ConfigError) as refusal:
         Config(sandbox="docker")
+    assert refusal.value.reason == "unknown_sandbox", refusal.value.reason
     for name in SANDBOX_NAMES:
         Config(sandbox=name)
 
@@ -193,10 +219,11 @@ def test_config_rejects_an_unknown_sandbox_at_load():
 
 def test_deny_network_cannot_be_lowered():
     assert Limits().deny_network is True
-    with pytest.raises(ValueError, match="cannot be honoured"):
+    with pytest.raises(ValueError) as refusal:
         Limits(deny_network=False)
 
 
+    assert refusal.value.reason == "deny_network_unhonourable", refusal.value.reason
 def test_high_risk_routing_cannot_be_disabled_by_configuration():
     """``escalate_below=0.0`` is the most permissive confidence floor a Config can
     express. Even then, high-risk actions route to a human: the routing flag is
@@ -212,6 +239,14 @@ def test_high_risk_routing_cannot_be_disabled_by_configuration():
 
 
 def _attribute_reads_outside_config() -> set[str]:
+    """Every attribute NAME appearing anywhere outside ``core/config.py``.
+
+    Misleadingly named for its own behaviour and kept that way deliberately:
+    renaming it would suggest the semantics changed, and they have not. It
+    collects ``node.attr`` for every ``ast.Attribute`` — loads and stores, any
+    object, reachable or not. The caller is a spelling check; see G17.
+    """
+
     names: set[str] = set()
     for path in SRC.rglob("*.py"):
         if path.name == "config.py" and path.parent.name == "core":
@@ -226,16 +261,34 @@ def _attribute_reads_outside_config() -> set[str]:
 _SECURITY_SHAPED = re.compile(r"^(require_|allow_|enforce_|deny_|strict)")
 
 
-def test_every_declared_security_field_is_consumed_somewhere():
-    """The require_digest_pin defect, generalised into a build-time check: a
-    Config field on SECURITY_FIELDS that no code outside config.py ever reads is
-    a control wired to nothing, and it fails here before it ships."""
+def test_every_declared_security_field_is_SPELLED_somewhere_outside_config():
+    """A SPELLING CHECK. It proves the field's NAME appears as an attribute
+    somewhere outside config.py. It does NOT prove the field is consumed, read,
+    or enforced, and it was named as though it did until 2026-09-14.
 
-    reads = _attribute_reads_outside_config()
-    dead = [name for name in SECURITY_FIELDS if name not in reads]
-    assert dead == [], (
-        f"security settings that can be set but are read by nothing: {dead} — "
-        "the require_digest_pin defect again"
+    What it actually catches, which is worth keeping: a field nobody mentions at
+    all — the original ``require_digest_pin`` defect, where ``build_sandbox``
+    took only a name and the field reached nothing. That is a typo-and-omission
+    check and it is cheap.
+
+    WHAT IT CANNOT CATCH, measured rather than reasoned (OPEN-GAPS G17). The
+    collector walks every ``ast.Attribute`` and keeps ``node.attr``, so it
+    counts an attribute on an unrelated object, on a literal, a WRITE rather
+    than a read, a body under ``if False:``, and a function nobody calls. Probed
+    end to end: every genuine consumption of ``require_ledger_anchor`` removed
+    from ``src/`` and one dead store left behind under ``if False:`` — this file
+    reported 26 passed. A declared security control wired to nothing, and this
+    test said it was consumed.
+
+    So the name says SPELLED. Behavioural proof, for the fields where absence
+    changes an authorization outcome, is tracked in G17 and is not this test."""
+
+    spelled = _attribute_reads_outside_config()
+    unspelled = [name for name in SECURITY_FIELDS if name not in spelled]
+    assert unspelled == [], (
+        f"security settings whose name appears nowhere outside config.py: "
+        f"{unspelled} — the require_digest_pin defect again. NOTE: the converse "
+        "does not hold; see this test's docstring and OPEN-GAPS G17."
     )
 
 
@@ -254,9 +307,10 @@ def test_security_fields_are_real_config_fields():
     assert set(SECURITY_FIELDS) <= names, set(SECURITY_FIELDS) - names
 
 
-def test_the_mechanism_has_teeth():
-    """A field that exists on Config and is read nowhere IS detected by the same
-    walk — proven by asking about a name that is certainly not read."""
+def test_the_spelling_check_is_not_universally_true():
+    """The collector does not say yes to everything — a name that is spelled
+    nowhere is absent from the set. That is the whole of what it establishes:
+    it bounds the check, it does not extend it to consumption."""
 
     reads = _attribute_reads_outside_config()
     assert "require_digest_pin" in reads  # the fix is visible to the mechanism
