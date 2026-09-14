@@ -1070,3 +1070,75 @@ def test_gate_size_bound_refuses_without_truncation(case):
     report = case.run()
     assert report.exit_code == 1
     assert "gate_read_unavailable" in report.to_dict()["problems"]
+
+
+# ---------------------------------------------------------------------------
+# F11's THIRD substrate state: no substrate at all.
+#
+# docs/OPEN-GAPS.md G5 recorded two — digest-bound on GCP, INDETERMINATE on
+# native AWS CloudTrail — and the air-gapped PKCS#11 case was in neither the
+# tracker nor any test. `test_audit_source.py::test_pkcs11_cannot_fabricate_an
+# _audit_capability` asserts the SHAPE of `unavailable_pkcs11_read` in
+# isolation and never hands it to a reconciler, so what the reconciler does
+# with it was unmeasured: exactly the pattern that let the positional-Evidence
+# defect survive, a check that refuses before the thing it is about runs.
+#
+# Measured here, end to end, on unmutated code. Both cases refuse.
+# ---------------------------------------------------------------------------
+
+
+class _AirGappedSource:
+    """What an air-gapped PKCS#11 site has: no portable audit read at all."""
+
+    def __init__(self, observed_at):
+        self._observed_at = observed_at
+
+    def read_sign_records(self, scope, start, end):
+        from prometheus_protocol.chokepoint.audit_normalization import (
+            unavailable_pkcs11_read,
+        )
+
+        return unavailable_pkcs11_read(scope, start, end, observed_at=self._observed_at)
+
+
+def _air_gapped(case):
+    return {
+        "scope": replace(case.scope, provider="pkcs11"),
+        "pin": replace(case.pin, backend="pkcs11"),
+        "source": _AirGappedSource(case.clock.now_ns()),
+    }
+
+
+def test_air_gapped_pkcs11_never_reports_clean_with_an_authorization_to_explain(case):
+    case.issue()
+    report = case.run(**_air_gapped(case))
+    problems = set(report.to_dict()["problems"])
+    assert report.to_dict()["clean"] is False and report.exit_code == 1
+    # Three independent reasons, not one: the source declares an issue, it
+    # cannot attest coverage, and it is not digest-bound. Removing any one of
+    # them would still leave this refused, which is the point of naming them.
+    assert {"source_incomplete", "source_coverage_incomplete", "metadata_only"} <= problems
+    statuses = {row["status"] for row in report.to_dict()["records"]}
+    assert statuses == {"INDETERMINATE"}
+
+
+def test_air_gapped_pkcs11_refuses_even_with_NOTHING_to_reconcile(case):
+    # The dangerous shape: an instrument that cannot represent what it is
+    # measuring reporting CLEAN rather than UNAVAILABLE. An empty range over a
+    # substrate that does not exist must not look like an empty range over a
+    # substrate that attested full coverage.
+    report = case.run(**_air_gapped(case))
+    d = report.to_dict()
+    assert d["records"] == [] and d["events"] == []
+    assert all(count == 0 for count in d["counts"].values())
+    assert d["clean"] is False and report.exit_code == 1
+    assert "source_incomplete" in d["problems"]
+
+
+def test_the_positive_control_the_same_empty_range_IS_clean_on_a_real_substrate(case):
+    # Doctrine #4: without this, the two refusals above could be a reconciler
+    # that refuses every empty range, and would prove nothing about pkcs11.
+    report = case.run()
+    d = report.to_dict()
+    assert d["records"] == [] and d["events"] == []
+    assert d["clean"] is True and report.exit_code == 0

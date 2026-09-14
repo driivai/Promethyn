@@ -28,17 +28,38 @@ other), and a standard-library module that does not exist at the pinned floor
 — which is how `import tomllib` passed the gate on all three matrix jobs and
 failed at import on 3.10.
 
-**Measured** (2026-09-12, `python -m mypy --config-file <mypy.ini with the flag
-off>`): `Found 25 errors in 24 files (checked 290 source files)`, every one
-`import-not-found`, none third-party — `fix_b_revert_proofs` (9 sites),
-`hearth_ledger` (5), `f11_support` (4), `type_gate` (2),
-`test_authorization_record` (2), `_pg_fault_proxy` (2), `test_audit_source` (1).
+**Measured** (re-measured 2026-09-14 at the current file set, `python -m mypy
+--config-file <mypy.ini with the flag off>`): `Found 28 errors in 27 files
+(checked 304 source files)`, every one `import-not-found`, none third-party.
+Counted by the module that could not be resolved, which is the axis that says
+how much work closing it is:
+
+| unresolved module | sites |
+|---|---|
+| `fix_b_revert_proofs` | 10 |
+| `hearth_ledger` | 5 |
+| `f11_support` | 4 |
+| `type_gate`, `test_authorization_record`, `_pg_fault_proxy` | 2 each |
+| `test_audit_source`, `mutation_worktree`, `check_hygiene` | 1 each |
+
+The previous record here said 25 errors in 24 files at 290 checked, and was
+measured before this sprint's 14 new files existed. It was a stale total inside
+the tracker — doctrine #9 applied to our own record of doctrine #9 — and it is
+corrected rather than re-dated. `mutation_worktree` and `check_hygiene` are new
+rows; `fix_b_revert_proofs` gained one.
+
+A note on reproducibility, because the first re-measurement disagreed with the
+second. One run reported `30 errors in 28 files (checked 305 source files)`
+while the full pytest suite was running concurrently in the same checkout;
+two consecutive runs afterwards both reported 28/27/304. The 305 reading is
+discarded as contaminated rather than averaged in, and the number above is the
+one that reproduced.
 
 **Why not closed — and the reason previously recorded was wrong.** The earlier
 record said silencing those needs per-module `[mypy-...]` sections, which
 `test_type_gate.py::test_mypy_ini_has_no_per_module_sections` forbids. Measured
-on the same day: `mypy_path = src:scripts:tests/conformance:tests/chokepoint`
-with the flag off reports `Success: no issues found in 290 source files`, with
+again on 2026-09-14: `mypy_path = src:scripts:tests/conformance:tests/chokepoint`
+with the flag off reports `Success: no issues found in 304 source files`, with
 no per-module section. So the blocker is not the rule; it is that the change
 re-shapes the type gate's config — an allowlisted file whose `mypy_path = src`
 is pinned by `_ALLOWED_CONFIG` — and makes the gate depend on every third-party
@@ -157,26 +178,73 @@ names "the dead-flag mechanism sees attribute reads, not enforcement".
 
 ---
 
-## G5 — F11 detection is INDETERMINATE on AWS
+## G5 — F11 detection has THREE substrate states, not two
 
 **What.** F11's operational reconciliation needs digest-bound Sign evidence
-from the signing service. GCP supplies the digest; native AWS CloudTrail is
-metadata-only — no signed digest in the Sign event — so on AWS the reconciler
-reports INDETERMINATE, never detection. Primes are AWS/GovCloud-heavy, so this
-must not be overstated anywhere: "F11 detects unauthorized signing" is true on
-GCP and false on AWS.
+from the signing service. What the substrate can supply decides what the
+reconciler can ever say, and there are three answers, not the two this entry
+used to name:
 
-**Measured.** By construction, in the tests below; there is no AWS number
-because there is nothing to measure — the digest is not in the event.
+| substrate | Sign evidence | reconciler can report |
+|---|---|---|
+| GCP Cloud Audit | digest-bound | detection — MATCHED / UNWITNESSED / UNEXPLAINED |
+| native AWS CloudTrail | metadata only | INDETERMINATE, never detection |
+| air-gapped PKCS#11 | **none at all** | refuses; no reconciliation is possible |
 
-**What closes it.** An AWS-side digest witness the invoking side records and an
-independent party retains — a design outside this repository's control, not
-code here.
+Primes are AWS/GovCloud-heavy, so the middle row must not be overstated
+anywhere: "F11 detects unauthorized signing" is true on GCP and false on AWS.
+The bottom row must not be overstated either, in the opposite direction — it is
+not a weaker detection, it is the absence of a substrate, and the code says so.
 
-**Test.** `tests/chokepoint/test_audit_source.py::test_aws_mapping_is_metadata_only_even_for_digest_message_type`,
+**Measured** (2026-09-14, driving the real `unavailable_pkcs11_read` through
+the real `reconcile()`, both cases refusing):
+
+```
+AIR-GAPPED pkcs11, one authorization : clean=False exit=1
+  problems  metadata_only, source_coverage_incomplete, source_incomplete
+  records   [(INDETERMINATE, insufficient_evidence)]
+AIR-GAPPED pkcs11, EMPTY ledger      : clean=False exit=1
+  problems  metadata_only, source_coverage_incomplete, source_incomplete
+```
+
+The empty-ledger case is the one worth having: an instrument that cannot
+represent what it is measuring must report UNAVAILABLE, not CLEAN, and a
+reconciliation over a substrate that does not exist must not look like a
+reconciliation that found nothing wrong. It does not. `normalize_pkcs11_event`
+raises rather than returning a shape, and `unavailable_pkcs11_read` returns a
+read carrying `no_portable_audit_source`, `capability="metadata_only"` and no
+covered interval — three independent grounds for refusal.
+
+**What was actually missing**, and it was the test rather than the code:
+`test_audit_source.py::test_pkcs11_cannot_fabricate_an_audit_capability`
+asserted the SHAPE of that read in isolation and never handed it to a
+reconciler. Whether the reconciler refused it was unmeasured — a check that
+stops before the thing it is about, which is the same pattern that let the
+positional-`Evidence` defect survive (G2).
+
+**Residual, named.** `native_locations` in `reconciliation.py` has rows for
+`gcp-audit` and `model-gcp` only, so the `unsupported_digest_provenance` check
+is inert for `pkcs11`. It does not matter today, because the three refusals
+above fire first and a pkcs11 source cannot attest coverage at all — but it is
+one allowlist that does not enumerate the provider it is asked about, and if a
+vendor PKCS#11 audit read ever lands it will matter on that day.
+
+**What closes it.** Row 2: an AWS-side digest witness the invoking side records
+and an independent party retains — a design outside this repository's control.
+Row 3: vendor evidence for a specific HSM, which is a per-deployment artifact,
+not code here.
+
+**Test.** Row 2:
+`tests/chokepoint/test_audit_source.py::test_aws_mapping_is_metadata_only_even_for_digest_message_type`,
 `::test_aws_shaped_event_cannot_become_digest_bearing`, `::test_aws_outcomes`.
-Stated in `docs/threat-model.md` §2.6 and `docs/reconciliation.md`; this entry
-is the index.
+Row 3, end to end:
+`tests/chokepoint/test_reconciliation.py::test_air_gapped_pkcs11_never_reports_clean_with_an_authorization_to_explain`
+and `::test_air_gapped_pkcs11_refuses_even_with_NOTHING_to_reconcile`, with
+`::test_the_positive_control_the_same_empty_range_IS_clean_on_a_real_substrate`
+as the doctrine #4 control — without it, both refusals would be consistent with
+a reconciler that refuses every empty range and would prove nothing about
+pkcs11. Stated in `docs/threat-model.md` §2.6 and `docs/reconciliation.md`;
+this entry is the index.
 
 ---
 
@@ -212,6 +280,35 @@ with #100's squash, which carried five sites (the vendor name four times plus a
 co-authorship line), the branch-side control removed everything it can reach.
 **No history rewrite has been executed**; Part B still waits on the final
 entity name.
+
+**Re-measured after #102 merged** (2026-09-14, same commands, `main` at
+`4451aa1`). It grew by one commit and one trailer again, which is the mechanism
+in G13 behaving exactly as recorded:
+
+| scope | commits reachable | carrying ≥ 1 term | co-authorship trailer | vendor name | vendor domain |
+|---|---|---|---|---|---|
+| `origin/main` | 87 | 76 | 76 sites | 8 sites (+1 variant) | 1 |
+| all refs | 312 | 112 | 90 | 40 | 12 |
+
+**PART B IS SMALLER THAN 76, AND THIS IS THE NUMBER TO PLAN AGAINST.** The
+"carrying ≥ 1 term" column counts the GitHub-written co-authorship trailer,
+which names this repository's own author. Decomposed on 2026-09-14:
+
+| scope | no term | ONLY the co-authorship trailer | carrying a VENDOR term |
+|---|---|---|---|
+| `origin/main` | 11 | 68 | **8** |
+| all refs | 200 | 82 | **30** |
+
+A provenance rewrite has to reach the last column. On `main` that is eight
+commits — `af932383f8`, `475fd3cc75`, `4d2c065761`, `7bb471ea8b`, `d0819bbf8f`,
+`edd14e45d1`, `98a0e7f66e`, `267a586104` — and across all refs thirty. The
+other 68 carry a line crediting `DriivAIDev <will@driivai.com>`, which is not
+what Part B is for.
+
+Of the 90 co-authorship trailers across all refs, **89 name
+`DriivAIDev <will@driivai.com>` and exactly one names a vendor** (`267a586104`,
+which three other terms catch anyway). That ratio is why the refusing modes now
+key on the identity rather than the string — see G13, closed.
 
 Two mechanisms, independent of each other:
 
@@ -574,7 +671,59 @@ unchanged — the refusal stays everywhere a human or an agent can still act on
 it, and the one commit nobody can act on before it exists stops failing the
 branch for a line the repository did not write.
 
-**Test.** None yet: the behaviour is correct per the current rule, so there is
-nothing to assert until the rule changes. Whichever option is chosen, the change
-lands with a test that a GitHub-generated trailer is treated as decided, and a
-control that a vendor token in the same position is still refused.
+---
+
+### CLOSED, 2026-09-14 — by (3), and by refusing the composed message instead
+
+Recurred exactly as predicted: `main` at `4451aa1`, the squash of #102, carries
+the same trailer and the same red push check. Two things landed.
+
+**First, the route is named rather than suspected.** `edited` was already
+covered by `pr-text-hygiene.yml`, so the window it closes was not the route.
+Measured by diffing the squash against the commit it squashed: `4451aa1`'s body
+is `8f29b1d`'s body plus ONE appended line, the trailer, and nothing else —
+64 lines to 65. The subject is the title with ` (#102)`. So the route is the
+composition itself, at merge time, after every check.
+
+**Second, the composed message turns out to be derivable, so the check moved
+onto it.** `scripts/check_message_hygiene.py --composed` reconstructs what
+GitHub will write from the branch's commits, the title and the number, and
+refuses THAT. It reproduces both real squash commits in this repository byte
+for byte — `4451aa1` (one commit) and `c846272` (five) — so it is a model of
+the artifact rather than a guess about it. Wired into `pr-text-hygiene.yml`,
+which needed `fetch-depth: 0` to see the commits at all.
+
+**The allowlist, and why (3) was the right option.** Measured across all refs:
+**90 co-authorship trailers, 89 naming `DriivAIDev <will@driivai.com>` — the
+repository's own author — and one naming a vendor.** That one is independently
+caught by three vendor-name terms in the same list. So the string-keyed rule
+scored 89 false positives against a single true positive it did not need to
+catch, and the cost was a red `main` after every merge. The refusing modes now
+ask WHO is named, against `PERMITTED_COAUTHORS`, a one-entry enumerated set.
+Same allowlist doctrine as every other guard here: say what is permitted.
+
+`--history` is deliberately NOT allowlisted. It is the instrument that sizes
+PROM-IP Part B, and an instrument that quietly filters 89 sites would have the
+rewrite planned against a number nobody chose.
+`test_the_history_sweep_is_NOT_allowlisted` pins that.
+
+**Observed after the change.** `--commits af93238..c846272` and
+`--commits 8f29b1d..origin/main` — the two squashes that turned `main` red —
+both pass. The vendor-trailer commit `267a586` is still refused, by the
+identity rule AND by the vendor terms independently.
+
+**Named limits that remain.** The merging account is not in a `pull_request`
+payload, so `--composed` assumes the worst case; a human can still edit the
+squash message in the merge dialog afterwards, and the push-to-`main` run is
+unchanged as the backstop for both; the `---------` separator rule is derived
+from the ONE multi-commit squash this repository has; and whether a red run
+can block a merge is branch protection, not a workflow property.
+
+**Test.** `tests/conformance/test_composed_message_guard.py`, 13 tests, and
+`scripts/composed_message_revert_proofs.py`, 9 executed mutations in a
+throwaway worktree — the nine-hyphen separator, the blank line before the
+trailer, commit order, the allowlist widened to a vendor identity, the
+allowlist disabled, the allowlist defanged, the merging-account exclusion, the
+sweep quietly allowlisted, and the workflow's checkout back to shallow. All
+nine redden their named test; none stayed green, so no field here is resting
+on a mutation that proved nothing.

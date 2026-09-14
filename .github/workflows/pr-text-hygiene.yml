@@ -42,6 +42,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The composed-message step below reads the pull request's COMMITS.
+          # A shallow checkout has none of them, and the composer would have
+          # nothing to compose — passing, loudly, over an empty range. Pinned
+          # by tests/conformance/test_composed_message_guard.py.
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -59,3 +65,28 @@ jobs:
           printf '%s\n' "$PR_BODY" > pr-body.txt
           python scripts/check_message_hygiene.py \
             --text-file pr-title.txt --text-file pr-body.txt
+
+      - name: Banned tokens in the SQUASH MESSAGE this merge would write
+        # The commit that does not exist yet. GitHub composes it from the
+        # branch's commits, this title, this number, and the merging account's
+        # identity, then writes it when the button is pressed — after every
+        # check has passed. Four of those five inputs are here, so the message
+        # is derived and checked now rather than detected on main afterwards.
+        #
+        # The merging account is the input a pull_request event does NOT carry,
+        # so --merged-by is deliberately omitted: the check runs against the
+        # WORST CASE, in which every distinct identity on the branch becomes a
+        # co-authorship trailer. That is also what this repository has actually
+        # merged under, twice (c846272, 4451aa1).
+        #
+        # Text goes through environment variables, never shell interpolation.
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python scripts/check_message_hygiene.py \
+            --composed "$PR_BASE..$PR_HEAD" \
+            --pr-number "$PR_NUMBER" \
+            --title "$PR_TITLE"
