@@ -297,6 +297,31 @@ def test_probe():
     assert entered.wait(0.1)
 """
 
+#: Channel 2b. The SAME channel, a different TYPE. ``SubstrateReport`` carries
+#: ``platform_unsupported`` exactly as the two runner results do, and was NOT in
+#: the gate's enumerated list — so a probe that refused by returning one was
+#: invisible to both channels. The wording again mentions no platform, so only
+#: the typed field can classify it.
+_RETURNED_REPORT = """
+from prometheus_protocol.chokepoint import runner as R
+from prometheus_protocol.chokepoint.substrate import SubstrateReport
+
+_REPORT = SubstrateReport(
+    path="/probe", verdict="refused", fs_type=None, mount_point=None,
+    detail="wording that mentions no platform at all",
+    platform_unsupported=True,
+)
+
+def _refused(self, *, approval, artifact):
+    return _REPORT
+
+R.BrokeredMigrationRunner.execute = _refused
+
+def test_probe():
+    result = R.BrokeredMigrationRunner.execute(object(), approval=None, artifact=None)
+    assert result.verdict == "ok"
+"""
+
 #: The control: a real misconfiguration must keep failing on both settings.
 _CONTROL = """
 from prometheus_protocol.core.errors import ConfigError
@@ -482,3 +507,66 @@ def test_a_real_runner_marks_a_platform_refusal_on_the_result_it_returns(
     finally:
         runner.close()
         audit.close()
+
+
+@pytest.mark.parametrize("flag", [None, "1"], ids=["without-flag", "PROM_REQUIRE_LINUX=1"])
+def test_the_RETURNED_SubstrateReport_channel_skips_without_the_flag_and_fails_with_it(
+    pytester, monkeypatch, flag
+):
+    """G8's second channel, for the type that was missing from it.
+
+    The returned channel was keyed on ``MigrationResult`` and
+    ``ReconciliationResult`` only, while ``SubstrateReport`` carries the same
+    typed field. A probe refusing by returning a report was therefore seen by
+    neither channel — the gate reported nothing rather than reporting
+    unavailable, which is the failure mode the gate exists to prevent.
+    """
+
+    result = _sub_session(pytester, monkeypatch, _RETURNED_REPORT, flag=flag)
+    outcomes = result.parseoutcomes()
+    if flag is None:
+        assert outcomes.get("skipped") == 1 and not outcomes.get("failed"), outcomes
+    else:
+        assert outcomes.get("failed") == 1 and not outcomes.get("skipped"), outcomes
+        result.stdout.fnmatch_lines(
+            [f"*{REQUIRE_LINUX_ENV}=1 but unsupported platform*returned as SubstrateReport*"]
+        )
+
+
+def test_every_type_carrying_the_typed_field_is_in_the_gates_enumerated_list():
+    """The list cannot fall behind the code without this going red.
+
+    ``SubstrateReport`` carried ``platform_unsupported`` for the whole time it
+    was absent from the gate, and nothing said so. This reads the shipped
+    package for dataclasses declaring the field and requires each to be
+    enumerated in ``platform_gate._returning_types()``.
+    """
+
+    import dataclasses
+    import importlib
+    import pkgutil
+
+    import prometheus_protocol
+
+    carriers: set[type] = set()
+    for module in pkgutil.walk_packages(
+        prometheus_protocol.__path__, prometheus_protocol.__name__ + "."
+    ):
+        try:
+            mod = importlib.import_module(module.name)
+        except Exception:  # a module that needs an optional dependency
+            continue
+        for obj in vars(mod).values():
+            if (
+                isinstance(obj, type)
+                and dataclasses.is_dataclass(obj)
+                and any(f.name == "platform_unsupported" for f in dataclasses.fields(obj))
+            ):
+                carriers.add(obj)
+    assert carriers, "found no type carrying the field; this check would be vacuous"
+    enumerated = set(platform_gate._returning_types())
+    missing = {c.__name__ for c in carriers - enumerated}
+    assert not missing, (
+        f"these types carry platform_unsupported but the gate's returned channel "
+        f"does not enumerate them: {sorted(missing)}"
+    )

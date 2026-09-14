@@ -19,7 +19,7 @@ given. A predicted number is not a measurement.
 
 ---
 
-## G1 — the type gate resolves first-party siblings only because missing imports are ignored
+## G1 — the type gate resolved first-party siblings only because missing imports were ignored (CLOSED 2026-09-14)
 
 **What.** `mypy.ini` sets `ignore_missing_imports = True` for genuine
 third-party packages. The same flag swallows two other things: a first-party
@@ -67,12 +67,37 @@ dependency shipping types, a trade to be made on its own evidence in its own
 change. The stdlib-floor guard (`tests/conformance/test_stdlib_floor.py`) was
 built beside the gate and does not depend on the flag either way.
 
-**What closes it.** Widen `mypy_path` as measured, turn the flag off, update the
-allowlist entry with the reason, and keep the floor guard. The withdrawn claim
-is corrected in `test_stdlib_floor.py`'s docstring.
+**What closed it, done.** `mypy_path` is now
+`src:scripts:tests/conformance:tests/chokepoint`, `ignore_missing_imports` is
+`False`, and `_ALLOWED_CONFIG` in `test_type_gate.py` carries both values with
+the reason. No per-module `[mypy-...]` section was added — the rule that was
+once thought to be the blocker never was.
 
-**Test.** None pins the 25 (running mypy twice per build is the cost); the
-corrected claim lives in the docstring above.
+**Observed after** (2026-09-14): `Success: no issues found in 308 source
+files`. The 28 `import-not-found` errors are gone because the roots those
+siblings live under are now on the path, not because anything was silenced.
+
+**The gate caught a defect on the way through, in code written in the same
+change.** With the flag off, `tests/support/platform_gate.py:194` reported
+`"object" has no attribute "platform_unsupported"` — an `isinstance` narrowing
+to a heterogeneous tuple of enumerated types. Resolved with `getattr`, not with
+a `cast()` or an ignore directive, both of which this gate's own config
+(`warn_unused_ignores`, `warn_redundant_casts`) exists to refuse. One finding
+on the first run is a small sample, but it is the kind of finding the flag was
+hiding.
+
+**THE TRADE, stated here and not left to be discovered.** With the flag off the
+gate depends on every third-party dependency shipping types or having stubs. A
+new dependency without them now FAILS this gate rather than degrading silently
+to `Any`. That is the intended direction, and it is a real cost at the next
+dependency bump.
+
+**Test.** `test_type_gate.py::test_the_config_carries_exactly_the_allowed_keys_and_values`
+pins both values; the type gate itself is the standing check. The floor guard
+(`test_stdlib_floor.py`) was re-probed under the new config rather than assumed:
+`import tomllib` under the 3.10 floor still reddens
+`test_no_import_needs_a_newer_stdlib_than_the_floor`. A config change is exactly
+what could have disabled it silently.
 
 ---
 
@@ -149,32 +174,116 @@ passing.
 
 ---
 
-## G4 — F10: the security-field and frozen-file guards do not prove enforcement (PARKED)
+## G4 — F10, scoped 2026-09-14: CLOSED as a finding, with its live remainder moved to G17
 
-**What** (the independent review at `48190ea`, finding F10, Medium/assurance):
-`tests/conformance/test_security_posture.py`'s attribute-read collector
-(`_attribute_reads_outside_config`) counts any attribute name regardless of
-object identity, Load/Store context or reachability — `if False:
-unrelated.require_ledger_anchor = False` counts as a read — so "every security
-field is consumed somewhere" is proven by name, not by enforcement. And the
-frozen-file guard carried permanent path exemptions (`_EX1_CHANGED`,
-`_HARDEN4_CHANGED`) that sanctioned a file forever once sanctioned once.
+### The original text could not be recovered, and the citation here was wrong
 
-**Status: parked, pending a scoping pass** against the five guard-hardening
-rounds that landed after the finding — TYPE-GATE (#87), TYPE-GATE-HARDEN (#88,
-#89, #90) and the Hearth content ledger (#99), which replaced the path-exemption
-set with per-file content digests and a recorded reason per sanction. That
-likely closes the frozen-file half; the collector half is untouched
-(`_attribute_reads_outside_config` is still at `test_security_posture.py:214`).
-Nobody should assume the original finding holds in full, or that it is closed,
-until the pass has been done and written down here.
+**This entry's own source citation was false, and I wrote it.** It said "the
+independent review at `48190ea`, finding F10". `48190ea` is
+*"Relicense to proprietary and record the IP position for diligence (PROM-IP,
+part A) (#73)"* and contains no finding of any kind. Withdrawn.
 
-**What closes it.** The scoping pass; then either a behavioural proof for the
-dead-flag mechanism (drive each declared field and observe the enforcement it
-names) or the residual re-stated in `docs/threat-model.md` §5.5, which already
-names "the dead-flag mechanism sees attribute reads, not enforcement".
+Searched, before working from memory:
 
-**Test.** None yet; that is what "parked" means.
+| where | result |
+|---|---|
+| `grep -rn "F10"` over the tree | **only this entry** |
+| `git log --all -S"F10"` | first appearance `30c22bf`/`c846272` — **my own #101, writing this entry** |
+| every blob across all refs | F10 only in this file and in a fixture quoting my commit text |
+| `docs/shakeout-report.md` | F1–F9, and about CLI tracebacks and corrupt state files — a different series |
+| `docs/reviews/*.md` | F11 only |
+| `docs/pre-disclosure-audit.md` | L1–L5, not F-numbered |
+| GitHub PR search, `#60`–`#90` | one hit |
+
+The one hit is **PR #78** (2026-09-07), in its "Not in scope" section:
+*"F11's authorization record (only the false claim is removed). F7, F8, F9,
+F10, F12 untouched."* That proves an F-series containing F10 and F12 existed
+and that F10 was live on 2026-09-07. **It does not preserve a word of what F10
+said.**
+
+So the claims below are enumerated from THIS ENTRY'S PARAPHRASE, written by me
+in #101, not from F10. Where the paraphrase is wrong, the dispositions below
+are wrong with it, and nothing in this repository can currently tell us. The
+review document should be attached to the repository if it still exists
+anywhere; a finding that only survives as somebody's summary of it is a finding
+that cannot be audited.
+
+### The six claims, and what each one measures today
+
+C1 identity · C2 Load/Store context · C3 reachability · C4 "proven by name, not
+enforcement" · C5 the frozen-file guard's permanent path exemptions · C6 those
+exemptions sanctioning a file forever.
+
+**C1, C2, C3 — STILL OPEN.** `tests/conformance/test_security_posture.py:214-223`,
+`_attribute_reads_outside_config`, unchanged since the finding. Probed by
+driving the collector's exact body over planted source:
+
+| probe | counted as a "read"? |
+|---|---|
+| `unrelated_thing.require_ledger_anchor` (C1, another object) | **yes** |
+| `(1).require_ledger_anchor` (C1, a literal) | **yes** |
+| `something.require_ledger_anchor = False` (C2, a WRITE) | **yes** |
+| `if False:\n    unrelated.require_ledger_anchor = False` (C3) | **yes** |
+| inside a function nobody calls (C3) | **yes** |
+| `s = 'require_ledger_anchor'` (control — must NOT count) | no |
+
+The control matters: the collector is not universally true, so these are real
+blind spots rather than an instrument that says yes to everything.
+
+**C4 — STILL OPEN, and it is the one that bites.** Probed end to end in a
+mutation worktree: every genuine consumption of `require_ledger_anchor` removed
+from `src/` (four sites in `runtime/factory.py`, `attestation/runtime.py`,
+`chokepoint/runner.py`), with a single dead store left behind —
+
+```python
+if False:  # F10 probe
+    _unrelated.require_ledger_anchor = False
+```
+
+**Observed: `26 passed`. `test_every_declared_security_field_is_consumed_somewhere`
+stayed GREEN with the control wired to nothing.** That is F10's shape, alive:
+the guard proves the NAME appears in an AST, and calls it consumption.
+
+**C5 and C6 — CLOSED BY OTHER MEANS.** The exemption mechanism is gone, not
+fixed: `_EX1_CHANGED` and `_HARDEN4_CHANGED` survive in the tree only as PROSE
+describing their own removal (`hearth_ledger.py`'s docstring, this file, and
+`threat-model.md`). What replaced them is a SHA-256 per protected file, which
+is a different mechanism rather than a repair of the old one — so the original
+remedy ("remove the permanent exemptions") is unnecessary rather than
+unimplemented.
+
+Probed rather than assumed, because "round N hardened this area" is not
+evidence. Editing `gate/authorization.py` — **the exact file that `_EX1_CHANGED`
+sanctioned forever** — reddens three tests:
+`test_every_protected_file_exists_and_matches_its_digest`,
+`test_the_ledger_actually_detects_a_changed_file`,
+`test_the_guards_do_not_depend_on_a_branch_being_resolvable`. Same result for
+`execution/pending.py`.
+
+### Can each guard FAIL? (§3)
+
+| guard | probe | reddened |
+|---|---|---|
+| `test_every_declared_security_field_is_consumed_somewhere` | strip all real reads, leave a dead store | **NO** |
+| `test_the_mechanism_has_teeth` | drive it with `reads = ∅` | yes (fails closed) |
+| `test_every_security_shaped_field_is_declared` | `SECURITY_FIELDS = ()` | yes |
+| Hearth `..._matches_its_digest` | edit a protected file | yes |
+| Hearth `..._actually_detects_a_changed_file` | edit a protected file | yes |
+| Hearth `..._covers_exactly_the_protected_files` | empty the protected set AND lower its count pin | yes |
+
+One guard cannot be made to fail by the defect it names. That is the finding,
+and it is not fixed here.
+
+### F10's disposition
+
+**CLOSED as a finding.** Four of its six claims are resolved — two by removal
+of the mechanism (C5, C6), and the remaining four are not "partly true": they
+are true, reproduced, and moved to **G17** so they can be worked on their own
+terms rather than keeping a 2026-09-07 finding open forever.
+
+**Test.** The probes above are recorded, not committed as tests — this was a
+scoping pass, and a test asserting that a guard is weak would have to be
+rewritten by whoever strengthens it. G17 carries what to build.
 
 ---
 
@@ -470,6 +579,42 @@ failures (17 whose assertion text quoted the result's repr — the population
 the first, string-matching gate had been converting as if they were platform
 refusals — and 1 thread test).
 
+### Re-measured 2026-09-14, per test, with the instrument committed
+
+`scripts/darwin_plugin.py` is now in the tree, so this is re-derivable rather
+than reconstructed from prose:
+
+```
+PYTHONPATH=scripts python -m pytest -q tests/chokepoint \
+  -p no:cacheprovider -p darwin_plugin -p no:randomly --junitxml=darwin.xml
+```
+
+**915 tests → 795 pass, 120 skip, 0 fail.** Every skip, by disposition and
+module — this is the per-test ledger, not a total:
+
+| disposition | count | modules |
+|---|---|---|
+| converted: raised | 80 | `test_approval` 16, `test_approval_expiry_across_preparation` 13, `test_approval_durability` 12, `test_execution_recovery` 10, `test_lock_identity` 9, `test_owner_identity` 7, `test_ledger_chain` 6, `test_external_anchor` 5, `test_artifact_integrity` 1, `test_mount_relevance` 1 |
+| converted: returned `MigrationResult` | 17 | `test_authorization_record` 10, `test_key_custody` 5, `test_approval_durability` 1, `test_reconciliation` 1 |
+| converted: returned `ReconciliationResult` | 0 | — |
+| converted: returned `SubstrateReport` | 0 | — |
+| converted: worker thread | 1 | `test_execution_recovery` 1 |
+| explicit `linux_only` gate | 8 | `test_substrate_linux` 7, `test_lock_identity` 1 |
+| no database configured | 14 | `test_migration_live` 13, `test_isolation` 1 |
+
+80 + 17 + 0 + 0 + 1 + 8 + 14 = 120, and 795 + 120 = 915. It reconciles because
+every row was counted from the same JUnit file in one pass.
+
+**THE THIRD RETURNED TYPE.** `SubstrateReport` carries `platform_unsupported`
+exactly as the two runner results do and was NOT in the gate's enumerated list
+— so a refusal returned as a report was invisible to both channels. Added.
+Honestly: it converted **nothing** in the run above, because no test on this
+tree currently refuses that way. This closed a latent enumeration gap, not an
+observed failure, and the proof is a synthetic pytester sub-session rather than
+a real conversion. `test_every_type_carrying_the_typed_field_is_in_the_gates_enumerated_list`
+walks the shipped package for dataclasses declaring the field and fails if a
+fourth appears without being enumerated, so the list cannot fall behind again.
+
 **The older ledger does not reconcile, and the difference is not recoverable.**
 An earlier sprint recorded "107 / 97 / 9 / 18" for this simulation. Those
 totals were taken on a different tree with a different test population, and the
@@ -478,6 +623,22 @@ accounting above is a fresh per-test ledger on today's tree rather than an
 arithmetic reconciliation of the old one. Recorded here because it was
 previously stated only in a pull-request body, which is not the tracker: a
 number nobody can re-derive is a number that should stop being cited.
+
+**STATUS OF THE NINE: UNRECOVERABLE. Not pending, not outstanding, not
+awaiting a better search — unrecoverable, and it should stop appearing on owed
+lists.** Asked again 2026-09-14 and the answer is the same, for a reason worth
+stating plainly rather than softening. The nine
+were never written down individually. What survives is the arithmetic
+(`107 / 97 / 9 / 18`), and arithmetic does not name tests. Their tree is gone:
+the population has moved from 912 to 915 through several sprints of additions
+and renames, so even a name would not reliably resolve. Disposition per test is
+available going forward — the table above is exactly that, and the instrument
+that produced it is committed — but **retroactively it is unavailable, and a
+plausible-looking mapping of the nine onto today's modules would be
+manufactured, not measured.** The honest statement is that 9 tests were once
+observed failing for genuine assertion reasons, nobody recorded which, and
+today's tree has 0 failures in this simulation. Both facts are true; they do
+not connect.
 
 **Named limits.**
 - The returned channel observes exactly `BrokeredMigrationRunner.execute` and
@@ -749,6 +910,38 @@ rewrite planned against a number nobody chose.
 both pass. The vendor-trailer commit `267a586` is still refused, by the
 identity rule AND by the vendor terms independently.
 
+### KNOWN TRIGGER — PROM-IP Part B will turn `main` red, and the fix is one line
+
+`PERMITTED_COAUTHORS` in `scripts/check_message_hygiene.py` is a one-entry set
+naming `DriivAIDev <will@driivai.com>`. **That is the identity PROM-IP Part B
+exists to replace.** When the entity forms and the canonical identity changes,
+the trailer GitHub writes will name the new one, it will not be in the set, and
+every commit will be refused — on the pull-request path, the push path, and
+both git hooks, at once.
+
+That is correct behaviour: fail closed and loud. It is recorded here because the
+symptom — `main` suddenly red on a line nobody wrote, immediately after an
+identity change — reads like a broken guard, and the instinct will be to revert
+the guard. **A guard reverted in confusion is worse than a guard that fires.**
+
+The change is one line:
+
+```python
+PERMITTED_COAUTHORS = frozenset({"<new canonical identity, case-folded>"})
+```
+
+Case-folded, whole `Name <email>` string, and the old entry comes OUT in the
+same edit unless both identities are genuinely still in use —
+`test_the_allowlist_is_a_small_enumerated_set_not_a_pattern` pins the set at one
+entry, so adding without removing fails and makes that decision explicit rather
+than incidental.
+
+Two things NOT to do when it fires. Do not widen the entry to a pattern or a
+domain suffix: the question is WHO, and a shape-matcher answers a different one.
+Do not add the old identity back "temporarily" — the history rewrite is what
+makes the old identity wrong, and a guard that still accepts it is a guard that
+has not noticed the rewrite happened.
+
 **Named limits that remain.** The merging account is not in a `pull_request`
 payload, so `--composed` assumes the worst case; a human can still edit the
 squash message in the merge dialog afterwards, and the push-to-`main` run is
@@ -776,3 +969,236 @@ by pull-request number rather than by squash sha for the same reason — keying
 on a value under test makes any mutation of it an import-time `KeyError`
 rather than a red test, and a mutation that only proves Python raises on a
 missing key proves nothing.
+
+---
+
+## G14 — the CI database's coordinates have one source (CLOSED, filed 2026-09-14)
+
+**What.** `PROM_CHOKEPOINT_PG_DB/_USER/_PASSWORD` for the live-database step and
+`POSTGRES_DB/_USER/_PASSWORD` for the service container were once typed twice,
+with nothing enforcing that the two copies matched
+(`docs/pre-disclosure-audit.md` L2/L3). A producer and a consumer that must
+agree, and no check that they do, is a silent-drift shape.
+
+**Measured** (2026-09-14): `jobs.build.env` holds the three literals; the
+service container and the live step both read them by expression
+(`${{ env.PROM_CI_PG_* }}`); the health command reads the container's OWN
+`$POSTGRES_USER`/`$POSTGRES_DB` rather than retyping anything; and each literal
+occurs exactly once in the whole workflow.
+
+**Why this entry exists at all.** It was closed in #101 and never given a
+G-number, so by this tracker's own rule it was untracked — the fix was real and
+the record was not. Filed now rather than left to be rediscovered.
+
+**Test.** `tests/conformance/test_ci_single_source.py`, five tests:
+`::test_the_job_env_is_the_one_source`,
+`::test_the_service_container_reads_the_source_by_expression`,
+`::test_the_live_step_reads_the_source_by_expression`,
+`::test_each_literal_appears_exactly_once_in_the_workflow`,
+`::test_the_health_check_reads_the_containers_own_environment`. The value is a
+CI-only throwaway for a container that does not outlive the job, not a
+credential.
+
+---
+
+## G15 — the swarm matrix's row mapping: which rows refuse, which executes, and what each drives (CLOSED, filed 2026-09-14)
+
+**What.** `test_policy_enforcement_regression.py` runs a ten-row matrix. An
+all-green matrix proves nothing unless the mapping says which rows assert a
+REFUSAL and which assert a LEGITIMATE EXECUTION — a matrix where every row
+refused would be a guard that passes by refusing everything.
+
+**Measured at `68d80df`, the commit before enforcement: SIX of these ten
+produced an approved action and an executor call.** The two rows that refused
+without the sprint did so only because the verifier happened to return
+`Unavailable`, which the old `_verify` propagated — an accident of one return
+shape, not a rule.
+
+**The mapping, both axes.** `_ROW_KIND` says what each row asserts; `_ROW_STATE`
+(added 2026-09-14) says which coverage state each row drives. The second was
+previously carried only in end-of-line comments, which is prose, which drifts.
+
+| # | row | drives | asserts |
+|---|---|---|---|
+| 1 | missing verifier | `coverage.incomplete` | refused before the gate |
+| 2 | raises | `coverage.incomplete` | refused before the gate |
+| 3 | raises TimeoutError | `coverage.incomplete` | refused before the gate |
+| 4 | returns Unavailable | `coverage.incomplete` | refused before the gate |
+| 5 | returns ABSTAIN | `coverage.abstained` | refused before the gate |
+| 6 | returns FAIL | `coverage.unsatisfactory` | **refused AT the gate** (blocked) |
+| 7 | Subprocess timeout BEFORE candidate start | `coverage.incomplete` | refused before the gate |
+| 8 | Subprocess timeout AFTER candidate start | `coverage.abstained` | refused before the gate |
+| 9 | Subprocess refuses (no isolation) | `coverage.incomplete` | refused before the gate |
+| 10 | Subprocess runs (positive control) | satisfied | **LEGITIMATE EXECUTION** |
+
+**Nine refusals to one execution**, and the one refusal that reaches the gate is
+distinguished from the eight that refuse before it: a FAILED required check is a
+real answer, so coverage refuses as unsatisfactory, the bank reports an
+authoritative FAIL and the gate blocks. The other eight never produce a verdict
+for the gate to judge.
+
+**"Eight-state" is historical and should stop being said.** The constant was
+once `eight_state_matrix` and was renamed to `swarm_matrix`. Ten rows drive
+FOUR distinct states, six of them `incomplete` by four different routes —
+absence, exception, timeout, explicit could-not-run. That repetition is
+deliberate (a matrix exercising `incomplete` once would leave three routes to it
+untested), but it is not eight states.
+
+**Test.** `::test_every_matrix_row_is_mapped_and_the_mapping_is_nine_refusals_to_one_execution`
+and `::test_the_state_to_row_mapping_covers_the_matrix_and_names_real_states`,
+which also asserts the two mappings agree about which row is the positive
+control. Registered in `tests/conformance/positive_controls.json` (G16).
+
+---
+
+## G16 — the positive-control set is named (CLOSED, filed 2026-09-14)
+
+**What.** Doctrine #4 says every negative has a positive control. Measured on
+2026-09-14, **25 tests in this tree declare themselves one** — and until now
+there was no record of WHICH refusal each stood beside. A positive control
+whose negative nobody wrote down proves that something passes.
+
+(The owed item was phrased as "four positive controls as a named set". Four was
+the number in play when it was written; the tree has 25. Naming four of the 25
+would have been exactly the arbitrariness the item was objecting to.)
+
+**What it is.** `tests/conformance/positive_controls.json`: each entry pairs a
+positive control with at least one negative and states the property the PAIR
+establishes.
+
+**Test.** `tests/conformance/test_positive_control_set.py` — every registered
+test on both halves resolves to a collected test; every self-declared positive
+control in the tree is registered (so the set cannot fall behind the code); and
+no stale entry survives a test that stopped declaring itself one.
+
+**Named limit.** It checks the pairs EXIST. It cannot check that a negative
+genuinely exercises the refusal its `property` line claims — that is review's
+job. A registry is not a semantic verifier, and reading it as coverage would be
+the same error as reading an audit score as coverage. The count is deliberately
+NOT pinned: a pin would move on every addition and train people to update a
+number without reading the pairing.
+
+---
+
+## G17 — the dead-flag guard proves a NAME APPEARS, not that a control is enforced (F10's live remainder)
+
+**What.** `tests/conformance/test_security_posture.py:214-223`:
+
+```python
+def _attribute_reads_outside_config() -> set[str]:
+    names: set[str] = set()
+    for path in SRC.rglob("*.py"):
+        if path.name == "config.py" and path.parent.name == "core":
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Attribute):
+                names.add(node.attr)
+    return names
+```
+
+`ast.Attribute` covers loads and stores, on any object, anywhere in the file,
+reachable or not. `test_every_declared_security_field_is_consumed_somewhere`
+then asserts each `SECURITY_FIELDS` name is in that set and reports "consumed".
+
+**Measured** (2026-09-14, mutation worktree, primary tree untouched). Removing
+every genuine consumption of `require_ledger_anchor` from `src/` and leaving one
+dead store under `if False:` on an unrelated object: **`26 passed`** — the whole
+file green, with a declared security control wired to nothing.
+
+**Why it is not fixed here.** A remedy is a design question, not a one-line
+change, and this was a scoping pass. At least three shapes are available and
+they are not equivalent:
+
+1. **Narrow the collector** — require `ctx=ast.Load`, exclude bodies under a
+   constant-false test, resolve the object to a `Config`. Cheap, and still
+   static: it would refuse the exact probe above and not the next one.
+2. **Behavioural proof per field** — drive each declared field through the
+   runtime and observe the enforcement it names. Strongest, and the largest:
+   22 fields, each needing a scenario where flipping it changes an outcome.
+3. **Accept it as a spelling check and rename it** — keep the guard for what it
+   genuinely catches (a field nobody mentions at all, the original
+   `require_digest_pin` defect) and stop the name claiming enforcement.
+
+(3) is the smallest honest step and is NOT free: it is a decision to accept that
+this control is unproven, which belongs to the owner, not to the scoping pass.
+
+**What closes it.** A ruling on which of the three, then the work. Until then
+this is a named gap, which is the point of the file.
+
+**Test.** None yet, deliberately — see G4's closing note.
+
+---
+
+## G18 — the Hearth freezes 21 files, all under `src/`, and none of the guards themselves
+
+**What.** `PROTECTED_FILES` is 21 paths, every one under
+`src/prometheus_protocol/`. **No file under `scripts/` is content-pinned by
+anything.** So the scripts that ENFORCE the doctrine — `check_hygiene.py`,
+`check_message_hygiene.py`, `type_gate.py`, `check_skip_manifest.py`,
+`check_ip_consistency.py`, the revert-proof runners — can be edited without any
+digest noticing. Their behaviour is covered by conformance tests; their CONTENT
+is covered by nothing.
+
+**Measured** (2026-09-14): 21 paths referenced in `hearth_ledger.py`, all
+`src/`; zero under `scripts/`. The one non-`src` string in that file is prose in
+a comment, not a path entry.
+
+**Status: DISCOVERED, NOT DECIDED.** This is a ruling, and stating it as a gap
+without stating the trade would be filing half of it.
+
+**The trade, both directions.**
+
+* **Extend Hearth to `scripts/`** — a guard edit then requires a re-sanction: a
+  new digest, in the ledger, with a written reason, in the same change. That is
+  the property the Hearth exists for, applied to the files most worth
+  protecting. The cost is real and recurring: this sprint alone edited five
+  scripts, each of which would have needed a ledger entry, and a ceremony
+  attached to every guard edit is a ceremony people learn to perform without
+  reading.
+* **Record the exclusion as CHOSEN** — say in the ledger that `scripts/` is
+  deliberately out of scope, on the grounds that guard scripts are exercised by
+  their own conformance tests and mutation proofs on every build, which a digest
+  is not a substitute for. The cost is that an edit weakening a guard in a way
+  its own tests do not cover has no second net.
+
+**Right now it is neither.** It is an exclusion nobody chose, which is the
+weakest of the three states and the only one that is definitely wrong.
+
+**What closes it.** Either decision, written down. Not a third sprint of
+noticing it.
+
+**Test.** `test_hearth_ledger.py` pins `EXPECTED_PROTECTED_FILES = 21`, so the
+set cannot shrink unnoticed — but nothing asserts what the set SHOULD contain,
+which is exactly the decision above.
+
+---
+
+## G19 — eight refusals in the security-posture file are proven by their message alone
+
+**What.** Discovered while scoping F10, and the same class as the 1a near-miss:
+a refusal asserted with `pytest.raises(X, match="...")` proves the refusal
+fired, and ties it to the named reason only through the string.
+
+**Measured** (2026-09-14): all eight `match=` arguments stripped from
+`tests/conformance/test_security_posture.py` — **`26 passed`, nothing reddened.**
+Every one of those eight tests would pass on any `ConfigError` from any cause.
+
+The affected assertions are at lines 93, 104, 145, 155, 164, 178, 183 and 196:
+`"cannot be honoured"` (x3), `"no container runtime"`, `"no isolation"`,
+`"PROM_ALLOW_UNSAFE_EXEC"`, `"without isolation"`, `"unknown sandbox"`.
+
+**How bad, stated honestly.** Lower stakes than the 1a case. These tests assert
+that a particular config COMBINATION is refused, and the raise carries most of
+that property — a `ConfigError` from an unrelated cause is unlikely when the
+only thing varied is the combination under test. The finding is that the
+distinction between "refused for this reason" and "refused" is currently
+carried by a string in every one of them, so a reworded diagnostic silently
+converts eight reason-assertions into existence-assertions.
+
+**What closes it.** Either a typed refusal reason these can assert
+structurally (the pattern the coverage vocabulary already uses), or an explicit
+note that the raise alone is the property here. Not a rewrite of eight tests
+into eight longer tests asserting the same string in another shape.
+
+**Test.** None yet; the probe above is the record.

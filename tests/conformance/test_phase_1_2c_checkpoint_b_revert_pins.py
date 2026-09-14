@@ -27,7 +27,8 @@ def runner():
 
 
 def test_mutation_plan_and_observed_failure_count_are_pinned(runner):
-    assert (runner.EXPECTED_REVERTS, runner.EXPECTED_CALL_FAILURES) == (6, 7)
+    # 6 / 7 -> 8 / 9 at close-out: the two R3 mutations above.
+    assert (runner.EXPECTED_REVERTS, runner.EXPECTED_CALL_FAILURES) == (8, 9)
     plan = runner.mutations()
     assert len(plan) == runner.EXPECTED_REVERTS
     assert len({name for name, *_ in plan}) == len(plan)
@@ -63,6 +64,15 @@ def test_mutations_cover_every_named_load_bearing_join(runner):
         "action-class-comparison-removed",
         "attempt-id-comparison-removed",
         "hold-admission-check-removed",
+        # R3's reproduction, added at close-out. The descriptor check above
+        # refuses a ROUTED decision lacking the seam proof; these two are what
+        # stop a FAIL reaching a hold at all, and what stops the validated
+        # action being swapped after the gate saw it. An earlier report named
+        # "hold-admission-check-removed" as R3's reproduction — measured, it
+        # reddens hold_admission_refuses and leaves the FAIL test passing, so
+        # that naming was wrong.
+        "routed-outcome-check-removed",
+        "hold-action-substitution-check-removed",
         "hold-pinned-policy-comparison-removed",
         "selected-profile-injection-unwired",
     }

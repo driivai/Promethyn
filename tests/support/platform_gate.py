@@ -190,19 +190,43 @@ def is_returned_platform_refusal(value: object) -> bool:
     the marker but whose field is False is NOT a platform refusal.
     """
 
+    for item in value if isinstance(value, tuple) else (value,):
+        if not isinstance(item, _returning_types()):
+            continue
+        # ``getattr`` rather than ``item.platform_unsupported``: the isinstance
+        # above narrows to a heterogeneous tuple of enumerated types, which mypy
+        # cannot collapse to one attribute — and with
+        # ``ignore_missing_imports`` off the gate now says so
+        # ([attr-defined] on this line, caught the moment the flag went off).
+        # Resolved rather than silenced: no cast, no ignore directive. It still
+        # reads the FIELD, which is the property that matters — a result whose
+        # detail quotes the marker but whose field is False is not a refusal.
+        if getattr(item, "platform_unsupported", False) is True:
+            return True
+    return False
+
+
+def _returning_types() -> tuple[type, ...]:
+    """Every result type that carries the typed ``platform_unsupported`` fact.
+
+    ENUMERATED, and checked against the source. ``SubstrateReport`` was missing
+    here while carrying the field, so a probe that refused by RETURNING a report
+    — rather than raising, or returning one of the two runner results — was
+    invisible to both channels. That is the same shape as the defect this whole
+    mechanism exists for, one layer up: an instrument that cannot represent what
+    it is measuring reports clean.
+
+    ``test_platform_contract.py`` fails if a fourth type gains the field
+    and is not added here, so the list cannot fall behind the code silently.
+    """
+
     from prometheus_protocol.chokepoint.runner import (
         MigrationResult,
         ReconciliationResult,
     )
+    from prometheus_protocol.chokepoint.substrate import SubstrateReport
 
-    items = value if isinstance(value, tuple) else (value,)
-    for item in items:
-        if (
-            isinstance(item, (MigrationResult, ReconciliationResult))
-            and item.platform_unsupported is True
-        ):
-            return True
-    return False
+    return (MigrationResult, ReconciliationResult, SubstrateReport)
 
 
 def note_returned(value: object) -> None:
@@ -282,8 +306,21 @@ def pytest_runtest_call(item):
     elif returned:
         first = returned[0]
         head = first[0] if isinstance(first, tuple) else first
+        # The runner results carry ``reason``; SubstrateReport carries
+        # ``detail``. NARROWED with isinstance rather than read with a
+        # defaulted getattr: the first version here used
+        # ``getattr(head, "reason", None)`` and
+        # ``test_type_gate.py::test_no_verdict_getattr_default_in_the_source_tree``
+        # refused it. That guard is right and its reason generalises past the
+        # verdict case it was written for — a defaulted read of a
+        # union-distinguishing attribute cannot tell "this type does not have
+        # that field" from "it has it and it is None", which is how a
+        # distinction gets quietly erased.
+        from prometheus_protocol.chokepoint.substrate import SubstrateReport
+
+        why = head.detail if isinstance(head, SubstrateReport) else head.reason
         channel = (
-            f"returned as {type(head).__name__}(reason={head.reason!r}, "
+            f"returned as {type(head).__name__}({why!r}, "
             "platform_unsupported=True)"
         )
     else:

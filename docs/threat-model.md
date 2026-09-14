@@ -179,6 +179,42 @@ coverage.
 5. **A named gap is managed; a hidden gap is a vulnerability.** Every section
    ends with what is *not* covered, and the honest limits are recorded as
    passing tests where they can be (§3's attacker-controls-the-anchor case).
+6. **An enforcement instrument and a measurement instrument must not share a
+   scope.** The message-hygiene checker's REFUSING modes exclude this
+   repository's own author from the co-authorship rule, because 89 of 90 hits
+   were that identity and one was a vendor — a rule firing 89 times on noise
+   trains readers to ignore it. Its `--history` mode excludes nothing, because
+   it sizes the PROM-IP provenance rewrite, and an instrument quietly filtering
+   89 sites would have that rewrite planned against a number nobody chose. **A
+   filter that is correct for enforcement is a falsification for measurement.**
+   Where one tool serves both, the modes are separated and a test pins that the
+   measuring one was not narrowed
+   (`test_composed_message_guard.py::test_the_history_sweep_is_NOT_allowlisted`).
+8. **An instrument that returns an empty set reads downstream as a pass.**
+   Emptiness and success are the same value to a caller that only asks "were
+   there findings?", so every guard that iterates a collected set must be driven
+   with that set empty and shown to fail closed. Three instances, all measured
+   in this repository rather than imagined:
+   * a sweep that collected **0 nodes** and reported no mismatches, which was
+     read as 18 pins agreeing until the collector was fixed;
+   * a CSS gradient computing as `transparent`, so a DOM walker reported the
+     colour BEHIND it and an accessibility audit scored 96 while three of four
+     surfaces failed;
+   * `_routes.json` not covering a path, so quota exhaustion on that path
+     returned the static asset instead of the function's refusal.
+   Measured 2026-09-14 on the security-posture guards: with `SECURITY_FIELDS`
+   emptied, three of five pass vacuously — and the edit that empties it is
+   caught by three OTHER tests, which is the right shape. The guard need not
+   itself refuse the empty set as long as something does, and the pass is only
+   a finding when nothing does.
+9. **A byte comparison catches what a shape assertion cannot.** `--composed`
+   models the squash message GitHub writes. It was wrong twice — a missing blank
+   line before the trailer, and a separator asserted as ten hyphens that is nine
+   — and both were caught only by comparing bytes against the real commit. Every
+   shape assertion anyone would have written (starts with the subject, contains
+   the body, ends with a trailer) passes both defects. Where a real artifact
+   exists to compare against, compare against it; a model of another system's
+   behaviour that nobody diffed against that system is a guess with tests.
 
 ## The model on one page
 

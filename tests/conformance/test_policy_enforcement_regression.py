@@ -16,6 +16,15 @@ is the only way they are two rows rather than one written twice.
 
 from __future__ import annotations
 
+from collections import Counter
+
+from prometheus_protocol.policy.coverage import (
+    REFUSAL_REASONS,
+    REFUSED_ABSTAINED,
+    REFUSED_INCOMPLETE,
+    REFUSED_UNSATISFACTORY,
+)
+
 import pytest
 
 from prometheus_protocol.core.models import (
@@ -524,6 +533,61 @@ _ROW_KIND: dict[str, str] = {
     "SubprocessVerifier refuses (no isolation)": REFUSED_BEFORE_GATE,  # incomplete (POLICY_REFUSAL)
     "SubprocessVerifier runs (positive control)": EXECUTES,
 }
+
+#: THE STATE-TO-ROW MAPPING. `_ROW_KIND` above says what each row ASSERTS;
+#: this says which coverage state each row DRIVES, which is the other half and
+#: was previously carried only in end-of-line comments. Values are the closed
+#: vocabulary from ``policy/coverage.py`` (plus ``satisfied``, which is not a
+#: refusal reason and so is not in that set).
+#:
+#: The constant this matrix lives under was once called ``eight_state_matrix``
+#: and was renamed to ``swarm_matrix``. The "eight" is historical and does not
+#: describe this mapping: ten rows drive FOUR distinct states, six of them the
+#: same one by four different routes. That is deliberate — ``incomplete`` is
+#: reachable by absence, by exception, by timeout and by an explicit
+#: could-not-run, and a matrix that exercised it once would leave three routes
+#: to it untested — but "eight states" should stop being said about it.
+SATISFIED = "satisfied"
+_ROW_STATE: dict[str, str] = {
+    "missing verifier": REFUSED_INCOMPLETE,
+    "raises": REFUSED_INCOMPLETE,
+    "raises TimeoutError": REFUSED_INCOMPLETE,
+    "returns Unavailable": REFUSED_INCOMPLETE,
+    "returns ABSTAIN": REFUSED_ABSTAINED,
+    "returns FAIL": REFUSED_UNSATISFACTORY,
+    "SubprocessVerifier timeout BEFORE confirmed candidate start": REFUSED_INCOMPLETE,
+    "SubprocessVerifier timeout AFTER confirmed candidate start": REFUSED_ABSTAINED,
+    "SubprocessVerifier refuses (no isolation)": REFUSED_INCOMPLETE,
+    "SubprocessVerifier runs (positive control)": SATISFIED,
+}
+
+
+def test_the_state_to_row_mapping_covers_the_matrix_and_names_real_states():
+    """Every row drives a named state, and every state is one the code knows.
+
+    Without this the state column is prose in a comment, which drifts. With it,
+    renaming a row or changing what it drives has to be done in two places that
+    a test compares.
+    """
+
+    labels = {label for label, _ in _MATRIX}
+    assert set(_ROW_STATE) == labels, (
+        f"unmapped or stale rows: {sorted(labels ^ set(_ROW_STATE))}"
+    )
+    for label, state in _ROW_STATE.items():
+        assert state == SATISFIED or state in REFUSAL_REASONS, (label, state)
+    # The shape, pinned: four distinct states, and `incomplete` reached by four
+    # different routes rather than once.
+    assert len(set(_ROW_STATE.values())) == 4, sorted(set(_ROW_STATE.values()))
+    counts = Counter(_ROW_STATE.values())
+    assert counts[REFUSED_INCOMPLETE] == 6
+    assert counts[REFUSED_ABSTAINED] == 2
+    assert counts[REFUSED_UNSATISFACTORY] == 1
+    assert counts[SATISFIED] == 1
+    # And the two mappings must agree about which row is the positive control.
+    executes = {l for l, k in _ROW_KIND.items() if k == EXECUTES}
+    satisfied = {l for l, s in _ROW_STATE.items() if s == SATISFIED}
+    assert executes == satisfied, (executes, satisfied)
 
 
 def test_every_matrix_row_is_mapped_and_the_mapping_is_nine_refusals_to_one_execution():

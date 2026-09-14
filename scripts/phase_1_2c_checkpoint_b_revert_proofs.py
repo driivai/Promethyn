@@ -2,7 +2,7 @@
 
 Each mutation removes one load-bearing join, runs the behavioural test that must
 fail, restores the function in memory, and refuses count drift in either
-direction.  This proves these five mutations are caught; it does not claim the
+direction.  This proves these eight mutations are caught; it does not claim the
 mutation set is complete and is not an external integrity anchor.
 """
 
@@ -14,8 +14,11 @@ from prometheus_protocol.verifier.bank import VerifierBank
 import fix_b_revert_proofs as harness
 
 TEST = "tests/conformance/test_execution_descriptor.py"
-EXPECTED_REVERTS = 6
-EXPECTED_CALL_FAILURES = 7
+EXPECTED_REVERTS = 8
+#: CLOSE-OUT — 7 -> 9. Two mutations added for R3's reproduction (the routed
+#: outcome check and the action-substitution check), each reddening
+#: ``cannot_hold_a_failure``.
+EXPECTED_CALL_FAILURES = 9
 
 
 def enforce_expected(caught: int, failures: int) -> None:
@@ -103,6 +106,35 @@ def mutations():
             ],
             TEST,
             "hold_admission_refuses",
+        ),
+        (
+            # R3's REPRODUCTION, which had no mutation until now. R3 is a FAIL
+            # reaching a human hold and executing on approval, and the guard
+            # that stops it is this outcome check — not the descriptor check
+            # above, which refuses a ROUTED decision lacking the seam proof.
+            # An earlier report of mine named "hold-admission-check-removed" as
+            # R3's reproduction; measured, it reddens
+            # ``hold_admission_refuses`` and leaves the FAIL test passing, so
+            # that naming was wrong and is withdrawn here.
+            "routed-outcome-check-removed",
+            PendingActionService.hold,
+            [("    if decision.effective_outcome != OUTCOME_ROUTE:", "    if False:")],
+            TEST,
+            "cannot_hold_a_failure",
+        ),
+        (
+            # The other half of the same test, separated so one cannot stand in
+            # for the other: substituting the action after the gate validated it.
+            "hold-action-substitution-check-removed",
+            PendingActionService.hold,
+            [
+                (
+                    "    if action != decision.action or action != authorization.action:",
+                    "    if False:",
+                )
+            ],
+            TEST,
+            "cannot_hold_a_failure",
         ),
         (
             # Re-expressed for TASK 5. This used to make ``revalidate`` return
