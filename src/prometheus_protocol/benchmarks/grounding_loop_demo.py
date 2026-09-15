@@ -57,6 +57,7 @@ from prometheus_protocol.sandbox import NamespaceSandbox
 from prometheus_protocol.verifier.bank import VerifierBank
 from prometheus_protocol.verifier.grounding import GroundingVerifier
 from prometheus_protocol.policy.coverage import BoundResult
+from prometheus_protocol.policy.implementations import declare_implementation
 from prometheus_protocol.policy.profile import PolicyRequirement, VerificationPolicy
 from prometheus_protocol.policy.resolver import resolve
 from prometheus_protocol.policy.snapshot import ACTION_SANDBOX_EXECUTE, snapshot_digest
@@ -142,7 +143,13 @@ def _assess(bank, policy, check_id, outcomes, *, subject_id: str, artifact: str)
     )
 
 
-HUMAN_REVIEWER_ID = "human-grounding-review"
+#: Declared as an implementation (G26): ``_demo_policy`` names it in
+#: ``permitted``, and a policy naming an undeclared identity is refused at
+#: construction. The site is this constant; :func:`human_review` reports it.
+HUMAN_REVIEWER_ID = declare_implementation(
+    "human-grounding-review",
+    implemented_by="prometheus_protocol.benchmarks.grounding_loop_demo.HUMAN_REVIEWER_ID",
+)
 
 #: The demo's scripted judge replies, keyed by item id (see grounding_items):
 #: a confident SUPPORTED on the grounded claim, a confident NOT-SUPPORTED on

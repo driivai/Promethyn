@@ -313,6 +313,27 @@
         "test_the_checker_refuses_an_empty_report"
       ],
       "property": "the composition checker refuses a report with the right counts and the wrong membership, and an empty one, while accepting a faithful report (PR #106 review, item 1)"
+    },
+    {
+      "module": "tests/conformance/test_implementation_registry.py",
+      "positive": "test_the_correct_identifier_constructs_and_its_requirement_is_satisfiable",
+      "negatives": [
+        "test_a_misspelled_implementation_is_refused_at_construction_with_the_typed_reason",
+        "test_an_empty_registry_refuses_distinctly_rather_than_reading_as_permissive",
+        "test_no_such_implementation_and_implementation_unavailable_are_different_refusals"
+      ],
+      "property": "the implementation registry refuses a misspelled permitted name at construction, and an empty registry distinctly under its own reason, while a declared name constructs and its requirement is satisfied by that implementation's evidence (G26)"
+    },
+    {
+      "module": "tests/conformance/test_implementation_registry.py",
+      "positive": "test_an_extension_declared_with_its_class_is_verified_on_the_spot_and_works",
+      "negatives": [
+        "test_an_extension_class_reporting_another_identity_is_refused_at_declaration",
+        "test_a_declaration_pointing_nowhere_is_refused_when_the_policy_is_resolved",
+        "test_a_declaration_whose_site_reports_a_different_identity_is_refused_at_resolution",
+        "test_the_committed_profiles_verify_every_declared_site_at_load"
+      ],
+      "property": "a declared site that is missing or reports another identity is refused at the declaration (class in hand) or at first use (path), while a declaration whose site reports the identity resolves and satisfies its requirement (G26, PR #111 review)"
     }
   ]
 }

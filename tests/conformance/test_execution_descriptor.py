@@ -25,6 +25,12 @@ from prometheus_protocol.policy.resolver import resolve
 from prometheus_protocol.policy.snapshot import ACTION_SANDBOX_EXECUTE, snapshot_digest
 from prometheus_protocol.swarm.models import ExecutionResult, content_hash
 from prometheus_protocol.verifier.bank import VerifierBank
+from tests.support.assessments import declare_test_implementations
+
+# G26: a policy may only permit DECLARED implementations. These are this
+# module's test doubles, declared under the shared test site before any policy
+# below names them.
+declare_test_implementations("runner", "auditor", "other-runner", "runner-2")
 
 POLICY = VerificationPolicy(
     policy_id="descriptor-test",

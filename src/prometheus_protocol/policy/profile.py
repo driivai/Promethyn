@@ -22,13 +22,27 @@ the moment it is digested and the moment it is enforced.
 
 R1 — WHERE POLICY LIVES, AND THE STAGING DECISION.
 
-Profiles are COMMITTED DATA in this package, under the content-based Hearth
-sanction, so a profile edit is a visible reviewable line in a diff rather than a
-silent runtime reconfiguration. The active profile is selected by a ``Config``
-field on ``SECURITY_FIELDS``, and its content digest is bound into every
-snapshot the resolver produces, so a decision is bound to the policy that
-produced it and a later edit cannot be presented as the policy a past decision
-ran under.
+Profiles are COMMITTED DATA in this package, so a profile edit is a visible
+reviewable line in a diff rather than a silent runtime reconfiguration. The
+active profile is selected by a ``Config`` field on ``SECURITY_FIELDS``, and its
+content digest is bound into every snapshot the resolver produces, so a decision
+is bound to the policy that produced it and a later edit cannot be presented as
+the policy a past decision ran under.
+
+CORRECTED CLAIM. An earlier version of the paragraph above said the profiles
+were "under the content-based Hearth sanction". They are not: the Hearth ledger
+(``tests/conformance/hearth_ledger.py``) digests 21 files and this module is not
+one of them. What guards a profile's content is the digest binding — the pinned
+record carries the policy digest and approval re-checks the hold's pinned policy
+against the selected one (``execution/pending.py:670-677``) — not a
+sanctioned-bytes check. The sentence was a claim about existing machinery made
+without reading it, and it is withdrawn here rather than left to be believed.
+
+WHAT A REQUIREMENT'S PERMITTED SET IS CHECKED AGAINST (G26). Every name in
+``permitted`` must be an identity declared in ``policy/implementations.py``; an
+undeclared one is refused at construction with a typed reason, and an empty
+registry is refused outright. The ``IMPL_*`` constants below are the declared
+objects themselves, not copies of them.
 
 **This is right for this version and wrong for the product, and that is a
 deliberate staging decision rather than an oversight.** A licensed component
@@ -51,6 +65,14 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 
+from prometheus_protocol.policy.implementations import (
+    GIT_MERGE_CHECK,
+    SUBPROCESS_TESTS,
+    SWARM_CHECKS,
+    ImplementationSiteUnresolved,
+    registered_implementations,
+    verify_implementation,
+)
 from prometheus_protocol.policy.snapshot import (
     ACTION_CLASSES,
     BoundRequirement,
@@ -72,8 +94,45 @@ ACCEPT_PASS = "pass"
 ACCEPTANCE_CONDITIONS: frozenset[str] = frozenset({ACCEPT_PASS})
 
 
+#: Same shape as ``CONFIG_REFUSAL_REASONS`` and ``EXECUTION_REFUSAL_REASONS``,
+#: and for the same reason: a test asserting WHICH refusal fired does so
+#: structurally, and an unknown reason is refused at construction so a typo
+#: cannot become a reason nothing asserts on. Not every ``PolicyError`` carries
+#: one; the two here are the ones that must be told apart from each other and
+#: from a runtime ``Unavailable`` (G26).
+POLICY_REFUSAL_REASONS: frozenset[str] = frozenset({
+    "implementation_not_registered",  # a permitted name no declared implementation reports under
+    "implementation_registry_empty",  # nothing is declared; validating against nothing is refused
+    "implementation_site_unresolved", # declared, but the declared site is missing or reports another identity
+})
+
+
 class PolicyError(ValueError):
-    """A policy could not be constructed, or does not admit what was asked."""
+    """A policy could not be constructed, or does not admit what was asked.
+
+    ``reason``, when set, comes from :data:`POLICY_REFUSAL_REASONS`.
+    ``implementation`` and ``check_id`` carry the offending name and the
+    requirement it sat in, so a refusal names what to fix without a caller
+    parsing prose.
+    """
+
+    def __init__(
+        self,
+        *args: object,
+        reason: str | None = None,
+        implementation: str | None = None,
+        check_id: str | None = None,
+    ) -> None:
+        super().__init__(*args)
+        if reason is not None and reason not in POLICY_REFUSAL_REASONS:
+            raise ValueError(
+                f"{reason!r} is not a known policy refusal reason; add it to "
+                f"POLICY_REFUSAL_REASONS deliberately. Known: "
+                f"{sorted(POLICY_REFUSAL_REASONS)}"
+            )
+        self.reason = reason
+        self.implementation = implementation
+        self.check_id = check_id
 
 
 @dataclass(frozen=True)
@@ -100,6 +159,39 @@ class PolicyRequirement:
         probe = BoundRequirement(check_id=self.check_id, permitted=self.permitted)
         object.__setattr__(self, "check_id", probe.check_id)
         object.__setattr__(self, "permitted", probe.permitted)
+
+        # G26. Every permitted name must be the identity of a DECLARED
+        # implementation. Checked here, with the requirement in hand, because
+        # the alternative is what this used to do: construct cleanly and refuse
+        # on every assessment as ``coverage.incomplete`` — a configuration
+        # error presenting as a runtime outage, permanent for the action class.
+        # The empty registry is refused FIRST and DISTINCTLY: with nothing
+        # declared, "not registered" would be true of every name and would read
+        # as N misspellings when the fault is that nothing was declared at all.
+        registry = registered_implementations()
+        if not registry:
+            raise PolicyError(
+                f"requirement {self.check_id!r} cannot be validated: no "
+                "implementation has been declared, so there is nothing to check "
+                "its permitted set against. An empty registry is refused rather "
+                "than read as permissive.",
+                reason="implementation_registry_empty",
+                check_id=self.check_id,
+            )
+        for name in self.permitted:
+            if name not in registry:
+                raise PolicyError(
+                    f"requirement {self.check_id!r} permits {name!r}, which is not "
+                    "the identity of any declared implementation. Declared: "
+                    f"{sorted(registry)}. A name nothing reports under would "
+                    "construct cleanly and then fail on every assessment as "
+                    "coverage.incomplete — a configuration error wearing a runtime "
+                    "outage. Declare it in policy/implementations.py at the site "
+                    "that reports it, or fix the spelling.",
+                    reason="implementation_not_registered",
+                    implementation=name,
+                    check_id=self.check_id,
+                )
 
         if isinstance(self.applies_to, (str, bytes)):
             raise PolicyError("applies_to must be a sequence of action classes, not a string")
@@ -295,19 +387,18 @@ CHECK_WORKFLOW_GRADE = "workflow.grade"
 #: the only thing that makes an irreversible delete safe.
 CHECK_MERGE_PROOF = "branch.merge_proof"
 
-#: The verifier implementation identities permitted to answer them. These are
-#: the REAL ``verifier_id`` values the implementations report — read off
-#: ``SubprocessVerifier.VERIFIER_ID`` and ``swarm.runtime.CHECK_VERIFIER_ID``,
-#: not invented here. A profile naming an id nothing reports would be a
-#: permanently unsatisfiable requirement, indistinguishable at the bank from a
-#: check that was omitted. ``tests/conformance/test_coverage_enforcement.py``
-#: asserts these match the implementations. (This comment cited
-#: ``test_policy_profiles.py``, which does not exist and never has — a citation
-#: to a file nobody can open is worse than none, because it reads as coverage.)
-IMPL_SUBPROCESS = "subprocess-tests"
-IMPL_SWARM_STRUCTURAL = "swarm-checks"
-#: Read off ``tools.git.MERGE_CHECK_VERIFIER_ID``, not invented here.
-IMPL_GIT_MERGE_CHECK = "git-merge-check"
+#: The verifier implementation identities permitted to answer them. NOT SPELLED
+#: HERE ANY MORE. Until G26 these were literals a person had copied off
+#: ``SubprocessVerifier.VERIFIER_ID`` and two module constants, and one test
+#: compared the copies by hand; nothing at construction did, so a misspelling
+#: constructed cleanly and failed as incomplete coverage on every assessment.
+#: Each is now the SAME OBJECT as its declaration in
+#: ``policy/implementations.py``, which the implementation sites consume by
+#: reference too — one spelling, two references — and ``PolicyRequirement``
+#: refuses any permitted name the registry has not declared.
+IMPL_SUBPROCESS = SUBPROCESS_TESTS
+IMPL_SWARM_STRUCTURAL = SWARM_CHECKS
+IMPL_GIT_MERGE_CHECK = GIT_MERGE_CHECK
 
 
 _BASELINE = VerificationPolicy(
@@ -360,12 +451,46 @@ PROFILES: dict[str, VerificationPolicy] = {
 DEFAULT_PROFILE_ID = _BASELINE.policy_id
 
 
+def verify_policy_implementations(
+    policy: VerificationPolicy, *, action_class: str | None = None
+) -> None:
+    """The second registry check (G26, PR #111 P2): every permitted name's
+    DECLARED SITE must resolve and report that identity.
+
+    Construction checked that each name is declared. A declaration is a claim,
+    and this is the claim being tested — when the policy is put to use, which is
+    the earliest moment every site is importable (see the registry's module
+    docstring for why not at declaration). ``action_class`` narrows the check to
+    the requirements that apply; the resolver passes it, ``load_profile`` checks
+    the whole profile. Refuses with ``implementation_site_unresolved``, naming
+    the implementation and the requirement, so a declaration pointing nowhere is
+    a configuration error here and not incomplete coverage on every assessment.
+    """
+
+    items = policy.requirements if action_class is None else policy.applicable(action_class)
+    for item in items:
+        for name in item.permitted:
+            try:
+                verify_implementation(name)
+            except ImplementationSiteUnresolved as exc:
+                raise PolicyError(
+                    f"policy {policy.policy_id!r}, requirement {item.check_id!r}: {exc}",
+                    reason="implementation_site_unresolved",
+                    implementation=name,
+                    check_id=item.check_id,
+                ) from exc
+
+
 def load_profile(profile_id: str) -> VerificationPolicy:
     """One supplier of a policy value: the committed profile with this id.
 
     Refuses an unknown id rather than falling back to a default. A typo in the
     selected profile must not silently authorize under a policy nobody chose —
     that is the omission attack wearing a configuration error.
+
+    Also verifies every permitted implementation's declared site
+    (:func:`verify_policy_implementations`): a committed profile whose declared
+    implementation has gone missing is refused at load, with the site named.
     """
 
     try:
@@ -380,4 +505,5 @@ def load_profile(profile_id: str) -> VerificationPolicy:
             "defaulted: authorizing under a policy nobody selected is the "
             "failure this refusal exists to prevent."
         )
+    verify_policy_implementations(policy)
     return policy

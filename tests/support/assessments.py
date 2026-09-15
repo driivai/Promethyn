@@ -37,6 +37,10 @@ from prometheus_protocol.core.models import (
 )
 from prometheus_protocol.policy.assessment import PolicyAssessment, mint
 from prometheus_protocol.policy.coverage import BoundResult
+from prometheus_protocol.policy.implementations import (
+    declare_implementation,
+    is_registered,
+)
 from prometheus_protocol.policy.profile import (
     PolicyRequirement,
     VerificationPolicy,
@@ -54,6 +58,43 @@ IMPL = "test-verifier"
 ARTIFACT = "a" * 64
 TARGET = "sandbox://test"
 
+def _double_for(identity: str) -> type:
+    """A class that REPORTS ``identity`` at class level and does nothing else.
+
+    The registry verifies a declaration made with the class in hand on the
+    spot (PR #111, P2: a declaration is a claim, and a path-only claim used to
+    go unchecked), so a test double is declared the way a deployment's own
+    implementation should be — by class — and is verified before any policy
+    names it. Built here, in one module, so two test modules that both name
+    "auditor" declare the same site and the registry's conflict refusal stays
+    reserved for what it exists for: two DIFFERENT implementations claiming one
+    identity.
+    """
+
+    name = "Double_" + "".join(ch if ch.isalnum() else "_" for ch in identity)
+    return type(name, (), {"VERIFIER_ID": identity, "__doc__": f"test double reporting {identity!r}"})
+
+
+def declare_test_implementations(*identities: str) -> tuple[str, ...]:
+    """Register test-double identities so a test policy may name them (G26).
+
+    ``PolicyRequirement`` refuses, at construction, a permitted name no
+    implementation has declared, and resolution refuses a declared site that
+    does not report its identity. Test code is trusted and may declare doubles.
+    What it must NOT do is re-declare a SHIPPED identity: that would conflict,
+    or worse would let a test believe it registered something the package
+    already reports under. An identity the package declared is therefore left
+    exactly as the package declared it.
+    """
+
+    for identity in identities:
+        if not is_registered(identity):
+            declare_implementation(identity, implemented_by=_double_for(identity))
+    return identities
+
+
+declare_test_implementations(IMPL)
+
 
 def a_policy(
     *,
@@ -64,6 +105,7 @@ def a_policy(
     """A one-requirement policy value. R1: the resolver takes a VALUE, so a test
     supplying its own policy is the intended shape, not a workaround."""
 
+    declare_test_implementations(implementation)
     return VerificationPolicy(
         policy_id="test-profile",
         version=1,
@@ -192,6 +234,7 @@ def workflow_policy(*implementations: str) -> VerificationPolicy:
 
     from prometheus_protocol.policy.profile import CHECK_WORKFLOW_GRADE
 
+    declare_test_implementations(*implementations)
     return VerificationPolicy(
         policy_id="test-workflow",
         version=1,

@@ -60,12 +60,14 @@ from prometheus_protocol.core.models import (
     Verdict,
 )
 from prometheus_protocol.gate.promotion import GateDecision
+from prometheus_protocol.policy.implementations import GIT_MERGE_CHECK
 from prometheus_protocol.sandbox import Limits, Sandbox, build_sandbox
 from prometheus_protocol.swarm.executor import Executor
 from prometheus_protocol.swarm.models import ExecutionResult
 
-#: The verifier identity the merge check reports in judgments it grounds.
-MERGE_CHECK_VERIFIER_ID = "git-merge-check"
+#: The verifier identity the merge check reports in judgments it grounds. The
+#: DECLARED object from ``policy/implementations.py``, by reference (G26).
+MERGE_CHECK_VERIFIER_ID = GIT_MERGE_CHECK
 
 #: Branch names the tool will touch: conservative charset, no leading dash
 #: (nothing that could read as a git option), no traversal-looking segments.
