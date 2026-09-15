@@ -247,6 +247,54 @@
         "test_the_partition_covers_every_declared_security_field_exactly_once"
       ],
       "property": "the collector that maps fields to their proofs can say no — an instrument returning an empty set would make the coverage guard vacuous for every field at once (doctrine #8, OPEN-GAPS G17)"
+    },
+    {
+      "module": "tests/conformance/test_sandbox_unbounded_reaches_the_command.py",
+      "positive": "test_container_emits_the_exact_cap_it_was_given",
+      "negatives": [
+        "test_container_omits_the_memory_flags_entirely_when_unbounded"
+      ],
+      "property": "the container adapter omits --memory under UNBOUNDED while still emitting the exact cap it was given — without the positive, the absence is equally consistent with an adapter that never caps memory at all (PR #106 P1)"
+    },
+    {
+      "module": "tests/conformance/test_sandbox_unbounded_reaches_the_command.py",
+      "positive": "test_namespace_passes_the_exact_caps_it_was_given",
+      "negatives": [
+        "test_namespace_passes_zero_for_an_unbounded_bound"
+      ],
+      "property": "the namespace adapter resolves UNBOUNDED to 0 at its argv line and still passes a real cap through unchanged"
+    },
+    {
+      "module": "tests/conformance/test_sandbox_unbounded_reaches_the_command.py",
+      "positive": "test_unsafe_sets_the_exact_rlimits_it_was_given",
+      "negatives": [
+        "test_unsafe_sets_no_address_space_or_cpu_rlimit_when_unbounded"
+      ],
+      "property": "the unsafe adapter sets no RLIMIT_AS/RLIMIT_CPU under UNBOUNDED and sets the exact ones it was given otherwise"
+    },
+    {
+      "module": "tests/conformance/test_sandbox_unbounded_reaches_the_command.py",
+      "positive": "test_the_adapter_collector_is_not_universally_true",
+      "negatives": [
+        "test_every_concrete_adapter_is_answered_for_here"
+      ],
+      "property": "the adapter collector can say no — an empty set would make the class-level ratchet vacuous for every adapter at once (doctrine #8)"
+    },
+    {
+      "module": "tests/conformance/test_sandbox_unbounded_reaches_the_command.py",
+      "positive": "test_the_finite_number_check_can_fail",
+      "negatives": [
+        "test_no_adapter_turns_an_unbounded_bound_into_a_finite_number"
+      ],
+      "property": "the class-level sweep for a finite number derived from an unbounded cap looks in the right place — the same assertions on a BOUNDED Limits must find those numbers"
+    },
+    {
+      "module": "tests/conformance/test_sandbox_unbounded_reaches_the_command.py",
+      "positive": "test_the_posture_record_also_matches_a_bounded_run",
+      "negatives": [
+        "test_the_posture_record_matches_what_the_container_actually_runs"
+      ],
+      "property": "the attestation records the posture the run actually had, and does not say 'unbounded' for every configuration"
     }
   ]
 }

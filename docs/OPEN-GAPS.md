@@ -1558,9 +1558,33 @@ saying *nothing in particular*.
   `reason="unknown_unbounded_spelling"` rather than falling back to either
   meaning.
 * `SubprocessVerifier` and `Limits` keep their `0 = no limit` contract
-  UNCHANGED. Inside the library, where the value arrives from a caller who wrote
-  it on the same line, `0` is unambiguous; `resolve_bound` is the single place
-  the operator-facing posture is translated into it.
+  UNCHANGED for every caller that already used it, and both additionally ACCEPT
+  the sentinel and carry it.
+
+### AMENDED 2026-09-15 by the Codex review on PR #106 — the sentinel must travel
+
+The first version of this fix resolved `UNBOUNDED` to `0` at the composition
+root. That is one flattening point for three substrates that do not agree on
+what a zero means, and the review found the consequence, correctly, as a P1:
+`ContainerSandbox` coerces the memory limit with `max(bytes, 16 MiB)` and
+emitted `--memory` unconditionally, so a posture an operator NAMED as "no cap"
+arrived at the container runtime as **the tightest cap in the tree**, while the
+namespace and unsafe adapters imposed nothing.
+
+The remedy is not to special-case zero inside `ContainerSandbox.run` — that
+fixes the instance and leaves the shape. `UNBOUNDED` now survives to the point
+where **each adapter builds its own command** (`core/bounds.py`), and each
+decides there: the container adapter omits the flags entirely, the namespace and
+unsafe adapters resolve to `0` at their argv and rlimit lines, because on those
+substrates `0` genuinely means "impose nothing". `--pids-limit` now emits the
+documented `-1` rather than relying on `0` happening to mean unlimited.
+
+The coercion predates the PR (`container.py`'s `max()` last changed in `d9a2bb7`,
+2026-06-30) and was already live for `verifier_memory_mb=0`. What the PR changed
+is that `0` went from an undocumented accident to a documented, supported
+posture — which turned a latent inconsistency into a shipped promise the
+container adapter did not keep. That is why it is a P1 on this PR and not a
+pre-existing note.
 * The posture record stores the operator's **spelling**, not a resolved `0`, so
   "no cap was asked for" and "a cap of zero" are distinguishable in the digest.
   `encode_value` tags `str` and `int` separately, so the two cannot collide.
@@ -1583,3 +1607,150 @@ round-trip would make a valid `Config` un-copyable; the ABSTAIN split; and a
 positive control that an unbreached bound still returns real verdicts in both
 directions, without which every assertion is consistent with a verifier that
 fails everything under a bound and passes everything without one.
+
+---
+
+## G22 — `verifier_cpu_seconds` has NO expression on the container substrate
+
+**Found while fixing the P1 on PR #106**, by asking the question the ruling
+attached to that fix rather than by looking for this.
+
+**What.** The three sandbox adapters do not agree on which bounds they enforce:
+
+| bound | namespace | unsafe | container |
+|---|---|---|---|
+| `memory_bytes` | bootstrap argv + cgroup `memory.max` | `RLIMIT_AS` | `--memory` / `--memory-swap` |
+| `max_processes` | bootstrap argv + cgroup `pids.max` | (process tree) | `--pids-limit` |
+| `cpu_time_s` | bootstrap argv + cgroup `cpu.max` | `RLIMIT_CPU` | **nothing** |
+
+Measured on the constructed command: `ContainerSandbox.run` builds its inner
+argv as `["python", "-B", *argv[1:]]` and passes **no** limit arguments to the
+bootstrap, unlike `NamespaceSandbox`, which passes memory, cpu, processes and
+file size explicitly. So `cpu_time_s` reaches the container adapter and is
+dropped.
+
+**`--cpus "1"` is not it, and is hardcoded.** It is a scheduling RATE — at most
+one core's worth of CPU per wall-clock second — not a quantity of CPU TIME. It
+never terminates a candidate. A runaway loop under the namespace adapter is
+killed by `RLIMIT_CPU` after `cpu_time_s` seconds; under the container adapter
+it runs until the WALL-CLOCK timeout, which is a different bound with a
+different meaning (`Verdict.ABSTAIN` rather than `Verdict.FAIL` — see G21).
+So the same candidate can be FAILED on one substrate and ABSTAINED on another,
+from the same configuration.
+
+**This is not the reported defect, and is wider.** PR #106's finding was that an
+unbounded memory posture became a 16 MiB cap on one substrate. This is that
+`cpu_time_s` is *not honoured at all* on that substrate, bounded or unbounded.
+Fixing the reported one does not touch it, and papering over it inside the
+class-level guard — by treating `--cpus` as the container's expression of
+`cpu_time_s` — would have recorded a bound as covered when it is absent.
+
+**Why it is not fixed here.** The remedy is a design choice, not a one-line
+change, and PR #106 is a review-response. At least three shapes exist and they
+are not equivalent: pass the limits into the container's bootstrap the way the
+namespace adapter does (most faithful, changes the image contract); use
+`--ulimit cpu=N` (runtime-specific, and silently ignored by some); or declare
+`cpu_time_s` unenforceable on this substrate and refuse the combination at load
+(fail-closed, and would refuse a configuration that works today).
+
+**What closes it.** Either an expression of `cpu_time_s` on the container
+substrate with a command-level proof beside the others in
+`test_sandbox_unbounded_reaches_the_command.py`, or a load-time refusal of the
+combination with the same. Not a comment saying `--cpus` covers it.
+
+**Test.** None yet — deliberately. The class-level guard in
+`test_sandbox_unbounded_reaches_the_command.py` excludes `--cpus` from its
+finite-number sweep and its docstring names this entry as the reason, so the
+exclusion is recorded where someone reading that test will find it rather than
+resolved by silence.
+
+---
+
+## G23 — branch protection was overridable by the party it constrains, and this tree cannot verify that it no longer is
+
+**The observed instance.** Pull request **#106** merged at **2026-09-15
+01:05:20Z**, merged by `driivai`, with review thread
+**`PRRT_kwDOTFRnqM6iVMIm`** unresolved. That thread carried a **P1 finding**
+(the container adapter turning a named unbounded memory posture into a 16 MiB
+cap). The repository's branch protection required conversation resolution before
+merge. The merge happened anyway, by administrator override.
+
+Nothing was broken and nothing misfired. The rule did exactly what it was
+configured to do: it asked, and the administrator answered.
+
+**Closed at the host, 2026-09-15.** Branch protection has been reconfigured so
+that conversation resolution cannot be bypassed by administrators.
+
+### The general form, which is the part worth keeping
+
+**A control that can be overridden by the party it constrains is a prompt, not a
+gate, and must not be documented as a gate.** The distinction is not pedantry
+about wording — it is the difference between a property a reader can rely on and
+a habit they are trusting. A prompt is worth having; most of this repository's
+process controls are prompts, and they catch real things. What is not acceptable
+is describing one as though it were structural, because a reader who believes a
+gate exists stops looking for the failure it was supposed to prevent.
+
+This is the same error as G17, one layer out. There, a test named
+`…_is_consumed_somewhere` proved only that a name was SPELLED, and the name
+carried a guarantee the mechanism did not. Here, "CI gates `main`" carried a
+guarantee the host configuration did not. Both were corrected by weakening the
+claim to what is true rather than by strengthening the mechanism to match the
+claim — and in both cases the weaker true statement is more useful, because it
+says where to look next.
+
+### Docs corrected under this entry (doctrine #9)
+
+Two live claims, both overstating a workflow's reach:
+
+| file | was | now |
+|---|---|---|
+| `docs/IP-READINESS.md` | "CI **gates** `main` on the canonical identity" | CI **detects** it; red-run-blocks-merge is branch protection, and on the `push: [main]` trigger the commit is already on `main` |
+| `docs/repository-identity.md` §4 | "**Gate** it in CI." | "**Detect** it in CI." |
+
+Checked and deliberately left unchanged:
+
+* `docs/OPEN-GAPS.md` (G13's limits) already said *"whether a red run can block a
+  merge is branch protection, not a workflow property"* — which is exactly the
+  correct framing, written before this instance proved it mattered.
+* `.github/workflows/pr-text-hygiene.yml` already said *"red is a
+  branch-protection setting, not a workflow property"*.
+* `docs/open-core-boundary.md` §15's "two public gates" describes a contribution
+  POLICY for a future open-source repository, not a claim about this
+  repository's host configuration. Left as policy language.
+
+### THE LIMIT THAT REMAINS — UNVERIFIABLE FROM THE REPO
+
+**Whether branch protection is now enforced cannot be asserted from inside this
+tree, and this entry does not assert it.** Branch protection is host
+configuration. It is not a file, it is not reachable from any ref, and the
+GitHub MCP server available to this project exposes **no branch-protection or
+ruleset endpoint** — checked, not assumed. A future session reading this entry
+has no way to confirm the fix is still in place.
+
+So this is recorded as **UNVERIFIABLE FROM THE REPO**, not as CLOSED. The
+closure is real; the *evidence* for it lives somewhere this repository cannot
+read.
+
+**The manual check that confirms it** — the only thing that does:
+
+> GitHub → repository **Settings** → **Rules** → **Rulesets** (or **Branches** →
+> the `main` protection rule) → confirm **"Require conversation resolution
+> before merging"** is on, and that **"Do not allow bypassing the above
+> settings"** is checked / the bypass list is empty. A ruleset with an
+> `Organization admin` or `Repository admin` bypass actor is the pre-2026-09-15
+> state under a different name.
+
+Whoever needs this asserted in a diligence setting should produce a screenshot
+or the ruleset JSON, dated, from that page. That is the artifact; nothing in
+this repository substitutes for it.
+
+**Test.** **NONE, deliberately, and this is the load-bearing sentence.** A test
+asserting branch-protection state would have to read a thing it cannot reach.
+It would therefore assert a constant, pass forever, and report a host setting as
+proven while measuring nothing — the exact shape of the defect this project
+exists to name, added in the entry that names it. A named gap is a passing test
+(doctrine #5); a green test over an unreadable subject is worse than no test.
+
+**What closes it.** Nothing in this repository. It is closed at the host or it
+is not closed; this entry exists so the claim is never made from here.

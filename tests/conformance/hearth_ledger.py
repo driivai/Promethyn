@@ -340,6 +340,20 @@ EXPECTED_PROTECTED_FILES = 21
 #:     that has lapsed but not been swept still reads ``pending`` while being
 #:     unapprovable — the state that had no test and now has two.
 #:
+#: * **PR #106 P1 (the unbounded sentinel must reach the adapter)** — one file,
+#:   ``verifier/runner.py``. ``SubprocessVerifier``'s three caps now accept
+#:   ``UNBOUNDED`` in addition to an int and CARRY it into ``Limits`` instead of
+#:   flattening it to ``0``. Nothing about verdicts, evidence or the sandbox
+#:   boundary changed; ``0`` still means "no limit" and every existing caller
+#:   passing one is unaffected.
+#:
+#:   The reason it had to change at all: the Codex review found that resolving
+#:   the sentinel before the adapter saw it made ``ContainerSandbox`` turn a
+#:   named "no memory cap" into a **16 MiB cap**, via a ``max(bytes, 16 MiB)``
+#:   floor that predates the change. A verifier that flattens the posture cannot
+#:   be fixed downstream, so the carrying had to start here. ``core/bounds.py``
+#:   holds the vocabulary and the full account.
+#:
 #: Those sprints are why these bytes are what they are. They do NOT license the
 #: next edit to the same files: updating a digest below is a fresh decision, and
 #: the reason for it belongs beside it.
@@ -381,7 +395,7 @@ DIGESTS: dict[str, str] = {
     "src/prometheus_protocol/verifier/model_judge.py":
         "bd0c73eea1f36e81bd5fdff7d2734b6c8d9b11580f700e08ce52f40ba3600937",
     "src/prometheus_protocol/verifier/runner.py":
-        "4d7f810f2cc019593ef388792a992903de75b89525130723d8fb72e2ec234e96",
+        "9caf32cca57dc7abe0e873efb5f4da017cebe547a6200189e8f3f780e4600e01",
     "src/prometheus_protocol/verifier/sql.py":
         "4a01962dc971c7426a72a5a26e6645cf64bc786aae9c5c87f5aa319b463a3a6b",
     "src/prometheus_protocol/verifier/trust.py":

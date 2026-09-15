@@ -19,6 +19,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from prometheus_protocol.core.bounds import Bound, is_unbounded, resolve_bound
 from prometheus_protocol.core.interfaces import Verifier
 from prometheus_protocol.core.models import (
     Evidence,
@@ -78,6 +79,14 @@ sys.stdout.write(response)
 """
 
 
+def _bound(value: Bound, *, name: str) -> Bound:
+    """A non-negative int, or the sentinel passed through untouched."""
+
+    if is_unbounded(value):
+        return value
+    return require_non_negative_int(value, name=name)
+
+
 class SubprocessVerifier(Verifier[Task]):
     """Default verifier. See the module-level security notice.
 
@@ -111,17 +120,20 @@ class SubprocessVerifier(Verifier[Task]):
         self,
         *,
         timeout_s: float = 5.0,
-        memory_mb: int = 256,
-        cpu_seconds: int = 5,
-        max_processes: int = 64,
+        memory_mb: Bound = 256,
+        cpu_seconds: Bound = 5,
+        max_processes: Bound = 64,
         sandbox: Sandbox | None = None,
     ) -> None:
         self.timeout_s = require_positive(timeout_s, name="timeout_s")
-        self.memory_mb = require_non_negative_int(memory_mb, name="memory_mb")
-        self.cpu_seconds = require_non_negative_int(cpu_seconds, name="cpu_seconds")
-        self.max_processes = require_non_negative_int(
-            max_processes, name="max_processes"
-        )
+        # ``0`` still means "no limit" here and every existing caller passing
+        # one is unaffected. ``UNBOUNDED`` is additionally accepted and is
+        # CARRIED, not resolved: the container adapter cannot tell a deliberate
+        # "no cap" from a zero once it has been flattened, and reading a zero as
+        # 16 MiB is exactly what it did (core/bounds.py).
+        self.memory_mb = _bound(memory_mb, name="memory_mb")
+        self.cpu_seconds = _bound(cpu_seconds, name="cpu_seconds")
+        self.max_processes = _bound(max_processes, name="max_processes")
         # The isolation boundary candidate code runs through. Defaults to the
         # configured/auto adapter (an isolating one); never the unsafe runner
         # unless explicitly opted in via PROM_ALLOW_UNSAFE_EXEC.
@@ -130,10 +142,15 @@ class SubprocessVerifier(Verifier[Task]):
         self.tier = self.TIER
 
     def _limits(self) -> Limits:
+        memory_mb = self.memory_mb
+        if is_unbounded(memory_mb):
+            memory_bytes: Bound = memory_mb
+        else:
+            memory_bytes = resolve_bound(memory_mb) * 1024 * 1024
         return Limits(
             wall_time_s=self.timeout_s,
             cpu_time_s=self.cpu_seconds,
-            memory_bytes=self.memory_mb * 1024 * 1024 if self.memory_mb > 0 else 0,
+            memory_bytes=memory_bytes,
             max_processes=self.max_processes,
         )
 

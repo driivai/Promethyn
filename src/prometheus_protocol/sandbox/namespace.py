@@ -26,6 +26,7 @@ from prometheus_protocol.sandbox._start_signal import (
     pipe_exec_failed,
     pipe_setup_failed,
 )
+from prometheus_protocol.core.bounds import resolve_bound
 from prometheus_protocol.sandbox.base import (
     FSIZE_BYTES,
     Limits,
@@ -140,10 +141,15 @@ class NamespaceSandbox(Sandbox):
         # Cap the candidate process tree with the stronger cgroup lever where a
         # writable cgroup is available; the bootstrap's POSIX rlimits stay as the
         # floor regardless, so this only adds containment, never removes it.
+        # Resolved HERE, at the call that builds the cgroup, not at the
+        # composition root: the bootstrap and the cgroup writer both read 0 as
+        # "impose nothing", which is what unbounded means on this substrate.
+        # The container adapter reads it differently and therefore resolves it
+        # differently, at its own command line (core/bounds.py).
         cgroup = create_pids_cgroup(
-            pids_max=limits.max_processes,
-            memory_bytes=limits.memory_bytes,
-            cpu_seconds=limits.cpu_time_s,
+            pids_max=resolve_bound(limits.max_processes),
+            memory_bytes=resolve_bound(limits.memory_bytes),
+            cpu_seconds=resolve_bound(limits.cpu_time_s),
         )
         limiter = "cgroup" if cgroup is not None else "rlimit"
         preexec = _join_cgroup_at_exec(cgroup)
@@ -156,9 +162,9 @@ class NamespaceSandbox(Sandbox):
                 "-I",
                 str(_BOOTSTRAP),
                 str(workspace),
-                str(limits.memory_bytes),
-                str(limits.cpu_time_s),
-                str(limits.max_processes),
+                str(resolve_bound(limits.memory_bytes)),
+                str(resolve_bound(limits.cpu_time_s)),
+                str(resolve_bound(limits.max_processes)),
                 str(FSIZE_BYTES),
                 str(status_w),
                 "--",
