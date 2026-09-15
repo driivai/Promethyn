@@ -53,8 +53,10 @@ from prometheus_protocol.core.models import (
     Unavailability,
     Unavailable,
 )
+from prometheus_protocol.core.errors import CONFIG_REFUSAL_REASONS, ConfigError
 from prometheus_protocol.execution.controller import ExecutionController
 from prometheus_protocol.execution.models import PendingStatus
+from prometheus_protocol.execution.pending import PendingActionService
 from prometheus_protocol.gate.authorization import ActionGate
 from prometheus_protocol.gate.promotion import OUTCOME_ROUTE, GateDecision
 from prometheus_protocol.ledger.sqlite_ledger import (
@@ -76,12 +78,14 @@ from prometheus_protocol.policy.profile import (
 from prometheus_protocol.policy.reobservation import (
     MOMENT_PRE_APPROVAL,
     MOMENT_PRE_EXECUTION,
+    NOT_THIS_PRINCIPAL,
     OBSERVATION_EVENT,
     OUTCOME_MATCHED,
     OUTCOME_MOVED,
     Observation,
     ReObservation,
     StateMoved,
+    StateUnobservable,
     StateUnreadable,
     Unreadable,
     compare,
@@ -541,8 +545,8 @@ def test_the_observation_record_is_chained_keyed_on_the_execution_attempt(tmp_pa
     ]
     attempt = pending.record["attempt_id"]
     assert [o["subject"] for o in found] == [
-        observation_subject(attempt, 0),
-        observation_subject(attempt, 1),
+        observation_subject(attempt, 0, pending_id=pending.id),
+        observation_subject(attempt, 1, pending_id=pending.id),
     ]
     assert ledger.verify_chain().ok
 
@@ -922,3 +926,662 @@ def test_the_state_digest_has_its_own_domain_and_commits_to_its_type():
     assert preimage.startswith(b"prom-target-state-v1\x00")
     assert b"prom-bound-requirements-v1" not in preimage
     assert b"BranchDeleteState" in preimage
+
+
+# ---------------------------------------------------------------------------
+# PART 7 — the real composition root
+# ---------------------------------------------------------------------------
+#
+# Everything above builds the controller by hand, and none of it proves the
+# mechanism is REACHED by anything shipped. When phase 1 merged it was not:
+# every non-test construction of ExecutionController omitted ``reobservation=``.
+# These two drive ``runtime/factory.build_execution_controller`` — the root the
+# CLI's ``approve`` and ``retry-execution`` commands build — with nothing wired
+# by hand but the ledger and the fixture repository.
+#
+# The executor here is the REAL SandboxExecutor the factory builds, not the spy,
+# so "the executor was not reached" is asserted the only way it can be from
+# outside: the branch the delete targets still exists afterwards.
+
+
+def _factory_controller(repo: Path) -> tuple:
+    """The shipped root, with only the ledger redirected to memory."""
+
+    from prometheus_protocol.runtime.factory import build_execution_controller
+
+    ledger = SqliteLedger(":memory:")
+    controller = build_execution_controller(
+        ledger=ledger, target_canonical=f"git://{_tool(repo).repo_path}"
+    )
+    return controller, ledger
+
+
+def test_the_real_composition_root_refuses_a_branch_that_moved(tmp_path):
+    """THE REPRODUCTION, THROUGH THE SHIPPED ROOT. This is the test that fails
+    on a tree where the factory omits ``reobservation=`` — on that tree the
+    approval succeeds and the delete proceeds, which is
+    ``test_the_gap_without_reobservation_...`` happening in production.
+
+    Nothing about re-observation is passed in here. The registry comes from the
+    factory reading its own target.
+    """
+
+    _make_repo(tmp_path)
+    tool = _tool(tmp_path)
+    controller, ledger = _factory_controller(tmp_path)
+    pending = _hold(controller, tool)
+
+    _add_commit_to_branch(tmp_path)
+
+    with pytest.raises(StateMoved) as refusal:
+        controller.approve(pending.id, identity="reviewer")
+
+    assert refusal.value.reason == "target_state_moved_before_approval"
+    assert ledger.pending_action(pending.id)["status"] == _PENDING_STATUS
+    # The executor was never reached: the branch is still there, with the
+    # commit that was never reviewed still on it.
+    assert tool.rev(BRANCH) is not None
+    assert tool.classify(BRANCH).unmerged_commits == 1
+
+
+def test_the_real_composition_root_pins_live_state_on_every_hold_it_creates(tmp_path):
+    """The positive half, and the one that says WHICH root wired what. A hold
+    created by the shipped factory carries an OBSERVED target-state block, and
+    the two classes phase 1 does not cover carry their reason by name rather
+    than being absent from the record."""
+
+    _make_repo(tmp_path)
+    controller, _ = _factory_controller(tmp_path)
+    pending = _hold(controller, _tool(tmp_path))
+
+    block = pending.record["target_state"]
+    assert block["observed"] is True
+    assert block["capture_point"] == "review"
+    assert len(block["digest"]) == 64
+
+    registry = controller.pending.reobservation
+    assert registry is not None, "the shipped root built a controller with no registry"
+    assert sorted(registry.observers) == [ACTION_BRANCH_DELETE]
+    assert sorted(registry.opted_out) == sorted(
+        [ACTION_DATABASE_MIGRATE, ACTION_SANDBOX_EXECUTE]
+    )
+    # Machinery, not coverage: ONE of the three action classes is observed.
+    assert len(registry.observers) == 1
+    assert set(registry.observers) | set(registry.opted_out) == set(ACTION_CLASSES)
+
+
+def test_the_real_composition_root_still_approves_a_branch_that_did_not_move(tmp_path):
+    """The paired positive control (doctrine #4): the shipped root refuses
+    movement, not approval. Without this, the refusal above is consistent with a
+    factory that has simply broken the approval path."""
+
+    _make_repo(tmp_path)
+    tool = _tool(tmp_path)
+    controller, ledger = _factory_controller(tmp_path)
+    pending = _hold(controller, tool)
+
+    controller.approve(pending.id, identity="reviewer")
+
+    assert ledger.pending_action(pending.id)["status"] == _APPROVED_STATUS
+    outcomes = [o["payload"]["outcome"] for o in _observations(ledger)]
+    assert outcomes == [OUTCOME_MATCHED, OUTCOME_MATCHED], outcomes
+
+
+# ---------------------------------------------------------------------------
+# PART 8 — two roots, two registries
+# ---------------------------------------------------------------------------
+#
+# WIRING CREATED THIS CASE. Before it, no root held a registry, so two could
+# never disagree. Now they can, and the disagreement is reachable through the
+# shipped CLI: `prom approve` builds its controller through
+# ``build_execution_controller(config, ledger=ledger)`` with the DEFAULT
+# ``sandbox://execution`` target (cli/main.py:341, :386), which opts
+# ``branch.delete`` out — while the hold it is approving may have been pinned by
+# a root that named a ``git://`` principal and does observe it.
+#
+# Found by driving the two roots against one ledger, not by reading the code:
+# the first run raised a bare KeyError out of `approve`.
+
+
+def _root(repo: Path | None, ledger_path: str):
+    """A controller from the shipped factory. ``repo=None`` builds it the way
+    the CLI does — default target, so ``branch.delete`` is opted out."""
+
+    from prometheus_protocol.runtime.factory import build_execution_controller
+
+    ledger = SqliteLedger(ledger_path)
+    if repo is None:
+        return build_execution_controller(ledger=ledger), ledger
+    return (
+        build_execution_controller(
+            ledger=ledger, target_canonical=f"git://{_tool(repo).repo_path}"
+        ),
+        ledger,
+    )
+
+
+def test_a_hold_pinned_by_an_observing_root_is_REFUSED_by_a_root_that_is_not(
+    tmp_path,
+):
+    """Doctrine #2: a requested security property that cannot be honoured is
+    refused, never degraded. The hold's own record says its live state was
+    pinned and will be re-checked; this service cannot re-check it; so the
+    approval is refused rather than granted unchecked.
+
+    Skipping instead would delete a branch irreversibly on evidence the record
+    claims was verified a second time.
+    """
+
+    ledger_path = str(tmp_path / "shared.db")
+    repo = tmp_path / "repo"
+    _make_repo(repo)
+    creator, _ = _root(repo, ledger_path)
+    pending = _hold(creator, _tool(repo))
+    assert pending.record["target_state"]["observed"] is True
+
+    approver, ledger = _root(None, ledger_path)
+    assert not approver.pending.reobservation.covers(ACTION_BRANCH_DELETE)
+
+    with pytest.raises(StateUnobservable) as refusal:
+        approver.approve(pending.id, identity="reviewer")
+
+    assert refusal.value.reason == "target_state_registry_mismatch"
+    assert refusal.value.reason in EXECUTION_REFUSAL_REASONS
+    # The refusal names the opt-out it hit, so an operator is told WHY this
+    # deployment cannot check the hold rather than only that it would not.
+    assert NOT_THIS_PRINCIPAL in str(refusal.value)
+    assert ledger.pending_action(pending.id)["status"] == _PENDING_STATUS
+
+
+def test_the_refusal_is_not_a_move_and_not_an_unreadable_target(tmp_path):
+    """Three different findings, three types. "this deployment does not observe
+    the class" is a statement about the DEPLOYMENT; collapsing it into
+    StateMoved would report a move nobody made, and into StateUnreadable would
+    report an outage that is not happening."""
+
+    ledger_path = str(tmp_path / "shared.db")
+    repo = tmp_path / "repo"
+    _make_repo(repo)
+    creator, _ = _root(repo, ledger_path)
+    pending = _hold(creator, _tool(repo))
+    approver, _ = _root(None, ledger_path)
+
+    with pytest.raises(StateUnobservable) as refusal:
+        approver.approve(pending.id, identity="reviewer")
+
+    assert not isinstance(refusal.value, (StateMoved, StateUnreadable))
+    assert refusal.value.reason not in {
+        "target_state_moved_before_approval",
+        "state_moved_after_approval",
+        "target_state_unreadable",
+    }
+
+
+def test_the_same_hold_approves_through_a_root_that_DOES_observe_it(tmp_path):
+    """THE PAIRED positive control (doctrine #4). Without it the refusal above
+    is consistent with a hold that cannot be approved by anything."""
+
+    ledger_path = str(tmp_path / "shared.db")
+    repo = tmp_path / "repo"
+    _make_repo(repo)
+    creator, _ = _root(repo, ledger_path)
+    pending = _hold(creator, _tool(repo))
+
+    approver, ledger = _root(repo, ledger_path)
+    approver.approve(pending.id, identity="reviewer")
+
+    assert ledger.pending_action(pending.id)["status"] == _APPROVED_STATUS
+
+
+def test_a_sandbox_targeted_root_cannot_CREATE_a_git_targeted_hold_at_all(tmp_path):
+    """MEASURED WHILE WRITING THE TEST BELOW, and it narrows the blast radius.
+
+    The obvious reverse case — the CLI-style root creating the hold — is not
+    reachable: the gate re-resolves the requirements from its OWN
+    ``target_canonical``, and a ``sandbox://execution`` re-resolution does not
+    cover an assessment resolved against ``git://``. The submission is refused
+    at authorization, before any hold exists.
+
+    So the registry disagreement has exactly one reachable direction through the
+    shipped factory: a hold CREATED by a git-targeted root and APPROVED by a
+    sandbox-targeted one, which is the refusal proven above. Pinned here because
+    "the other direction cannot happen" is a load-bearing claim and it is being
+    checked rather than reasoned about.
+    """
+
+    from prometheus_protocol.policy.execution import ExecutionNotAuthorized
+
+    repo = tmp_path / "repo"
+    _make_repo(repo)
+    creator, _ = _root(None, str(tmp_path / "shared.db"))
+
+    with pytest.raises(ExecutionNotAuthorized, match="does not cover the requirements"):
+        _hold(creator, _tool(repo))
+
+
+def test_a_hold_that_was_never_pinned_approves_under_an_observing_root(tmp_path):
+    """THE ASYMMETRY, NAMED RATHER THAN DISCOVERED. Here the registries differ
+    the other way: the hold was created with ``branch.delete`` opted out, so its
+    record carries ``observed: false`` and a reason, and the approving root
+    observes. It PROCEEDS, because there is no pin to compare against and
+    inventing one at approval would compare the target to itself.
+
+    That is honest — the record makes no claim the approval fails to honour —
+    but it is NOT symmetric with the refusal above, and the difference is which
+    direction makes a false claim. The gate makes this unreachable through the
+    factory (the test above), so the registry is supplied directly: what is
+    measured here is the comparison's behaviour, not a shipped path.
+    """
+
+    repo = tmp_path / "repo"
+    _make_repo(repo)
+    opted_out_everywhere = ReObservation(
+        opted_out={klass: "measuring the reverse direction" for klass in ACTION_CLASSES}
+    )
+    creator, _, ledger = _controller(repo, reobservation=opted_out_everywhere)
+    pending = _hold(creator, _tool(repo))
+
+    block = pending.record["target_state"]
+    assert block["observed"] is False
+    assert block["opted_out"] == "measuring the reverse direction"
+
+    # Same ledger, a registry that DOES observe branch.delete.
+    creator._pending._reobservation = _reobservation(repo)
+    creator.approve(pending.id, identity="reviewer")
+
+    assert ledger.pending_action(pending.id)["status"] == _APPROVED_STATUS
+    # No observation was chained for it, so no receipt claims a check that did
+    # not happen.
+    assert _observations(ledger) == []
+
+
+# ---------------------------------------------------------------------------
+# PART 9 — the receipt's identity, and what survives a reload
+# ---------------------------------------------------------------------------
+
+
+def test_two_holds_sharing_an_attempt_id_do_not_share_an_observation_subject(
+    tmp_path,
+):
+    """The observation subject keyed on ``attempt_id`` alone collides.
+
+    ``attempt_id`` is a caller-supplied string and nothing requires it to be
+    unique — ``_hold`` derives it from the branch name, so two holds on the same
+    branch share one. Keyed on the attempt alone, both holds' receipts land on
+    ONE subject, and a reader asking "what was observed for hold #2" gets hold
+    #1's reading.
+
+    FIXED BY INCLUDING THE HOLD, not by requiring attempt uniqueness: a
+    uniqueness rule would be a new global constraint on every caller, would not
+    apply retroactively to holds already in a ledger, and would be enforced far
+    from where a duplicate is created. The hold id is already the ledger's
+    primary key, so it is the identity that exists.
+    """
+
+    _make_repo(tmp_path)
+    tool = _tool(tmp_path)
+    controller, _, ledger = _controller(
+        tmp_path, reobservation=_reobservation(tmp_path)
+    )
+    first = _hold(controller, tool)
+    second = _hold(controller, tool)
+    assert first.id != second.id
+    assert first.record["attempt_id"] == second.record["attempt_id"], (
+        "the collision this test is about did not occur"
+    )
+
+    attempt = first.record["attempt_id"]
+    assert observation_subject(attempt, 0, pending_id=first.id) != observation_subject(
+        attempt, 0, pending_id=second.id
+    )
+
+    controller.approve(first.id, identity="reviewer")
+    controller.approve(second.id, identity="reviewer")
+
+    subjects = [o["subject"] for o in _observations(ledger)]
+    assert len(subjects) == len(set(subjects)), subjects
+    # And each hold's own receipt is readable by its own identity.
+    for hold in (first, second):
+        entry = controller.pending.pre_approval_entry(attempt, pending_id=hold.id)
+        assert entry is not None, f"hold #{hold.id} has no pre-approval receipt"
+
+
+def test_a_reloaded_state_moved_hold_still_names_its_reviewer_and_the_time(tmp_path):
+    """Approval metadata survives the reload of a hold that went terminal.
+
+    The design's second human-facing obligation is that the refusal says **the
+    approval stands as a record** — with the approver's name and time, because
+    it was a correct decision on the state it was shown. A decoder that
+    reconstructs the human decision only for ``APPROVED`` and ``REJECTED``
+    drops exactly the case where the interface has to show it, and an operator
+    reading a terminal hold would see no approver at all.
+
+    The decision is labelled APPROVED rather than the hold's terminal status:
+    what the human did was approve. The terminal status is the hold's, and it is
+    on the row beside it.
+    """
+
+    _make_repo(tmp_path)
+    controller, _, ledger = _controller(
+        tmp_path, reobservation=_reobservation(tmp_path)
+    )
+    pending = _hold(controller, _tool(tmp_path))
+    _approve_without_executing(controller, pending.id)
+    _add_commit_to_branch(tmp_path)
+    with pytest.raises(StateMoved):
+        controller.retry_execution(pending.id, identity="operator")
+
+    # Reloaded from the row, not the object that was held in memory.
+    reloaded = controller.pending.get(pending.id)
+    assert reloaded is not None
+    assert reloaded.status == PendingStatus.STATE_MOVED
+    assert reloaded.human_decision is not None, (
+        "a terminal hold reloaded from the ledger forgot who approved it"
+    )
+    assert reloaded.human_decision.identity == "reviewer"
+    assert reloaded.human_decision.timestamp
+    assert reloaded.human_decision.decision == PendingStatus.APPROVED.value
+    assert reloaded.human_decision.decision != PendingStatus.STATE_MOVED.value
+
+
+# ---------------------------------------------------------------------------
+# PART 10 — the claim, and the row a refusal leaves behind
+# ---------------------------------------------------------------------------
+#
+# Both findings are about the SAME line: the pre-execution comparison sits after
+# ``claim_pending_execution``, so any refusal it raises leaves the claim spent
+# and no execution row written.
+
+
+def _refused_rows(ledger: SqliteLedger, pending_id: int) -> list[dict]:
+    return [r for r in ledger.executions_for_pending(pending_id) if r["refused"]]
+
+
+def test_a_transient_observer_outage_does_not_permanently_brick_an_approved_hold(
+    tmp_path,
+):
+    """THE REPRODUCTION FOR THE CLAIM LEAK, and its fix in one test.
+
+    The observer is unavailable at execution time. That says nothing about the
+    target, so the hold stays APPROVED and is retryable — but the claim was
+    already taken, and retaining it would make every later retry fail with
+    "already in progress or has completed" no matter how healthy the observer
+    became. An approved action permanently unexecutable because a reader was
+    down for a moment, with no verb to recover it.
+
+    The second half is what makes this a fix rather than an assertion: the
+    observer recovers and the SAME hold executes.
+    """
+
+    _make_repo(tmp_path)
+    controller, spy, ledger = _controller(
+        tmp_path, reobservation=_reobservation(tmp_path)
+    )
+    pending = _hold(controller, _tool(tmp_path))
+    _approve_without_executing(controller, pending.id)
+
+    controller.pending._reobservation = _reobservation(
+        tmp_path, observers={ACTION_BRANCH_DELETE: Broken()}
+    )
+    with pytest.raises(StateUnreadable) as refusal:
+        controller.retry_execution(pending.id, identity="operator")
+
+    assert refusal.value.reason == "target_state_unreadable"
+    assert spy.calls == []
+    # Still approved, and the claim was RELEASED: not terminal, so retryable.
+    assert ledger.pending_action(pending.id)["status"] == _APPROVED_STATUS
+    assert ledger.claim_pending_execution(pending.id, CLOCK), (
+        "the claim was not released, so this hold can never execute again"
+    )
+    ledger.release_pending_execution(pending.id)
+
+    # The observer recovers. The same hold executes.
+    controller.pending._reobservation = _reobservation(tmp_path)
+    result = controller.retry_execution(pending.id, identity="operator")
+    assert result.executed
+    assert len(spy.calls) == 1
+
+
+def test_a_hold_whose_target_MOVED_keeps_its_claim_spent(tmp_path):
+    """The other side of the same ruling, and the reason it is keyed on type.
+
+    A move is terminal. Releasing the claim here would be releasing it for a
+    hold that must never execute — the status transition already refuses it, and
+    the claim is the second lock. The two refusals take opposite branches and
+    both are asserted, because a rule with only one measured side is a rule
+    whose other side is a guess.
+    """
+
+    _make_repo(tmp_path)
+    controller, spy, ledger = _controller(
+        tmp_path, reobservation=_reobservation(tmp_path)
+    )
+    pending = _hold(controller, _tool(tmp_path))
+    _approve_without_executing(controller, pending.id)
+    _add_commit_to_branch(tmp_path)
+
+    with pytest.raises(StateMoved):
+        controller.retry_execution(pending.id, identity="operator")
+
+    assert spy.calls == []
+    assert ledger.pending_action(pending.id)["status"] == _STATE_MOVED_STATUS
+    assert not ledger.claim_pending_execution(pending.id, CLOCK), (
+        "a terminal hold's claim was released"
+    )
+
+
+def test_the_claim_ruling_is_keyed_on_type_and_the_key_set_is_pinned(tmp_path):
+    """G25's shape applied to a behavioural rule: pin the MEMBERSHIP, because a
+    fourth refusal type added later would otherwise silently take the default
+    branch. The default is to RELEASE, so an unnamed terminal refusal would
+    leave a hold that must not execute retry-eligible — the status still
+    refuses it, which is why the default is safe, and why this pin is what
+    makes adding a type a decision rather than an accident."""
+
+    from prometheus_protocol.policy.reobservation import (
+        CLAIM_RETAINED_BY,
+        refusal_retains_claim,
+    )
+
+    assert CLAIM_RETAINED_BY == frozenset({StateMoved})
+    assert refusal_retains_claim(StateMoved("moved", reason="state_moved_after_approval"))
+    for other in (
+        StateUnreadable("unreadable", reason="target_state_unreadable"),
+        StateUnreadable("aspects", reason="target_state_aspects_differ"),
+        StateUnobservable("not here", reason="target_state_registry_mismatch"),
+    ):
+        assert not refusal_retains_claim(other), other
+
+
+@pytest.mark.parametrize(
+    "observer,refusal,reason",
+    [
+        (None, StateMoved, "state_moved_after_approval"),
+        (Broken, StateUnreadable, "target_state_unreadable"),
+    ],
+)
+def test_a_pre_execution_refusal_writes_a_refused_execution_row(
+    tmp_path, observer, refusal, reason
+):
+    """BOTH refusal kinds, because the audit contract does not have an exempt
+    one. The hold was claimed and an execution WAS attempted; without a row,
+    ``executions_for_pending`` shows nothing and an approved action that did not
+    execute is indistinguishable from one nobody ever tried to run.
+
+    The row names the typed reason, so the receipt says WHY rather than only
+    that something was refused.
+    """
+
+    _make_repo(tmp_path)
+    controller, spy, ledger = _controller(
+        tmp_path, reobservation=_reobservation(tmp_path)
+    )
+    pending = _hold(controller, _tool(tmp_path))
+    _approve_without_executing(controller, pending.id)
+    assert _refused_rows(ledger, pending.id) == []
+
+    if observer is None:
+        _add_commit_to_branch(tmp_path)
+    else:
+        controller.pending._reobservation = _reobservation(
+            tmp_path, observers={ACTION_BRANCH_DELETE: observer()}
+        )
+
+    with pytest.raises(refusal):
+        controller.retry_execution(pending.id, identity="operator")
+
+    assert spy.calls == []
+    rows = _refused_rows(ledger, pending.id)
+    assert len(rows) == 1, rows
+    row = rows[0]
+    assert row["executed"] == 0 or row["executed"] is False
+    assert reason in row["detail"], row["detail"]
+    # The row carries the authorization it was decided under, like every other
+    # execution row, so the refusal is readable without a join.
+    assert row["authorization"]
+
+
+# ---------------------------------------------------------------------------
+# PART 11 — a supplied service and a supplied registry
+# ---------------------------------------------------------------------------
+
+
+def _service(ledger, **kwargs):
+    """A service built the way a caller who wires their own would build it."""
+
+    return PendingActionService(
+        ledger,
+        authorizer=ExecutionAuthorizer(lambda: load_profile(DEFAULT_PROFILE_ID)),
+        **kwargs,
+    )
+
+
+def _bare_controller(repo: Path, *, pending, reobservation):
+    return ExecutionController(
+        gate=ActionGate(
+            route_high_risk=True,
+            authorizer=ExecutionAuthorizer(lambda: load_profile(DEFAULT_PROFILE_ID)),
+            target_canonical=f"git://{Path(repo).resolve()}",
+        ),
+        executor=Spy(),
+        ledger=pending._ledger,
+        pending=pending,
+        reobservation=reobservation,
+    )
+
+
+def test_a_supplied_service_that_would_discard_the_registry_is_REFUSED(tmp_path):
+    """THE REPRODUCTION AND THE RULING (doctrine #2). ``pending or Pending...``
+    never constructs the service when one is supplied, so the registry passed
+    beside it was silently dropped and both comparisons ran on the service's own
+    registry — possibly ``None``.
+
+    That is the worst shape this repository has a name for: every observable
+    surface says re-observation is enabled, and neither check runs. Refused at
+    construction rather than degraded, with a typed reason.
+    """
+
+    _make_repo(tmp_path)
+    ledger = SqliteLedger(":memory:")
+    service = _service(ledger)  # no registry
+    assert service.reobservation is None
+
+    with pytest.raises(ConfigError) as refusal:
+        _bare_controller(tmp_path, pending=service, reobservation=_reobservation(tmp_path))
+
+    assert refusal.value.reason == "reobservation_registry_discarded"
+    assert refusal.value.reason in CONFIG_REFUSAL_REASONS
+
+
+def test_a_supplied_service_carrying_a_DIFFERENT_registry_is_refused_too(tmp_path):
+    """Not only the ``None`` case. Two registries are two answers to "which
+    classes are observed", and the second comparison could then not happen for
+    a class the first one covered. Identity, not equality: a caller that means
+    to share one passes one."""
+
+    _make_repo(tmp_path)
+    ledger = SqliteLedger(":memory:")
+    service = _service(ledger, reobservation=_reobservation(tmp_path))
+    other = _reobservation(tmp_path)  # equivalent, not the same object
+    assert service.reobservation is not other
+
+    with pytest.raises(ConfigError) as refusal:
+        _bare_controller(tmp_path, pending=service, reobservation=other)
+
+    assert refusal.value.reason == "reobservation_registry_discarded"
+
+
+def test_a_supplied_service_carrying_THE_SAME_registry_is_accepted(tmp_path):
+    """The positive control (doctrine #4). The refusal is about the registry
+    being discarded, not about supplying a service at all — without this the
+    rule above is consistent with a controller that has simply stopped
+    accepting ``pending=``."""
+
+    _make_repo(tmp_path)
+    ledger = SqliteLedger(":memory:")
+    registry = _reobservation(tmp_path)
+    service = _service(ledger, reobservation=registry)
+
+    controller = _bare_controller(tmp_path, pending=service, reobservation=registry)
+
+    assert controller.pending is service
+    assert controller.pending.reobservation is registry
+
+
+def test_supplying_a_service_with_no_registry_and_asking_for_none_is_accepted(
+    tmp_path,
+):
+    """The other positive control. Nothing was requested, so nothing was
+    discarded: a deployment that wires no re-observation is untouched by this
+    rule, and its records still say ``observed: false`` with the reason."""
+
+    _make_repo(tmp_path)
+    ledger = SqliteLedger(":memory:")
+    service = _service(ledger)
+
+    controller = _bare_controller(tmp_path, pending=service, reobservation=None)
+
+    assert controller.pending is service
+    assert controller.pending.reobservation is None
+    pending = _hold(controller, _tool(tmp_path))
+    assert pending.record["target_state"]["observed"] is False
+
+
+def test_two_registries_that_are_EQUAL_but_not_the_same_object_are_still_refused(
+    tmp_path,
+):
+    """WHY IDENTITY AND NOT EQUALITY, pinned because the two are not the same
+    check and a mutation proved this suite could not tell them apart.
+
+    ``ReObservation`` is a dataclass, so ``==`` compares its two mappings, and
+    the observers inside them compare with whatever ``__eq__`` their class has.
+    ``GitBranchStateObserver`` defines none, so today equality IS identity for
+    the observers and an equality check would behave the same. That is exactly
+    the problem: the strictness of this refusal would be a property of a class
+    this check does not own. An observer that later grew an ``__eq__`` on, say,
+    ``repo_path`` would make two observers over DIFFERENT GitTools — different
+    sandbox, different base branch — compare equal, and the check would start
+    accepting a registry that reads its subject through a different instrument.
+    A security check that can loosen without being edited is not a check.
+
+    Identity cannot loosen. The cost is that a caller who builds two equivalent
+    registries is refused and told to pass one; that is the correct direction.
+    """
+
+    _make_repo(tmp_path)
+    ledger = SqliteLedger(":memory:")
+    observer = GitBranchStateObserver(_tool(tmp_path))
+    opted_out = {
+        ACTION_SANDBOX_EXECUTE: "phase 1 covers branch.delete only",
+        ACTION_DATABASE_MIGRATE: "phase 1 covers branch.delete only",
+    }
+    one = ReObservation(observers={ACTION_BRANCH_DELETE: observer}, opted_out=opted_out)
+    two = ReObservation(observers={ACTION_BRANCH_DELETE: observer}, opted_out=opted_out)
+    assert one == two, "this test needs two registries that ARE equal"
+    assert one is not two
+
+    service = _service(ledger, reobservation=one)
+    with pytest.raises(ConfigError) as refusal:
+        _bare_controller(tmp_path, pending=service, reobservation=two)
+
+    assert refusal.value.reason == "reobservation_registry_discarded"

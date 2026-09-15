@@ -62,6 +62,7 @@ from prometheus_protocol.policy.profile import PolicyRequirement, VerificationPo
 from prometheus_protocol.policy.resolver import resolve
 from prometheus_protocol.policy.snapshot import ACTION_SANDBOX_EXECUTE, snapshot_digest
 from prometheus_protocol.swarm.models import content_hash
+from prometheus_protocol.runtime.factory import build_reobservation
 
 
 # ---------------------------------------------------------------------------
@@ -205,6 +206,11 @@ def run_loop(*, out: Callable[[str], None] = print) -> dict:
         ),
         executor=SandboxExecutor(),
         ledger=ledger,
+        # Wired even though this root executes only ``sandbox.execute``, which
+        # phase 1 does not observe: the registry is TOTAL over the action
+        # classes, so the record says which reason applies to each rather than
+        # being silent about all three.
+        reobservation=build_reobservation(target_canonical="sandbox://demo"),
     )
     summary: dict = {}
 

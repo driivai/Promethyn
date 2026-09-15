@@ -1,12 +1,40 @@
-# Re-observation at execution — revision 4: PHASE 1 IMPLEMENTED for `branch.delete`
+# Re-observation at execution — revision 5: phase 1 built AND wired for `branch.delete`
 
-**Status: the mechanism is built for ONE action class.** `branch.delete` is
-re-observed end to end — captured at hold creation, compared before the
-approval is recorded, and re-read immediately before the executor is called —
-and `sandbox.execute` and `database.migrate` are **opted out by name**, which
-is a value in the record rather than an absence. Everything below revision 3's
+**Status: the mechanism is built for ONE action class, and as of revision 5 it
+is reached by the shipped composition roots.** `branch.delete` is re-observed
+end to end — captured at hold creation, compared before the approval is
+recorded, and re-read immediately before the executor is called — and
+`sandbox.execute` and `database.migrate` are **opted out by name**, which is a
+value in the record rather than an absence. Everything below revision 3's
 heading is the design as ruled; this section records what landed, what it is
 allowed to claim, and what it does not do.
+
+## REVISION 4 CLAIMED THIS AND IT WAS NOT TRUE — the correction, in front
+
+Revision 4 was headed "PHASE 1 IMPLEMENTED" and said `branch.delete` was
+"re-observed end to end". **On the tree that merged, no shipped code path
+re-observed anything.** `reobservation` was an optional constructor argument
+that defaulted to `None`, and every non-test construction of
+`ExecutionController` omitted it: `runtime/factory.py`,
+`tools/stale_branch_demo.py`, `orchestration/demo.py`,
+`benchmarks/sql_loop_demo.py` and `benchmarks/grounding_loop_demo.py`. The only
+`ReObservation(...)` in the repository was in the test module. Thirty passing
+proofs and thirteen reddening mutations described a mechanism that ran nowhere,
+and `None` is byte-for-byte the unfixed path the reproduction measures — so
+every deployment was on the before-picture while this document said it was on
+the after.
+
+This is the second time in this project a security-critical parameter has
+shipped with no production caller wiring it, where the unwired default IS the
+behaviour. The correction is not only the wiring: it is
+`tests/conformance/test_reobservation_wiring.py`, which reads the source and
+refuses any construction of `ExecutionController` that omits the argument, so
+the next root cannot repeat it silently. That guard fails on the tree revision 4
+described.
+
+**The general rule this adds.** A proof that builds its own subject proves the
+subject, never its reach. A feature whose mechanism is proven and whose wiring
+is not has been tested, not shipped, and a document may not call it shipped.
 
 ## WHAT SHIPPED, AND WHY THIS CLASS FIRST
 
@@ -29,7 +57,30 @@ evidence says the delete is lossless.
 | comparison one, before the approval is recorded | `execution/pending.py` — `_require_state_unmoved_before_approval` |
 | comparison two, immediately before the executor | `execution/controller.py` — in `_execute`, after the claim |
 | the terminal transition out of `APPROVED` | `ledger/sqlite_ledger.py` — `mark_state_moved`, guarded on `status = 'approved'` |
-| the observation record, chained, keyed on the execution attempt | `policy/reobservation.py` + `execution/pending.py` — `_compare_now` |
+| the observation record, chained, keyed on the execution attempt and the hold | `policy/reobservation.py` + `execution/pending.py` — `_compare_now` |
+| **what a pre-execution refusal leaves behind**: a refused execution row, and the claim released unless the target MOVED | `execution/controller.py` — `CLAIM_RETAINED_BY` |
+| **the registry each composition root gets, from its own target** | `runtime/factory.py` — `build_reobservation` |
+| **the wiring, at all five shipped roots** | `runtime/factory.py`, `tools/stale_branch_demo.py`, `orchestration/demo.py`, `benchmarks/sql_loop_demo.py`, `benchmarks/grounding_loop_demo.py` |
+| **the guard that stops a sixth root omitting it** | `tests/conformance/test_reobservation_wiring.py` — reads the source, pins the site set |
+
+### What each root observes, and why they differ
+
+`build_reobservation` decides from the root's `target_canonical`, because the
+decision depends on what the principal IS. A `git://` target gets a real
+observer for `branch.delete`; every other target gets `branch.delete` opted out
+under `NOT_THIS_PRINCIPAL` — **a different fact** from `PHASE_ONE_NOT_COVERED`,
+and the two are separate constants so a deployment that *cannot* observe never
+looks like one that *chose not to*. `sandbox.execute` and `database.migrate`
+carry `PHASE_ONE_NOT_COVERED` everywhere. The result is total over
+`ACTION_CLASSES` for every principal, so no class is ever unobserved by absence.
+
+The CLI's three bare `PendingActionService` constructions
+(`cli/main.py` — `pending`, `reject`, `sweep`) carry no registry and are named
+exempt, because none of them approves or executes. That exemption is checked
+rather than believed: the guard asserts the variable each is bound to never
+reaches `approve`, `pre_approval_entry` or
+`require_state_unmoved_for_execution`. `approve` and `retry-execution` build the
+controller through `build_execution_controller`, so they are wired.
 
 ## WHAT THE DOCS MAY CLAIM — the exact sentence
 
@@ -89,9 +140,14 @@ name **the remedy**.
 
 ## WHAT PHASE 1 DOES NOT DO
 
-- **Two of three action classes are opted out**, by name, in the deployment the
-  tests wire. The opt-out is real machinery and its reason is in the record;
-  it is not coverage.
+- **ONE of three action classes is observed, and only for a `git://`
+  principal.** `sandbox.execute` and `database.migrate` are opted out by name
+  at every root, and `branch.delete` is opted out too wherever the target is
+  not a git repository — which is the default `sandbox://execution` target and
+  therefore most deployments. The opt-out is real machinery and its reason is
+  in the record; it is not coverage. Read the numbers before the verdict: five
+  composition roots are wired, and exactly one of them
+  (`tools/stale_branch_demo.py`) names a git principal today.
 - **The opt-out is not in the attested posture.** It is a constructor argument
   at the composition root, not a `Config` field on `SECURITY_FIELDS`, so it is
   not in the configuration-attestation digest. A deployment's choice is in

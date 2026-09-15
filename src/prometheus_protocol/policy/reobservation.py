@@ -105,6 +105,58 @@ class StateUnreadable(ExecutionNotAuthorized):
     """The target could not be read, wholly or in part. Never a comparison."""
 
 
+class StateUnobservable(ExecutionNotAuthorized):
+    """The hold was pinned to live state that THIS service does not observe.
+
+    Distinct from both siblings, because it is a statement about the DEPLOYMENT
+    and not about the target: the state was not read, was not unreadable, and
+    did not move — the registry in front of this hold has the hold's action
+    class opted out, so the comparison the hold's own record says it is subject
+    to cannot be made here.
+
+    WHY THIS IS A REFUSAL AND NOT A SKIP. Two composition roots can disagree,
+    and wiring re-observation is what made that possible: a hold created by a
+    root naming a ``git://`` principal carries ``observed: true``, and the CLI's
+    ``approve`` builds its controller with the default ``sandbox://execution``
+    target, which opts ``branch.delete`` out. Skipping the comparison there
+    would execute an irreversible delete on evidence the hold's own record
+    claims was re-checked — degrading a requested security property instead of
+    refusing it (doctrine #2). Measured, not hypothetical: before this type
+    existed the same path raised a bare ``KeyError`` out of ``approve``.
+    """
+
+
+#: Which pre-execution refusals leave the hold RETRYABLE, keyed on TYPE.
+#:
+#: WHY A TYPE AND NOT A REASON STRING. The three refusal types are the closed
+#: vocabulary; a reason distinguishes WHICH comparison found it, and two
+#: reasons can share a type. Keying on the type is keying on the fact.
+#:
+#: ONLY ``StateMoved`` RETAINS THE CLAIM. A hold whose target moved must never
+#: execute, and the claim is a second lock on that. Everything else is doctrine
+#: #1's "the check could not run": an observer outage or a deployment that does
+#: not observe the class says nothing about the target, and a hold left claimed
+#: after one is a hold that can never execute and can never be retried — the
+#: claim is spent forever and every retry reports "already in progress". That
+#: is a transient outage permanently bricking an approved action, which is the
+#: road an operator ends by removing the requirement (G21).
+#:
+#: THE DEFAULT FOR A TYPE NOT NAMED HERE IS TO RELEASE, and that is safe
+#: because terminal-ness does not live in the claim: ``StateMoved`` transitions
+#: the hold's STATUS out of ``approved``, and ``retry_decision`` refuses it on
+#: the status alone. The claim is belt; the status is suspenders. A new refusal
+#: type that must retain the claim has to be added here deliberately, and
+#: ``test_reobservation_branch_delete.py`` pins this mapping's key set so it
+#: cannot fall behind the types.
+CLAIM_RETAINED_BY: "frozenset[type]" = frozenset({StateMoved})
+
+
+def refusal_retains_claim(refusal: BaseException) -> bool:
+    """Whether ``refusal`` leaves the at-most-once claim spent."""
+
+    return any(isinstance(refusal, kind) for kind in CLAIM_RETAINED_BY)
+
+
 @dataclass(frozen=True)
 class Unreadable:
     """Why a reading could not be taken, and which aspects were not read.
@@ -306,6 +358,24 @@ class ReObservation:
         )
 
 
+#: The opt-out reason a composition root gives for the two action classes
+#: phase 1 does not cover. Spelled once, here, because it appears in every hold
+#: record those roots create and a reason that drifted between roots would make
+#: two deployments' records incomparable for no reason anyone chose.
+PHASE_ONE_NOT_COVERED = (
+    "re-observation phase 1 covers branch.delete only; this action class is not "
+    "observed and its holds execute against replayed evidence"
+)
+
+#: The opt-out reason for an action class this root's target cannot BE. A root
+#: whose principal is not a git repository has no branch state to read, and
+#: saying so is different from saying the class is out of scope: one is about
+#: the deployment, the other about the phase.
+NOT_THIS_PRINCIPAL = (
+    "this composition root's target is not a git principal, so there is no "
+    "branch state to observe here"
+)
+
 #: The capture point a pinned reading describes. ``review`` is hold creation,
 #: which is where §2.1 ruled the capture point. ``rehearsal`` is the successor
 #: feature and is deliberately not a value this code can produce yet: a field
@@ -414,23 +484,40 @@ def compare(
     return OUTCOME_MATCHED if observation.digest == pinned_digest else OUTCOME_MOVED
 
 
-def observation_subject(attempt_id: str, execution_attempt: int) -> str:
+def observation_subject(
+    attempt_id: str, execution_attempt: int, *, pending_id: int
+) -> str:
     """The chain subject an observation is bound under.
 
-    KEYED ON THE EXECUTION ATTEMPT, not the hold and not the action. The
-    verification attempt is what the pinned record already binds to
-    (``policy/record.py``), so pairing an observation with its authorization is
-    structural rather than a join someone has to get right; the ordinal
-    separates a retry's reading from the first one, so a retry ADDS a record
-    instead of overwriting one. ``0`` is the pre-approval reading, which
-    precedes every execution attempt.
+    THE HOLD IDENTITY IS IN THE KEY, and leaving it out was a defect (PR #113
+    review). The original ruling keyed on the verification attempt alone,
+    because that is what the pinned record binds to — but ``attempt_id`` is
+    CALLER-SUPPLIED and nothing requires it to be unique. Two holds created with
+    the same attempt therefore shared ``observation:<attempt>#0``, and
+    ``pre_approval_entry`` returns the first matching event, so the later hold's
+    execution receipt restated the EARLIER hold's observation: a receipt for one
+    decision carrying another decision's evidence.
+
+    Fixed by including the hold, NOT by requiring attempts to be unique. A
+    uniqueness rule would be a new global constraint on every caller, it could
+    not be applied retroactively to rows already written, and it would be
+    enforced far from where a duplicate is created. The hold id is already
+    unique — it is the ledger's own primary key — and it is already the thing
+    the pinned record is attached to, so the pairing stays structural.
+
+    The ordinal separates a retry's reading from the first one, so a retry ADDS
+    a record instead of overwriting one. ``0`` is the pre-approval reading,
+    which precedes every execution attempt.
     """
 
     if not isinstance(execution_attempt, int) or isinstance(execution_attempt, bool):
         raise ValueError("execution_attempt must be an integer")
     if execution_attempt < 0:
         raise ValueError("execution_attempt counts from 0 (the pre-approval reading)")
-    return f"observation:{_identity(attempt_id, what='attempt_id')}#{execution_attempt}"
+    if not isinstance(pending_id, int) or isinstance(pending_id, bool):
+        raise ValueError("pending_id must be the hold's integer identity")
+    attempt = _identity(attempt_id, what="attempt_id")
+    return f"observation:{attempt}@pending:{pending_id}#{execution_attempt}"
 
 
 def observation_record(

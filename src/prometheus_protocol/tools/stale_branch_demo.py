@@ -71,6 +71,7 @@ from prometheus_protocol.verifier.bank import VerifierBank
 from prometheus_protocol.verifier.store import InMemoryTrustStore
 from prometheus_protocol.core.models import Tier
 from prometheus_protocol.swarm.models import content_hash
+from prometheus_protocol.runtime.factory import build_reobservation
 
 #: The two fixture branches that carry commits main never received.
 UNMERGED_BRANCHES = ("task-04", "task-09")
@@ -208,6 +209,14 @@ def run_hero(repo: Path | str, *, out: Callable[[str], None] = print) -> dict:
             repo_path=repo, sandbox=tool._sandbox, allow_delete=True
         ),
         ledger=ledger,
+        # THE BRANCH-DELETE ROOT, and the one where the gap actually bites: this
+        # demo really deletes (``allow_delete=True``). The observer is built
+        # over the SAME ``GitTool`` the merge proof reads through, so the state
+        # a hold is pinned to and the evidence it was authorized on are two
+        # readings of one subject by one instrument.
+        reobservation=build_reobservation(
+            target_canonical=repo_canonical, git_tool=tool
+        ),
     )
     # PHASE-1.2b — the demo now runs the real policy path. The merge check is a
     # permitted implementation of the ``branch.merge_proof`` requirement, and the

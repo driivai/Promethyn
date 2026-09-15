@@ -72,6 +72,7 @@ EXECUTION_REFUSAL_REASONS: frozenset[str] = frozenset({
     "target_state_unreadable",              # wholly or partly unreadable; never compared
     "target_state_aspects_differ",          # two digests over different covered sets
     "target_state_absent",                  # a v2 record carrying no target_state at all
+    "target_state_registry_mismatch",       # pinned under a registry this one does not match
 })
 
 

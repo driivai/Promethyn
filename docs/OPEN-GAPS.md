@@ -2349,7 +2349,7 @@ Whether that matters for the provenance story is a judgement for whoever runs
 Part B; what is recorded here is that it is **not** swept by it, so the
 question is answered before diligence rather than during it.
 
-### THE BOUNDED SET — ten carriers, every one read back
+### THE BOUNDED SET — sixteen carriers, every one read back
 
 | PR | kind | id |
 |---|---|---|
@@ -2363,9 +2363,17 @@ question is answered before diligence rather than during it.
 | #111 | review reply | `4012711563` |
 | #111 | review reply | `4012712585` |
 | #112 | PR comment | `5687317374` (the probe above) |
+| #113 | review reply | `4020508859` |
+| #113 | review reply | `4020509721` |
+| #113 | review reply | `4020510841` |
+| #113 | review reply | `4020511688` |
+| #113 | review reply | `4020512632` |
+| #113 | review reply | `4020513244` |
 
-Nine review replies and one PR comment. Not approximate: each was fetched and
-its body inspected for the footer. PR BODIES are not in this set — #111's and
+Fifteen review replies and one PR comment. Not approximate: each was fetched
+and its body inspected for the footer. The six #113 replies are the answers to
+that PR's six findings, posted after it merged; `4020508859` was read back and
+the footer is present, so the route is unchanged and this entry is not stale. PR BODIES are not in this set — #111's and
 #112's created bodies carried it, were refused by CI, and were rewritten
 through the update tool, which appends nothing; the stored bodies are clean.
 
@@ -2378,6 +2386,48 @@ carried nothing else, so nothing of substance was ever in a refused payload and
 the rewrite was one call rather than a reconstruction. `ci.yml` reads the
 frozen payload, so the three build jobs still need a push to clear — which is
 what the commit carrying this paragraph is.
+
+**FOURTH OCCURRENCE ON #114 — AND IT IS A DIFFERENT ROUTE, which is why this
+paragraph exists rather than a bump to the count above.** #114 was opened with
+a placeholder body and rewritten through the update path, exactly as the
+paragraph above prescribes. The update tool appended nothing, as recorded. The
+body refused anyway, with `check_message_hygiene.py` reporting `pr-body.txt`
+as carrying a banned token.
+
+**That refusal message is deliberately NOT quoted verbatim here, and the reason
+was measured on this paragraph.** The message names the token it found, and
+`check_hygiene.py` scans tracked files — this file among the 415 it reports.
+The first draft of this paragraph carried the quote and `check_hygiene.py`
+refused it locally before it could be pushed. So the two controls compose in a
+way neither one states: **a finding from `check_message_hygiene.py` cannot be
+recorded verbatim in the tree `check_hygiene.py` scans.** Worth naming, because
+the instinct when writing an entry like this is to paste the evidence, and here
+the evidence is itself the contraband.
+
+**The token was in the text the AUTHOR wrote.** A session-attribution URL was
+appended to the body by hand. No tool added it; the remedy this entry
+prescribes was followed correctly and could not have caught it, because the
+remedy addresses a tool that appends and this was a human-authored line.
+
+**What that corrects in this entry.** The table's "the PR-UPDATE tool —
+appends? **no**" row is still true and is now insufficient on its own: it
+licenses a reading in which a body written through the update path is safe,
+and what it actually establishes is only that the TOOL adds nothing. The
+author's own text is a separate route with no instrument in front of it —
+`check_hygiene.py` scans the repository, `check_message_hygiene.py --commits`
+scans commit messages and identities, and neither sees a PR body until CI
+reads the frozen payload, at which point the refusal has already happened.
+
+**The cost, measured on this PR.** The `build` job runs the PR-text step
+BEFORE the suites, so one banned token in the body reddened all three Python
+jobs and `pr-text` — four red jobs, no test failure, and every step after the
+hygiene check unrun on all three versions. The type gate had already passed
+(320 files, each version) and the repository hygiene check had already passed
+(415 files). A body typo costs a full CI cycle.
+
+**No new instrument.** The same limit as the rest of this entry: nothing in the
+tree can read a PR body before it is posted. What changed is the claim, which
+now says the update path protects against the tool and not against the author.
 
 **The coverage claim was narrowed in six places** rather than left to be
 read around, the same correction G23 took: `CONTRIBUTING.md`, `CHANGELOG.md`,
@@ -2493,6 +2543,173 @@ as an absent one, inside the record whose whole purpose is to show that state
 was checked twice. Fixed in statement form. The 30 module tests were green
 while that was live; the guard that was not was a different instrument.
 
-**Tests.** `tests/conformance/test_reobservation_branch_delete.py` (30), in
-CI's full-suite job, none skipped. Two positive controls registered in
-`positive_controls.json` with their negatives.
+**Tests.** `tests/conformance/test_reobservation_branch_delete.py` (38) and
+`tests/conformance/test_reobservation_wiring.py` (18), in CI's full-suite job,
+none skipped. Five positive controls registered in `positive_controls.json`
+with their negatives.
+
+**CORRECTION, ENTERED AFTER THE MERGE. Every claim in this entry above this
+line described a mechanism that no shipped code path reached.** `reobservation`
+was an optional constructor argument defaulting to `None`, and all five
+non-test constructions of `ExecutionController` omitted it. `None` is
+byte-for-byte the unfixed path the reproduction measures, so on the merged tree
+every deployment was on the before-picture while this entry said otherwise. The
+30 proofs and 13 mutations were real and are unchanged; what none of them
+covered was reach, because every one of them built its own controller.
+
+**The shape, named: a proof that builds its own subject proves the subject,
+never its reach.** This is the second time a security-critical parameter has
+shipped here with no production caller wiring it (R4 was the first), and in both
+the unwired default IS the behaviour.
+
+---
+
+## G30 — the re-observation opt-out is in every record and in no attestation
+
+**Measured.** `build_reobservation` is a composition-root call, and its result
+is a constructor argument. The opt-out reason for each action class therefore
+appears in every hold's `target_state` block and in none of the configuration
+attestation: it is not a `Config` field, so it is not in `SECURITY_FIELDS` and
+not in the attestation digest. Two deployments with different re-observation
+postures produce the same posture digest.
+
+**What that costs.** The attestation is what a reader consults to learn what a
+deployment enforces. Re-observation coverage is a security posture — it is the
+difference between a delete checked against live state and one executed on
+replayed evidence — and it is currently discoverable only by reading a hold
+that already happened. There is no way to ask a deployment in advance what it
+re-observes and get an attested answer.
+
+**Not closed here, and why.** Moving it into `Config` is its own change: it
+needs a `SECURITY_FIELDS` entry, an attestation re-pin, and a decision about how
+a per-target choice (`git://` versus everything else) is expressed as a
+configuration field when the target is itself a runtime argument. Filed rather
+than done, so that the limit is a numbered gap rather than a paragraph inside
+another entry's "named limits" list.
+
+**Where it is stated today.** `docs/live-state-pinning-design.md` "WHAT PHASE 1
+DOES NOT DO", and G29's named limits.
+
+---
+
+## G31 — two composition roots, two registries, and only one direction is reachable
+
+**Found by probing, not by reading.** Wiring G29 created a case that could not
+exist before it: two roots can now hold different registries. Driving the two
+shipped roots against one ledger — a hold created by a root naming a `git://`
+principal, then approved through a controller built the way `cli/main.py:341`
+builds it — raised a bare `KeyError` out of `approve()`:
+
+> `KeyError: "no state observer for action class 'branch.delete'; ReObservation is total over ACTION_CLASSES, so this means the class is opted out and the caller should not have asked"`
+
+**Why it is reachable at all.** `build_execution_controller`'s
+`target_canonical` defaults to `sandbox://execution`, and the CLI's `approve`
+and `retry-execution` both call it without one (`cli/main.py:341`, `:386`). That
+default opts `branch.delete` out. The hold being approved may have been pinned
+by a root that named a git principal and does observe it.
+
+**RULING AND FIX (doctrine #2).** A hold whose record says its live state was
+pinned, presented to a service that does not observe its action class, is
+REFUSED — not skipped. Skipping would execute an irreversible delete on evidence
+the record claims was re-checked, which is degrading a requested security
+property instead of refusing it. New type `StateUnobservable`, new typed reason
+`target_state_registry_mismatch` in `EXECUTION_REFUSAL_REASONS`. It is a third
+type beside `StateMoved` and `StateUnreadable` because it is a statement about
+the DEPLOYMENT: the state did not move and was not unreadable; it was not read.
+
+**The other direction is not reachable through the factory, and that is
+checked.** A `sandbox://`-targeted root cannot CREATE a git-targeted hold: the
+gate re-resolves requirements from its own `target_canonical` and refuses the
+submission at authorization
+(`test_a_sandbox_targeted_root_cannot_CREATE_a_git_targeted_hold_at_all`). The
+registry disagreement therefore has exactly one reachable direction.
+
+**The asymmetry, named.** A hold created with the class opted out and approved
+under a registry that DOES observe proceeds, because there is no pin to compare
+against. That is honest — its record says `observed: false` and no observation
+is chained — but it is not symmetric with the refusal, and the difference is
+which direction makes a false claim. Pinned as a measured property.
+
+**Executed mutations** on the new guard, through `scripts/mutation_worktree.py`:
+
+| mutation | observed |
+|---|---|
+| M7 deletion: the registry-mismatch guard removed | 2 red |
+| M8 substitution: refuses, but as `StateMoved` / `state_moved_after_approval` — a real type and a real reason from the same closed sets, naming the wrong fact | 2 red |
+| M9 degradation: returns `OUTCOME_MATCHED` instead of refusing — the silent-skip shape | 2 red |
+
+**STILL OPEN after this fix.** The CLI's approve path re-observes NOTHING for a
+git target — it refuses instead. That is the correct failure direction and it is
+not the desired behaviour: a reviewer approving a branch delete through
+`prom approve` is told the deployment cannot check it, rather than having it
+checked. Closing that means the CLI naming its target, which is a change to how
+a deployment declares its principal and is not in this sprint.
+
+---
+
+## G32 — three defects on the re-observation seam, found by review after merge
+
+All three were correct, all three were on `execution/controller.py`, and all
+three are fixed. Recorded together because they share one cause: the
+pre-execution comparison was added to `_execute` as a single unguarded call, and
+a call added between a claim and an executor inherits obligations to both.
+
+**1. A supplied service silently discarded the registry (P1).**
+`self._pending = pending or PendingActionService(..., reobservation=...)` never
+constructs the service when `pending=` is given, so a `reobservation=` passed
+beside it was dropped. Both comparisons then used the supplied service's
+registry, which may be `None` — a controller whose every observable surface says
+re-observation is enabled, running neither check.
+**RULING (doctrine #2): refused, not degraded.** `ConfigError` with the typed
+reason `reobservation_registry_discarded`, in `CONFIG_REFUSAL_REASONS`.
+
+*Compared by IDENTITY, and that choice is pinned.* `ReObservation` is a
+dataclass, so `==` delegates to the observers' `__eq__`.
+`GitBranchStateObserver` defines none, so today equality behaves as identity —
+which is the problem: the strictness of a security check would be a property of
+classes the check does not own. An observer that later gained an `__eq__` on
+`repo_path` would make two observers over *different* `GitTool`s compare equal.
+A check that can loosen without being edited is not a check.
+**This was found by mutation, not by reasoning:** substituting `!=` for
+`is not` reddened NOTHING, because every "different registry" in the suite was
+also unequal. A proof was added that builds two registries that ARE equal and
+are not the same object; the mutation now reddens it.
+
+**2. A pre-execution refusal left no execution row (P2).** `StateMoved` and
+`StateUnreadable` both exited `_execute` before `record_execution`, although the
+hold had been claimed and an execution attempted. `executions_for_pending()`
+could not say why an approved action did not run — indistinguishable from one
+nobody tried. Fixed: the refusal is persisted as a refused row naming its typed
+reason, then re-raised. Proven for both refusal kinds.
+
+**3. The claim leaked on non-terminal refusals (P1).** The claim is taken before
+the comparison. A refusal raised without releasing it, and for a
+non-terminal refusal the hold stayed `approved` — so `retry_decision` accepted
+it — while `claim_pending_execution` failed forever with "already in progress or
+has completed". **A transient observer outage permanently bricked an approved
+action, with no verb to recover it.** That is the G21 road: an operator who
+cannot recover removes the requirement.
+**RULING: release for non-terminal refusals, retain for `StateMoved`.** Keyed on
+TYPE in `CLAIM_RETAINED_BY`, whose key set is pinned by a test. The default for
+an unnamed type is to RELEASE, which is safe because terminal-ness lives in the
+STATUS — `StateMoved` transitions the hold out of `approved` and
+`retry_decision` refuses it on that alone. The claim is belt; the status is
+suspenders.
+
+**Executed mutations**, through `scripts/mutation_worktree.py`, both attack
+classes:
+
+| mutation | observed |
+|---|---|
+| M14 deletion: the registry-discard check removed | 2 red |
+| M15 substitution: equality for identity | **0 red on first run** — recorded as a gap in the proofs, not as a pass; 1 red after the distinguishing proof was added |
+| M16 deletion: the refused execution row not written | 2 red |
+| M17 substitution: the row is written but drops the typed reason | 2 red |
+| M18 deletion: the claim is never released | 1 red |
+| M19 substitution: the claim released for every refusal, moves included | 2 red |
+| M20 substitution: the wrong type retains — unreadable treated as terminal | 3 red |
+
+**M15 is the entry worth reading twice.** A green mutation is not evidence the
+field is covered; it is evidence nothing has been measured yet. Probing the
+field directly — constructing two equal, non-identical registries — showed the
+suite could not distinguish the two checks at all.

@@ -8,6 +8,50 @@ in `spec/invariants.md` is a major version bump.
 ## [Unreleased]
 
 ### Added
+- **Re-observation at execution, phase 1 — `branch.delete` only, and wired.**
+  A hold now pins the live state of its target when it is created, compares it
+  again before the human's approval is recorded, and re-reads it immediately
+  before the executor is called. A target that moved refuses the approval
+  (`target_state_moved_before_approval`, the hold stays PENDING) or refuses the
+  execution terminally (`state_moved_after_approval`, a new `PendingStatus`);
+  an unreadable target halts rather than comparing. Every reading is chained
+  into the audit ledger keyed on the hold and the execution attempt, and the
+  execution entry restates the pre-approval one so a single receipt shows state
+  was checked twice. Authorization records are version 2 and always carry a
+  `target_state` block — `observed: false` with a named reason where nothing was
+  observed, because an absent block and a passing comparison would be the same
+  bytes. `docs/live-state-pinning-design.md` revision 5; `docs/OPEN-GAPS.md`
+  G29-G31.
+
+  **Read the scope before the verdict.** ONE of three action classes is
+  observed, and only where the composition root names a `git://` principal.
+  `sandbox.execute` and `database.migrate` are opted out by name everywhere,
+  and `branch.delete` is opted out wherever the target is not a git repository
+  — which includes the default `sandbox://execution` target the CLI's `approve`
+  uses. This is machinery, not coverage. The TOCTOU residual is narrowed to a
+  read-to-execute window, not closed.
+
+  **Two further facts that belong in the same entry.** The mechanism first
+  merged with no composition root wiring it, so it ran nowhere; the wiring and
+  a source-level guard against a sixth root omitting it
+  (`tests/conformance/test_reobservation_wiring.py`) landed afterwards. And
+  wiring made two roots able to hold different registries: a hold pinned by an
+  observing root and approved through one that is not is now refused with
+  `StateUnobservable` / `target_state_registry_mismatch` rather than approved
+  unchecked.
+
+### Fixed
+- **Three defects on the re-observation seam** (`docs/OPEN-GAPS.md` G32).
+  Supplying both a pending service and a re-observation registry silently
+  discarded the registry, leaving a controller that looked enabled running
+  neither comparison; it is now refused at construction with the typed reason
+  `reobservation_registry_discarded`. A pre-execution refusal exited before
+  `record_execution`, so an approved action that did not run left no execution
+  row; the refusal is now persisted with its typed reason before it is
+  re-raised. And a non-terminal refusal did not release the at-most-once
+  execution claim, so a transient observer outage left an approved hold
+  permanently unexecutable and unretryable — the claim is now released for
+  every refusal except `StateMoved`, which stays terminal.
 - **PHASE-1.2c TASK 5/6 — the execution authorization record, and the pinned
   hold.** Every human hold now persists a versioned record of what it was
   decided under — the policy and its version, the requirements it resolved,
