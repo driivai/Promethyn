@@ -25,10 +25,17 @@ Recorded here rather than silently replaced.
 | 2 | §4: a mismatch **invalidates** the hold, following rotation | `invalidate_pending_action` is `WHERE id = ? AND status = ?` with `_PENDING_STATUS` — **pending rows only** — and an execution-time comparison runs after `approve()` has written APPROVED. The mismatch would refuse and leave an **approved, retry-eligible** hold: worse than either option, because it will be retried against a state that already failed | The comparison runs **before approval is recorded**. Not a new post-approval transition. §4 |
 | 3 | §3.3: refuse-vs-route "is already a policy property" | **Measured false.** `ActionGate.decide` handles `Unavailable` *before* `_outcome` and returns a terminal `OUTCOME_UNAVAILABLE`; `submit()` records it and halts, deliberately **not** as an approvable hold. The routing logic is never reached | Unavailability **always halts**. The claim is deleted. §3 |
 | 4 | §3.1: a requirement nothing can satisfy "is already refused at policy construction" | **Measured false.** `PolicyRequirement.__post_init__` validates identity normalisation, `applies_to` shape, non-emptiness, known action classes and duplicates — and **never** that an implementation exists or is registered | An implementation-registry validation step is a **stated prerequisite**, and the underlying defect gets its own entry, **G26**. §3.1 |
+| 5 | §1.2: "server version and relevant settings" — `lock_timeout`, `statement_timeout`, `search_path` — are IN the pinned state | **The executor SETS those itself**, per session, at `runner.py:815-903`, and `statement_timeout` is derived from the approval's *remaining budget*. A review-time reader necessarily uses another session and cannot reproduce them. Included, they make an **unchanged target mismatch** and invalidate valid holds — §4.2's frequency risk turned into a certainty. A fifth finding the brief did not list; it is correct | Per-session mutable values are **OUT**. Stable server configuration is IN, read by `context`/`source` from `pg_settings`, never via `current_setting()`. §1.2, §1.3 |
 
 Findings 3 and 4 are the same error twice: I claimed existing machinery covered
 something without reading it. That is the shape this repository keeps naming,
 and it arrived here in the document arguing against it.
+
+Finding 5 is a different error and worth its own sentence: **the digest was
+measuring the executor's own effect on the target.** The instrument included
+values that the thing it was checking sets on the way in. Same family as the
+adapter collector that counted test doubles (PR #108) — an instrument whose
+answer depends on who is asking is not measuring the subject.
 
 ---
 
@@ -111,7 +118,18 @@ than invisible.
 table/column existence, names, types, nullability, defaults · constraints ·
 indexes **including validity** · triggers · views and dependent objects ·
 extensions and enum members · permissions and role grants · migration-version
-table state · server version and relevant settings · partitioning topology.
+table state · **server major version and STABLE server configuration** ·
+partitioning topology.
+
+**"Stable server configuration" is a rule, not a list, because the list is how
+finding 5 happened.** A setting is in the pinned state only if it is read from
+`pg_settings` with a `source` that is not the session — `default`,
+`configuration file`, `override`, `command line`, `environment variable` — and
+a `context` that a session cannot change for itself. It is read from
+`pg_settings`, **never** via `current_setting()`, which returns whatever the
+executing session has set. The aspect that collects it carries that filter as
+part of its known-answer test (§7.5), so the filter cannot drift back to "read
+the session".
 
 For `branch.delete` the equivalent `TargetState` is the merge-proof subject:
 the branch tip, the base tip, and the unmerged-commit count.
@@ -123,6 +141,7 @@ the branch tip, the base tip, and the unmerged-commit count.
 | row count / table size | Changes on every write; including it refuses on almost every comparison — §4's failure in its purest form | Size affects how long a rewrite holds locks. A migration reviewed against 1k rows and executed against 100M is *correct* and may still cause an outage. Not covered. A size-bound check is a separate feature |
 | data content | Unbounded; a digest over content is a digest over the database | A migration whose safety depends on data (a `NOT NULL` backfill assuming no nulls) is not covered. That is a data precondition and belongs in the migration's own checks |
 | replication topology | Not a property of the schema; a property of *which server answered* | Handled in §7.3 by a different control |
+| **per-session mutable settings** — `lock_timeout`, `statement_timeout`, `search_path` as the executor sets them | **The executor changes these itself** at `runner.py:815-903`, and `statement_timeout` is computed from the approval's remaining budget at execution time. A review-time reader cannot reproduce a value that does not exist yet. Pinning them guarantees a mismatch on an unchanged target — the design invalidating its own valid holds. (Finding 5, PR #109) | Whether the *executing session's* effective settings are what the reviewer assumed is not covered by the digest. It is covered by something better: the executor sets them **deterministically from the approval**, so they are a function of the record rather than an observation of the target. The record already carries the budget they derive from |
 
 ### 1.4 Q1 — ANSWERED BY THE OWNER: the covered set is FIXED, not per-policy
 
@@ -487,6 +506,7 @@ would refuse**, because a recorded mismatch that does not stop execution is the
 | Aspect collected but not encoded | **Closed by construction.** The encoder iterates `STATE_ASPECTS`; the every-aspect-moves-the-digest test catches a collected-and-ignored aspect |
 | Aspect encoded but **type-collapsed** — `"True"` vs `True`, or `["a","bc"]` vs `["ab","c"]` | **Closed by reuse.** The existing encoder type-tags and length-prefixes, with the three named tests. This design **must reuse that encoder**; a second encoder is the hand-enumeration failure again |
 | The aspect list is **incomplete** | **NOT closed. Named limit** (§1.1). The single largest residual, and no test can close it — a test cannot know what nobody thought of. §6's `aspects` field is the mitigation: it makes the gap legible |
+| **The inverse: a digest UNSTABLE under no change** — an aspect that varies between two reads of the same target, so an unchanged target mismatches | **Closed for the case found, named as a class.** Finding 5 was this: per-session settings the executor itself sets. The rule in §1.2 excludes session-sourced values. The class is wider than settings — anything the executor mutates on the way in, or that varies by connection (`pg_backend_pid()`, transaction snapshot ids, `now()`) — and **a test must read the same target twice from two sessions and require equal digests**, which catches this class without enumerating it |
 
 ### 7.3 A target readable but served by a replica
 
@@ -543,7 +563,10 @@ detected.
 
 **Ruled by me, revisable:**
 
-- §1 derived covered set, ten aspects in, three out as named limits.
+- §1 derived covered set, ten aspects in, **four** out as named limits — the
+  fourth (per-session settings) added in rev 2 from finding 5, with a
+  two-sessions-equal-digest test required so the class is caught, not the
+  instance.
 - §4.3 refuse on any difference, with an explicit re-review that re-pins;
   scope-limiting deferred and must fail conservative.
 - §6 the records name their covered set and never the state itself.
