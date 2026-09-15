@@ -112,7 +112,12 @@ jobs:
         # The tree checker above cannot see a commit message or a PR body, and
         # both reached main carrying banned tokens (#100's squash merge). This
         # REFUSES rather than strips: every commit in a pull request — message,
-        # author and committer identity — and the PR's title and body. On a push
+        # author and committer identity — and the PR's title and body.
+        #
+        # WHAT NO STEP HERE COVERS: a REVIEW COMMENT. Nothing in this workflow,
+        # or in pr-text-hygiene.yml, reads one. docs/OPEN-GAPS.md G28 carries
+        # the measurement — tokens are in review comments on merged PRs now —
+        # and the reason no in-repository control closes it. On a push
         # to main it re-checks what landed, which is detection after the fact:
         # the squash-merge commit is written by GitHub after these checks pass
         # and can carry a co-authorship trailer no pre-merge check can refuse.

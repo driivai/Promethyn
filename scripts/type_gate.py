@@ -88,7 +88,10 @@ RECEIPT = REPO / "type-gate-receipt.json"
 #:
 #: Observed 316 on 2026-09-15 (was 314): G26 added
 #: ``policy/implementations.py`` and ``tests/conformance/test_implementation_registry.py``.
-EXPECTED_CHECKED_FILES = 316
+#: Observed 319 on 2026-09-15 (was 316): re-observation phase 1 (G29) added
+#: ``policy/target_state.py``, ``policy/reobservation.py`` and
+#: ``tests/conformance/test_reobservation_branch_delete.py``.
+EXPECTED_CHECKED_FILES = 319
 CHECKED_FILE_TOLERANCE = 2
 MINIMUM_CHECKED_FILES = EXPECTED_CHECKED_FILES - CHECKED_FILE_TOLERANCE
 

@@ -24,6 +24,16 @@ class PendingStatus(str, Enum):
     hold can never be approved and verification must be re-run. It is kept
     separate from ``EXPIRED`` so the ledger can tell "this lapsed" from "this
     was voided by a rotation".
+
+    ``STATE_MOVED`` is the one transition that leaves ``APPROVED`` rather than
+    ``PENDING``, and it is separate from the other two because the CAUSE
+    differs and the record has to say which. Expiry means time passed;
+    invalidation means the policy changed; this means **the target itself moved
+    after a human looked at it**, found by the pre-execution re-read. The
+    approval stands as a record of a correct decision on the state it was shown;
+    what cannot stand is executing on it. It is terminal: re-verification is a
+    NEW hold with a NEW approval, so the human sees the new state rather than
+    re-approving the old decision.
     """
 
     PENDING = "pending"
@@ -31,6 +41,7 @@ class PendingStatus(str, Enum):
     REJECTED = "rejected"
     EXPIRED = "expired"
     INVALIDATED = "invalidated"
+    STATE_MOVED = "state_moved_after_approval"
 
 
 @dataclass(frozen=True)

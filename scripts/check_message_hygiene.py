@@ -19,6 +19,14 @@ a banned token is REFUSED, by the ``commit-msg`` hook at commit time, by the
 ``pre-push`` hook at push time, and by CI on the pull request's commits, title
 and body. Nothing here strips anything; a refusal says what was found and where.
 
+THE SURFACES THIS COVERS, EXHAUSTIVELY: commit messages, commit author and
+committer identities, a pull request's title, and its body. **A REVIEW COMMENT
+IS NOT ONE OF THEM.** No workflow reads review comments, this checker is never
+pointed at one, and nothing in the tree can see one. That is not an oversight
+to be read around: tokens have reached review comments and stayed there, and
+``docs/OPEN-GAPS.md`` G28 carries the count, the route and why no in-repository
+control closes it.
+
 THE TERMS are the same encoded list the tree checker uses
 (``scripts/hygiene_terms.txt``), decoded through ``check_hygiene.load_terms`` so
 the two guards cannot disagree about what is banned. That includes the tree

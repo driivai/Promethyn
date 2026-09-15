@@ -444,6 +444,8 @@ refuses a banned token in a commit message, an author or committer identity,
 or a PR title/body. It runs as the `commit-msg` and `pre-push` hooks
 (`python scripts/install_git_hooks.py`, per clone), in CI on every pull
 request (the PR's commits, title and body), and on every push to `main`.
+**Those four surfaces are the whole of its coverage. A REVIEW COMMENT is not
+one of them and is checked by nothing** — measured, and filed as G28.
 
 **Named limits.**
 - The squash-merge commit is written by GitHub after CI has passed; no
@@ -2316,8 +2318,171 @@ the tooling that posts, after the text leaves the checker. Either the channel's
 own attribution setting (a `DriivAIDev/disable-attribution` branch exists on
 the remote and was not examined here), or a workflow that reads review comments
 through the API and refuses on banned tokens, which would detect and not
-prevent. Recorded so the seven replies that carry the footer are a known state,
-and so the next reply through this channel is posted knowing it will carry it.
+prevent.
+
+### Is there a posting path WITHOUT the footer? Measured 2026-09-15.
+
+Four paths were tried. **No path that POSTS A COMMENT omits the footer.**
+
+| path | appends? | observed |
+|---|---|---|
+| the inline review-reply tool | **yes** | nine replies, all read back (table below) |
+| the issue/PR-comment tool — a different tool, probed deliberately | **yes** | comment `5687317374` on #112, posted 20:02:37Z and read back immediately: the footer is there. This is the load-bearing observation: the append is a property of the CHANNEL, not of one tool, so "use the other comment tool" is not a remedy |
+| the PR-creation tool | **yes** | #111 and #112 both; their created bodies were refused by CI |
+| the PR-UPDATE tool | **no** | the rewritten bodies of #111 and #112 came back clean and pr-text passed on both. This is why a body can be repaired and a comment cannot |
+
+There is no raw-REST escape hatch in this environment: the only GitHub access
+is through these tools (no `gh`, no direct API), so "call the endpoint
+directly" was not available to try, and that is a limit of the environment
+rather than a finding about GitHub. The probe comment is itself now a carrier,
+deliberately: measuring cost one comment, and the alternative was to assert the
+answer without testing it.
+
+### PROM-IP PART B DOES NOT CLEAN THIS UP
+
+Part B is a **history rewrite** — commit messages and identities (see this
+file's G6 sizing, "the sizing PROM-IP Part B asked for"). A review comment is
+not in git history at all: it lives in GitHub's API, attached to a pull
+request. Rewriting every commit on every branch leaves all ten carriers exactly
+where they are, on merged pull requests, and a force-push does not touch them.
+Whether that matters for the provenance story is a judgement for whoever runs
+Part B; what is recorded here is that it is **not** swept by it, so the
+question is answered before diligence rather than during it.
+
+### THE BOUNDED SET — ten carriers, every one read back
+
+| PR | kind | id |
+|---|---|---|
+| #106 | review reply | `4011093860` |
+| #108 | review reply | `4011775351` |
+| #109 | review reply | `4012114040` |
+| #109 | review reply | `4012117730` |
+| #109 | review reply | `4012118993` |
+| #109 | review reply | `4012120458` |
+| #109 | review reply | `4012154122` |
+| #111 | review reply | `4012711563` |
+| #111 | review reply | `4012712585` |
+| #112 | PR comment | `5687317374` (the probe above) |
+
+Nine review replies and one PR comment. Not approximate: each was fetched and
+its body inspected for the footer. PR BODIES are not in this set — #111's and
+#112's created bodies carried it, were refused by CI, and were rewritten
+through the update tool, which appends nothing; the stored bodies are clean.
+
+**The coverage claim was narrowed in six places** rather than left to be
+read around, the same correction G23 took: `CONTRIBUTING.md`, `CHANGELOG.md`,
+this file's G6 control paragraph, `scripts/check_message_hygiene.py`'s
+docstring, and the step comments in both workflows now say that review comments
+are outside the checked surface.
 
 **Test.** None. Nothing in the tree can observe a review comment, and a test
-that could would be reading GitHub, which the suite does not do.
+that could would be reading GitHub, which the suite does not do. The narrowed
+claims are prose, and prose is what this entry can offer.
+
+---
+
+## G29 — re-observation at execution: built for `branch.delete`, opted out by name for the other two
+
+**The gap, measured.** A hold records evidence at assessment time and executes
+later against that evidence REPLAYED from the persisted record:
+`execution/pending.py` restores the coverage report with `restore_coverage` and
+calls no verifier, and a search of `src/prometheus_protocol/execution/` for
+`.verify(` returns nothing. Every action class has it. `branch.delete` is where
+it is demonstrable, because its live-state check already exists — the merge
+proof counts commits reachable from the branch and absent from the base
+(`tools/git.py:141-158`) — so a branch reviewed as "zero commits absent" can
+gain commits before the human approves and the delete executes on the replayed
+sentence. That is irreversible loss of work that may exist nowhere else.
+
+**THE REPRODUCTION IS KEPT, and it passes.**
+`test_the_gap_without_reobservation_a_delete_executes_on_replayed_evidence`
+wires the controller with no re-observation, lets the branch gain a commit
+after review, approves, and shows the executor REACHED with an approved
+decision whose record still says the delete is lossless. A named gap is a
+passing test; this one is also the before-picture the fix is measured against.
+
+**What was built** (`docs/live-state-pinning-design.md` revision 4 lists the
+files): a derived covered set with its own digest domain, an observer that is
+the same reader the merge proof uses, a registry that is total over
+`ACTION_CLASSES`, capture at hold creation, a comparison before the approval is
+recorded, a re-read immediately before the executor, a terminal transition out
+of `APPROVED`, and an append-only chained observation record keyed on the
+execution attempt.
+
+**Executed mutations**, through `scripts/mutation_worktree.py`, four target
+modules, 73 tests green unmutated. Five on the mechanism and eight second-order
+probes on the proofs; every one reddened a named test and none survived.
+
+| mutation | observed |
+|---|---|
+| the pre-approval comparison removed | 6 red |
+| the pre-execution re-read removed — **also the red-first state**: on that path the tree is the pre-change tree, and the fixed half of the reproduction goes red | 5 red |
+| the pre-execution comparison compares the observed digest against ITSELF (the §7.5 cell that passes every deletion probe) | 4 red |
+| the observation record dropped from the chain | 6 red |
+| the terminal state left as `approved`, so the hold stays retry-eligible | 4 red, including the derived literal-vs-enum check |
+| S1 the pre-approval refusal keeps raising, its typed reason swapped | 1 red |
+| S2 the pre-execution refusal keeps raising, its typed reason swapped | 1 red |
+| S3 an unreadable target reported as a move instead | 3 red |
+| S4 the observation record always says `matched` | 2 red |
+| S5 the record forgets what it compared against | 1 red |
+| S6 the execution entry stops restating the pre-approval one | 1 red |
+| S7 the capture halt removed, pinning an unreadable target | 1 red |
+| S8 the opt-out block stops naming the choice | 1 red |
+
+**A mutation that was NOT measured, recorded rather than counted.** The first
+attempt at "drop the observation record from the chain" replaced the call's
+opening line only and left its keyword arguments stranded inside a tuple: a
+`SyntaxError`, which the runner reported as `(no summary)` with an empty red
+list. Read carelessly that is GREEN. It was re-run as a valid edit (the 6-red
+row above) and the broken attempt is recorded here as not-measured, because
+this is the second time the runner's `(no summary)` has had to be read as "not
+measured" rather than "nothing red" (G26 carries the first).
+
+**Named limits.**
+- **Two of three action classes are opted out**, by name. That is machinery,
+  not coverage: `sandbox.execute` and `database.migrate` are unobserved, and
+  every hold's record says which reason was given.
+- **The opt-out is not in the attested posture.** It is a composition-root
+  argument, not a `Config` field on `SECURITY_FIELDS`, so it is not in the
+  configuration-attestation digest. In the record, not in the attestation.
+- **The state pin is not a `PolicyRequirement`.** §3.1 framed it as one so that
+  unavailability would flow through coverage. The claim was VERIFIED and is
+  true — an `Unavailable` in a `BoundResult` is recorded at
+  `policy/coverage.py:331-334` and refused as `coverage.incomplete` at `:388` —
+  but it is not the path used, because §2.1 ruled the capture point at hold
+  creation, which is downstream of assessment and so downstream of coverage.
+  Unavailability halts by its own path instead. Recorded because the brief said
+  to verify the claim before relying on it, and verifying it is what showed it
+  does not carry the capture.
+- **The covered set is three aspects.** What can vary outside it, for this
+  class: the reflog, other branches, the working tree, the remote. None is part
+  of "is deleting this branch lossless", and a deployment whose loss model is
+  wider is not covered.
+- **The TOCTOU residual is bounded, not closed**, and the window is now
+  read-to-execute. A third party committing to the branch between the re-read
+  and the executor call is not detected.
+
+**Re-verified at this head rather than assumed, because the design's two
+previous claims about existing behaviour were both false when read.**
+Unavailability still always halts and there is still no routing path:
+`ActionGate.decide` tests `isinstance(judgment, Unavailable)` at
+`gate/authorization.py:137` and returns a terminal `OUTCOME_UNAVAILABLE` at
+`:149`, which is BEFORE `_outcome` (`:168`) and before `escalate_below` is
+consulted (`:184-185`); `ExecutionController.submit` records it distinctly and
+halts at `controller.py:174-178`, with the existing comment that it is
+deliberately not parked as an approvable hold.
+
+**THE TYPE GATE CAUGHT A DEFECT IN THIS SPRINT'S OWN CODE**, and it is recorded
+because it is the shape this repository keeps finding. `pre_approval_entry`
+narrowed a chain payload in EXPRESSION position — `payload if isinstance(payload,
+dict) else None` — which `test_no_union_is_narrowed_in_expression_position`
+refuses. It was right to: a payload of a third shape would have been taken by
+the else-branch and become `None`, and this method's caller reads `None` as
+"there was no pre-approval entry". A missing receipt would have been reported
+as an absent one, inside the record whose whole purpose is to show that state
+was checked twice. Fixed in statement form. The 30 module tests were green
+while that was live; the guard that was not was a different instrument.
+
+**Tests.** `tests/conformance/test_reobservation_branch_delete.py` (30), in
+CI's full-suite job, none skipped. Two positive controls registered in
+`positive_controls.json` with their negatives.

@@ -27,6 +27,7 @@ from prometheus_protocol.core.models import ExecutableAction
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle: policy imports core.models
     from prometheus_protocol.policy.assessment import PolicyAssessment
+    from prometheus_protocol.policy.reobservation import ReObservation
 from prometheus_protocol.execution.models import PendingAction
 from prometheus_protocol.execution.pending import (
     _DEFAULT_TTL_SECONDS,
@@ -87,16 +88,24 @@ class ExecutionController:
         pending: PendingActionService | None = None,
         clock: Callable[[], str] | None = None,
         ttl_seconds: int = _DEFAULT_TTL_SECONDS,
+        reobservation: "ReObservation | None" = None,
     ) -> None:
         self._gate = gate
         self._executor = executor
         self._ledger = ledger
         self._clock = clock or _utc_now_iso
+        # ONE registry, both comparisons. The pending service runs the
+        # pre-approval comparison and this controller runs the pre-execution
+        # re-read, and they must agree about which classes are observed and
+        # which are opted out — two registries would be two answers to that,
+        # and the second comparison could then silently not happen for a class
+        # the first one covered.
         self._pending = pending or PendingActionService(
             ledger,
             clock=self._clock,
             ttl_seconds=ttl_seconds,
             authorizer=gate.authorizer,
+            reobservation=reobservation,
         )
         # Opportunistic expiry (belt): a controller coming up sweeps lapsed
         # holds, so TTL enforcement does not depend on an operator remembering
@@ -294,6 +303,21 @@ class ExecutionController:
 
         return self._pending.sweep(now=now)
 
+    def _execution_attempt(self, pending_id: int) -> int:
+        """Which execution attempt this is for the hold, counting from 1.
+
+        DERIVED from the rows already written rather than stored in a new
+        column: every attempt records an execution row (an ineligible retry
+        included), so the count of existing rows plus one IS the ordinal, and a
+        schema change would be a second place for the same number to live.
+
+        It is what separates a retry's observation from the first one, so a
+        retry ADDS a record instead of overwriting one — which is what makes
+        the history of what moved readable at all.
+        """
+
+        return len(self._ledger.executions_for_pending(pending_id)) + 1
+
     def _execute(
         self,
         decision: GateDecision,
@@ -338,6 +362,24 @@ class ExecutionController:
                 authorization=record,
             )
             return refused
+        # THE SECOND COMPARISON, and its placement is the whole of the bound it
+        # provides. AFTER the claim, so a concurrent driver cannot slip an
+        # execution between this read and the executor call; IMMEDIATELY BEFORE
+        # ``executor.execute``, with nothing between them, so the window a
+        # third party can move the target in is the narrowest this design can
+        # make it. It is still a window — see the TOCTOU residual in
+        # ``docs/live-state-pinning-design.md`` §7.1, which is bounded and not
+        # closed.
+        #
+        # A refusal here is TERMINAL for the hold and deliberately does not
+        # release the claim: the release below is what keeps a fail-closed
+        # refusal retry-eligible, and a hold whose target moved must not be.
+        if pending_id is not None:
+            self._pending.require_state_unmoved_for_execution(
+                pending_id,
+                execution_attempt=self._execution_attempt(pending_id),
+                now=self._clock(),
+            )
         result = self._executor.execute(decision)
         self._ledger.record_execution(
             subject_id=decision.subject_id,

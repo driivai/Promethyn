@@ -182,6 +182,18 @@ def _inserted_id(cur: sqlite3.Cursor) -> int:
 # Terminal states a pending action can settle into. ``pending`` is the only
 # non-terminal state; once decided it is never re-opened.
 _PENDING_STATUS = "pending"
+#: The two statuses the re-observation transition moves BETWEEN.
+#:
+#: SPELLED, NOT IMPORTED, and the reason is layering: ``PendingStatus`` lives in
+#: ``execution/models.py``, which imports the policy seam, and a ledger that
+#: imported the execution layer would invert the dependency the whole package
+#: is arranged around — which is why ``_PENDING_STATUS`` above is a literal too.
+#: What cannot be derived is the VALUE; what can be derived is the CHECK, so
+#: ``tests/conformance/test_reobservation_branch_delete.py`` asserts these three
+#: literals equal the enum members. That is the G26 answer applied here: three
+#: copies that agree by hand are what a guard is for.
+_APPROVED_STATUS = "approved"
+_STATE_MOVED_STATUS = "state_moved_after_approval"
 
 # Additive columns ensured on open (added to ledgers that predate them) so the
 # write path can always populate them: the judgment columns promoted for
@@ -549,6 +561,35 @@ class SqliteLedger(Ledger):
                 reason,
                 pending_id,
                 _PENDING_STATUS,
+            ),
+        )
+        self._conn.commit()
+        return cur.rowcount == 1
+
+    def mark_state_moved(self, pending_id: int, *, at: str, reason: str) -> bool:
+        """Make an APPROVED hold terminal; True iff it was approved.
+
+        The mirror image of the two guards above: they refuse to touch anything
+        that is not still ``pending``, this refuses to touch anything that is
+        not ``approved``. ``decided_by``/``decided_at``/``decision_reason`` are
+        left exactly as the human wrote them — the approval was a correct
+        decision on the state it was shown — and the flat invalidation columns
+        carry when and why the hold stopped being executable, so a sweep can
+        query it without parsing the record.
+        """
+
+        cur = self._conn.execute(
+            """
+            UPDATE pending_actions
+               SET status = ?, invalidated_at = ?, invalidated_reason = ?
+             WHERE id = ? AND status = ?
+            """,
+            (
+                _STATE_MOVED_STATUS,
+                at,
+                reason,
+                pending_id,
+                _APPROVED_STATUS,
             ),
         )
         self._conn.commit()
