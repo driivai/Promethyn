@@ -2387,6 +2387,48 @@ the rewrite was one call rather than a reconstruction. `ci.yml` reads the
 frozen payload, so the three build jobs still need a push to clear — which is
 what the commit carrying this paragraph is.
 
+**FOURTH OCCURRENCE ON #114 — AND IT IS A DIFFERENT ROUTE, which is why this
+paragraph exists rather than a bump to the count above.** #114 was opened with
+a placeholder body and rewritten through the update path, exactly as the
+paragraph above prescribes. The update tool appended nothing, as recorded. The
+body refused anyway, with `check_message_hygiene.py` reporting `pr-body.txt`
+as carrying a banned token.
+
+**That refusal message is deliberately NOT quoted verbatim here, and the reason
+was measured on this paragraph.** The message names the token it found, and
+`check_hygiene.py` scans tracked files — this file among the 415 it reports.
+The first draft of this paragraph carried the quote and `check_hygiene.py`
+refused it locally before it could be pushed. So the two controls compose in a
+way neither one states: **a finding from `check_message_hygiene.py` cannot be
+recorded verbatim in the tree `check_hygiene.py` scans.** Worth naming, because
+the instinct when writing an entry like this is to paste the evidence, and here
+the evidence is itself the contraband.
+
+**The token was in the text the AUTHOR wrote.** A session-attribution URL was
+appended to the body by hand. No tool added it; the remedy this entry
+prescribes was followed correctly and could not have caught it, because the
+remedy addresses a tool that appends and this was a human-authored line.
+
+**What that corrects in this entry.** The table's "the PR-UPDATE tool —
+appends? **no**" row is still true and is now insufficient on its own: it
+licenses a reading in which a body written through the update path is safe,
+and what it actually establishes is only that the TOOL adds nothing. The
+author's own text is a separate route with no instrument in front of it —
+`check_hygiene.py` scans the repository, `check_message_hygiene.py --commits`
+scans commit messages and identities, and neither sees a PR body until CI
+reads the frozen payload, at which point the refusal has already happened.
+
+**The cost, measured on this PR.** The `build` job runs the PR-text step
+BEFORE the suites, so one banned token in the body reddened all three Python
+jobs and `pr-text` — four red jobs, no test failure, and every step after the
+hygiene check unrun on all three versions. The type gate had already passed
+(320 files, each version) and the repository hygiene check had already passed
+(415 files). A body typo costs a full CI cycle.
+
+**No new instrument.** The same limit as the rest of this entry: nothing in the
+tree can read a PR body before it is posted. What changed is the claim, which
+now says the update path protects against the tool and not against the author.
+
 **The coverage claim was narrowed in six places** rather than left to be
 read around, the same correction G23 took: `CONTRIBUTING.md`, `CHANGELOG.md`,
 this file's G6 control paragraph, `scripts/check_message_hygiene.py`'s
