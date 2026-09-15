@@ -425,14 +425,22 @@ def test_an_altered_pinned_requirement_set_is_detected_at_approval():
     executes, the chain itself is still valid (only the row was touched), and
     the hold is left pending — this is tampering, not a rotation.
 
-    THE ``match=`` BELOW IS LOAD-BEARING, and that was measured rather than
+    THE CAUSAL ASSERTION IS LOAD-BEARING, and that was measured rather than
     assumed. Remove the chain append from ``hold()`` — leaving the record in
     the JSON column — and approval STILL refuses, because a hold with no chain
-    entry cannot be approved either. With the ``match=`` dropped this test
+    entry cannot be approved either. Without the causal assertion this test
     goes green under that mutation: it would be asserting that approval
-    refused, not that the BINDING is what detected the change. The precondition
-    below is the structural half, so the proof does not rest on one literal.
+    refused, not that the BINDING is what detected the change.
     ``scripts/phase_1_2c_record_revert_proofs.py`` carries the mutation.
+
+    IT IS NOW A TYPED REASON, NOT A STRING. It read
+    ``match="does not match its tamper-evident chain entry"`` until 2026-09-15
+    — in the same file where Block 1a nearly closed on the wrong evidence. A
+    prose match passes when the prose is edited and passes when a different
+    refusal happens to share a phrase; ``reason`` is checked against a closed
+    set at construction, so it cannot drift and cannot be typo'd into something
+    nothing asserts on. The precondition above is the structural half, so the
+    proof does not rest on one literal either way.
     """
 
     ctl, spy, ledger = controller(route_high_risk=True)
@@ -446,8 +454,9 @@ def test_an_altered_pinned_requirement_set_is_detected_at_approval():
         (json.dumps(weakened(held.record)), held.id),
     )
     ledger._conn.commit()
-    with pytest.raises(ExecutionNotAuthorized, match="does not match its tamper-evident chain entry"):
+    with pytest.raises(ExecutionNotAuthorized) as refusal:
         ctl.approve(held.id, identity="human")
+    assert refusal.value.reason == "record_differs_from_chain_entry"
     assert spy.calls == []
     assert ledger.verify_chain().ok
     assert ctl.pending.get(held.id).status == PendingStatus.PENDING
@@ -471,8 +480,9 @@ def test_an_altered_chain_entry_breaks_the_chain_and_approval_refuses():
     )
     ledger._conn.commit()
     assert not ledger.verify_chain().ok
-    with pytest.raises(ExecutionNotAuthorized, match="did not verify"):
+    with pytest.raises(ExecutionNotAuthorized) as broke_chain:
         ctl.approve(held.id, identity="human")
+    assert broke_chain.value.reason == "chain_did_not_verify"
     assert spy.calls == []
 
 
@@ -518,8 +528,9 @@ def test_the_named_limit_a_full_rewrite_is_NOT_detected_without_an_anchor_and_IS
     rewrite_entry_and_rehash(anchored, seq=chain_entry_for(anchored, held2.id)["seq"], payload=altered2)
     verdict = anchored.verify_chain()
     assert not verdict.ok and verdict.status == "broken", verdict.render()
-    with pytest.raises(ExecutionNotAuthorized, match="did not verify"):
+    with pytest.raises(ExecutionNotAuthorized) as rewrote_chain:
         ctl2.approve(held2.id, identity="human")
+    assert rewrote_chain.value.reason == "chain_did_not_verify"
     assert spy2.calls == []
 
 
@@ -543,8 +554,9 @@ def test_a_pre_record_blob_is_refused_as_reverification_required():
     )
     ledger._conn.commit()
     assert ctl.pending.get(held.id).record is None
-    with pytest.raises(ExecutionNotAuthorized, match="re-verification is required"):
+    with pytest.raises(ExecutionNotAuthorized) as reverify:
         ctl.approve(held.id, identity="human")
+    assert reverify.value.reason == "reverification_required"
     assert spy.calls == []
 
 
@@ -556,6 +568,7 @@ def test_a_hold_with_no_chain_entry_cannot_be_approved():
     entry = chain_entry_for(ledger, held.id)
     ledger._conn.execute("DELETE FROM audit_chain WHERE seq = ?", (entry["seq"],))
     ledger._conn.commit()
-    with pytest.raises(ExecutionNotAuthorized, match="0 tamper-evident chain entries"):
+    with pytest.raises(ExecutionNotAuthorized) as no_entry:
         ctl.approve(held.id, identity="human")
+    assert no_entry.value.reason == "chain_entry_count_wrong"
     assert spy.calls == []

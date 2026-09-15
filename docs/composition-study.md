@@ -187,8 +187,12 @@ more reason to route a step to a person sooner. It can **never** lift a block,
 raise a tier, or authorize execution: authority comes only from the gate + HARD
 verification + human approval. This is enforced by construction — the
 composition module holds no gate/executor capability, and a high composed
-confidence provably cannot execute a non-authoritative action (the gate decides
-on each action's own judgment; tested in
+confidence does not execute a non-authoritative action **on the paths this
+repository tests** — the gate decides on each action's own judgment, and the
+composition module is not given a capability with which to bypass it. That is
+an argument from construction plus a test, not a proof: it assumes in-process
+code does not reach past the API, which is the residual recorded in
+`docs/execution-descriptor.md` class (5). Tested in
 `tests/conformance/test_composition.py::test_high_composed_confidence_cannot_execute_a_soft_action`).
 
 ## Limits and follow-ups

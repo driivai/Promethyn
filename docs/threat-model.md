@@ -15,7 +15,10 @@ named is a gap that is being managed; a gap that is hidden is a vulnerability
 with better marketing — and by this project's own thesis, a check that is
 present, plausible, and void is the failure mode we exist to name.
 
-> **Status.** All five attacker classes are complete; this document is the
+> **Status.** All five attacker classes have been WORKED — each has named
+> controls, tests, and residuals recorded below. "Worked" is not "complete":
+> the class list is this project's own partition of the threat space, and a
+> sixth class nobody has thought of would not appear in it. This document is the
 > final state of PROM-HARDEN-MAX and the one to hand to a design partner's
 > security team or to an independent auditor. Each class states what is
 > enforced, what is a deployment recommendation, which test proves each claim,
@@ -122,7 +125,7 @@ on the store's own inode, held for the store's lifetime, so every alias of
 the store contends for one lock object across processes; a multiply linked
 store is refused at construction and before every use; and every intent
 records the identity of the lock its owner held, so "same kernel" establishes
-a dead owner only when it is provably the same lock (`chokepoint/runner.py`,
+a dead owner only when the RECORDED LOCK IDENTITY MATCHES (`chokepoint/runner.py`,
 `chokepoint/ownership.py`; `tests/chokepoint/test_lock_identity.py`
 reproduces the review's scenario and shows it failing closed). The 1A/1B
 follow-up replaces parent-only classification with inspection of the opened

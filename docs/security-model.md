@@ -358,7 +358,8 @@ and has been read as more than it claims.
 **What still varies.** Anything able to run arbitrary code in this process:
 `object.__setattr__` reaches through `frozen=True`, and
 `policy.assessment._MINT` is an importable module global. The mint guard makes an
-accidental assessment impossible and a deliberate one a visible act that
+accidental assessment unreachable through the supported API and a deliberate
+one a visible act that
 `test_no_second_aggregator.py` sweeps for. It is not a security boundary, and the
 control against arbitrary in-process code remains the process boundary.
 

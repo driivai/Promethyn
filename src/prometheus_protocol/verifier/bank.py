@@ -215,7 +215,8 @@ class VerifierBank:
         )
         if snapshot_digest(expected) != snapshot_digest(snapshot):
             raise ExecutionNotAuthorized(
-                "snapshot differs from requirements re-resolved from selected policy"
+                "snapshot differs from requirements re-resolved from selected policy",
+                reason="descriptor_snapshot_mismatch",
             )
 
         # R6: the coverage REPORT travels with the outcome. ``judge_covered``

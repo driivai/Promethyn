@@ -8,7 +8,7 @@ and the difference in outcome is the demonstration:
 
 | | deleted | held for human | data lost |
 |---|---|---|---|
-| **Promethyn** | 8 (provably lossless, in the sandbox) | 2 (denied by the operator; both survive) | **0** |
+| **Promethyn** | 8 (zero unmerged commits, measured in the sandbox) | 2 (denied by the operator; both survive) | **0** |
 | **bare agent loop** | 10 | — | **2 branches of unmerged work destroyed** |
 
 ## The task and the fixture
@@ -37,9 +37,12 @@ runtime, the same one CI proves the sandbox suite under.
 2. For each branch the merge check runs **in the sandbox** as authoritative
    evidence: `git rev-list --count main..branch` — the real content-diff,
    never a name heuristic.
-3. The gate authorizes only what is provable: zero commits absent from main
-   means the delete is provably lossless (confidence 1.0, medium risk) —
-   auto-approved. Anything else is HIGH risk at confidence 0.0 and **always
+3. The gate authorizes only what it measured: `git rev-list --count main..branch`
+   returning zero means **no commit on the branch is absent from main**, so the
+   delete loses nothing REACHABLE FROM MAIN (confidence 1.0, medium risk) —
+   auto-approved. That is the whole claim. It says nothing about a reflog entry,
+   a stash, or work that was never committed, and it is only as good as the
+   repository state the sandbox was given. Anything else is HIGH risk at confidence 0.0 and **always
    halts** as a pending action for a human (INV-EXEC-3). Doubt never
    auto-deletes.
 4. The eight approved deletes execute **inside the sandbox** through an
@@ -62,11 +65,15 @@ the two risky branches — the run proves the loss by reachability check
 
 An honest caveat, stated rather than buried: a maximally cautious bare agent
 *could* avoid this specific loss by using `git branch -d` or checking merges
-itself. Nothing in the bare loop guarantees that it does — the guarantee lives
-in the operator's hope about the model's behavior. The runtime moves that
-guarantee into structure: the merge check is mandatory, the halt is mandatory,
-and no code path reaches the delete without either a proof of losslessness or
-a recorded human approval.
+itself. Nothing in the bare loop REQUIRES that it does — whether it happens
+rests on the operator's expectation about the model's behavior. The runtime
+moves that from expectation into structure: the merge check is mandatory, the
+halt is mandatory, and no code path in this runtime reaches the delete without
+either a zero-unmerged-commit measurement or a recorded human approval.
+
+Under which assumptions: that the executor is the one this runtime built, that
+the sandbox is the isolation boundary it reports itself to be, and that nothing
+in-process reached past the API (`docs/execution-descriptor.md` class 5).
 
 ## The safeguards this demo exercises (none new, none loosened)
 

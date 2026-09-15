@@ -60,7 +60,12 @@ record said silencing those needs per-module `[mypy-...]` sections, which
 `test_type_gate.py::test_mypy_ini_has_no_per_module_sections` forbids. Measured
 again on 2026-09-14: `mypy_path = src:scripts:tests/conformance:tests/chokepoint`
 with the flag off reports `Success: no issues found in 304 source files`, with
-no per-module section. So the blocker is not the rule; it is that the change
+no per-module section. **That 304 is DATED AT OBSERVATION, 2026-09-14.** It is
+the file set as it was that day, not a current figure and not a pin — the tree
+has grown since (the live pin is `EXPECTED_CHECKED_FILES` in
+`scripts/type_gate.py`, which is what moves). Read here, "at the current file
+set" means *at the file set current on 2026-09-14*, and anyone comparing it to
+today's count is comparing two different populations. So the blocker is not the rule; it is that the change
 re-shapes the type gate's config — an allowlisted file whose `mypy_path = src`
 is pinned by `_ALLOWED_CONFIG` — and makes the gate depend on every third-party
 dependency shipping types, a trade to be made on its own evidence in its own
@@ -1078,6 +1083,14 @@ the same error as reading an audit score as coverage. The count is deliberately
 NOT pinned: a pin would move on every addition and train people to update a
 number without reading the pairing.
 
+**And the number of entries is NEVER a coverage figure**, stated plainly because
+a registry that grows looks like progress. "31 registered pairs" means 31
+places where someone wrote down a pairing. It does not mean 31 properties are
+covered, does not mean the covered ones are the important ones, and says
+nothing at all about the refusals that have no pair because nobody noticed they
+needed one. Quoting the count as a coverage figure, anywhere, is a misuse of
+this instrument.
+
 ---
 
 ## G17 — the dead-flag guard proves a NAME APPEARS, not that a control is enforced (F10's live remainder)
@@ -1754,3 +1767,75 @@ exists to name, added in the entry that names it. A named gap is a passing test
 
 **What closes it.** Nothing in this repository. It is closed at the host or it
 is not closed; this entry exists so the claim is never made from here.
+
+---
+
+## G24 — one approved GateDecision permits repeated executor calls with the same attempt_id (FILED, NOT FIXED)
+
+**Found by the Codex review of `6135652`, item 6.5.** Filed under an explicit
+ruling that it is NOT to be fixed in that sprint.
+
+**What.** `ExecutionController` claims a HELD action atomically before running
+it, so a human-approved hold cannot be executed twice. **Auto-approved actions
+are excluded from that claim.** One approving `GateDecision` can therefore be
+handed to the executor repeatedly, with the same `attempt_id`, and each call
+runs.
+
+**Why it is a product decision and not a bug report.** It turns on what "one
+attempt at one consequential action" means, and the two readings are both
+defensible:
+
+* **one action IDENTITY** — an `attempt_id` may be executed once, ever. Replay
+  is refused. Clean, and it makes an idempotent retry after a timeout
+  impossible: a caller who did not see the result cannot safely ask again.
+* **one execution OCCURRENCE** — the gate authorizes an action, and the caller
+  may run it as often as it is willing to pay for. Retry-safe, and it means the
+  audit record of "authorized once" does not bound "executed once".
+
+The cost is real in both directions, which is why this is a ruling and not a
+fix. A migration runner that loses its connection mid-apply wants the second
+reading; a payment wants the first.
+
+**What is NOT in doubt:** nothing executes without an approving decision, and
+the approval itself is recorded once. The question is only whether the RECORD
+bounds the number of executions, and today, on the auto-approved path, it does
+not.
+
+**What closes it.** A ruling, then either an attempt-scoped claim covering the
+auto-approved path with a test that a second call refuses, or an explicit
+statement in `docs/execution-descriptor.md` that an approving decision is a
+capability the caller may exercise repeatedly — with the audit consequence
+spelled out.
+
+**Test.** None yet. Deliberately: a test written before the ruling would pin
+whichever reading the test author picked, which is the decision being deferred.
+
+---
+
+## G23 — addendum, 2026-09-15: #107 carried a Codex review with ZERO inline threads
+
+**Measured, not assumed.** PR #107 (`fb7e376`, merged 01:58:55Z) carried a Codex
+review submitted at 01:53:36Z in state `COMMENTED`, with the summary wrapper
+*"Here are some automated review suggestions for this pull request."* — and
+**zero inline review threads**. So #107 did not merge past an unresolved
+conversation, and **G23 remains an incident on #106 alone**. No rewrite of that
+entry is owed: it describes one occurrence, not a practice.
+
+### The workflow rule that follows, because this nearly went the other way
+
+**A Codex summary comment is NOT evidence of findings.** The wrapper comment and
+the `COMMENTED` review state appear whether or not there are inline threads, and
+its own About box — *"comments if it has suggestions, and reacts with 👍 once all
+reviews finish with no findings"* — reads as though commenting implies findings.
+It does not: the summary comment is posted separately from the review itself.
+
+Reasoning from the summary alone would have produced a confident and wrong
+conclusion here: that #107 probably carried a P1 like #106, that the rule had
+been merged past twice, and that G23 needed rewriting from an incident into a
+practice. **The signal is inline review threads, or the 👍 reaction documented as
+the all-clear.** Nothing else.
+
+This is the same class as G17 and G23 themselves: a surface that LOOKS like it
+carries a guarantee, read as though it does. Three instances now, in three
+different substrates — a test name, a branch-protection rule, a bot's summary
+comment.

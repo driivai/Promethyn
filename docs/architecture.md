@@ -37,8 +37,11 @@ lists exactly what is supported. Underscore-prefixed modules (for example
 ## Why these boundaries
 
 - **The provider is blind to tests.** It receives a prompt, an entry point,
-  and retrieved skills — never hidden cases. This makes "the model cheated by
-  reading the test" structurally impossible.
+  and retrieved skills — never hidden cases. So "the model cheated by reading
+  the test" cannot happen **through the provider interface**: there is no
+  parameter that carries a held-out case. A provider that reaches the
+  filesystem itself is a different question, and the sandbox is what bounds
+  that one.
 - **The gate owns the firewall.** The single safety invariant lives in one
   guarded module, called on every promotion, rather than being spread across
   the loop.

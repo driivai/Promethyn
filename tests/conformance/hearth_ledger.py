@@ -354,6 +354,23 @@ EXPECTED_PROTECTED_FILES = 21
 #:   be fixed downstream, so the carrying had to start here. ``core/bounds.py``
 #:   holds the vocabulary and the full account.
 #:
+#: * **CODEX REVIEW REMEDIATION (typed execution refusal reasons)** — two files,
+#:   ``verifier/bank.py`` and ``execution/pending.py``. Both changes attach a
+#:   ``reason=`` from the closed ``EXECUTION_REFUSAL_REASONS`` set to refusals
+#:   that already existed. No branch was added, removed or re-ordered; no
+#:   message text changed; every refusal fires on exactly the input it fired on
+#:   before. ``pending.py`` also gains a docstring paragraph recording that
+#:   revalidation runs BEFORE the TTL check, which narrows the literal
+#:   "expired on the spot" claim without changing the ordering.
+#:
+#:   The reason it had to change: four materially different integrity states —
+#:   the chain did not verify, a legacy record needs re-verification, there is
+#:   not exactly one chain entry, the record differs from its chain entry — were
+#:   distinguished only by prose, so a test asserting WHICH one fired had to
+#:   match a message. That is the third instance of this class in the arc, and
+#:   the one in ``test_execution_authorization_record.py`` sat in the same file
+#:   where Block 1a nearly closed on the wrong evidence.
+#:
 #: Those sprints are why these bytes are what they are. They do NOT license the
 #: next edit to the same files: updating a digest below is a fresh decision, and
 #: the reason for it belongs beside it.
@@ -371,7 +388,7 @@ DIGESTS: dict[str, str] = {
     "src/prometheus_protocol/execution/executor.py":
         "7fc5ee28f1a76417a9350ee9a0ab1913483991a89d60d9670ffd8149ab6afb0f",
     "src/prometheus_protocol/execution/pending.py":
-        "1be12c6452942365ac9aaeae9f67eba3b52e4239d4387c2f17e419d977eb69de",
+        "a2f0330fdf523db07219ffa8249092edb116758d9a6816acd0126b6fcc4058b8",
     "src/prometheus_protocol/forge/miner.py":
         "b0e2a53440df5b38a1031cc9648e19b3f9df20081ee34d4e035beda2b6973a29",
     "src/prometheus_protocol/gate/authorization.py":
@@ -389,7 +406,7 @@ DIGESTS: dict[str, str] = {
     "src/prometheus_protocol/verifier/aggregate.py":
         "5963bb6b4047c0ec2c900b10187e861ad95541dca87c0b98bdb5db34dcd1c37c",
     "src/prometheus_protocol/verifier/bank.py":
-        "10dd21123b3a635ea3f028b2bb8a1c04572cee95856e237436db5ed36a4d39cd",
+        "68464ca7ba79e03d8b77f9322af89a3df3f3f4b0ce547efcd0d9d9a6a18d70aa",
     "src/prometheus_protocol/verifier/grounding.py":
         "edb44c93c371cbf4a5099e607f4de0332d1bb902d47913bdd3708d5be1b4da3f",
     "src/prometheus_protocol/verifier/model_judge.py":

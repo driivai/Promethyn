@@ -228,7 +228,8 @@ class PendingActionService:
         authorization = decision.authorization
         if not isinstance(authorization, AuthorizedExecution):
             raise ExecutionNotAuthorized(
-                "a routed hold requires a validated execution descriptor"
+                "a routed hold requires a validated execution descriptor",
+                reason="descriptor_absent",
             )
         if action != decision.action or action != authorization.action:
             raise ExecutionNotAuthorized(
@@ -313,6 +314,19 @@ class PendingActionService:
         no execution can follow an unrecorded approval. Approval re-checks the
         hold at decision time — a lapsed (past-TTL) or already-resolved hold
         cannot be approved — closing the stale-approval race.
+
+        ORDER MATTERS, AND THE LITERAL CLAIM IS NARROWER THAN IT READS.
+        ``_revalidate`` runs BEFORE the TTL check. So a hold that is BOTH
+        expired AND independently broken — a record that no longer matches its
+        chain entry, a chain that no longer verifies, a superseded policy —
+        refuses for the EARLIER reason and is never marked EXPIRED here: it
+        stays stored as PENDING until a sweep transitions it.
+
+        Every outcome is still fail-closed; nothing executes on either path, and
+        the hold remains unapprovable because the revalidation that refused it
+        will refuse it again. What is narrowed is only "a lapsed hold is expired
+        on the spot": that holds when the TTL is the FIRST thing wrong with it.
+        This is a description of the ordering, not a bypass.
         """
 
         timestamp = now or self._clock()
@@ -588,7 +602,9 @@ class PendingActionService:
 
         if self._authorizer is None or pending.record is None:
             raise ExecutionNotAuthorized(
-                "legacy hold has no trusted execution descriptor; re-verification is required"
+                "legacy hold has no trusted execution descriptor; "
+                "re-verification is required",
+                reason="reverification_required",
             )
         self._require_chain_binding(pending)
         self._require_pinned_policy(pending)
@@ -626,7 +642,8 @@ class PendingActionService:
             raise ExecutionNotAuthorized(
                 f"hold #{pending.id} has {len(entries)} tamper-evident chain "
                 "entries where exactly one is required; the pinned record cannot "
-                "be trusted"
+                "be trusted",
+                reason="chain_entry_count_wrong",
             )
         payload = entries[0].get("payload")
         stored: object = payload
@@ -639,13 +656,15 @@ class PendingActionService:
             raise ExecutionNotAuthorized(
                 f"hold #{pending.id}: the pinned authorization record does not "
                 "match its tamper-evident chain entry; the row was altered after "
-                "it was written"
+                "it was written",
+                reason="record_differs_from_chain_entry",
             )
         verification = self._ledger.verify_chain()
         if not verification.ok:
             raise ExecutionNotAuthorized(
                 f"hold #{pending.id}: the tamper-evident chain did not verify "
-                f"({verification.render()}); the pinned record cannot be trusted"
+                f"({verification.render()}); the pinned record cannot be trusted",
+                reason="chain_did_not_verify",
             )
 
     def _require_pinned_policy(self, pending: PendingAction) -> None:

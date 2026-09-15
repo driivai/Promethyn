@@ -44,8 +44,10 @@ every link after it.
   separately: a payload corrupted to non-JSON is reported `NOT_VERIFIABLE`.
 - **Append is append-only in fact.** `record_chained` reads the current tip and
   chains onto it; the caller **cannot** pass `prev_hash`, so a forged-prior-hash
-  append is impossible through the API. Direct-file forgery of a wrong `prev_hash`
-  is caught at verify.
+  append is unreachable **through this API** — there is no parameter for it.
+  That is a statement about the function signature, not about the database:
+  direct-file forgery of a wrong `prev_hash` is a different route, and is caught
+  at verify instead.
 
 ## The verifier
 
