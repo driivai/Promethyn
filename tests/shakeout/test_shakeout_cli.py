@@ -12,6 +12,7 @@ import logging
 
 import pytest
 
+from prometheus_protocol import UNBOUNDED
 from prometheus_protocol.cli.main import main
 
 
@@ -72,7 +73,7 @@ def test_status_renders_ranking_and_skills_after_a_cycle(monkeypatch, tmp_path, 
     monkeypatch.setenv("PROM_LEDGER_PATH", str(state / "ledger.db"))
     monkeypatch.setenv("PROM_TRUST_STORE_PATH", str(state / "trust.db"))
     monkeypatch.setenv("PROM_REGISTRY_DIR", str(state / "skills"))
-    monkeypatch.setenv("PROM_VERIFIER_MEMORY_MB", "0")
+    monkeypatch.setenv("PROM_VERIFIER_MEMORY_MB", UNBOUNDED)
 
     assert main(["cycle"]) == 0  # populate the trust store + registry
     capsys.readouterr()  # discard cycle output

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from prometheus_protocol import Config, build_swarm_runtime
+from prometheus_protocol import UNBOUNDED, Config, build_swarm_runtime
 from prometheus_protocol._examples.swarm_tasks import (
     build_swarm_provider,
     buggy_code_task,
@@ -24,7 +24,7 @@ from prometheus_protocol.swarm.models import KIND_PROPOSED_ACTION
 def _runtime(task):
     provider = build_swarm_provider([task])
     return build_swarm_runtime(
-        Config(ledger_path=":memory:", verifier_memory_mb=0), provider=provider
+        Config(ledger_path=":memory:", verifier_memory_mb=UNBOUNDED), provider=provider
     )
 
 

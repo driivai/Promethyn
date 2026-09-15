@@ -236,9 +236,14 @@ def resolve_posture(
         attestation_target_class=target.kind if target is not None else TARGET_NONE,
         attestation_target_external=bool(target.external) if target is not None else False,
         verifier_timeout_s=float(config.verifier_timeout_s),
-        verifier_memory_mb=int(config.verifier_memory_mb),
-        verifier_cpu_seconds=int(config.verifier_cpu_seconds),
-        verifier_max_processes=int(config.verifier_max_processes),
+        # The operator's own spelling, not a resolved 0: "unbounded" and a cap
+        # of zero would be the same byte in the digest otherwise, and the whole
+        # point of the named posture is that the record says which was meant.
+        # ``encode_value`` tags str and int separately, so the two cannot share
+        # a preimage.
+        verifier_memory_mb=config.verifier_memory_mb,
+        verifier_cpu_seconds=config.verifier_cpu_seconds,
+        verifier_max_processes=config.verifier_max_processes,
         request_timeout_s=float(config.request_timeout_s),
         provider_max_response_bytes=int(config.provider_max_response_bytes),
         max_role_calls=int(config.max_role_calls),

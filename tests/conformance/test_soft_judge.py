@@ -136,7 +136,7 @@ def test_determinism_identical_inputs_identical_judgment():
 
 
 def test_parity_enabling_judge_preserves_verdicts(tmp_path):
-    from prometheus_protocol import Config, build_orchestrator
+    from prometheus_protocol import UNBOUNDED, Config, build_orchestrator
     from prometheus_protocol._examples.python_functions import build_benchmark
 
     benchmark = build_benchmark()
@@ -145,7 +145,7 @@ def test_parity_enabling_judge_preserves_verdicts(tmp_path):
         config = Config(
             registry_dir=tmp_path / sub,
             ledger_path=Path(":memory:"),
-            verifier_memory_mb=0,
+            verifier_memory_mb=UNBOUNDED,
             enable_model_judge=enable,
         )
         report = build_orchestrator(config).baseline(benchmark.tasks)

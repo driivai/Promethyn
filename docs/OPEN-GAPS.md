@@ -1145,18 +1145,77 @@ measurement. The §5 summary row now reads "dead-flag SPELLING check (G17)".
 `docs/sandbox.md:103` was checked and is accurate — it describes the pre-fix
 state historically.
 
-**(2) PARTITIONED, NOT BUILT.** The 22 fields split by whether neutralizing the
-field changes an authorization outcome — 14 yes, 2 no, 6 UNCLASSIFIED. The
-partition is a CLASSIFICATION BY READING each consumer, not a measurement, and
-it is stated that way on purpose: the behavioural proofs in 2b are what measure
-it, and they await a ruling on the six. See the table below.
+**(2) LANDED, AND MEASURED RATHER THAN CLASSIFIED.** The 22 fields split 14
+outcome-affecting / 6 resource-bound / 2 spelling-only. That split began as a
+CLASSIFICATION BY READING each consumer; it is now a measurement, because every
+field in the first two classes has a behavioural proof and every proof has been
+shown to redden under a mutation that neutralizes its field.
 
-**What closes it.** The 14 outcome-affecting fields getting behavioural proofs
-(neutralize the field, a named test reddens), the remainder recorded as
-SPELLING-CHECKED ONLY, and a ruling on the six unclassified.
+`tests/conformance/test_security_field_behaviour.py` holds the 14, and holds
+the partition itself as executable structure — `OUTCOME_AFFECTING`,
+`RESOURCE_BOUND`, `SPELLING_ONLY` and a `PROOFS` mapping, with guards that the
+three classes partition `SECURITY_FIELDS` exactly and that every test `PROOFS`
+names exists. A field added to `SECURITY_FIELDS` must be classified, and a
+proof cannot be renamed away. The table below is now a description of that
+structure rather than the structure itself.
 
-**Test.** The rename has landed and is covered by the suite. The behavioural
-proofs are 2b and are not built.
+### The measurement, 2026-09-15 (`scripts/mutation_worktree.py`, primary tree clean)
+
+Per field: the consumption neutralized in `src/`, and what went red.
+
+**14 of 14 reddened a NAMED test in the new module.** For **11 of the 14** the
+spelling-check file stayed at `26 passed` — i.e. the new module caught exactly
+what the old one cannot. For the other three (`sandbox`, `require_digest_pin`,
+`verification_profile`) `test_security_posture.py` also reddened, but NOT
+through the spelling check: through the ordinary assertions that already sat in
+that file. Stated because "the spelling check went red too" would be a false
+reading of the same output.
+
+**C4, the reproduction that motivated all of this, is closed.** Its exact shape
+— every genuine consumption of `require_ledger_anchor` removed from `src/`, one
+dead store left under `if False:` — now reddens
+`test_require_ledger_anchor_refuses_a_configuration_it_cannot_honour`, while
+`test_security_posture.py` still reports `26 passed`, unchanged from the
+original probe.
+
+**One thing the measurement corrected, and I had it the other way round first.**
+The enforcing consumer for `require_ledger_anchor` and `require_config_attestation`
+is the coherence block in `core/config.py`, not the runtime builder: a `Config`
+carrying the requirement with no anchor — or with a `file://` one — cannot be
+constructed at all. The runtime read in `runtime/factory.py` is therefore
+*unreachable from any loadable Config*, and its only reachable driver is the
+environment variable. That is why the spelling check could not see the
+enforcement at all: its collector skips `config.py` by design. Each of those two
+fields has two proofs here, one per site, kept separate so a mutation that
+removes only one is distinguishable from a mutation that removes both.
+
+### Second-order probe on all 14
+
+Strip the assertion that states the property, keep the neutralizing mutation:
+
+* **11 of 14 go GREEN** (`23 passed`) — the assertion is load-bearing and
+  nothing else in the module catches that mutation.
+* **3 stay RED, and each for a different reason worth naming rather than
+  recording as weak.** `sandbox`: a *different* field's test
+  (`test_require_digest_pin_…`) also catches a hardcoded adapter, so the two
+  proofs overlap. `escalate_below`: the same test's `assert routed != approved`
+  carries "the field changes the outcome", and the stripped
+  `assert routed == "route"` carried only "and in which direction".
+  `pending_ttl_seconds`: the paired assertion at the other value fails too —
+  both carry the same half, and the pair exists so a hardcode to *either* value
+  is caught.
+
+Strip the POSITIVE CONTROL instead: **14 of 14 stay RED**. That is the expected
+result and it says what the control is for — not catching neutralization, which
+the property statement does, but catching the opposite defect of code that
+refuses or returns the same thing unconditionally.
+
+**What closes it.** Closed for the 20 fields that have proofs. The 2 named
+partials stay open by design and are described in 2c below.
+
+**Test.** `tests/conformance/test_security_field_behaviour.py` (23 tests) and
+`tests/conformance/test_resource_bound_outcomes.py` (18 tests), plus the rename
+and the spelling check in `test_security_posture.py`.
 
 ### The partition (2a), for ruling
 
@@ -1192,19 +1251,53 @@ work happens, never whether it was authorized.
 | `ledger_anchor_retention_days` | retention of the anchor; no decision reads it |
 | `max_role_calls` | bounds swarm iterations; exceeding it stops work, it authorizes nothing |
 
-**UNCLASSIFIED — 6, and the reason is a definition I should not pick alone.**
-Each bounds a verifier or provider. Neutralizing one does not flip an
-authorize/refuse directly — but a verifier that hangs or is killed produces
-`Unavailable`, which makes coverage incomplete, which IS a refusal. So they
-remove a refusal PATH without being a decision.
+**2c — these two are SPELLING-CHECKED ONLY, and that is the whole claim made
+about them.** They are covered by
+`test_every_declared_security_field_is_SPELLED_somewhere_outside_config`, which
+proves their name appears as an attribute outside `config.py` and nothing more.
+No behavioural proof exists for either and none is planned: a proof would have
+to assert that neutralizing them changes *nothing*, which is a claim about the
+absence of an effect and is not provable by a test. If either later grows a
+consumer that decides something, it moves into the outcome-affecting set and
+gets a proof then. A named partial is the honest state; a uniform claim over 22
+fields that holds for none of them was not.
+
+**RESOURCE-BOUND — 6. Ruled outcome-affecting, PROVEN UNDER A DIFFERENT SHAPE,
+and the difference is the point of this entry.**
 
 `verifier_timeout_s` · `verifier_memory_mb` · `verifier_cpu_seconds` ·
 `verifier_max_processes` · `request_timeout_s` · `provider_max_response_bytes`
 
-Whether "removes a refusal path that runs through coverage" counts as
-outcome-affecting decides whether 2b is 14 proofs or 20. That is a scoping
-call, and distributing these into either side to make the table tidy is exactly
-what the UNCLASSIFIED category exists to prevent.
+These were UNCLASSIFIED pending a ruling on whether "removes a refusal path that
+runs through coverage" counts. It was ruled that it does — and then the
+measurement showed the premise behind the question was wrong. Neutralizing one
+of these does **not** produce an `Unavailable` that makes coverage incomplete.
+It produces a **different VERDICT**: the same candidate bytes that return
+`Verdict.FAIL` under a bound return `Verdict.PASS` without one (G21).
+
+So the proof shape here is a **verdict flip, not a refusal**, and no refusal test
+could catch it because nothing refuses. That is a STRONGER observation — the
+control does not merely remove a path, it changes the answer — and a WEAKER
+guarantee, because there is no refusal to assert on. Recording these as "proven"
+alongside the 14 without recording the shape would let a reader carry the 14's
+guarantee onto them, and they do not carry it.
+
+| bound | proof |
+|---|---|
+| `verifier_memory_mb` | FAIL→PASS flip, bare `0` refused at load, named `UNBOUNDED` accepted |
+| `verifier_cpu_seconds` | same three |
+| `verifier_max_processes` | same three |
+| `verifier_timeout_s` | a confirmed start that overruns is `ABSTAIN`; no unbounded spelling exists |
+| `request_timeout_s` | refuses `0` and `-1` at load; no unbounded spelling exists |
+| `provider_max_response_bytes` | refuses `0` and `-1` at load; no unbounded spelling exists |
+
+**Test.** `tests/conformance/test_resource_bound_outcomes.py`, 18 tests. The
+runner's three-way split (FAIL for a resource kill on a confirmed start, ABSTAIN
+for a confirmed start that overruns, `Unavailable` only for a timeout *before*
+the candidate started) was reviewed and RULED CORRECT: a candidate killed by a
+limit on its own code produced a verdict about the candidate, and converting
+that to `Unavailable` would discard real information. Doctrine #1 stops absence
+being reported as a verdict; it does not turn verdicts into absences.
 
 ---
 
@@ -1355,9 +1448,138 @@ said", which is the question that matters when the finding is cited to a third
 party — a diligence reader, an auditor, or the next engineer deciding whether a
 closure is honest.
 
+### What can and cannot be claimed about R1–R7, in a diligence setting
+
+This is the practical consequence, and it should be written down before someone
+has to answer it live.
+
+**CAN be claimed, and is well supported:** *"An independent review found real
+defects in five consecutive rounds, and each one is reproduced in this
+repository with the reproduction and the observed outcome recorded."* Every part
+of that is checkable here: the reproductions run, `docs/execution-descriptor.md`
+carries what was done and what was seen, and the mutation proofs show the fixes
+are load-bearing. A reader can re-run them.
+
+**CANNOT be claimed:** *"Here is what the reviewers found, in their words."* We
+do not hold their words. What we hold is our reproduction of what we understood
+them to mean — written by the party with an interest in the finding being
+closeable. That is a real limitation and stating it plainly is stronger than
+having it discovered: a diligence reader who asks for the original reports and
+is told they cannot be produced will reasonably discount the closures too.
+
+**The difference matters most where a closure is contested.** If a reviewer's
+finding was broader than our reproduction, the reproduction passes and the
+finding is not closed — and nothing in this repository could detect that.
+`G4` is the worked example: F10's paraphrase turned out to be the only record,
+and its citation pointed at an unrelated commit for three sprints.
+
 **What closes it.** Either the original documents attached to the repository,
 or — if they are genuinely gone — an entry per orphaned number recording what
 evidence survives and that the text does not, so nobody re-derives it from a
 paraphrase a third time. F10 already has that treatment in G4; F12 does not.
 
 **Test.** None. A test cannot know whether a document was ever received.
+
+---
+
+## G21 — three resource bounds accept "no bound", and removing one turns a FAIL into a PASS
+
+**What.** `verifier_memory_mb`, `verifier_cpu_seconds` and
+`verifier_max_processes` accept `0` at `Config` load, meaning "no bound".
+Measured on the real `SubprocessVerifier` with byte-identical candidate code:
+
+| bound | enforced | set to 0 |
+|---|---|---|
+| `verifier_memory_mb` (64) | `Verdict.FAIL` | **`Verdict.PASS`** |
+| `verifier_cpu_seconds` (2) | `Verdict.FAIL` | **`Verdict.PASS`** |
+| `verifier_max_processes` (4) | `Verdict.FAIL` | **`Verdict.PASS`** |
+
+So these fields are outcome-affecting in the strongest sense: they do not merely
+remove a refusal path, they change the verdict. An operator who zeroes one
+silently widens what passes.
+
+**The other three of the six are fail-closed and cannot be neutralized at all.**
+`verifier_timeout_s`, `request_timeout_s` and `provider_max_response_bytes`
+refuse both `0` and `-1` at load. The asymmetry is the finding as much as the
+table is.
+
+### What this is NOT, stated because the sprint that found it expected otherwise
+
+The G17 ruling asked for proofs showing an Unavailable path — "neutralize the
+bound, show the verifier fails to yield a verdict, show coverage reports
+incomplete" — and named the risk as couldn't-verify collapsing into
+verified-clean at the resource layer.
+
+**That path does not exist here, and its absence is deliberate rather than a
+defect.** A resource-limit kill is a FAIL, a verdict about the candidate.
+`runner.py`'s docstring says so exactly, and all four measurements match it:
+
+* FAIL — "the candidate crashing / being killed by a resource limit on its own
+  code (a *confirmed* candidate start that produced no verdict)";
+* ABSTAIN — "the candidate started and then ran past the wall clock";
+* Unavailable — "a wall-clock timeout *before* the candidate started".
+
+Measured: a confirmed start that runs past the wall clock returns
+`Verdict.ABSTAIN`, not FAIL and not Unavailable. There is therefore no
+couldn't-verify state on this path to collapse from, and the prescribed proof
+shape cannot be built for these six without manufacturing it.
+
+(An earlier reading of mine, withdrawn: I first reported the docstring as
+claiming wall-clock timeouts are Unavailable and therefore false. It says
+*before the candidate started*, which my probe did not exercise. The docstring
+is accurate; the misreading was mine.)
+
+### The control that exists
+
+Every one of these values is captured in the startup posture record
+(`attestation/runtime.py`), so the budget a verdict was produced under is
+recorded rather than implicit. That is what those fields are doing in the
+attestation snapshot — a point that reads as "recorded, not enforced" until you
+need to know which budget produced a PASS.
+
+### RULED AND CLOSED 2026-09-15 — unbounded stays, but it must be NAMED
+
+Not "refuse zero outright" and not "leave it". Unbounded is a supported posture
+and removing it would be a different product: `Limits` documents that a disabled
+address-space cap avoids refusing legitimate workloads, and this repository
+relies on it — a 256 MiB cap makes ordinary test candidates flaky. What was
+wrong was not that unbounded was reachable. It was that it was reachable by
+saying *nothing in particular*.
+
+* `Config` accepts `UNBOUNDED` (`"unbounded"`, exported from the package root)
+  for `verifier_memory_mb`, `verifier_cpu_seconds`, `verifier_max_processes`.
+* A bare `0` is **refused at load** with `reason="bound_zero_is_not_unbounded"`,
+  as `verifier_timeout_s`, `request_timeout_s` and `provider_max_response_bytes`
+  already refused it. Three fields in one struct failing closed while three did
+  not was the inconsistency, and that is what is removed.
+* The permitted spellings are an **allowlist over what varies**
+  (`UNBOUNDED_SPELLINGS`), not an enumeration of bad values: a near-miss like
+  `"unbouned"` and a stringified number like `"256"` are both refused with
+  `reason="unknown_unbounded_spelling"` rather than falling back to either
+  meaning.
+* `SubprocessVerifier` and `Limits` keep their `0 = no limit` contract
+  UNCHANGED. Inside the library, where the value arrives from a caller who wrote
+  it on the same line, `0` is unambiguous; `resolve_bound` is the single place
+  the operator-facing posture is translated into it.
+* The posture record stores the operator's **spelling**, not a resolved `0`, so
+  "no cap was asked for" and "a cap of zero" are distinguishable in the digest.
+  `encode_value` tags `str` and `int` separately, so the two cannot collide.
+
+**Migrated: 7 call sites** that passed a bare `0` through the `Config` surface —
+six `verifier_memory_mb=0` keyword arguments (`tests/conftest.py`, two shakeout
+modules, `test_sql_learn_loop.py`, `test_soft_judge.py`,
+`test_swarm_provider_backed.py`) and one `PROM_VERIFIER_MEMORY_MB=0` environment
+variable in `test_shakeout_cli.py`. The ~45 internal
+`SubprocessVerifier(memory_mb=0)` calls are deliberately NOT migrated: that
+constructor is not an operator surface and its contract did not change.
+
+**Test.** `tests/conformance/test_resource_bound_outcomes.py`, 18 tests: the
+FAIL→PASS flip per bound; the bare-zero refusal per bound with its typed reason;
+the paired positive control that the named value loads AND still widens — without
+which the refusal is equally consistent with unbounded having been removed
+outright; the unrecognised-spelling refusal; a `replace()` round-trip, because
+`__post_init__` re-validates what was stored and a normalisation that did not
+round-trip would make a valid `Config` un-copyable; the ABSTAIN split; and a
+positive control that an unbreached bound still returns real verdicts in both
+directions, without which every assertion is consistent with a verifier that
+fails everything under a bound and passes everything without one.

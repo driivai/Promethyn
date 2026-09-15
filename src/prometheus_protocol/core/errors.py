@@ -49,6 +49,8 @@ CONFIG_REFUSAL_REASONS: frozenset[str] = frozenset({
     "unsafe_with_remote",        # a non-isolating adapter beside a remote provider
     "deny_network_unhonourable", # network access asked of a non-isolating adapter
     "substrate_requirement_contradiction",  # require_verified + allow_unverified
+    "bound_zero_is_not_unbounded",  # a 0/negative where unbounded must be named
+    "unknown_unbounded_spelling",   # a bound that is neither positive nor named
 })
 
 
