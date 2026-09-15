@@ -2109,6 +2109,28 @@ tests, all green unmutated.
 | M12 a resolved site that reports a different identity accepted | substitution | **1 failed, 90 passed**: the reports-another-identity proof | The identity comparison, not merely the import, is what the proof pins |
 | M13 the class-in-hand check removed at declaration | deletion | **1 failed, 90 passed**: `test_an_extension_class_reporting_another_identity_is_refused_at_declaration` | The on-the-spot form has its own proof; the path form's proofs do not cover it, and were not expected to |
 
+**Round three — SECOND-ORDER probes on the site-check proofs.** Every
+mutation keeps the raise and drops only the part that names the property: the
+typed reason, the implementation or identity attribute, or the message the
+proof reads. A proof that survived would be one resting on the raise alone.
+Two target modules (the registry proofs, coverage enforcement), 51 tests, all
+green unmutated.
+
+| mutation | observed | what it establishes |
+|---|---|---|
+| S1 `reason=` dropped from the load-and-resolve refusal (the raise stays) | **3 failed, 48 passed**: the pointing-nowhere proof, the reports-another-identity proof, the committed-profiles-at-load proof | Every path-declared proof asserts the typed reason; none rests on the raise |
+| S2 the resolver's re-raise drops only the reason it copies | **2 failed, 49 passed**: the two resolution proofs | The load proof survived, correctly — its path never enters the resolver — and the two that do enter it assert the reason survives the re-raise |
+| S3 `implementation=` dropped from the load-and-resolve refusal | **3 failed, 48 passed**: the same three as S1 | The proofs assert WHICH implementation, not only which reason |
+| S4 `identity=` dropped from the class-in-hand refusal | **1 failed, 50 passed**: the class-mismatch proof | The on-the-spot refusal's identity attribute is asserted |
+| S5 the class-in-hand message stops naming what the class reported | **1 failed, 50 passed**: the class-mismatch proof | The proof reads the message for the reported identity, so a refusal that stops saying what it found reddens it |
+| S6 the unresolved-site message stops naming the site | **1 failed, 50 passed**: the pointing-nowhere proof | The proof reads the message for the site, so a refusal that stops saying where it looked reddens it |
+
+No second-round proof survived a probe aimed at its own property-naming half.
+Three proofs have no second-order probe because they assert no refusal: the
+extension positive control, the committed profiles' positive half, and the
+G27 limit test — each states an acceptance, and an acceptance has no reason to
+drop.
+
 **A note on M6, because it is the doctrine #8 shape inside the tool.** The
 mutation runner reported `(no summary)` and an EMPTY red list. Read carelessly,
 that is GREEN. It was a collection failure, and the raw pytest output was
