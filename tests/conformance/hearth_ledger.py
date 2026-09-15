@@ -421,6 +421,30 @@ EXPECTED_PROTECTED_FILES = 21
 #:   of the three cases it is, because an absent block and a passing comparison
 #:   would otherwise be the same bytes.
 #:
+#: RE-SANCTIONED AGAIN — re-observation WIRING, and the registry-mismatch
+#: refusal it made reachable. One protected file moved:
+#:
+#:   - ``execution/pending.py`` — ``_compare_now`` gains a guard BEFORE it asks
+#:     the registry to observe: a hold whose record says its live state was
+#:     pinned, held by a service whose registry has that action class opted out,
+#:     is refused (``StateUnobservable`` / ``target_state_registry_mismatch``)
+#:     instead of compared or skipped. Also ``_from_row`` now reconstructs the
+#:     human decision for ``STATE_MOVED`` holds, and the observation subject
+#:     carries the pending-hold id so two holds sharing an ``attempt_id`` cannot
+#:     collide on one receipt.
+#:
+#:   WHY THAT GUARD EXISTS AND WHY IT IS A REFUSAL. Until the previous sprint's
+#:   mechanism was actually WIRED at the composition roots, no root held a
+#:   registry, so two roots could never disagree. They can now, and the
+#:   disagreement is reachable through the shipped CLI: ``prom approve`` builds
+#:   its controller with the default ``sandbox://execution`` target, which opts
+#:   ``branch.delete`` out, while the hold it approves may have been pinned by a
+#:   root naming a ``git://`` principal. Measured: before the guard, that path
+#:   raised a bare ``KeyError`` out of ``approve``. Skipping the comparison
+#:   instead would execute an irreversible delete on evidence the hold's own
+#:   record claims was re-checked — degrading a requested security property
+#:   rather than refusing it. OPEN-GAPS G31.
+#:
 #: Those sprints are why these bytes are what they are. They do NOT license the
 #: next edit to the same files: updating a digest below is a fresh decision, and
 #: the reason for it belongs beside it.
@@ -438,7 +462,7 @@ DIGESTS: dict[str, str] = {
     "src/prometheus_protocol/execution/executor.py":
         "7fc5ee28f1a76417a9350ee9a0ab1913483991a89d60d9670ffd8149ab6afb0f",
     "src/prometheus_protocol/execution/pending.py":
-        "bde57b1094a1f4c60b95722b1ece9efdade4282de03d80bb3f85dd6fb231184e",
+        "2cd49d4e8b4bf439df13cd9679ff867035c54c170e308ef41a40d62ebe03882c",
     "src/prometheus_protocol/forge/miner.py":
         "b0e2a53440df5b38a1031cc9648e19b3f9df20081ee34d4e035beda2b6973a29",
     "src/prometheus_protocol/gate/authorization.py":

@@ -49,6 +49,8 @@ from prometheus_protocol.verifier.store import (
 
 if TYPE_CHECKING:  # pragma: no cover
     from prometheus_protocol.policy.profile import VerificationPolicy
+    from prometheus_protocol.policy.reobservation import ReObservation, StateObserver
+    from prometheus_protocol.tools.git import GitTool
 
 _LOG = logging.getLogger(__name__)
 
@@ -400,6 +402,72 @@ def build_swarm_runtime(
     )
 
 
+#: The scheme a git principal's canonical target carries. Spelled once: the
+#: observer's own binding check compares against the same shape, and two
+#: spellings of "is this a git target" is two answers to one question.
+GIT_TARGET_PREFIX = "git://"
+
+
+def build_reobservation(
+    *, target_canonical: str, git_tool: "GitTool | None" = None
+) -> "ReObservation":
+    """The re-observation registry for a composition root, from its TARGET.
+
+    WHY THIS EXISTS AS A FUNCTION rather than a default argument. Every
+    composition root must decide, explicitly, which action classes it
+    re-observes and why it does not re-observe the rest — and the decision
+    depends on what the root's principal IS. A default would make the decision
+    once, invisibly, for roots that had not been written yet, which is the
+    shape that let re-observation ship unwired: thirty passing proofs, thirteen
+    reddening mutations, and no production caller.
+
+    The registry is total over ``ACTION_CLASSES`` by construction, so this
+    returns a complete answer or raises. Two reasons are possible for a class
+    being out, and they are different facts: ``NOT_THIS_PRINCIPAL`` says this
+    deployment's target cannot have that kind of state, and
+    ``PHASE_ONE_NOT_COVERED`` says the mechanism does not cover the class yet.
+    Both appear verbatim in every hold record the root creates.
+
+    ``git_tool`` lets a root that ALREADY holds a ``GitTool`` pass it, so the
+    observer and the merge proof read through one instance — one sandbox, one
+    repository, one definition of "unmerged". A root that does not pass one
+    gets a tool built for the principal in ``target_canonical``.
+    """
+
+    from prometheus_protocol.policy.reobservation import (
+        NOT_THIS_PRINCIPAL,
+        PHASE_ONE_NOT_COVERED,
+        ReObservation,
+    )
+    from prometheus_protocol.policy.snapshot import (
+        ACTION_BRANCH_DELETE,
+        ACTION_DATABASE_MIGRATE,
+        ACTION_SANDBOX_EXECUTE,
+    )
+
+    observers: dict[str, "StateObserver"] = {}
+    opted_out: dict[str, str] = {
+        ACTION_SANDBOX_EXECUTE: PHASE_ONE_NOT_COVERED,
+        ACTION_DATABASE_MIGRATE: PHASE_ONE_NOT_COVERED,
+    }
+    if target_canonical.startswith(GIT_TARGET_PREFIX):
+        from prometheus_protocol.tools.git import GitBranchStateObserver, GitTool
+
+        # Narrowed in STATEMENT form. The expression form the type gate refuses
+        # would take an argument of a third shape down the else-branch and build
+        # a tool for the wrong repository, which is an observer reading a
+        # subject the hold was never pinned to.
+        tool: "GitTool"
+        if git_tool is None:
+            tool = GitTool(repo_path=target_canonical[len(GIT_TARGET_PREFIX) :])
+        else:
+            tool = git_tool
+        observers[ACTION_BRANCH_DELETE] = GitBranchStateObserver(tool)
+    else:
+        opted_out[ACTION_BRANCH_DELETE] = NOT_THIS_PRINCIPAL
+    return ReObservation(observers=observers, opted_out=opted_out)
+
+
 def build_execution_controller(
     config: Config | None = None, *, ledger: Ledger | None = None,
     target_canonical: str = "sandbox://execution",
@@ -445,6 +513,11 @@ def build_execution_controller(
         executor=SandboxExecutor(sandbox=build_sandbox_for(config), limits=limits),
         ledger=ledger if ledger is not None else build_ledger(config),
         ttl_seconds=config.pending_ttl_seconds,
+        # WIRED HERE, at the root, because an argument no production caller
+        # passes is a feature that does not exist. This is the root the CLI's
+        # ``approve`` and ``retry-execution`` commands build, so it is the path
+        # a human's decision actually travels.
+        reobservation=build_reobservation(target_canonical=target_canonical),
     )
 
 

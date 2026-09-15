@@ -96,6 +96,7 @@ from prometheus_protocol.policy.reobservation import (
     Observation,
     ReObservation,
     StateMoved,
+    StateUnobservable,
     StateUnreadable,
     compare,
     observation_record,
@@ -698,6 +699,28 @@ class PendingActionService:
         action_class = str(record.get("action_class", ""))
         target_canonical = str(record.get("target_canonical", ""))
         attempt_id = str(record.get("attempt_id", ""))
+        # TWO REGISTRIES CAN DISAGREE, and wiring re-observation is what made
+        # that reachable. This hold's record says its live state was pinned; the
+        # registry in front of it now says the class is not observed here. The
+        # comparison the record commits the hold to cannot be made, so the hold
+        # is REFUSED rather than passed through as a match — passing it through
+        # would execute on evidence the record claims was re-checked, which is
+        # the degradation doctrine #2 forbids. Measured: before this branch
+        # existed the same path raised a bare KeyError out of ``approve``.
+        if not self._reobservation.covers(action_class):
+            raise StateUnobservable(
+                f"hold #{pending.id} was pinned to the live state of "
+                f"{target_canonical!r}, but this service does not observe "
+                f"{action_class!r}"
+                + (
+                    f" ({self._reobservation.opt_out_reason(action_class)})"
+                    if self._reobservation.opt_out_reason(action_class)
+                    else ""
+                )
+                + ". The comparison its record commits it to cannot be made "
+                "here, so it is refused rather than approved unchecked",
+                reason="target_state_registry_mismatch",
+            )
         observation = self._reobservation.observe(
             action_class=action_class,
             target_canonical=target_canonical,
@@ -726,7 +749,9 @@ class PendingActionService:
         # same argument applies to the record this adds.
         self._ledger.record_chained(
             event=OBSERVATION_EVENT,
-            subject=observation_subject(attempt_id, execution_attempt),
+            subject=observation_subject(
+                attempt_id, execution_attempt, pending_id=pending.id
+            ),
             payload=entry,
             created_at=at,
         )
@@ -771,7 +796,7 @@ class PendingActionService:
                 pending, outcome, moved_reason="target_state_moved_before_approval"
             )
 
-    def pre_approval_entry(self, attempt_id: str) -> dict | None:
+    def pre_approval_entry(self, attempt_id: str, *, pending_id: int) -> dict | None:
         """The pre-approval observation, read back off the chain.
 
         The pre-execution entry RESTATES it, so one receipt shows that state was
@@ -781,7 +806,7 @@ class PendingActionService:
         would be a value neither of them can show came from the chain.
         """
 
-        subject = observation_subject(attempt_id, 0)
+        subject = observation_subject(attempt_id, 0, pending_id=pending_id)
         for entry in self._ledger.chained_events():
             if entry.get("event") == OBSERVATION_EVENT and entry.get("subject") == subject:
                 payload = entry.get("payload")
@@ -821,7 +846,11 @@ class PendingActionService:
             raise KeyError(f"no pending action with id {pending_id}")
         record = pending.record or {}
         attempt_id = str(record.get("attempt_id", ""))
-        prior = self.pre_approval_entry(attempt_id) if attempt_id else None
+        prior = (
+            self.pre_approval_entry(attempt_id, pending_id=pending_id)
+            if attempt_id
+            else None
+        )
         outcome, _ = self._compare_now(
             pending,
             moment=MOMENT_PRE_EXECUTION,
@@ -941,13 +970,31 @@ class PendingActionService:
         # expiry or invalidation is a transition audited in the row
         # (status/decided_at/reason), not a human decision, so it is not
         # surfaced here.
+        #
+        # STATE_MOVED IS THE EXCEPTION, and leaving it out was a defect (PR
+        # #113 review). It is a system transition, but unlike expiry and
+        # invalidation it happens to a hold that WAS APPROVED: the reviewer's
+        # identity and timestamp are still in the row, and the lifecycle says
+        # explicitly that the approval remains part of the record because it
+        # was a correct decision on the state it was shown. Reconstructing
+        # ``None`` there made a reloaded hold claim nobody had approved it —
+        # the opposite of what the ruling says the record must show.
         human_decision = None
         if row["status"] in (
             PendingStatus.APPROVED.value,
             PendingStatus.REJECTED.value,
+            PendingStatus.STATE_MOVED.value,
         ) and row.get("decided_by"):
             human_decision = HumanDecision(
-                decision=row["status"],
+                # The DECISION the human made, not the hold's current status.
+                # A STATE_MOVED hold was approved; what changed afterwards is
+                # the hold's fate, not what the reviewer decided, and labelling
+                # their approval with the terminal status would rewrite it.
+                decision=(
+                    PendingStatus.APPROVED.value
+                    if row["status"] == PendingStatus.STATE_MOVED.value
+                    else row["status"]
+                ),
                 identity=row["decided_by"],
                 timestamp=row.get("decided_at") or "",
                 reason=row.get("decision_reason") or "",

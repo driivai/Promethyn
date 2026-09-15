@@ -46,6 +46,7 @@ from prometheus_protocol.orchestration.workflow import (
 )
 from prometheus_protocol.sandbox import NamespaceSandbox
 from prometheus_protocol.verifier.bank import VerifierBank
+from prometheus_protocol.runtime.factory import build_reobservation
 
 _PLAN_GRADER = "plan-review"
 _IMPL_GRADER = "impl-check"
@@ -140,6 +141,11 @@ def run_demo(*, out: Callable[[str], None] = print) -> dict:
         ),
         executor=SandboxExecutor(),
         ledger=ledger,
+        # Wired even though this root executes only ``sandbox.execute``, which
+        # phase 1 does not observe: the registry is TOTAL over the action
+        # classes, so the record says which reason applies to each rather than
+        # being silent about all three.
+        reobservation=build_reobservation(target_canonical="sandbox://workflow"),
     )
     # The orchestrator receives ONLY a submit-only gateway — no controller, no
     # gate, no executor. Its whole vocabulary for acting is route_action.

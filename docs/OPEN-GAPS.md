@@ -2493,6 +2493,104 @@ as an absent one, inside the record whose whole purpose is to show that state
 was checked twice. Fixed in statement form. The 30 module tests were green
 while that was live; the guard that was not was a different instrument.
 
-**Tests.** `tests/conformance/test_reobservation_branch_delete.py` (30), in
-CI's full-suite job, none skipped. Two positive controls registered in
-`positive_controls.json` with their negatives.
+**Tests.** `tests/conformance/test_reobservation_branch_delete.py` (38) and
+`tests/conformance/test_reobservation_wiring.py` (18), in CI's full-suite job,
+none skipped. Five positive controls registered in `positive_controls.json`
+with their negatives.
+
+**CORRECTION, ENTERED AFTER THE MERGE. Every claim in this entry above this
+line described a mechanism that no shipped code path reached.** `reobservation`
+was an optional constructor argument defaulting to `None`, and all five
+non-test constructions of `ExecutionController` omitted it. `None` is
+byte-for-byte the unfixed path the reproduction measures, so on the merged tree
+every deployment was on the before-picture while this entry said otherwise. The
+30 proofs and 13 mutations were real and are unchanged; what none of them
+covered was reach, because every one of them built its own controller.
+
+**The shape, named: a proof that builds its own subject proves the subject,
+never its reach.** This is the second time a security-critical parameter has
+shipped here with no production caller wiring it (R4 was the first), and in both
+the unwired default IS the behaviour.
+
+---
+
+## G30 — the re-observation opt-out is in every record and in no attestation
+
+**Measured.** `build_reobservation` is a composition-root call, and its result
+is a constructor argument. The opt-out reason for each action class therefore
+appears in every hold's `target_state` block and in none of the configuration
+attestation: it is not a `Config` field, so it is not in `SECURITY_FIELDS` and
+not in the attestation digest. Two deployments with different re-observation
+postures produce the same posture digest.
+
+**What that costs.** The attestation is what a reader consults to learn what a
+deployment enforces. Re-observation coverage is a security posture — it is the
+difference between a delete checked against live state and one executed on
+replayed evidence — and it is currently discoverable only by reading a hold
+that already happened. There is no way to ask a deployment in advance what it
+re-observes and get an attested answer.
+
+**Not closed here, and why.** Moving it into `Config` is its own change: it
+needs a `SECURITY_FIELDS` entry, an attestation re-pin, and a decision about how
+a per-target choice (`git://` versus everything else) is expressed as a
+configuration field when the target is itself a runtime argument. Filed rather
+than done, so that the limit is a numbered gap rather than a paragraph inside
+another entry's "named limits" list.
+
+**Where it is stated today.** `docs/live-state-pinning-design.md` "WHAT PHASE 1
+DOES NOT DO", and G29's named limits.
+
+---
+
+## G31 — two composition roots, two registries, and only one direction is reachable
+
+**Found by probing, not by reading.** Wiring G29 created a case that could not
+exist before it: two roots can now hold different registries. Driving the two
+shipped roots against one ledger — a hold created by a root naming a `git://`
+principal, then approved through a controller built the way `cli/main.py:341`
+builds it — raised a bare `KeyError` out of `approve()`:
+
+> `KeyError: "no state observer for action class 'branch.delete'; ReObservation is total over ACTION_CLASSES, so this means the class is opted out and the caller should not have asked"`
+
+**Why it is reachable at all.** `build_execution_controller`'s
+`target_canonical` defaults to `sandbox://execution`, and the CLI's `approve`
+and `retry-execution` both call it without one (`cli/main.py:341`, `:386`). That
+default opts `branch.delete` out. The hold being approved may have been pinned
+by a root that named a git principal and does observe it.
+
+**RULING AND FIX (doctrine #2).** A hold whose record says its live state was
+pinned, presented to a service that does not observe its action class, is
+REFUSED — not skipped. Skipping would execute an irreversible delete on evidence
+the record claims was re-checked, which is degrading a requested security
+property instead of refusing it. New type `StateUnobservable`, new typed reason
+`target_state_registry_mismatch` in `EXECUTION_REFUSAL_REASONS`. It is a third
+type beside `StateMoved` and `StateUnreadable` because it is a statement about
+the DEPLOYMENT: the state did not move and was not unreadable; it was not read.
+
+**The other direction is not reachable through the factory, and that is
+checked.** A `sandbox://`-targeted root cannot CREATE a git-targeted hold: the
+gate re-resolves requirements from its own `target_canonical` and refuses the
+submission at authorization
+(`test_a_sandbox_targeted_root_cannot_CREATE_a_git_targeted_hold_at_all`). The
+registry disagreement therefore has exactly one reachable direction.
+
+**The asymmetry, named.** A hold created with the class opted out and approved
+under a registry that DOES observe proceeds, because there is no pin to compare
+against. That is honest — its record says `observed: false` and no observation
+is chained — but it is not symmetric with the refusal, and the difference is
+which direction makes a false claim. Pinned as a measured property.
+
+**Executed mutations** on the new guard, through `scripts/mutation_worktree.py`:
+
+| mutation | observed |
+|---|---|
+| M7 deletion: the registry-mismatch guard removed | 2 red |
+| M8 substitution: refuses, but as `StateMoved` / `state_moved_after_approval` — a real type and a real reason from the same closed sets, naming the wrong fact | 2 red |
+| M9 degradation: returns `OUTCOME_MATCHED` instead of refusing — the silent-skip shape | 2 red |
+
+**STILL OPEN after this fix.** The CLI's approve path re-observes NOTHING for a
+git target — it refuses instead. That is the correct failure direction and it is
+not the desired behaviour: a reviewer approving a branch delete through
+`prom approve` is told the deployment cannot check it, rather than having it
+checked. Closing that means the CLI naming its target, which is a change to how
+a deployment declares its principal and is not in this sprint.

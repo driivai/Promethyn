@@ -8,8 +8,8 @@
     "",
     "Each entry pairs a positive control with at least one negative it stands beside,",
     "and states the property the pair establishes together. test_positive_control_set.py",
-    "asserts every entry resolves to a real collected test, and \u2014 the half that keeps",
-    "this honest \u2014 that every self-declared positive control in the tree is registered",
+    "asserts every entry resolves to a real collected test, and — the half that keeps",
+    "this honest — that every self-declared positive control in the tree is registered",
     "here, so the set cannot fall behind the code."
   ],
   "controls": [
@@ -237,7 +237,7 @@
         "test_a_bare_zero_is_refused_at_config_load",
         "test_an_unrecognised_spelling_of_unbounded_is_refused"
       ],
-      "property": "a bare zero is refused at load while the NAMED unbounded posture still loads and still widens \u2014 without this the refusal is equally consistent with unbounded having been removed outright (OPEN-GAPS G21)"
+      "property": "a bare zero is refused at load while the NAMED unbounded posture still loads and still widens — without this the refusal is equally consistent with unbounded having been removed outright (OPEN-GAPS G21)"
     },
     {
       "module": "tests/conformance/test_security_field_behaviour.py",
@@ -246,7 +246,7 @@
         "test_every_outcome_affecting_field_has_a_proof_that_exists",
         "test_the_partition_covers_every_declared_security_field_exactly_once"
       ],
-      "property": "the collector that maps fields to their proofs can say no \u2014 an instrument returning an empty set would make the coverage guard vacuous for every field at once (doctrine #8, OPEN-GAPS G17)"
+      "property": "the collector that maps fields to their proofs can say no — an instrument returning an empty set would make the coverage guard vacuous for every field at once (doctrine #8, OPEN-GAPS G17)"
     },
     {
       "module": "tests/conformance/test_sandbox_unbounded_reaches_the_command.py",
@@ -254,7 +254,7 @@
       "negatives": [
         "test_container_omits_the_memory_flags_entirely_when_unbounded"
       ],
-      "property": "the container adapter omits --memory under UNBOUNDED while still emitting the exact cap it was given \u2014 without the positive, the absence is equally consistent with an adapter that never caps memory at all (PR #106 P1)"
+      "property": "the container adapter omits --memory under UNBOUNDED while still emitting the exact cap it was given — without the positive, the absence is equally consistent with an adapter that never caps memory at all (PR #106 P1)"
     },
     {
       "module": "tests/conformance/test_sandbox_unbounded_reaches_the_command.py",
@@ -278,7 +278,7 @@
       "negatives": [
         "test_every_concrete_adapter_is_answered_for_here"
       ],
-      "property": "the adapter collector can say no \u2014 an empty set would make the class-level ratchet vacuous for every adapter at once (doctrine #8)"
+      "property": "the adapter collector can say no — an empty set would make the class-level ratchet vacuous for every adapter at once (doctrine #8)"
     },
     {
       "module": "tests/conformance/test_sandbox_unbounded_reaches_the_command.py",
@@ -286,7 +286,7 @@
       "negatives": [
         "test_no_adapter_turns_an_unbounded_bound_into_a_finite_number"
       ],
-      "property": "the class-level sweep for a finite number derived from an unbounded cap looks in the right place \u2014 the same assertions on a BOUNDED Limits must find those numbers"
+      "property": "the class-level sweep for a finite number derived from an unbounded cap looks in the right place — the same assertions on a BOUNDED Limits must find those numbers"
     },
     {
       "module": "tests/conformance/test_sandbox_unbounded_reaches_the_command.py",
@@ -303,7 +303,7 @@
         "test_the_sweep_refuses_a_module_it_cannot_import",
         "test_the_sweep_refuses_a_file_it_cannot_parse"
       ],
-      "property": "the positional sweep refuses a narrowed population and does NOT refuse a healthy tree \u2014 without the positive, both refusals are consistent with an instrument that refuses everything and is merely useless rather than dishonest"
+      "property": "the positional sweep refuses a narrowed population and does NOT refuse a healthy tree — without the positive, both refusals are consistent with an instrument that refuses everything and is merely useless rather than dishonest"
     },
     {
       "module": "tests/conformance/test_proof_composition.py",
@@ -354,6 +354,30 @@
         "test_the_terminal_hold_is_not_retry_eligible"
       ],
       "property": "the pre-execution re-read refuses a target that moved after approval and makes the hold terminal rather than retry-eligible, while an unchanged target still executes on the same path (re-observation phase 1)"
+    },
+    {
+      "module": "tests/conformance/test_reobservation_wiring.py",
+      "positive": "test_the_receiver_scan_sees_a_call_it_should_flag",
+      "negatives": [
+        "test_an_exempt_service_never_reaches_a_comparison_method"
+      ],
+      "property": "the exemption check finds a comparison call when one is there, so an empty intersection means the exempt services really decide nothing rather than the scan being blind"
+    },
+    {
+      "module": "tests/conformance/test_reobservation_branch_delete.py",
+      "positive": "test_the_same_hold_approves_through_a_root_that_DOES_observe_it",
+      "negatives": [
+        "test_a_hold_pinned_by_an_observing_root_is_REFUSED_by_a_root_that_is_not"
+      ],
+      "property": "a registry that does not observe the pinned class refuses the approval, while a registry that does observe it still approves — the refusal is about the mismatch, not about the hold"
+    },
+    {
+      "module": "tests/conformance/test_reobservation_branch_delete.py",
+      "positive": "test_the_real_composition_root_still_approves_a_branch_that_did_not_move",
+      "negatives": [
+        "test_the_real_composition_root_refuses_a_branch_that_moved"
+      ],
+      "property": "the shipped factory's wiring refuses a target that moved without refusing approval itself"
     }
   ]
 }
