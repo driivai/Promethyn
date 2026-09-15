@@ -278,8 +278,11 @@ Named here rather than discovered later:
    defeats `frozen=True`, and the validation stamp is an importable module
    global exactly as `_MINT` is. The control against arbitrary in-process code
    remains the process boundary. The stamp makes an accidental authorization
-   impossible and a deliberate one a deliberate act; it is not a security
-   boundary and this document does not claim it is one.
+   unreachable **through the constructor** — the only route it governs — and a
+   deliberate one a deliberate act; in-process code that calls
+   ``object.__setattr__`` or rebinds the module global is unaffected, which is
+   the whole of this class. It is not a security boundary and this document
+   does not claim it is one.
 6. **Time-of-check to time-of-use on the artifact.** The seam digests the action
    it is handed and the executor runs the action it is handed. Anything able to
    mutate the action object between those two points is in class (5).

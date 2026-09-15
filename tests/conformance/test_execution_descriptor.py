@@ -111,8 +111,9 @@ def test_bank_re_resolves_and_rejects_honestly_redigested_weakened_snapshot():
         implementation="structural",
         outcome=_hard_pass("structural"),
     )
-    with pytest.raises(ExecutionNotAuthorized, match="re-resolved"):
+    with pytest.raises(ExecutionNotAuthorized) as refusal:
         VerifierBank(policy_supplier=lambda: POLICY).assess(weakened, [bound])
+    assert refusal.value.reason == "descriptor_snapshot_mismatch"
 
 
 def _hard_pass(verifier_id: str) -> Evidence:
@@ -193,10 +194,11 @@ def test_bank_re_resolves_and_rejects_a_PARTIALLY_weakened_snapshot():
         implementation="runner",
         outcome=_hard_pass("runner"),
     )
-    with pytest.raises(ExecutionNotAuthorized, match="re-resolved"):
+    with pytest.raises(ExecutionNotAuthorized) as refusal:
         VerifierBank(policy_supplier=lambda: _TWO_REQUIREMENT_POLICY).assess(
             weakened, [bound]
         )
+    assert refusal.value.reason == "descriptor_snapshot_mismatch"
 
 
 def test_bank_mints_for_the_unweakened_two_requirement_snapshot():
@@ -272,8 +274,19 @@ def test_descriptor_refuses_each_cross_action_mismatch_before_execution():
         forged = _restore_persisted(
             outcome=assessed.outcome, coverage=assessed.coverage, **values
         )
-        with pytest.raises(ExecutionNotAuthorized):
+        with pytest.raises(ExecutionNotAuthorized) as refusal:
             gate().decide(forged, action=a, attempt_id=ATTEMPT)
+        # WHICH dimension refused. Measured 2026-09-15: collapsing every
+        # descriptor reason onto one generic value left this test GREEN,
+        # because it asserted only that SOMETHING refused. A test that cannot
+        # tell a target mismatch from a missing action is not testing the
+        # binding, and each of these four fields is a separate way to cross a
+        # boundary.
+        assert refusal.value.reason in (
+            "descriptor_field_mismatch", "descriptor_snapshot_mismatch"
+        ), (field, refusal.value.reason)
+        if refusal.value.reason == "descriptor_field_mismatch":
+            assert refusal.value.field == field, (field, refusal.value.field)
     assert spy.calls == []
 
 
@@ -428,10 +441,11 @@ def test_human_hold_requires_same_proof_and_revalidates_on_approval_and_retry():
     ledger._conn.execute(
         "UPDATE pending_actions SET authorization=NULL WHERE id=?", (held.id,)
     )
-    with pytest.raises(ExecutionNotAuthorized, match="re-verification"):
+    with pytest.raises(ExecutionNotAuthorized) as reverify:
         controller.retry_execution(held.id, identity="human")
 
 
+    assert reverify.value.reason == "reverification_required"
 def test_human_cannot_hold_a_failure_or_replace_the_validated_action():
     a = action()
     g = gate()
@@ -551,8 +565,15 @@ def test_assessment_from_a_different_policy_is_not_relabelled_as_selected():
     )
     assessed = VerifierBank(policy_supplier=lambda: other).assess(s, [result])
     assert assessed.policy_digest != snapshot(a).policy_digest
-    with pytest.raises(ExecutionNotAuthorized):
+    with pytest.raises(ExecutionNotAuthorized) as refusal:
         gate().decide(assessed, action=a, attempt_id=ATTEMPT)
+    # WHICH dimension refused, not merely that something did. Until 2026-09-15
+    # this was a bare `pytest.raises(ExecutionNotAuthorized)`, so it passed on
+    # any refusal the seam could produce — including ones about a missing
+    # action or an absent descriptor, which are not what this test is about.
+    assert refusal.value.reason == "descriptor_snapshot_mismatch", (
+        refusal.value.reason, str(refusal.value)
+    )
     # Refusal did not rewrite history to the context's selected digest.
     assert assessed.policy_digest != snapshot(a).policy_digest
 
@@ -571,10 +592,11 @@ def test_hold_admission_refuses_a_routed_decision_without_the_seam_proof():
     controller = ExecutionController(
         gate=gate(), executor=Spy(), ledger=SqliteLedger(":memory:")
     )
-    with pytest.raises(ExecutionNotAuthorized, match="validated execution descriptor"):
+    with pytest.raises(ExecutionNotAuthorized) as absent:
         controller.pending.hold(hollow)
 
 
+    assert absent.value.reason == "descriptor_absent"
 def test_nonbaseline_profile_is_injected_into_the_execution_factory():
     from prometheus_protocol.core.config import Config
     from prometheus_protocol.core.models import Unavailable

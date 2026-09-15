@@ -23,15 +23,24 @@ Named limits, each a test below:
 
 * It compares COLLECTION, not outcomes. The workflow's steps also assert zero
   skips, failures and errors; those need the run, and the run is CI's job.
-* It reads the two pin SHAPES the workflow uses — a per-module mapping and a
-  bare ``assert len(cases) == N`` total. A step that invents a third shape is
-  invisible to the parser, which is why the set of pinned steps is itself
-  pinned: a new one has to be added here deliberately.
+* It reads the pin SHAPES the workflow uses — a per-module mapping, a bare
+  ``assert len(cases) == N`` total, and a delegation to
+  ``scripts/check_proof_composition.py`` whose numbers live in
+  ``tests/conformance/proof_composition.json``. A step that invents a fourth
+  shape is invisible to the parser, which is why the set of pinned steps is
+  itself pinned: a new one has to be added here deliberately.
+
+  The third shape appeared on 2026-09-15, when five steps moved from counting
+  to pinning MEMBERSHIP. When they moved, this guard went red — correctly, and
+  by design: a pinned step the parser stops seeing is a VOID GUARD, which is
+  what the enumeration above exists to catch. It is taught the new shape here
+  rather than having the steps left unreadable.
 """
 
 from __future__ import annotations
 
 import ast
+import json
 import re
 import subprocess
 import sys
@@ -42,6 +51,11 @@ import yaml
 
 REPO = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO / ".github" / "workflows" / "ci.yml"
+_COMPOSITION_MANIFEST = json.loads(
+    (REPO / "tests" / "conformance" / "proof_composition.json").read_text(
+        encoding="utf-8"
+    )
+)
 
 #: Every step whose ``run`` script carries a collection pin this guard can
 #: read. Enumerated rather than discovered, in both directions: a pinned step
@@ -62,6 +76,11 @@ PINNED_STEPS = (
 )
 
 _TEST_PATH = re.compile(r"tests/[\w./-]+\.py")
+
+#: The third pin shape: ``python scripts/check_proof_composition.py X.xml key``.
+_COMPOSITION_CALL = re.compile(
+    r"python scripts/check_proof_composition\.py\s+\S+\s+(\w+)"
+)
 
 
 class Pin:
@@ -146,6 +165,18 @@ def _pins() -> dict[str, Pin]:
             body_modules, body_total = _pin_from_body(body)
             per_module.update(body_modules)
             total = body_total if body_total is not None else total
+        # The delegated shape: the numbers live in the manifest, keyed by the
+        # argument the step passes. Resolved here so a pin in the manifest is
+        # checked against live collection exactly as an inline one is.
+        for key in _COMPOSITION_CALL.findall(script):
+            step_manifest = _COMPOSITION_MANIFEST["steps"].get(key)
+            assert step_manifest is not None, (
+                f"{name!r} delegates to proof_composition key {key!r}, which the "
+                "manifest does not define"
+            )
+            for dotted, count in step_manifest["counts"].items():
+                per_module[dotted.rsplit(".", 1)[-1]] = count
+            total = sum(step_manifest["counts"].values())
         pin = Pin(name, files, per_module, total)
         if pin.readable:
             pins[name] = pin
@@ -276,7 +307,18 @@ def test_the_named_limit_this_guard_does_NOT_see_skips_failures_or_errors(pins):
     text = WORKFLOW.read_text(encoding="utf-8")
     for step in PINNED_STEPS:
         assert step in text
-    assert text.count('for t in ("skipped", "failure", "error")') >= len(PINNED_STEPS) - 1
+    # Counted across BOTH shapes. The inline heredocs assert it directly; the
+    # delegated steps assert it inside check_proof_composition.py, which
+    # refuses on any skipped/failure/error element. Counting only the inline
+    # form would have read the move to the manifest as five steps dropping the
+    # assertion, when they moved it.
+    inline = text.count('for t in ("skipped", "failure", "error")')
+    delegated = len(_COMPOSITION_CALL.findall(text))
+    assert inline + delegated >= len(PINNED_STEPS) - 1, (inline, delegated)
+    # And the delegated half really does refuse those states, rather than being
+    # counted on trust: the checker's source says so.
+    checker = (REPO / "scripts" / "check_proof_composition.py").read_text(encoding="utf-8")
+    assert 'for state in ("skipped", "failure", "error")' in checker
 
     tracker = (REPO / "docs" / "OPEN-GAPS.md").read_text(encoding="utf-8")
     assert re.search(r"^## G12\b", tracker, re.M), "docs/OPEN-GAPS.md has no entry G12"

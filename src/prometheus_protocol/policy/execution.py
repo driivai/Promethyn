@@ -35,8 +35,66 @@ from prometheus_protocol.policy.snapshot import (
 )
 
 
+#: The closed set of reasons an execution refusal may carry.
+#:
+#: WHY A CLOSED SET, for the third time in this arc. Four materially different
+#: integrity states — the chain did not verify / this is a legacy record needing
+#: re-verification / there is not exactly one chain entry / the record differs
+#: from its chain entry — were distinguished only by PROSE. A test asserting
+#: which one fired had to match a message, and a message match is an enumeration
+#: wearing a test's clothes: it passes when the prose is edited and it passes
+#: when a DIFFERENT refusal happens to share a phrase. The same applied to the
+#: descriptor dimensions, where a test for "a different policy is refused"
+#: passed on any ``ExecutionNotAuthorized`` at all, including ones raised for
+#: reasons it was not testing.
+#:
+#: Same shape as ``CONFIG_REFUSAL_REASONS`` and for the same reason. Adding a
+#: reason is a deliberate edit here; an unknown one is refused at construction,
+#: so a typo cannot quietly become a reason nothing asserts on.
+EXECUTION_REFUSAL_REASONS: frozenset[str] = frozenset({
+    # -- integrity of a pinned record against its tamper-evident chain entry --
+    "chain_did_not_verify",          # the ledger chain itself failed to verify
+    "reverification_required",       # a legacy/pre-record hold; no trusted descriptor
+    "chain_entry_count_wrong",       # zero, or more than one, matching entries
+    "record_differs_from_chain_entry",  # the row was altered after it was written
+    # -- descriptor binding: WHICH dimension refused -------------------------
+    "descriptor_policy_cannot_authorize",   # selected policy cannot resolve it at all
+    "descriptor_snapshot_mismatch",         # re-resolved requirements differ
+    "descriptor_field_mismatch",            # one named field differs
+    "descriptor_missing_action",            # no concrete ExecutableAction
+    "descriptor_absent",                    # no validated descriptor at all
+})
+
+
 class ExecutionNotAuthorized(ValueError):
-    """The assessment is not bound to the selected policy and concrete action."""
+    """The assessment is not bound to the selected policy and concrete action.
+
+    ``reason`` is optional and, when set, comes from
+    :data:`EXECUTION_REFUSAL_REASONS`. It exists so a test asserting WHICH
+    refusal fired can do so structurally rather than by matching prose. It is
+    not required everywhere: refusals whose call site is unambiguous do not need
+    ceremony, and the ones that carry a reason are the ones a test distinguishes.
+
+    ``field`` carries the specific descriptor field for
+    ``descriptor_field_mismatch``, so "which dimension" survives without a
+    reason per field.
+    """
+
+    def __init__(
+        self,
+        *args: object,
+        reason: str | None = None,
+        field: str | None = None,
+    ) -> None:
+        super().__init__(*args)
+        if reason is not None and reason not in EXECUTION_REFUSAL_REASONS:
+            raise ValueError(
+                f"{reason!r} is not a known execution refusal reason; add it to "
+                f"EXECUTION_REFUSAL_REASONS deliberately. Known: "
+                f"{sorted(EXECUTION_REFUSAL_REASONS)}"
+            )
+        self.reason = reason
+        self.field = field
 
 
 class PinnedPolicySuperseded(ExecutionNotAuthorized):
@@ -130,7 +188,10 @@ class AuthorizedExecution(Generic[ActionT]):
 
 def action_class_of(action: ExecutableAction) -> str:
     if not isinstance(action, ExecutableAction):
-        raise ExecutionNotAuthorized("execution requires an ExecutableAction")
+        raise ExecutionNotAuthorized(
+            "execution requires an ExecutableAction",
+            reason="descriptor_missing_action",
+        )
     try:
         return _ACTION_CLASS_FOR_KIND[action.kind]
     except KeyError:
@@ -141,7 +202,10 @@ def action_class_of(action: ExecutableAction) -> str:
 
 def artifact_digest_of(action: ExecutableAction) -> str:
     if not isinstance(action, ExecutableAction):
-        raise ExecutionNotAuthorized("execution requires an ExecutableAction")
+        raise ExecutionNotAuthorized(
+            "execution requires an ExecutableAction",
+            reason="descriptor_missing_action",
+        )
     return hashlib.sha256(action.code.encode("utf-8")).hexdigest()
 
 
@@ -204,11 +268,14 @@ class ExecutionAuthorizer:
             )
         except ValueError as exc:
             raise ExecutionNotAuthorized(
-                "selected policy cannot authorize the execution descriptor"
+                "selected policy cannot authorize the execution descriptor",
+                reason="descriptor_policy_cannot_authorize",
             ) from exc
         if snapshot_digest(expected) != assessment.snapshot_digest:
             raise ExecutionNotAuthorized(
-                "assessment does not cover the requirements re-resolved from the selected policy"
+                "assessment does not cover the requirements re-resolved from "
+                "the selected policy",
+                reason="descriptor_snapshot_mismatch",
             )
         # DERIVED, not retyped. This was a hand-written tuple of the six field
         # names, which made it an enumeration of exactly the thing that varies:
@@ -227,7 +294,9 @@ class ExecutionAuthorizer:
         for name in _DESCRIPTOR_FIELDS:
             if getattr(assessment, name) != getattr(descriptor, name):
                 raise ExecutionNotAuthorized(
-                    f"assessment {name} does not match execution descriptor"
+                    f"assessment {name} does not match execution descriptor",
+                    reason="descriptor_field_mismatch",
+                    field=name,
                 )
         # The requirements and version come off ``expected`` — the seam's own
         # re-resolution of the SELECTED policy — so the record a hold pins to is
@@ -245,7 +314,10 @@ class ExecutionAuthorizer:
         self, authorization: AuthorizedExecution[ActionT]
     ) -> AuthorizedExecution[ActionT]:
         if not isinstance(authorization, AuthorizedExecution):
-            raise ExecutionNotAuthorized("execution carries no validated descriptor")
+            raise ExecutionNotAuthorized(
+            "execution carries no validated descriptor",
+            reason="descriptor_absent",
+        )
         d = authorization.descriptor
         return self.authorize_context(
             authorization.assessment,

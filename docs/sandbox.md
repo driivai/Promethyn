@@ -7,10 +7,18 @@ not, and the adapters that provide it.
 
 ## The guarantee (and what it is not)
 
-The trusted-core guarantee is small and provable: **untrusted candidate code
-runs only under isolation.** It is expressed as the `Sandbox` port and the
-INV-SANDBOX invariants (`spec/invariants.md`), and proven by adversarial tests
-that run hostile code and assert containment (`tests/conformance/test_sandbox.py`).
+The trusted-core claim is small and TESTED: **untrusted candidate code runs
+only under isolation.** It is expressed as the `Sandbox` port and the
+INV-SANDBOX invariants (`spec/invariants.md`), and exercised by adversarial
+tests that run hostile code and assert containment
+(`tests/conformance/test_sandbox.py`).
+
+Under which assumptions: that the selected adapter is the isolation boundary it
+reports itself to be — the namespace adapter needs working user namespaces, the
+container adapter trusts the runtime and the image — and that the host kernel
+holds. The tests establish that the runtime REACHES for isolation and refuses
+when it cannot get it; they do not establish that a given kernel's isolation is
+unescapable, which is not a property this repository can test.
 
 This layer closes an existing hole — the verifier already executed candidate
 code — without opening a new capability. **Live execution is still disabled**:

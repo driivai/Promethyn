@@ -64,6 +64,10 @@ def _tests_in(module: str) -> set[str]:
     }
 
 
+def rel_of(path: Path) -> str:
+    return path.relative_to(REPO).as_posix()
+
+
 def _declared_positive_controls() -> set[tuple[str, str]]:
     """Every test in the tree that calls itself a positive control."""
 
@@ -76,8 +80,20 @@ def _declared_positive_controls() -> set[tuple[str, str]]:
             continue
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"))
-        except (SyntaxError, UnicodeDecodeError):
-            continue
+        except (SyntaxError, UnicodeDecodeError) as exc:
+            # REFUSE, do not narrow. A file this cannot parse is a file whose
+            # self-declared controls it cannot see, and the caller's assertion
+            # is a SUBTRACTION (`declared - registered`): a smaller `declared`
+            # makes it MORE likely to pass, so swallowing the error turns an
+            # unreadable test file into a silent all-clear. Found while fixing
+            # the same shape in tests/support/positional_sweep.py; the first
+            # sweep for it covered tests/support and scripts and missed this
+            # one, which is its own small lesson about scoping a sweep.
+            raise AssertionError(
+                f"the positive-control scan could not parse {rel_of(path)}: "
+                f"{exc}. Its population is narrower than the tree, so its "
+                "answer is not a measurement of it."
+            ) from exc
         rel = path.relative_to(REPO).as_posix()
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):

@@ -1,0 +1,201 @@
+{
+  "_why": [
+    "A COUNT IS NOT A COMPOSITION, AND A NAME IS NOT A MEMBERSHIP.",
+    "",
+    "Two sets of the same size are indistinguishable by count, so a pin that only",
+    "counts survives the swap that matters: delete a load-bearing refusal, add a",
+    "benign passing test to the same module, and the total is unchanged.",
+    "",
+    "The FIRST version of this file pinned bare NAMES, and that was not enough --",
+    "found by review (PR #108, P2). The checker discarded each testcase's module,",
+    "so a required name could be satisfied by a DIFFERENT collected module while",
+    "the per-module counts stayed right. Rename the pinned descriptor proof to a",
+    "filler and hand its old name to an unpinned test in the revert-pins module,",
+    "and the step passed with the proof gone. The change's own thesis failing on",
+    "itself: what varies is the (module, name) PAIR, so that is what is pinned.",
+    "",
+    "`counts` guards collection loss. `required` is keyed BY MODULE and names the",
+    "tests whose disappearance would be a silent loss of a refusal the project",
+    "depends on, plus at least one POSITIVE CONTROL per step -- a step that pins",
+    "only refusals is consistent with a build that refuses everything.",
+    "",
+    "`required` is a SUBSET, deliberately. Listing every name would churn on every",
+    "added test and pin nothing extra: the count already catches deletion, and what",
+    "`required` adds is resistance to SUBSTITUTION.",
+    "",
+    "Names are BASE function names. A parametrised test appears in JUnit as",
+    "`name[param]`, and the checker matches on the base, so re-parametrising a test",
+    "keeps the pin while deleting or moving it breaks it."
+  ],
+  "steps": {
+    "checkpoint_b": {
+      "description": "PHASE-1.2c Checkpoint B execution-descriptor proofs",
+      "counts": {
+        "tests.conformance.test_execution_descriptor": 18,
+        "tests.conformance.test_phase_1_2c_checkpoint_b_revert_pins": 4
+      },
+      "required": {
+        "tests.conformance.test_execution_descriptor": [
+          "test_a_LEGITIMATELY_minted_assessment_does_not_cross_target_or_attempt",
+          "test_a_legitimately_minted_assessment_on_its_OWN_target_and_attempt_passes",
+          "test_assessment_from_a_different_policy_is_not_relabelled_as_selected",
+          "test_bank_re_resolves_and_rejects_a_PARTIALLY_weakened_snapshot",
+          "test_bank_re_resolves_and_rejects_honestly_redigested_weakened_snapshot",
+          "test_correct_binding_authorizes_and_executes",
+          "test_descriptor_refuses_each_cross_action_mismatch_before_execution",
+          "test_hold_admission_refuses_a_routed_decision_without_the_seam_proof",
+          "test_hold_approval_re_resolves_the_policy_instead_of_redigesting_the_hold",
+          "test_human_cannot_hold_a_failure_or_replace_the_validated_action",
+          "test_the_snapshot_digest_covers_every_descriptor_field",
+          "test_user_factories_refuse_an_unknown_selected_profile"
+        ],
+        "tests.conformance.test_phase_1_2c_checkpoint_b_revert_pins": [
+          "test_every_mutation_target_and_selection_is_live",
+          "test_mutations_cover_every_named_load_bearing_join",
+          "test_shortfall_and_excess_are_both_refused"
+        ]
+      }
+    },
+    "authorization_record": {
+      "description": "PHASE-1.2c authorization record and pinned-hold proofs",
+      "counts": {
+        "tests.conformance.test_execution_authorization_record": 17,
+        "tests.conformance.test_hold_pinning": 7
+      },
+      "required": {
+        "tests.conformance.test_execution_authorization_record": [
+          "test_a_FAILED_required_check_is_refused_at_the_gate_and_the_row_records_the_row",
+          "test_a_hold_with_no_chain_entry_cannot_be_approved",
+          "test_a_pre_record_blob_is_refused_as_reverification_required",
+          "test_a_submission_refused_by_a_real_coverage_row_records_which_row",
+          "test_an_altered_chain_entry_breaks_the_chain_and_approval_refuses",
+          "test_an_altered_pinned_requirement_set_is_detected_at_approval",
+          "test_an_assessment_minted_without_coverage_validation_says_so_in_the_record",
+          "test_an_auto_approved_execution_row_carries_the_record",
+          "test_every_refusal_reason_in_the_closed_set_has_an_end_to_end_row",
+          "test_the_named_limit_a_full_rewrite_is_NOT_detected_without_an_anchor_and_IS_with_one"
+        ],
+        "tests.conformance.test_hold_pinning": [
+          "test_a_hold_approved_under_an_unrotated_policy_still_executes",
+          "test_a_hold_pinned_to_a_superseded_policy_is_refused_and_invalidated",
+          "test_a_retry_after_rotation_is_refused_and_the_human_decision_is_untouched",
+          "test_explicit_rotation_invalidates_every_pending_hold_pinned_to_the_old_policy_and_only_those",
+          "test_relabelling_a_hold_to_the_new_policy_does_not_get_it_approved"
+        ]
+      }
+    },
+    "phase_1_2a": {
+      "description": "PHASE-1.2a proofs (requirement coverage enforced before fusion)",
+      "counts": {
+        "tests.conformance.test_bound_requirements_encoding": 21,
+        "tests.conformance.test_coverage_enforcement": 33,
+        "tests.conformance.test_policy_enforcement_regression": 21,
+        "tests.conformance.test_no_second_aggregator": 12,
+        "tests.conformance.test_phase_1_2a_revert_pins": 7
+      },
+      "required": {
+        "tests.conformance.test_bound_requirements_encoding": [
+          "test_the_encoded_field_set_equals_the_dataclass_fields",
+          "test_the_encoding_matches_its_pinned_known_answer"
+        ],
+        "tests.conformance.test_coverage_enforcement": [
+          "test_bank_fuses_normally_once_coverage_holds",
+          "test_bank_refuses_before_fusing_when_a_required_check_is_missing",
+          "test_bank_reports_a_failed_required_check_as_a_failure_not_an_outage",
+          "test_r3_a_satisfactory_result_from_an_unpermitted_implementation_is_invalid",
+          "test_r3_both_permitted_unavailable_REFUSES",
+          "test_r4_residual_an_attacker_downing_the_stronger_gets_the_weaker_to_answer",
+          "test_row_conflicting_results_refuse_ambiguity",
+          "test_row_duplicates_refuse_and_never_count_toward_coverage",
+          "test_row_fail_refuses_authorization",
+          "test_row_missing_refuses_as_incomplete",
+          "test_row_unavailable_refuses_as_incomplete",
+          "test_row_valid_bound_satisfactory_result_satisfies_the_requirement",
+          "test_row_wrong_artifact_target_or_action_binding_refuses",
+          "test_row_wrong_attempt_binding_refuses_as_invalid_evidence",
+          "test_row_wrong_policy_binding_refuses_as_invalid_evidence"
+        ],
+        "tests.conformance.test_policy_enforcement_regression": [
+          "test_a_structural_pass_cannot_stand_in_for_a_missing_executable_check",
+          "test_every_matrix_row_is_mapped_and_the_mapping_is_nine_refusals_to_one_execution",
+          "test_the_matrix_positive_control_really_authorizes",
+          "test_the_swarm_matrix_authorizes_only_where_policy_is_satisfied"
+        ],
+        "tests.conformance.test_no_second_aggregator": [
+          "test_only_permitted_modules_construct_an_authoritative_verdict",
+          "test_only_the_bank_mints_a_policy_assessment",
+          "test_the_sweep_is_not_vacuous"
+        ],
+        "tests.conformance.test_phase_1_2a_revert_pins": [
+          "test_a_shortfall_or_an_excess_fails_the_runner",
+          "test_the_runner_is_pinned_and_every_target_still_exists"
+        ]
+      }
+    },
+    "phase_1_2b": {
+      "description": "PHASE-1.2b proofs (the unbound-judgment route is closed)",
+      "counts": {
+        "tests.conformance.test_unbound_authorization_closed": 18,
+        "tests.conformance.test_phase_1_2b_revert_pins": 6
+      },
+      "required": {
+        "tests.conformance.test_unbound_authorization_closed": [
+          "test_a_covered_assessment_mints_a_migration_capability",
+          "test_a_covered_assessment_still_authorizes_and_still_executes",
+          "test_a_refused_coverage_still_refuses_after_all_this",
+          "test_an_assessment_for_a_DIFFERENT_ACTION_CLASS_mints_no_capability",
+          "test_an_assessment_for_a_DIFFERENT_action_mints_no_capability",
+          "test_copying_a_real_one_is_refused",
+          "test_direct_construction_is_refused",
+          "test_no_approval_and_zero_executor_calls_at_the_controller",
+          "test_presenting_one_anyway_raises_rather_than_returning_unapproved",
+          "test_the_gate_has_no_judgment_parameter"
+        ],
+        "tests.conformance.test_phase_1_2b_revert_pins": [
+          "test_a_shortfall_or_an_excess_fails_the_runner",
+          "test_the_runner_is_pinned_and_every_target_still_exists"
+        ]
+      }
+    },
+    "checkpoint_3": {
+      "description": "PHASE-1.2 CHECKPOINT 3 proofs (advisory evidence cannot satisfy)",
+      "counts": {
+        "tests.conformance.test_advisory_cannot_satisfy": 22,
+        "tests.conformance.test_phase_1_2c_revert_pins": 6
+      },
+      "required": {
+        "tests.conformance.test_advisory_cannot_satisfy": [
+          "test_a_REGISTERED_verifier_cannot_lie_about_its_tier",
+          "test_a_missing_tier_fails_closed",
+          "test_advisory_evidence_does_not_satisfy",
+          "test_advisory_plus_unavailable_authoritative_still_refuses",
+          "test_an_UNREGISTERED_verifier_is_believed_and_this_is_the_residual",
+          "test_an_unavailable_wrapper_cannot_satisfy_either",
+          "test_authoritative_evidence_satisfies",
+          "test_each_wrapper_still_works_as_advisory_calibration",
+          "test_no_acceptance_condition_can_satisfy_without_a_result",
+          "test_no_wrapper_can_satisfy_a_requirement_even_when_permitted",
+          "test_partial_unavailability_is_still_not_unanimous",
+          "test_the_bank_still_authorizes_a_properly_covered_action"
+        ],
+        "tests.conformance.test_phase_1_2c_revert_pins": [
+          "test_a_shortfall_or_an_excess_fails_the_runner",
+          "test_the_runner_is_pinned_and_every_target_still_exists"
+        ]
+      }
+    }
+  },
+  "_left_as_counts_only": {
+    "_why": [
+      "Assessed and deliberately NOT given a membership pin. For each, the count",
+      "guards what it can (the module still collects, the selection still selects)",
+      "and a membership pin would add nothing the module does not already enforce",
+      "on itself, or would pin a subject that is not a refusal."
+    ],
+    "substrate-proofs": "test_substrate / test_opened_substrate / test_mount_relevance / test_mount_root_formats are host-fact taxonomies. Their property is that a mount classification is TOTAL over the observed shapes, and each module already asserts that totality internally (an unclassified shape fails inside the module, not by being absent from a list here). A CI name list would restate a guard the module keeps on itself.",
+    "attestation-proofs": "test_config_attestation (87) is a digest/encoding module. Its membership property -- that every posture field is in the digest -- is enforced by its own POSTURE_FIELDS agreement test, which fails if a field is added and left out. That is a stronger check than naming tests here, and it lives where the field is added.",
+    "prod-fix-1": "test_approval_expiry_across_preparation / test_attestation_chronology / test_unicode_hostname_taxonomy are boundary sweeps over generated inputs. Their composition is the input space, not the test names, and the input space is pinned in the modules.",
+    "prod-fix-2": "test_secret_canary_sweep discovers credential-shaped fields FROM THE DATACLASS and fails if one is unswept. Membership is derived from the source, not from a list, which is the property this whole file is arguing for -- there is nothing to pin here that the sweep does not already derive.",
+    "composed-message-proofs": "Already pins five required names inline, in the step, since G13. Left where it is rather than moved here: it is the pattern this file generalises, and relocating it would churn a working guard for symmetry alone."
+  }
+}
