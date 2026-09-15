@@ -2349,7 +2349,7 @@ Whether that matters for the provenance story is a judgement for whoever runs
 Part B; what is recorded here is that it is **not** swept by it, so the
 question is answered before diligence rather than during it.
 
-### THE BOUNDED SET — ten carriers, every one read back
+### THE BOUNDED SET — sixteen carriers, every one read back
 
 | PR | kind | id |
 |---|---|---|
@@ -2363,9 +2363,17 @@ question is answered before diligence rather than during it.
 | #111 | review reply | `4012711563` |
 | #111 | review reply | `4012712585` |
 | #112 | PR comment | `5687317374` (the probe above) |
+| #113 | review reply | `4020508859` |
+| #113 | review reply | `4020509721` |
+| #113 | review reply | `4020510841` |
+| #113 | review reply | `4020511688` |
+| #113 | review reply | `4020512632` |
+| #113 | review reply | `4020513244` |
 
-Nine review replies and one PR comment. Not approximate: each was fetched and
-its body inspected for the footer. PR BODIES are not in this set — #111's and
+Fifteen review replies and one PR comment. Not approximate: each was fetched
+and its body inspected for the footer. The six #113 replies are the answers to
+that PR's six findings, posted after it merged; `4020508859` was read back and
+the footer is present, so the route is unchanged and this entry is not stale. PR BODIES are not in this set — #111's and
 #112's created bodies carried it, were refused by CI, and were rewritten
 through the update tool, which appends nothing; the stored bodies are clean.
 
