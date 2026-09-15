@@ -2278,3 +2278,46 @@ paragraph, and `docs/live-state-pinning-design.md` §7.5, whose
 implementation answering it". It covers an UNDECLARED one, one whose declared
 site does not report it, and a second site claiming the identity — not a wrong
 registered one the policy itself permits.
+
+---
+
+## G28 — the assistant's GitHub channel appends a vendor footer to PR bodies and review replies after the text has passed the hygiene checker, and no guard sees a review reply
+
+**Measured three times on 2026-09-15, each time on text that had passed
+`scripts/check_message_hygiene.py --text-file` before it was sent.**
+
+* **PR bodies.** #111 was opened with a checked body; the body GitHub stored
+  ended with a two-line footer naming the vendor and its product, appended by
+  the tool that created the PR. All three build jobs and pr-text refused at
+  "Message hygiene (commit messages, identities, PR title and body)" with
+  `message hygiene FAILED: pr-body.txt contains banned token(s)` naming the two
+  tokens. The body was rewritten through the update tool, which appends nothing
+  (read back to confirm), and a push re-triggered `ci.yml` with the clean
+  payload. #112 reproduced it exactly at creation: pr-text refused the created
+  body at 19:18:13Z and re-ran on `edited`; the three build jobs ran against the
+  frozen created payload; this entry's own commit is the push that clears them.
+* **Review replies.** The reply tool appends the same footer, without the link.
+  Read back: the five #109 replies, the #108 reply and the #106 reply all carry
+  it — seven observed. The two #111 replies went through the same tool and were
+  not read back before the thread listing was rate-limited. No workflow checks
+  a review comment: `ci.yml` checks commits, title and body, and
+  `pr-text-hygiene.yml` checks title, body and the composed squash message. The
+  tokens on those replies sit outside every guard, and were found only because
+  a reply was read back for another reason.
+
+**What the guards do and do not cover, stated.** A PR body is refused before
+merge by two workflows and can be rewritten. A review reply is refused by
+nothing, cannot be edited or deleted through this channel, and stays as posted.
+The route is the channel, not the text: every body and reply had passed the
+checker as written, and the checker cannot see what is appended after it runs.
+
+**What closes it.** Not anything inside the repository: the footer is added by
+the tooling that posts, after the text leaves the checker. Either the channel's
+own attribution setting (a `DriivAIDev/disable-attribution` branch exists on
+the remote and was not examined here), or a workflow that reads review comments
+through the API and refuses on banned tokens, which would detect and not
+prevent. Recorded so the seven replies that carry the footer are a known state,
+and so the next reply through this channel is posted knowing it will carry it.
+
+**Test.** None. Nothing in the tree can observe a review comment, and a test
+that could would be reading GitHub, which the suite does not do.
