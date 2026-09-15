@@ -99,9 +99,17 @@ SBOM (CycloneDX 1.6): `docs/sbom.cdx.json`. Pinned closure: `constraints.txt`
   diligence and accepted the cost (force-push, invalidated SHAs, re-clone).
 - **Regression control:** squash merging is to be disabled in favour of rebase
   or merge-commit merging (which preserve authorship), the account identity is
-  set to the project name with a private email, and CI gates `main` on the
-  canonical identity (`scripts/check_ip_consistency.py --history`). Procedure:
-  `docs/repository-identity.md` §4.
+  set to the project name with a private email, and CI **detects** a
+  non-canonical identity on `main` (`scripts/check_ip_consistency.py
+  --history`). Procedure: `docs/repository-identity.md` §4.
+
+  This said "CI gates `main`" until 2026-09-15 and that was a stronger claim
+  than anything in this repository can make. The workflow turns the run RED;
+  whether a red run stops a merge is **branch protection, which is host
+  configuration and not visible from here** — and it was measured to be
+  overridable (OPEN-GAPS G23). On the `push: [main]` trigger the claim is
+  weaker still: by then the commit is already on `main`, so the run is a
+  detector after the fact, not a gate before it.
 - **Branches:** the two vendor-named branches and every branch whose PR was
   merged or closed are deleted.
 - **Secrets:** a scan of every blob reachable from every ref (680 blobs) for

@@ -1663,3 +1663,94 @@ combination with the same. Not a comment saying `--cpus` covers it.
 finite-number sweep and its docstring names this entry as the reason, so the
 exclusion is recorded where someone reading that test will find it rather than
 resolved by silence.
+
+---
+
+## G23 — branch protection was overridable by the party it constrains, and this tree cannot verify that it no longer is
+
+**The observed instance.** Pull request **#106** merged at **2026-09-15
+01:05:20Z**, merged by `driivai`, with review thread
+**`PRRT_kwDOTFRnqM6iVMIm`** unresolved. That thread carried a **P1 finding**
+(the container adapter turning a named unbounded memory posture into a 16 MiB
+cap). The repository's branch protection required conversation resolution before
+merge. The merge happened anyway, by administrator override.
+
+Nothing was broken and nothing misfired. The rule did exactly what it was
+configured to do: it asked, and the administrator answered.
+
+**Closed at the host, 2026-09-15.** Branch protection has been reconfigured so
+that conversation resolution cannot be bypassed by administrators.
+
+### The general form, which is the part worth keeping
+
+**A control that can be overridden by the party it constrains is a prompt, not a
+gate, and must not be documented as a gate.** The distinction is not pedantry
+about wording — it is the difference between a property a reader can rely on and
+a habit they are trusting. A prompt is worth having; most of this repository's
+process controls are prompts, and they catch real things. What is not acceptable
+is describing one as though it were structural, because a reader who believes a
+gate exists stops looking for the failure it was supposed to prevent.
+
+This is the same error as G17, one layer out. There, a test named
+`…_is_consumed_somewhere` proved only that a name was SPELLED, and the name
+carried a guarantee the mechanism did not. Here, "CI gates `main`" carried a
+guarantee the host configuration did not. Both were corrected by weakening the
+claim to what is true rather than by strengthening the mechanism to match the
+claim — and in both cases the weaker true statement is more useful, because it
+says where to look next.
+
+### Docs corrected under this entry (doctrine #9)
+
+Two live claims, both overstating a workflow's reach:
+
+| file | was | now |
+|---|---|---|
+| `docs/IP-READINESS.md` | "CI **gates** `main` on the canonical identity" | CI **detects** it; red-run-blocks-merge is branch protection, and on the `push: [main]` trigger the commit is already on `main` |
+| `docs/repository-identity.md` §4 | "**Gate** it in CI." | "**Detect** it in CI." |
+
+Checked and deliberately left unchanged:
+
+* `docs/OPEN-GAPS.md` (G13's limits) already said *"whether a red run can block a
+  merge is branch protection, not a workflow property"* — which is exactly the
+  correct framing, written before this instance proved it mattered.
+* `.github/workflows/pr-text-hygiene.yml` already said *"red is a
+  branch-protection setting, not a workflow property"*.
+* `docs/open-core-boundary.md` §15's "two public gates" describes a contribution
+  POLICY for a future open-source repository, not a claim about this
+  repository's host configuration. Left as policy language.
+
+### THE LIMIT THAT REMAINS — UNVERIFIABLE FROM THE REPO
+
+**Whether branch protection is now enforced cannot be asserted from inside this
+tree, and this entry does not assert it.** Branch protection is host
+configuration. It is not a file, it is not reachable from any ref, and the
+GitHub MCP server available to this project exposes **no branch-protection or
+ruleset endpoint** — checked, not assumed. A future session reading this entry
+has no way to confirm the fix is still in place.
+
+So this is recorded as **UNVERIFIABLE FROM THE REPO**, not as CLOSED. The
+closure is real; the *evidence* for it lives somewhere this repository cannot
+read.
+
+**The manual check that confirms it** — the only thing that does:
+
+> GitHub → repository **Settings** → **Rules** → **Rulesets** (or **Branches** →
+> the `main` protection rule) → confirm **"Require conversation resolution
+> before merging"** is on, and that **"Do not allow bypassing the above
+> settings"** is checked / the bypass list is empty. A ruleset with an
+> `Organization admin` or `Repository admin` bypass actor is the pre-2026-09-15
+> state under a different name.
+
+Whoever needs this asserted in a diligence setting should produce a screenshot
+or the ruleset JSON, dated, from that page. That is the artifact; nothing in
+this repository substitutes for it.
+
+**Test.** **NONE, deliberately, and this is the load-bearing sentence.** A test
+asserting branch-protection state would have to read a thing it cannot reach.
+It would therefore assert a constant, pass forever, and report a host setting as
+proven while measuring nothing — the exact shape of the defect this project
+exists to name, added in the entry that names it. A named gap is a passing test
+(doctrine #5); a green test over an unreadable subject is worse than no test.
+
+**What closes it.** Nothing in this repository. It is closed at the host or it
+is not closed; this entry exists so the claim is never made from here.

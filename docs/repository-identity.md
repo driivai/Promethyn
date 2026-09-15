@@ -80,10 +80,16 @@ The rewrite removes the past. These keep the future correct — do all three:
    **"Block command line pushes that expose my email"**. Then even a squash
    made by mistake carries the project name and a `noreply` address, not a
    personal one.
-3. **Gate it in CI.** `scripts/check_ip_consistency.py --history origin/main`
+3. **Detect it in CI.** `scripts/check_ip_consistency.py --history origin/main`
    fails the build if any commit reachable from `main` carries a non-canonical
    author or committer. It is enabled in `ci.yml` once the rewrite has run
    (before that it would fail on every historical commit).
+
+   Called a gate here until 2026-09-15, which overstated it. The script turns
+   the RUN red; making a red run stop a merge is **branch protection**, a host
+   setting this repository cannot read or prove, and one that was observed
+   being overridden (OPEN-GAPS G23). Steps 1 and 2 above are the controls that
+   live where the work happens; this one reports.
 
 On every machine that commits here:
 
