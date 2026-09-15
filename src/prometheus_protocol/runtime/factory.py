@@ -15,7 +15,8 @@ from typing import TYPE_CHECKING, Mapping
 from prometheus_protocol.core.anchor_spec import parse_anchor_spec
 from prometheus_protocol.core.booleans import parse_env_bool
 from prometheus_protocol.core.errors import ConfigError
-from prometheus_protocol.core.config import PROVIDER_REMOTE, Config, resolve_bound
+from prometheus_protocol.core.bounds import Bound, is_unbounded, resolve_bound
+from prometheus_protocol.core.config import PROVIDER_REMOTE, Config
 from prometheus_protocol.core.interfaces import Ledger, Provider, Verifier
 from prometheus_protocol.execution.controller import ExecutionController
 from prometheus_protocol.execution.executor import SandboxExecutor
@@ -289,9 +290,9 @@ def build_orchestrator(
 
     verifier = SubprocessVerifier(
         timeout_s=config.verifier_timeout_s,
-        memory_mb=resolve_bound(config.verifier_memory_mb),
-        cpu_seconds=resolve_bound(config.verifier_cpu_seconds),
-        max_processes=resolve_bound(config.verifier_max_processes),
+        memory_mb=config.verifier_memory_mb,
+        cpu_seconds=config.verifier_cpu_seconds,
+        max_processes=config.verifier_max_processes,
         sandbox=build_sandbox_for(config),
     )
 
@@ -371,9 +372,9 @@ def build_swarm_runtime(
         trust_store = SqliteTrustStore(config.trust_store_path)
     code_verifier = SubprocessVerifier(
         timeout_s=config.verifier_timeout_s,
-        memory_mb=resolve_bound(config.verifier_memory_mb),
-        cpu_seconds=resolve_bound(config.verifier_cpu_seconds),
-        max_processes=resolve_bound(config.verifier_max_processes),
+        memory_mb=config.verifier_memory_mb,
+        cpu_seconds=config.verifier_cpu_seconds,
+        max_processes=config.verifier_max_processes,
         sandbox=build_sandbox_for(config),
     )
     _LOG.info("swarm runtime built (max_role_calls=%d)", config.max_role_calls)
@@ -413,14 +414,21 @@ def build_execution_controller(
     """
 
     config = config or Config()
-    # ``Limits`` reads 0 as "do not impose this one", which is the same
-    # contract ``resolve_bound`` translates the named posture into.
-    memory_mb = resolve_bound(config.verifier_memory_mb)
+    # NOT resolved here. A bound is carried to the adapter that builds the
+    # command and resolved there, because the three substrates do not agree on
+    # what a zero means: the container runtime reads it through a 16 MiB floor
+    # (core/bounds.py). Resolving at this composition root is the flattening
+    # that produced PR #106's P1.
+    memory_mb = config.verifier_memory_mb
+    if is_unbounded(memory_mb):
+        memory_bytes: Bound = memory_mb
+    else:
+        memory_bytes = resolve_bound(memory_mb) * 1024 * 1024
     limits = Limits(
         wall_time_s=config.verifier_timeout_s,
-        cpu_time_s=resolve_bound(config.verifier_cpu_seconds),
-        memory_bytes=memory_mb * 1024 * 1024,
-        max_processes=resolve_bound(config.verifier_max_processes),
+        cpu_time_s=config.verifier_cpu_seconds,
+        memory_bytes=memory_bytes,
+        max_processes=config.verifier_max_processes,
     )
     _LOG.info("execution controller built (escalate_below=%.2f)", config.escalate_below)
     # Resolve at the composition root so an unknown profile refuses startup,

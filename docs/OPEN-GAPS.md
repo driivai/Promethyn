@@ -1558,9 +1558,33 @@ saying *nothing in particular*.
   `reason="unknown_unbounded_spelling"` rather than falling back to either
   meaning.
 * `SubprocessVerifier` and `Limits` keep their `0 = no limit` contract
-  UNCHANGED. Inside the library, where the value arrives from a caller who wrote
-  it on the same line, `0` is unambiguous; `resolve_bound` is the single place
-  the operator-facing posture is translated into it.
+  UNCHANGED for every caller that already used it, and both additionally ACCEPT
+  the sentinel and carry it.
+
+### AMENDED 2026-09-15 by the Codex review on PR #106 — the sentinel must travel
+
+The first version of this fix resolved `UNBOUNDED` to `0` at the composition
+root. That is one flattening point for three substrates that do not agree on
+what a zero means, and the review found the consequence, correctly, as a P1:
+`ContainerSandbox` coerces the memory limit with `max(bytes, 16 MiB)` and
+emitted `--memory` unconditionally, so a posture an operator NAMED as "no cap"
+arrived at the container runtime as **the tightest cap in the tree**, while the
+namespace and unsafe adapters imposed nothing.
+
+The remedy is not to special-case zero inside `ContainerSandbox.run` — that
+fixes the instance and leaves the shape. `UNBOUNDED` now survives to the point
+where **each adapter builds its own command** (`core/bounds.py`), and each
+decides there: the container adapter omits the flags entirely, the namespace and
+unsafe adapters resolve to `0` at their argv and rlimit lines, because on those
+substrates `0` genuinely means "impose nothing". `--pids-limit` now emits the
+documented `-1` rather than relying on `0` happening to mean unlimited.
+
+The coercion predates the PR (`container.py`'s `max()` last changed in `d9a2bb7`,
+2026-06-30) and was already live for `verifier_memory_mb=0`. What the PR changed
+is that `0` went from an undocumented accident to a documented, supported
+posture — which turned a latent inconsistency into a shipped promise the
+container adapter did not keep. That is why it is a P1 on this PR and not a
+pre-existing note.
 * The posture record stores the operator's **spelling**, not a resolved `0`, so
   "no cap was asked for" and "a cap of zero" are distinguishable in the digest.
   `encode_value` tags `str` and `int` separately, so the two cannot collide.
@@ -1583,3 +1607,59 @@ round-trip would make a valid `Config` un-copyable; the ABSTAIN split; and a
 positive control that an unbreached bound still returns real verdicts in both
 directions, without which every assertion is consistent with a verifier that
 fails everything under a bound and passes everything without one.
+
+---
+
+## G22 — `verifier_cpu_seconds` has NO expression on the container substrate
+
+**Found while fixing the P1 on PR #106**, by asking the question the ruling
+attached to that fix rather than by looking for this.
+
+**What.** The three sandbox adapters do not agree on which bounds they enforce:
+
+| bound | namespace | unsafe | container |
+|---|---|---|---|
+| `memory_bytes` | bootstrap argv + cgroup `memory.max` | `RLIMIT_AS` | `--memory` / `--memory-swap` |
+| `max_processes` | bootstrap argv + cgroup `pids.max` | (process tree) | `--pids-limit` |
+| `cpu_time_s` | bootstrap argv + cgroup `cpu.max` | `RLIMIT_CPU` | **nothing** |
+
+Measured on the constructed command: `ContainerSandbox.run` builds its inner
+argv as `["python", "-B", *argv[1:]]` and passes **no** limit arguments to the
+bootstrap, unlike `NamespaceSandbox`, which passes memory, cpu, processes and
+file size explicitly. So `cpu_time_s` reaches the container adapter and is
+dropped.
+
+**`--cpus "1"` is not it, and is hardcoded.** It is a scheduling RATE — at most
+one core's worth of CPU per wall-clock second — not a quantity of CPU TIME. It
+never terminates a candidate. A runaway loop under the namespace adapter is
+killed by `RLIMIT_CPU` after `cpu_time_s` seconds; under the container adapter
+it runs until the WALL-CLOCK timeout, which is a different bound with a
+different meaning (`Verdict.ABSTAIN` rather than `Verdict.FAIL` — see G21).
+So the same candidate can be FAILED on one substrate and ABSTAINED on another,
+from the same configuration.
+
+**This is not the reported defect, and is wider.** PR #106's finding was that an
+unbounded memory posture became a 16 MiB cap on one substrate. This is that
+`cpu_time_s` is *not honoured at all* on that substrate, bounded or unbounded.
+Fixing the reported one does not touch it, and papering over it inside the
+class-level guard — by treating `--cpus` as the container's expression of
+`cpu_time_s` — would have recorded a bound as covered when it is absent.
+
+**Why it is not fixed here.** The remedy is a design choice, not a one-line
+change, and PR #106 is a review-response. At least three shapes exist and they
+are not equivalent: pass the limits into the container's bootstrap the way the
+namespace adapter does (most faithful, changes the image contract); use
+`--ulimit cpu=N` (runtime-specific, and silently ignored by some); or declare
+`cpu_time_s` unenforceable on this substrate and refuse the combination at load
+(fail-closed, and would refuse a configuration that works today).
+
+**What closes it.** Either an expression of `cpu_time_s` on the container
+substrate with a command-level proof beside the others in
+`test_sandbox_unbounded_reaches_the_command.py`, or a load-time refusal of the
+combination with the same. Not a comment saying `--cpus` covers it.
+
+**Test.** None yet — deliberately. The class-level guard in
+`test_sandbox_unbounded_reaches_the_command.py` excludes `--cpus` from its
+finite-number sweep and its docstring names this entry as the reason, so the
+exclusion is recorded where someone reading that test will find it rather than
+resolved by silence.

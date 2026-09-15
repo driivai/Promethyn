@@ -21,6 +21,7 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
+from prometheus_protocol.core.bounds import resolve_bound
 from prometheus_protocol.sandbox.base import (
     FSIZE_BYTES,
     Limits,
@@ -72,7 +73,10 @@ class UnsafeLocalSandbox(Sandbox):
                 text=True,
                 timeout=limits.wall_time_s,
                 input=stdin or None,
-                preexec_fn=_rlimits(limits.cpu_time_s, limits.memory_bytes),
+                preexec_fn=_rlimits(
+                    resolve_bound(limits.cpu_time_s),
+                    resolve_bound(limits.memory_bytes),
+                ),
                 # This adapter isolates NOTHING — but that is no reason to hand
                 # the candidate the runner's secrets on top. It ran with the
                 # inherited environment, which is the same defect as the one

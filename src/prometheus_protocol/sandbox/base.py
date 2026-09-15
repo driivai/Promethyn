@@ -10,6 +10,7 @@ reuse it; this sprint wires it only into the verifier.
 
 from __future__ import annotations
 
+from prometheus_protocol.core.bounds import Bound, is_unbounded
 from prometheus_protocol.core.errors import ConfigError
 
 from abc import ABC, abstractmethod
@@ -77,12 +78,21 @@ class Limits:
     is read-only or hidden. ``deny_network`` is an invariant, not a knob: every
     isolating adapter denies the network unconditionally, and ``False`` is
     refused at construction rather than silently ignored.
+
+    THE THREE CAPS ALSO ACCEPT ``UNBOUNDED``, and that is not the same as ``0``.
+    ``0`` keeps its meaning for every caller that already used it; the sentinel
+    exists so an adapter can tell "the operator asked for no cap" from "a cap of
+    zero arrived here" AT ITS OWN COMMAND LINE. ``ContainerSandbox`` must, and
+    the finding that forced this is in ``core/bounds.py``: it coerces the memory
+    limit with ``max(bytes, 16 MiB)``, so a resolved ``0`` became the tightest
+    cap in the tree while the other two adapters imposed nothing. Adapters call
+    ``resolve_bound`` at the argv or rlimit line, never before.
     """
 
     wall_time_s: float = 5.0
-    cpu_time_s: int = 5
-    memory_bytes: int = 256 * 1024 * 1024
-    max_processes: int = 64
+    cpu_time_s: Bound = 5
+    memory_bytes: Bound = 256 * 1024 * 1024
+    max_processes: Bound = 64
     max_output_bytes: int = 1_000_000
     deny_network: bool = True
 
@@ -95,9 +105,13 @@ class Limits:
         # behaviour and stay as they are — but a NEGATIVE value reaching them was
         # never intentional, it just landed in the same branch.
         require_positive(self.wall_time_s, name="wall_time_s")
-        require_non_negative_int(self.cpu_time_s, name="cpu_time_s")
-        require_non_negative_int(self.memory_bytes, name="memory_bytes")
-        require_non_negative_int(self.max_processes, name="max_processes")
+        for field_name in ("cpu_time_s", "memory_bytes", "max_processes"):
+            value = getattr(self, field_name)
+            # The sentinel is a permitted value here and passes through
+            # unchanged; anything else must still be a non-negative int, so a
+            # negative cap cannot ride in behind the new union.
+            if not is_unbounded(value):
+                require_non_negative_int(value, name=field_name)
         require_positive_int(self.max_output_bytes, name="max_output_bytes")
         # ``deny_network`` was a field no adapter read: every isolating adapter
         # denies the network unconditionally, and the unsafe adapter denies

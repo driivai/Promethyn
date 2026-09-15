@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from prometheus_protocol.core.booleans import parse_env_bool, require_bool
+from prometheus_protocol.core.bounds import Bound, is_unbounded, resolve_bound
 
 from prometheus_protocol.sandbox._start_signal import (
     exec_failed_line,
@@ -180,6 +181,52 @@ def is_digest_pinned(image: str) -> bool:
     return "@sha256:" in image
 
 
+#: The container runtime refuses a `--memory` below this, so a smaller cap is
+#: raised to it rather than passed through and rejected at run time.
+_MEMORY_FLOOR_BYTES = 16 * 1024 * 1024
+
+
+def _memory_flags(memory_bytes: Bound) -> tuple[str, ...]:
+    """``--memory``/``--memory-swap``, or NOTHING when unbounded was asked for.
+
+    THE FINDING THIS EXISTS FOR (Codex review, PR #106, P1). This used to be
+    ``"--memory", str(max(limits.memory_bytes, 16 * 1024 * 1024))``, emitted
+    unconditionally. With the memory bound resolved to ``0`` before it arrived,
+    ``max(0, 16 MiB)`` made "unbounded" into **a 16 MiB cap** — the tightest in
+    the tree — so candidates that the namespace and unsafe adapters ran happily
+    were killed here. The posture the operator named was inverted, silently, by
+    a floor that exists for a different reason.
+
+    Omitting the flags is what "no cap" means to the runtime; there is no value
+    that says it. So this returns a pair of flags or an empty tuple, and the
+    caller splats it — a shape that cannot accidentally emit a number for a
+    bound nobody set.
+
+    ``0`` is NOT treated as unbounded here on purpose. An adapter guessing that
+    a zero means "no cap" is the flattening this change removes; a zero that
+    reaches this line came from a caller who wrote a zero, and it gets the floor.
+    """
+
+    if is_unbounded(memory_bytes):
+        return ()
+    capped = str(max(resolve_bound(memory_bytes), _MEMORY_FLOOR_BYTES))
+    return ("--memory", capped, "--memory-swap", capped)
+
+
+def _pids_limit(max_processes: Bound) -> int:
+    """``--pids-limit``, where the runtime spells "no limit" as ``-1``.
+
+    ``0`` happened to work — the runtime reads it as unlimited too — but that
+    was incidental, and an incidental correctness is one coercion away from
+    inverting, exactly as the memory floor did. ``-1`` is the documented
+    spelling and it is now what an unbounded process cap produces.
+    """
+
+    if is_unbounded(max_processes):
+        return -1
+    return resolve_bound(max_processes)
+
+
 def _require_digest_pin(env: Mapping[str, str] | None = None) -> bool:
     env = os.environ if env is None else env
     return parse_env_bool(
@@ -307,10 +354,9 @@ class ContainerSandbox(Sandbox):
             # reap. The two are complementary; caching buys nothing for a one-shot
             # sandboxed run anyway.
             "--env", "PYTHONDONTWRITEBYTECODE=1",
-            "--memory", str(max(limits.memory_bytes, 16 * 1024 * 1024)),
-            "--memory-swap", str(max(limits.memory_bytes, 16 * 1024 * 1024)),
+            *_memory_flags(limits.memory_bytes),
             "--cpus", "1",
-            "--pids-limit", str(limits.max_processes),
+            "--pids-limit", str(_pids_limit(limits.max_processes)),
             "--cap-drop", "ALL",
             "--security-opt", "no-new-privileges",
             "--user", container_user,

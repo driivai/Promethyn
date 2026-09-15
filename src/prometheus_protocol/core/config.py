@@ -14,6 +14,12 @@ from pathlib import Path
 from typing import Mapping
 
 from prometheus_protocol.core.anchor_spec import ANCHOR_FILE, parse_anchor_spec
+from prometheus_protocol.core.bounds import (
+    UNBOUNDED,
+    UNBOUNDED_SPELLINGS,
+    Bound,
+    resolve_bound,
+)
 from prometheus_protocol.core.booleans import parse_env_bool, require_bool
 from prometheus_protocol.core.endpoint import validate_endpoint
 from prometheus_protocol.core.errors import ConfigError
@@ -34,24 +40,18 @@ PROVIDER_REMOTE = "remote"
 #: name fails here, not at the first run.
 SANDBOX_NAMES = ("auto", "namespace", "container", "unsafe")
 
-#: The spellings that NAME a deliberately unenforced verifier bound.
+#: Re-exported from ``core.bounds``, which is where the sentinel now lives so
+#: that the sandbox adapters can import it without importing this module. See
+#: that module's docstring for why a bound must survive to command construction.
 #:
-#: An ALLOWLIST over what varies — the permitted spellings — in the sense the
-#: rest of this project uses the word: anything else is refused, and a further
-#: spelling is added by writing it down here, never by a guard learning to
-#: tolerate one more shape.
-#:
-#: A bare ``0`` is deliberately NOT a member. Unbounded is a posture an operator
-#: states; ``0`` states nothing — it is what an unset variable, a truncated
-#: template and a slipped keystroke all look like, and it used to be accepted
-#: silently. Measured (OPEN-GAPS G21): with ``verifier_memory_mb=0`` a candidate
-#: that allocates 300 MiB returns ``Verdict.PASS`` where the same bytes under a
-#: 64 MiB cap return ``Verdict.FAIL``. The bound does not merely remove a
-#: refusal path, it changes the verdict, so the zero has to be spoken aloud.
-UNBOUNDED_SPELLINGS = frozenset({"unbounded"})
-
-#: The canonical spelling. Prefer this constant to the literal at call sites.
-UNBOUNDED = "unbounded"
+#: A bare ``0`` is deliberately NOT a member of ``UNBOUNDED_SPELLINGS``.
+#: Unbounded is a posture an operator states; ``0`` states nothing — it is what
+#: an unset variable, a truncated template and a slipped keystroke all look
+#: like, and it used to be accepted silently. Measured (OPEN-GAPS G21): with
+#: ``verifier_memory_mb=0`` a candidate that allocates 300 MiB returns
+#: ``Verdict.PASS`` where the same bytes under a 64 MiB cap return
+#: ``Verdict.FAIL``. The bound does not merely remove a refusal path, it changes
+#: the verdict, so the zero has to be spoken aloud.
 
 #: The fields that accept ``UNBOUNDED`` in place of a positive bound.
 #:
@@ -69,7 +69,7 @@ NAMEABLY_UNBOUNDED_FIELDS = (
 )
 
 
-def require_bound(value: object, *, name: str) -> int | str:
+def require_bound(value: object, *, name: str) -> Bound:
     """A positive integer bound, or a named unbounded spelling. Never a bare 0.
 
     Returns the CANONICAL form — the int, or ``UNBOUNDED`` — so that whatever is
@@ -117,23 +117,6 @@ def require_bound(value: object, *, name: str) -> int | str:
         reason="unknown_unbounded_spelling",
     )
 
-
-def resolve_bound(value: int | str) -> int:
-    """The integer the runtime limit APIs take: the bound, or 0 for "no limit".
-
-    ``SubprocessVerifier`` and ``Limits`` both read 0 that way and that contract
-    is UNCHANGED — inside the library, where the value arrives from a caller who
-    wrote it on the same line, 0 is unambiguous. This is the single place the
-    operator-facing posture is translated into it, so ``Config`` can refuse a
-    zero without every internal caller having to spell one.
-    """
-
-    # Statement form, not a ternary: narrowing a union in expression position is
-    # refused by `test_no_union_is_narrowed_in_expression_position`, and it was
-    # right to — this is the one line that decides whether a cap is imposed.
-    if isinstance(value, str):
-        return 0
-    return value
 
 #: Every field on ``Config`` that holds a credential. Normalised to ``Secret``
 #: in ``__post_init__`` so that construction by ANY route — ``from_env``, a
@@ -232,7 +215,7 @@ def _as_int(value: str | None, default: int) -> int:
     return int(value)
 
 
-def _as_bound(value: str | None, default: int) -> int | str:
+def _as_bound(value: str | None, default: int) -> Bound:
     """Unset means the default; a decimal integer means that bound.
 
     Anything else is passed through AS WRITTEN for ``__post_init__`` to refuse
@@ -298,9 +281,9 @@ class Config:
     #: The annotation names the ACCEPTED input; what is STORED is the canonical
     #: form, an ``int`` or the literal ``"unbounded"``. Use ``resolve_bound`` to
     #: get the integer the limit APIs take.
-    verifier_memory_mb: int | str = 256
-    verifier_cpu_seconds: int | str = 5
-    verifier_max_processes: int | str = 64
+    verifier_memory_mb: Bound = 256
+    verifier_cpu_seconds: Bound = 5
+    verifier_max_processes: Bound = 64
 
     # Sandbox adapter for executing untrusted candidate code: "auto" (pick the
     # best available isolating adapter), "namespace", "container", or "unsafe"
