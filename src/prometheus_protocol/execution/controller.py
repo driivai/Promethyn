@@ -22,6 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
 
+from prometheus_protocol.core.errors import ConfigError
 from prometheus_protocol.core.interfaces import Ledger
 from prometheus_protocol.core.models import ExecutableAction
 
@@ -41,7 +42,11 @@ from prometheus_protocol.gate.promotion import (
     OUTCOME_ROUTE,
     GateDecision,
 )
-from prometheus_protocol.policy.execution import AuthorizedExecution
+from prometheus_protocol.policy.execution import (
+    AuthorizedExecution,
+    ExecutionNotAuthorized,
+)
+from prometheus_protocol.policy.reobservation import refusal_retains_claim
 from prometheus_protocol.policy.record import authorization_record
 from prometheus_protocol.swarm.executor import Executor
 from prometheus_protocol.swarm.models import ExecutionResult
@@ -100,6 +105,31 @@ class ExecutionController:
         # which are opted out — two registries would be two answers to that,
         # and the second comparison could then silently not happen for a class
         # the first one covered.
+        if pending is not None and reobservation is not None:
+            # REFUSED, NOT DEGRADED (doctrine #2). ``pending or Pending...(...)``
+            # never constructs the service when one is supplied, so the registry
+            # passed here was silently discarded: both comparisons then ran on
+            # the supplied service's registry, which may be ``None``. A
+            # controller that LOOKS like it enables re-observation would execute
+            # a stale destructive action with neither check — and the caller has
+            # no way to tell, because every observable surface says the feature
+            # is on.
+            #
+            # Identity, not equality. Two equivalent registries are still two
+            # objects, and "the same registry" is the property the two
+            # comparisons need: one answer to which classes are observed. A
+            # caller that means to share one passes one.
+            if pending.reobservation is not reobservation:
+                raise ConfigError(
+                    "ExecutionController was given both a pending service and a "
+                    "re-observation registry, and the service does not carry "
+                    "that registry. The service's registry is what both "
+                    "comparisons would use, so the one passed here would be "
+                    "discarded and re-observation would appear enabled while "
+                    "running neither check. Pass the registry to the service "
+                    "you build, or pass no service.",
+                    reason="reobservation_registry_discarded",
+                )
         self._pending = pending or PendingActionService(
             ledger,
             clock=self._clock,
@@ -371,15 +401,60 @@ class ExecutionController:
         # ``docs/live-state-pinning-design.md`` §7.1, which is bounded and not
         # closed.
         #
-        # A refusal here is TERMINAL for the hold and deliberately does not
-        # release the claim: the release below is what keeps a fail-closed
-        # refusal retry-eligible, and a hold whose target moved must not be.
+        # A refusal here is recorded as a refused execution row BEFORE it is
+        # re-raised, and whether it releases the claim depends on WHICH refusal
+        # it is (``CLAIM_RETAINED_BY``).
+        #
+        # THE ROW, because the hold was claimed and an execution was attempted:
+        # without it ``executions_for_pending`` shows nothing, and an approved
+        # action that did not execute is indistinguishable from one nobody
+        # tried. That is the audit contract this controller states, and a
+        # refusal is exactly the outcome it exists to record.
+        #
+        # THE CLAIM: a ``StateMoved`` refusal is terminal and keeps it spent,
+        # so a hold whose target moved cannot be re-driven. Every other refusal
+        # is "the check could not run" and RELEASES it — a transient observer
+        # outage must not permanently brick an approved hold, which is what
+        # retaining the claim did: the status stayed ``approved``, so
+        # ``retry_decision`` accepted the hold, and ``claim_pending_execution``
+        # then failed forever with "already in progress or has completed".
         if pending_id is not None:
-            self._pending.require_state_unmoved_for_execution(
-                pending_id,
-                execution_attempt=self._execution_attempt(pending_id),
-                now=self._clock(),
-            )
+            try:
+                self._pending.require_state_unmoved_for_execution(
+                    pending_id,
+                    execution_attempt=self._execution_attempt(pending_id),
+                    now=self._clock(),
+                )
+            except ExecutionNotAuthorized as refusal:
+                # STATEMENT form, and no ``getattr`` default. ``reason`` is
+                # always present on this exception but is ``str | None``, and a
+                # default would make "carried no typed reason" and "the
+                # attribute was missing" the same bytes in the row. When there
+                # is none the row SAYS there is none, rather than borrowing a
+                # reason-shaped string that no member of
+                # ``EXECUTION_REFUSAL_REASONS`` matches.
+                reason = refusal.reason
+                if reason is None:
+                    reason = "no typed reason"
+                self._ledger.record_execution(
+                    subject_id=decision.subject_id,
+                    source=source,
+                    executed=False,
+                    refused=True,
+                    sandbox_name="",
+                    exit_status=None,
+                    detail=(
+                        f"{detail_prefix}refused before execution "
+                        f"({reason}): {refusal}"
+                    ),
+                    created_at=self._clock(),
+                    judgment=_judgment_or_none(decision),
+                    pending_id=pending_id,
+                    authorization=record,
+                )
+                if not refusal_retains_claim(refusal):
+                    self._ledger.release_pending_execution(pending_id)
+                raise
         result = self._executor.execute(decision)
         self._ledger.record_execution(
             subject_id=decision.subject_id,

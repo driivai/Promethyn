@@ -57,7 +57,8 @@ evidence says the delete is lossless.
 | comparison one, before the approval is recorded | `execution/pending.py` — `_require_state_unmoved_before_approval` |
 | comparison two, immediately before the executor | `execution/controller.py` — in `_execute`, after the claim |
 | the terminal transition out of `APPROVED` | `ledger/sqlite_ledger.py` — `mark_state_moved`, guarded on `status = 'approved'` |
-| the observation record, chained, keyed on the execution attempt | `policy/reobservation.py` + `execution/pending.py` — `_compare_now` |
+| the observation record, chained, keyed on the execution attempt and the hold | `policy/reobservation.py` + `execution/pending.py` — `_compare_now` |
+| **what a pre-execution refusal leaves behind**: a refused execution row, and the claim released unless the target MOVED | `execution/controller.py` — `CLAIM_RETAINED_BY` |
 | **the registry each composition root gets, from its own target** | `runtime/factory.py` — `build_reobservation` |
 | **the wiring, at all five shipped roots** | `runtime/factory.py`, `tools/stale_branch_demo.py`, `orchestration/demo.py`, `benchmarks/sql_loop_demo.py`, `benchmarks/grounding_loop_demo.py` |
 | **the guard that stops a sixth root omitting it** | `tests/conformance/test_reobservation_wiring.py` — reads the source, pins the site set |

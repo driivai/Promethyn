@@ -378,6 +378,24 @@
         "test_the_real_composition_root_refuses_a_branch_that_moved"
       ],
       "property": "the shipped factory's wiring refuses a target that moved without refusing approval itself"
+    },
+    {
+      "module": "tests/conformance/test_reobservation_branch_delete.py",
+      "positive": "test_a_supplied_service_carrying_THE_SAME_registry_is_accepted",
+      "negatives": [
+        "test_a_supplied_service_that_would_discard_the_registry_is_REFUSED",
+        "test_a_supplied_service_carrying_a_DIFFERENT_registry_is_refused_too",
+        "test_two_registries_that_are_EQUAL_but_not_the_same_object_are_still_refused"
+      ],
+      "property": "a supplied service is refused only when the registry beside it would be discarded, not for being supplied at all"
+    },
+    {
+      "module": "tests/conformance/test_reobservation_branch_delete.py",
+      "positive": "test_supplying_a_service_with_no_registry_and_asking_for_none_is_accepted",
+      "negatives": [
+        "test_a_supplied_service_that_would_discard_the_registry_is_REFUSED"
+      ],
+      "property": "a deployment that wires no re-observation is untouched by the discard refusal — nothing was requested, so nothing was discarded"
     }
   ]
 }

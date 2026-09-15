@@ -2594,3 +2594,72 @@ not the desired behaviour: a reviewer approving a branch delete through
 `prom approve` is told the deployment cannot check it, rather than having it
 checked. Closing that means the CLI naming its target, which is a change to how
 a deployment declares its principal and is not in this sprint.
+
+---
+
+## G32 — three defects on the re-observation seam, found by review after merge
+
+All three were correct, all three were on `execution/controller.py`, and all
+three are fixed. Recorded together because they share one cause: the
+pre-execution comparison was added to `_execute` as a single unguarded call, and
+a call added between a claim and an executor inherits obligations to both.
+
+**1. A supplied service silently discarded the registry (P1).**
+`self._pending = pending or PendingActionService(..., reobservation=...)` never
+constructs the service when `pending=` is given, so a `reobservation=` passed
+beside it was dropped. Both comparisons then used the supplied service's
+registry, which may be `None` — a controller whose every observable surface says
+re-observation is enabled, running neither check.
+**RULING (doctrine #2): refused, not degraded.** `ConfigError` with the typed
+reason `reobservation_registry_discarded`, in `CONFIG_REFUSAL_REASONS`.
+
+*Compared by IDENTITY, and that choice is pinned.* `ReObservation` is a
+dataclass, so `==` delegates to the observers' `__eq__`.
+`GitBranchStateObserver` defines none, so today equality behaves as identity —
+which is the problem: the strictness of a security check would be a property of
+classes the check does not own. An observer that later gained an `__eq__` on
+`repo_path` would make two observers over *different* `GitTool`s compare equal.
+A check that can loosen without being edited is not a check.
+**This was found by mutation, not by reasoning:** substituting `!=` for
+`is not` reddened NOTHING, because every "different registry" in the suite was
+also unequal. A proof was added that builds two registries that ARE equal and
+are not the same object; the mutation now reddens it.
+
+**2. A pre-execution refusal left no execution row (P2).** `StateMoved` and
+`StateUnreadable` both exited `_execute` before `record_execution`, although the
+hold had been claimed and an execution attempted. `executions_for_pending()`
+could not say why an approved action did not run — indistinguishable from one
+nobody tried. Fixed: the refusal is persisted as a refused row naming its typed
+reason, then re-raised. Proven for both refusal kinds.
+
+**3. The claim leaked on non-terminal refusals (P1).** The claim is taken before
+the comparison. A refusal raised without releasing it, and for a
+non-terminal refusal the hold stayed `approved` — so `retry_decision` accepted
+it — while `claim_pending_execution` failed forever with "already in progress or
+has completed". **A transient observer outage permanently bricked an approved
+action, with no verb to recover it.** That is the G21 road: an operator who
+cannot recover removes the requirement.
+**RULING: release for non-terminal refusals, retain for `StateMoved`.** Keyed on
+TYPE in `CLAIM_RETAINED_BY`, whose key set is pinned by a test. The default for
+an unnamed type is to RELEASE, which is safe because terminal-ness lives in the
+STATUS — `StateMoved` transitions the hold out of `approved` and
+`retry_decision` refuses it on that alone. The claim is belt; the status is
+suspenders.
+
+**Executed mutations**, through `scripts/mutation_worktree.py`, both attack
+classes:
+
+| mutation | observed |
+|---|---|
+| M14 deletion: the registry-discard check removed | 2 red |
+| M15 substitution: equality for identity | **0 red on first run** — recorded as a gap in the proofs, not as a pass; 1 red after the distinguishing proof was added |
+| M16 deletion: the refused execution row not written | 2 red |
+| M17 substitution: the row is written but drops the typed reason | 2 red |
+| M18 deletion: the claim is never released | 1 red |
+| M19 substitution: the claim released for every refusal, moves included | 2 red |
+| M20 substitution: the wrong type retains — unreadable treated as terminal | 3 red |
+
+**M15 is the entry worth reading twice.** A green mutation is not evidence the
+field is covered; it is evidence nothing has been measured yet. Probing the
+field directly — constructing two equal, non-identical registries — showed the
+suite could not distinguish the two checks at all.

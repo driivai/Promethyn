@@ -51,6 +51,7 @@ CONFIG_REFUSAL_REASONS: frozenset[str] = frozenset({
     "substrate_requirement_contradiction",  # require_verified + allow_unverified
     "bound_zero_is_not_unbounded",  # a 0/negative where unbounded must be named
     "unknown_unbounded_spelling",   # a bound that is neither positive nor named
+    "reobservation_registry_discarded",  # a registry the supplied service would not use
 })
 
 

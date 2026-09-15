@@ -445,6 +445,30 @@ EXPECTED_PROTECTED_FILES = 21
 #:   record claims was re-checked — degrading a requested security property
 #:   rather than refusing it. OPEN-GAPS G31.
 #:
+#: RE-SANCTIONED for the three review findings on the re-observation seam.
+#: ``execution/controller.py`` moved for all three:
+#:
+#:   - **The supplied-service combination is refused, not degraded.**
+#:     ``pending or PendingActionService(...)`` never constructs the service
+#:     when one is supplied, so a ``reobservation=`` passed beside a ``pending=``
+#:     was silently discarded and BOTH comparisons then ran on the supplied
+#:     service's registry — possibly ``None``. A controller that looked enabled
+#:     ran neither check. Now a ``ConfigError`` with the typed reason
+#:     ``reobservation_registry_discarded``, compared by IDENTITY: equality on
+#:     this dataclass delegates to the observers' ``__eq__``, which is a
+#:     property of classes this check does not own, so an equality check could
+#:     loosen without being edited.
+#:   - **A pre-execution refusal writes a refused execution row** before it is
+#:     re-raised. The hold was claimed and an execution was attempted; with no
+#:     row, ``executions_for_pending`` cannot say why an approved action did not
+#:     run, which is the audit contract this controller states.
+#:   - **The claim is released for every refusal except a move.** Retaining it
+#:     after a transient observer outage left the hold ``approved`` — so
+#:     ``retry_decision`` accepted it — while ``claim_pending_execution`` failed
+#:     forever: an approved action permanently unexecutable because a reader was
+#:     down for a moment. The rule is keyed on TYPE (``CLAIM_RETAINED_BY``) and
+#:     its key set is pinned by a test.
+#:
 #: Those sprints are why these bytes are what they are. They do NOT license the
 #: next edit to the same files: updating a digest below is a fresh decision, and
 #: the reason for it belongs beside it.
@@ -458,7 +482,7 @@ DIGESTS: dict[str, str] = {
     "src/prometheus_protocol/core/models.py":
         "96fe20410439abdb87fd9a34becdffab032fd106a5fa70f80271527a79df5910",
     "src/prometheus_protocol/execution/controller.py":
-        "38aa91d6211350cc5487c6888402d0b335b8e2447d6e9f2eff6112f9c745c2d9",
+        "1c5a671defaf47dc1dbb201bd9c4765c2c0abb1dec16dbe43dfc44e68fd99876",
     "src/prometheus_protocol/execution/executor.py":
         "7fc5ee28f1a76417a9350ee9a0ab1913483991a89d60d9670ffd8149ab6afb0f",
     "src/prometheus_protocol/execution/pending.py":

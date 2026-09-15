@@ -126,6 +126,37 @@ class StateUnobservable(ExecutionNotAuthorized):
     """
 
 
+#: Which pre-execution refusals leave the hold RETRYABLE, keyed on TYPE.
+#:
+#: WHY A TYPE AND NOT A REASON STRING. The three refusal types are the closed
+#: vocabulary; a reason distinguishes WHICH comparison found it, and two
+#: reasons can share a type. Keying on the type is keying on the fact.
+#:
+#: ONLY ``StateMoved`` RETAINS THE CLAIM. A hold whose target moved must never
+#: execute, and the claim is a second lock on that. Everything else is doctrine
+#: #1's "the check could not run": an observer outage or a deployment that does
+#: not observe the class says nothing about the target, and a hold left claimed
+#: after one is a hold that can never execute and can never be retried — the
+#: claim is spent forever and every retry reports "already in progress". That
+#: is a transient outage permanently bricking an approved action, which is the
+#: road an operator ends by removing the requirement (G21).
+#:
+#: THE DEFAULT FOR A TYPE NOT NAMED HERE IS TO RELEASE, and that is safe
+#: because terminal-ness does not live in the claim: ``StateMoved`` transitions
+#: the hold's STATUS out of ``approved``, and ``retry_decision`` refuses it on
+#: the status alone. The claim is belt; the status is suspenders. A new refusal
+#: type that must retain the claim has to be added here deliberately, and
+#: ``test_reobservation_branch_delete.py`` pins this mapping's key set so it
+#: cannot fall behind the types.
+CLAIM_RETAINED_BY: "frozenset[type]" = frozenset({StateMoved})
+
+
+def refusal_retains_claim(refusal: BaseException) -> bool:
+    """Whether ``refusal`` leaves the at-most-once claim spent."""
+
+    return any(isinstance(refusal, kind) for kind in CLAIM_RETAINED_BY)
+
+
 @dataclass(frozen=True)
 class Unreadable:
     """Why a reading could not be taken, and which aspects were not read.

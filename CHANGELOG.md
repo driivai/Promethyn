@@ -39,6 +39,19 @@ in `spec/invariants.md` is a major version bump.
   observing root and approved through one that is not is now refused with
   `StateUnobservable` / `target_state_registry_mismatch` rather than approved
   unchecked.
+
+### Fixed
+- **Three defects on the re-observation seam** (`docs/OPEN-GAPS.md` G32).
+  Supplying both a pending service and a re-observation registry silently
+  discarded the registry, leaving a controller that looked enabled running
+  neither comparison; it is now refused at construction with the typed reason
+  `reobservation_registry_discarded`. A pre-execution refusal exited before
+  `record_execution`, so an approved action that did not run left no execution
+  row; the refusal is now persisted with its typed reason before it is
+  re-raised. And a non-terminal refusal did not release the at-most-once
+  execution claim, so a transient observer outage left an approved hold
+  permanently unexecutable and unretryable — the claim is now released for
+  every refusal except `StateMoved`, which stays terminal.
 - **PHASE-1.2c TASK 5/6 — the execution authorization record, and the pinned
   hold.** Every human hold now persists a versioned record of what it was
   decided under — the policy and its version, the requirements it resolved,
