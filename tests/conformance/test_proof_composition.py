@@ -64,14 +64,14 @@ def test_every_required_name_is_a_test_that_exists(key):
     local suite, instead of refusing three CI jobs after the push."""
 
     step = STEPS[key]
-    available: set[str] = set()
-    for dotted in step["counts"]:
-        available |= _test_names(_module_path(dotted))
-
-    missing = sorted(name for name in step["required"] if name not in available)
+    missing = []
+    for dotted, required in step["required"].items():
+        assert dotted in step["counts"], (key, dotted, "pinned module is not collected")
+        defined = _test_names(_module_path(dotted))
+        missing += [f"{dotted}::{n}" for n in required if n not in defined]
     assert missing == [], (
-        f"{key}: proof_composition.json pins names that do not exist in the "
-        f"modules this step collects: {missing}"
+        f"{key}: proof_composition.json pins (module, name) pairs that do not "
+        f"exist where it says they do: {sorted(missing)}"
     )
 
 
@@ -86,10 +86,11 @@ def test_the_required_set_is_not_empty_and_not_everything(key):
     available: set[str] = set()
     for dotted in step["counts"]:
         available |= _test_names(_module_path(dotted))
+    pinned = [n for names in step["required"].values() for n in names]
 
-    assert step["required"], f"{key}: no names pinned"
-    assert len(set(step["required"])) == len(step["required"]), f"{key}: duplicate name"
-    assert len(step["required"]) < len(available), (
+    assert pinned, f"{key}: no names pinned"
+    assert len(set(pinned)) == len(pinned), f"{key}: duplicate name"
+    assert len(pinned) < len(available), (
         f"{key}: every test is pinned; `required` is meant to be the subset whose "
         "substitution would be silent"
     )
@@ -112,7 +113,9 @@ def test_every_step_pins_at_least_one_name_that_is_not_a_refusal(key):
     refusal_words = ("refus", "cannot", "no_", "not_", "never", "invalid",
                      "detected", "breaks", "excess", "shortfall", "lie")
     positives = [
-        name for name in STEPS[key]["required"]
+        name
+        for names in STEPS[key]["required"].values()
+        for name in names
         if not any(word in name for word in refusal_words)
     ]
     assert positives, f"{key}: every pinned name reads as a refusal"
@@ -158,7 +161,7 @@ def test_the_checker_accepts_a_faithful_report(tmp_path):
     rows = []
     for module, count in step["counts"].items():
         names = sorted(_test_names(_module_path(module)))
-        pinned = [n for n in step["required"] if n in names]
+        pinned = [n for n in step["required"].get(module, []) if n in names]
         chosen = pinned + [n for n in names if n not in pinned]
         # A module collects MORE cases than it has functions when tests are
         # parametrised, so the synthetic report pads with `name[i]` rows the way
@@ -203,3 +206,61 @@ def test_the_manifest_records_what_it_deliberately_left_alone():
             continue
         assert len(reason) > 80, f"{name}: the reason is too thin to be a reason"
     assert MANIFEST.is_file()
+
+
+@pytest.mark.parametrize("key", sorted(STEPS))
+def test_the_checker_refuses_a_name_that_MOVED_to_another_module(key, tmp_path):
+    """CODEX P2, AS A PERMANENT TEST.
+
+    The first version of the checker collected ``{name for ...}`` and threw the
+    module away, so a required name could be satisfied by a DIFFERENT collected
+    module while the per-module counts stayed right. Reproduced before fixing:
+    rename the pinned descriptor proof to a filler, hand its old name to an
+    unpinned test in the revert-pins module, and ``check()`` returned NO
+    problems with the pinned proof gone.
+
+    Deletion is the obvious attack and a name-only pin catches it.
+    SUBSTITUTION is the shape a real patch takes, and it passed — the same
+    distinction as Family A vs Family B in the R2 mutations. This test is the
+    Family B half, parametrised over every step so no step is covered only by
+    the easy case.
+    """
+
+    step = STEPS[key]
+    # Pick a victim and a module that can host its name without being pinned.
+    victim_module = next(m for m, names in step["required"].items() if names)
+    victim = step["required"][victim_module][0]
+    host = next(
+        (m for m in step["counts"] if m != victim_module
+         and (set(_test_names(_module_path(m))) - set(step["required"].get(m, [])))),
+        None,
+    )
+    assert host, f"{key}: no module can host the moved name"
+    displaced = sorted(
+        set(_test_names(_module_path(host))) - set(step["required"].get(host, []))
+    )[0]
+
+    rows = []
+    for module, count in step["counts"].items():
+        names = sorted(_test_names(_module_path(module)))
+        if module == victim_module:
+            names = [n for n in names if n != victim] + ["test_a_benign_filler"]
+        if module == host:
+            names = [victim if n == displaced else n for n in names]
+        pinned = [n for n in step["required"].get(module, []) if n in names]
+        chosen = pinned + [n for n in names if n not in pinned]
+        while len(chosen) < count:
+            chosen.append(f"{chosen[0]}[pad{len(chosen)}]")
+        rows += [
+            f'<testcase classname="{module}" name="{n}"/>' for n in chosen[:count]
+        ]
+
+    report = tmp_path / f"{key}.xml"
+    report.write_text(f"<testsuites><testsuite>{''.join(rows)}</testsuite></testsuites>")
+    problems = check(report, key)
+    membership = [p for p in problems if p.startswith("membership:")]
+    assert membership, (
+        f"{key}: the name moved from {victim_module} to {host} and the check "
+        f"passed — this is P2 reopened. problems={problems}"
+    )
+    assert f"{victim_module}::{victim}" in membership[0], membership

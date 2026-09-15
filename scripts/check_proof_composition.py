@@ -10,12 +10,22 @@ security property, membership is what has to be pinned.
 So this checks three things against ``tests/conformance/proof_composition.json``:
 
 1. **counts**, per module — collection loss, unchanged from before;
-2. **membership** — every name in ``required`` ran;
+2. **membership** — every ``(module, name)`` pair in ``required`` ran;
 3. **zero skips, failures or errors** — a skipped proof is not a proof.
+
+MEMBERSHIP IS A PAIR, AND THE FIRST VERSION GOT THIS WRONG. It collected
+``{name for ...}`` and discarded each testcase's module, so a required name
+could be satisfied by a DIFFERENT collected module while the per-module counts
+stayed right — rename the pinned proof to a filler, hand its old name to an
+unpinned test elsewhere in the same step, and the check passed with the proof
+gone. Found by review (PR #108, P2), reproduced, and fixed by keying membership
+on ``(module, base name)``. What varies is the pair, so the pin is over the
+pair; a name-only pin does not cover what varies, which is this file's own
+argument applied to itself.
 
 Names in ``required`` are BASE function names. A parametrised test appears in
 JUnit as ``name[param]``, so matching is on the base: re-parametrising a test
-keeps the pin, deleting it breaks it.
+keeps the pin, while deleting it — or MOVING it to another module — breaks it.
 
 USAGE::
 
@@ -83,11 +93,22 @@ def check(report: Path, key: str) -> list[str]:
     if unpinned:
         problems.append(f"count: modules in the report but not pinned: {unpinned}")
 
-    ran = {_base_name(c.get("name", "")) for c in cases}
-    missing = [name for name in step["required"] if name not in ran]
+    # (module, base name). Keyed on the pair because the name alone is not the
+    # identity of a proof: the same name in another module is a different test.
+    ran = {
+        (_module_of(c.get("classname", "")), _base_name(c.get("name", "")))
+        for c in cases
+    }
+    missing = [
+        f"{module}::{name}"
+        for module, required in step["required"].items()
+        for name in required
+        if (module, name) not in ran
+    ]
     if missing:
         problems.append(
-            "membership: pinned proofs that did not run: " + ", ".join(sorted(missing))
+            "membership: pinned proofs that did not run in their own module: "
+            + ", ".join(sorted(missing))
         )
 
     for case in cases:
@@ -112,10 +133,11 @@ def main(argv: list[str]) -> int:
         return 1
     manifest = load_manifest()["steps"][key]
     total = sum(manifest["counts"].values())
+    pairs = sum(len(v) for v in manifest["required"].values())
     print(
         f"proof composition OK for {key!r}: {total} proofs across "
-        f"{len(manifest['counts'])} module(s), {len(manifest['required'])} pinned "
-        f"by name, zero skips/failures/errors"
+        f"{len(manifest['counts'])} module(s), {pairs} pinned by "
+        f"(module, name), zero skips/failures/errors"
     )
     return 0
 

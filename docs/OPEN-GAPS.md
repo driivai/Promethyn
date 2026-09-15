@@ -1839,3 +1839,66 @@ This is the same class as G17 and G23 themselves: a surface that LOOKS like it
 carries a guarantee, read as though it does. Three instances now, in three
 different substrates — a test name, a branch-protection rule, a bot's summary
 comment.
+
+---
+
+## G25 — a NAME is not a membership: the composition pin's own thesis failed on itself
+
+**Found by review (PR #108, P2), reproduced before fixing.**
+
+**What.** `scripts/check_proof_composition.py` collected `{_base_name(c) for c in cases}`
+— the set of names that ran — and discarded each testcase's MODULE. So a
+required name could be satisfied by a **different collected module** while the
+per-module counts stayed right.
+
+**Reproduced, exactly.** Rename
+`test_descriptor_refuses_each_cross_action_mismatch_before_execution` to a
+filler in `test_execution_descriptor`, and hand its old name to
+`test_mutation_plan_and_observed_failure_count_are_pinned` (unpinned) in
+`test_phase_1_2c_checkpoint_b_revert_pins`. Counts unchanged: 18 + 4 = 22. The
+name still appears in the report. `check(..., "checkpoint_b")` returned
+**NO problems** — with the pinned proof gone.
+
+That is this change's own argument failing on itself. It was written to say a
+count does not cover what varies; it then pinned a name, and **what varies is
+the `(module, name)` PAIR**.
+
+### THE SPRINT'S PROOF WAS INSUFFICIENT, and this is the record of it
+
+The five swap proofs run when the pins were converted probed **DELETION**:
+remove a load-bearing refusal, append a benign passing test, watch the pin
+redden. All five reddened, and that result stands — but it establishes less
+than it appeared to.
+
+**Deletion is the obvious attack; SUBSTITUTION is the shape a real patch takes.**
+A name-only pin catches deletion and passes substitution, and nothing in that
+first round distinguished the two. It is the same split as **Family A vs
+Family B in the R2 mutations**, and I did not carry that distinction across to a
+new instrument — which is the more useful half of this entry, because the
+distinction was already written down in this repository.
+
+**Fixed.** `required` is keyed BY MODULE in
+`tests/conformance/proof_composition.json`, and the checker keys membership on
+`(module, base name)`. A test that MOVES modules now breaks its pin exactly as
+deletion does.
+
+**Proof, per converted pin, on the real tree** — rename a pinned test to a
+filler in its own module, give its old name to an unpinned test in a DIFFERENT
+module of the same step, counts unchanged. **All five REDDEN**, each naming the
+pair that moved:
+
+| step | moved | from → to |
+|---|---|---|
+| `checkpoint_b` | `test_a_LEGITIMATELY_minted_assessment_does_not_cross_target_or_attempt` | descriptor → checkpoint-B revert pins |
+| `authorization_record` | `test_a_FAILED_required_check_is_refused_at_the_gate_and_the_row_records_the_row` | record → hold pinning |
+| `phase_1_2a` | `test_the_encoded_field_set_equals_the_dataclass_fields` | encoding → coverage enforcement |
+| `phase_1_2b` | `test_a_covered_assessment_mints_a_migration_capability` | unbound-closed → 1.2b revert pins |
+| `checkpoint_3` | `test_a_REGISTERED_verifier_cannot_lie_about_its_tier` | advisory → 1.2c revert pins |
+
+**Test.** `test_the_checker_refuses_a_name_that_MOVED_to_another_module`,
+parametrised over every step so no step is covered only by the easy case.
+
+**The general form.** When an instrument pins an identifier, ask what the
+identifier's SCOPE is. A bare name is scoped to nothing; the thing being
+identified is scoped to a module. A pin over the narrower key passes every
+substitution that stays inside the wider one.
