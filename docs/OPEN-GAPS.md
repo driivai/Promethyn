@@ -2109,6 +2109,28 @@ tests, all green unmutated.
 | M12 a resolved site that reports a different identity accepted | substitution | **1 failed, 90 passed**: the reports-another-identity proof | The identity comparison, not merely the import, is what the proof pins |
 | M13 the class-in-hand check removed at declaration | deletion | **1 failed, 90 passed**: `test_an_extension_class_reporting_another_identity_is_refused_at_declaration` | The on-the-spot form has its own proof; the path form's proofs do not cover it, and were not expected to |
 
+**Round three — SECOND-ORDER probes on the site-check proofs.** Every
+mutation keeps the raise and drops only the part that names the property: the
+typed reason, the implementation or identity attribute, or the message the
+proof reads. A proof that survived would be one resting on the raise alone.
+Two target modules (the registry proofs, coverage enforcement), 51 tests, all
+green unmutated.
+
+| mutation | observed | what it establishes |
+|---|---|---|
+| S1 `reason=` dropped from the load-and-resolve refusal (the raise stays) | **3 failed, 48 passed**: the pointing-nowhere proof, the reports-another-identity proof, the committed-profiles-at-load proof | Every path-declared proof asserts the typed reason; none rests on the raise |
+| S2 the resolver's re-raise drops only the reason it copies | **2 failed, 49 passed**: the two resolution proofs | The load proof survived, correctly — its path never enters the resolver — and the two that do enter it assert the reason survives the re-raise |
+| S3 `implementation=` dropped from the load-and-resolve refusal | **3 failed, 48 passed**: the same three as S1 | The proofs assert WHICH implementation, not only which reason |
+| S4 `identity=` dropped from the class-in-hand refusal | **1 failed, 50 passed**: the class-mismatch proof | The on-the-spot refusal's identity attribute is asserted |
+| S5 the class-in-hand message stops naming what the class reported | **1 failed, 50 passed**: the class-mismatch proof | The proof reads the message for the reported identity, so a refusal that stops saying what it found reddens it |
+| S6 the unresolved-site message stops naming the site | **1 failed, 50 passed**: the pointing-nowhere proof | The proof reads the message for the site, so a refusal that stops saying where it looked reddens it |
+
+No second-round proof survived a probe aimed at its own property-naming half.
+Three proofs have no second-order probe because they assert no refusal: the
+extension positive control, the committed profiles' positive half, and the
+G27 limit test — each states an acceptance, and an acceptance has no reason to
+drop.
+
 **A note on M6, because it is the doctrine #8 shape inside the tool.** The
 mutation runner reported `(no summary)` and an EMPTY red list. Read carelessly,
 that is GREEN. It was a collection failure, and the raw pytest output was
@@ -2256,3 +2278,46 @@ paragraph, and `docs/live-state-pinning-design.md` §7.5, whose
 implementation answering it". It covers an UNDECLARED one, one whose declared
 site does not report it, and a second site claiming the identity — not a wrong
 registered one the policy itself permits.
+
+---
+
+## G28 — the assistant's GitHub channel appends a vendor footer to PR bodies and review replies after the text has passed the hygiene checker, and no guard sees a review reply
+
+**Measured three times on 2026-09-15, each time on text that had passed
+`scripts/check_message_hygiene.py --text-file` before it was sent.**
+
+* **PR bodies.** #111 was opened with a checked body; the body GitHub stored
+  ended with a two-line footer naming the vendor and its product, appended by
+  the tool that created the PR. All three build jobs and pr-text refused at
+  "Message hygiene (commit messages, identities, PR title and body)" with
+  `message hygiene FAILED: pr-body.txt contains banned token(s)` naming the two
+  tokens. The body was rewritten through the update tool, which appends nothing
+  (read back to confirm), and a push re-triggered `ci.yml` with the clean
+  payload. #112 reproduced it exactly at creation: pr-text refused the created
+  body at 19:18:13Z and re-ran on `edited`; the three build jobs ran against the
+  frozen created payload; this entry's own commit is the push that clears them.
+* **Review replies.** The reply tool appends the same footer, without the link.
+  Read back: the five #109 replies, the #108 reply and the #106 reply all carry
+  it — seven observed. The two #111 replies went through the same tool and were
+  not read back before the thread listing was rate-limited. No workflow checks
+  a review comment: `ci.yml` checks commits, title and body, and
+  `pr-text-hygiene.yml` checks title, body and the composed squash message. The
+  tokens on those replies sit outside every guard, and were found only because
+  a reply was read back for another reason.
+
+**What the guards do and do not cover, stated.** A PR body is refused before
+merge by two workflows and can be rewritten. A review reply is refused by
+nothing, cannot be edited or deleted through this channel, and stays as posted.
+The route is the channel, not the text: every body and reply had passed the
+checker as written, and the checker cannot see what is appended after it runs.
+
+**What closes it.** Not anything inside the repository: the footer is added by
+the tooling that posts, after the text leaves the checker. Either the channel's
+own attribution setting (a `DriivAIDev/disable-attribution` branch exists on
+the remote and was not examined here), or a workflow that reads review comments
+through the API and refuses on banned tokens, which would detect and not
+prevent. Recorded so the seven replies that carry the footer are a known state,
+and so the next reply through this channel is posted knowing it will carry it.
+
+**Test.** None. Nothing in the tree can observe a review comment, and a test
+that could would be reading GitHub, which the suite does not do.
