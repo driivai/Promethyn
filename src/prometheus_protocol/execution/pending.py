@@ -84,6 +84,26 @@ from prometheus_protocol.policy.execution import (
     PinnedPolicySuperseded,
 )
 from prometheus_protocol.policy.profile import VerificationPolicy, policy_digest
+from prometheus_protocol.policy.reobservation import (
+    MOMENT_CAPTURE,
+    MOMENT_PRE_APPROVAL,
+    MOMENT_PRE_EXECUTION,
+    OBSERVATION_EVENT,
+    OUTCOME_ASPECTS_DIFFER,
+    OUTCOME_MATCHED,
+    OUTCOME_MOVED,
+    OUTCOME_UNAVAILABLE,
+    Observation,
+    ReObservation,
+    StateMoved,
+    StateUnreadable,
+    compare,
+    observation_record,
+    observation_subject,
+    opted_out_target_state,
+    pinned_reading_of,
+    pinned_target_state,
+)
 from prometheus_protocol.policy.record import (
     PINNED_HOLD_EVENT,
     authorization_record,
@@ -198,6 +218,7 @@ class PendingActionService:
         clock: Callable[[], str] | None = None,
         ttl_seconds: int = _DEFAULT_TTL_SECONDS,
         authorizer: ExecutionAuthorizer | None = None,
+        reobservation: ReObservation | None = None,
     ) -> None:
         self._ledger = ledger
         self._clock = clock or _utc_now_iso
@@ -205,6 +226,16 @@ class PendingActionService:
         # branch and disabled it too, which was never a chosen setting.
         self._ttl_seconds = require_non_negative_int(ttl_seconds, name="ttl_seconds")
         self._authorizer = authorizer
+        # ``None`` means this deployment wired no re-observation, and the pinned
+        # record SAYS SO rather than omitting the block — an absent block and a
+        # passing comparison would otherwise be the same bytes. It is not a
+        # silent default: it is a stated one, and it is the reason the record
+        # version moved to 2.
+        self._reobservation = reobservation
+
+    @property
+    def reobservation(self) -> ReObservation | None:
+        return self._reobservation
 
     # -- holding -----------------------------------------------------------
 
@@ -242,10 +273,18 @@ class PendingActionService:
         authorization = self._authorizer.revalidate(authorization)
 
         created = self._clock()
+        # THE CAPTURE POINT (design §2.1(b)): the live state is read HERE, at
+        # hold creation, which is the moment the human's review is about. It
+        # goes into the pinned record and is what both later comparisons are
+        # against. An unreadable target HALTS here — no hold is created at all,
+        # rather than one pinned to nothing that would read as "checked".
+        target_state = self._capture_target_state(authorization, at=created)
         # THE PINNED RECORD, built from the seam's own re-resolution (the
         # requirements and policy version on the AuthorizedExecution) — never
         # from anything the caller supplied. Written once, here.
-        record = authorization_record(authorization, pinned_at=created)
+        record = authorization_record(
+            authorization, pinned_at=created, target_state=target_state
+        )
         pending_id = self._ledger.record_pending_action(
             subject_id=decision.subject_id,
             risk_class=risk_class,
@@ -341,6 +380,20 @@ class PendingActionService:
                 f"pending action {pending_id} has expired (TTL {self._ttl_seconds}s) "
                 "and can no longer be approved"
             )
+        # THE FIRST COMPARISON, and its placement is load-bearing in two ways.
+        #
+        # BEFORE the APPROVED write, so an approval on the record is one whose
+        # premise still held when the human gave it. That is the invariant; a
+        # comparison after the write would leave an approved hold that is
+        # refusable, a state nothing else in this system has.
+        #
+        # AFTER the TTL check, which the design left as "beside ``_revalidate``"
+        # and is settled here. Reading a live target costs a real read, and a
+        # hold that has already lapsed is refused whatever the target says;
+        # observing it first would spend the read to produce an unavailability
+        # that then MASKS a plain expiry. Expiry is a pure function of the clock
+        # and the cheaper, more common answer, so it goes first.
+        self._require_state_unmoved_before_approval(pending, at=timestamp)
         self._ledger.resolve_pending_action(
             pending_id,
             status=PendingStatus.APPROVED.value,
@@ -582,6 +635,213 @@ class PendingActionService:
             pending.id, invalidated_at=now, reason=reason
         )
         return reason
+
+    # -- re-observation: capture, compare, refuse ------------------------------
+
+    def _capture_target_state(
+        self, authorization: AuthorizedExecution[ExecutableAction], *, at: str
+    ) -> dict | None:
+        """The ``target_state`` block for a new hold, or ``None`` for unconfigured.
+
+        ``None`` is not silence: ``authorization_record`` turns it into the
+        explicit "this deployment wired no re-observation" block, so every v2
+        record says which of the three cases it is.
+        """
+
+        if self._reobservation is None:
+            return None
+        action_class = authorization.descriptor.action_class
+        opted_out = self._reobservation.opt_out_reason(action_class)
+        if opted_out is not None:
+            return opted_out_target_state(action_class, opted_out)
+        observation = self._reobservation.observe(
+            action_class=action_class,
+            target_canonical=authorization.descriptor.target_canonical,
+            action=authorization.action,
+            moment=MOMENT_CAPTURE,
+            at=at,
+        )
+        if not observation.readable:
+            unread = observation.unavailable
+            raise StateUnreadable(
+                f"the live state of {authorization.descriptor.target_canonical!r} "
+                f"could not be read at hold creation "
+                f"({unread.reason if unread else 'unknown'}: "
+                f"{unread.detail if unread else ''}); no hold is created, because "
+                "a hold pinned to nothing would read as one that was checked",
+                reason="target_state_unreadable",
+            )
+        return pinned_target_state(observation)
+
+    def _compare_now(
+        self,
+        pending: PendingAction,
+        *,
+        moment: str,
+        execution_attempt: int,
+        at: str,
+        prior: dict | None = None,
+    ) -> tuple[str, dict | None]:
+        """Read the target again, compare with the pin, and CHAIN the finding.
+
+        Returns ``(outcome, record)``. The record is written before the caller
+        decides what to do about the outcome, and on every outcome including a
+        match: an observation that is only recorded when it fails is an
+        observation a reader cannot distinguish from one that never ran.
+        """
+
+        record = pending.record or {}
+        pinned = pinned_reading_of(record)
+        if self._reobservation is None or pinned is None:
+            return OUTCOME_MATCHED, None
+        pinned_digest, pinned_aspects = pinned
+        action_class = str(record.get("action_class", ""))
+        target_canonical = str(record.get("target_canonical", ""))
+        attempt_id = str(record.get("attempt_id", ""))
+        observation = self._reobservation.observe(
+            action_class=action_class,
+            target_canonical=target_canonical,
+            action=pending.action,
+            moment=moment,
+            at=at,
+        )
+        outcome = compare(
+            pinned_digest=pinned_digest,
+            pinned_aspects=pinned_aspects,
+            observation=observation,
+        )
+        entry = observation_record(
+            attempt_id=attempt_id,
+            execution_attempt=execution_attempt,
+            action_class=action_class,
+            target_canonical=target_canonical,
+            pinned=dict(record.get("target_state") or {}),
+            observation=observation,
+            outcome=outcome,
+            prior=prior,
+        )
+        # INSIDE THE CHAIN, not in a column beside it. An observation trusted
+        # because it is in the record and covered by nothing is the split Block
+        # 1a closed when integrity moved from re-resolution to the record; the
+        # same argument applies to the record this adds.
+        self._ledger.record_chained(
+            event=OBSERVATION_EVENT,
+            subject=observation_subject(attempt_id, execution_attempt),
+            payload=entry,
+            created_at=at,
+        )
+        return outcome, entry
+
+    def _refuse_outcome(
+        self, pending: PendingAction, outcome: str, *, moved_reason: str
+    ) -> None:
+        """Turn a non-matching outcome into the refusal that outcome means."""
+
+        if outcome == OUTCOME_UNAVAILABLE:
+            raise StateUnreadable(
+                f"hold #{pending.id}: the live state could not be read, so it "
+                "was never compared. A target that cannot be read is not a "
+                "target that has not changed",
+                reason="target_state_unreadable",
+            )
+        if outcome == OUTCOME_ASPECTS_DIFFER:
+            raise StateUnreadable(
+                f"hold #{pending.id}: the observed covered set differs from the "
+                "set the hold was pinned over, so the two digests are not "
+                "comparable. This is a deployment-version finding, not a "
+                "statement about the target",
+                reason="target_state_aspects_differ",
+            )
+        raise StateMoved(
+            f"hold #{pending.id}: the live state of its target is not what the "
+            "pinned record says it was",
+            reason=moved_reason,
+        )
+
+    def _require_state_unmoved_before_approval(
+        self, pending: PendingAction, *, at: str
+    ) -> None:
+        """The pre-approval comparison. A refusal leaves the hold PENDING."""
+
+        outcome, _ = self._compare_now(
+            pending, moment=MOMENT_PRE_APPROVAL, execution_attempt=0, at=at
+        )
+        if outcome != OUTCOME_MATCHED:
+            self._refuse_outcome(
+                pending, outcome, moved_reason="target_state_moved_before_approval"
+            )
+
+    def pre_approval_entry(self, attempt_id: str) -> dict | None:
+        """The pre-approval observation, read back off the chain.
+
+        The pre-execution entry RESTATES it, so one receipt shows that state was
+        checked twice and what moved between the two. Read from the chain rather
+        than carried in memory: the controller that runs the second comparison
+        is not the object that ran the first, and a value passed between them
+        would be a value neither of them can show came from the chain.
+        """
+
+        subject = observation_subject(attempt_id, 0)
+        for entry in self._ledger.chained_events():
+            if entry.get("event") == OBSERVATION_EVENT and entry.get("subject") == subject:
+                payload = entry.get("payload")
+                if isinstance(payload, str):
+                    try:
+                        payload = json.loads(payload)
+                    except ValueError:
+                        return None
+                # Narrowed in STATEMENT form, not a ternary. The type gate
+                # refuses the expression spelling here and it is right to: a
+                # payload of a third shape would be taken by the else-branch and
+                # become ``None``, which this method's caller reads as "there
+                # was no pre-approval entry" — a missing receipt reported as an
+                # absent one.
+                if isinstance(payload, dict):
+                    return payload
+                return None
+        return None
+
+    def require_state_unmoved_for_execution(
+        self, pending_id: int, *, execution_attempt: int, now: str | None = None
+    ) -> None:
+        """The pre-execution re-read. A mismatch refuses AND makes the hold terminal.
+
+        The state moved after a human looked at it, so the approval is stale as
+        a matter of fact and retrying cannot make it fresh. The hold leaves
+        ``APPROVED`` for ``STATE_MOVED``, which ``retry_decision`` refuses like
+        any other non-approved status, and the execution claim is deliberately
+        NOT released: releasing it is what keeps a refused, side-effect-free
+        execution retry-eligible, and retry-eligible is the outcome this ruling
+        exists to prevent.
+        """
+
+        at = now or self._clock()
+        pending = self.get(pending_id)
+        if pending is None:
+            raise KeyError(f"no pending action with id {pending_id}")
+        record = pending.record or {}
+        attempt_id = str(record.get("attempt_id", ""))
+        prior = self.pre_approval_entry(attempt_id) if attempt_id else None
+        outcome, _ = self._compare_now(
+            pending,
+            moment=MOMENT_PRE_EXECUTION,
+            execution_attempt=execution_attempt,
+            at=at,
+            prior=prior,
+        )
+        if outcome == OUTCOME_MATCHED:
+            return
+        if outcome == OUTCOME_MOVED:
+            self._ledger.mark_state_moved(
+                pending_id,
+                at=at,
+                reason=(
+                    "the target moved between approval and execution; the "
+                    "approval stands as a record of a correct decision on the "
+                    "state it was shown, and re-verification is a NEW hold"
+                ),
+            )
+        self._refuse_outcome(pending, outcome, moved_reason="state_moved_after_approval")
 
     # -- the checks approval and retry run, in order ----------------------------
 

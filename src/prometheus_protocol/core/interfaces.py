@@ -292,6 +292,25 @@ class Ledger(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def mark_state_moved(self, pending_id: int, *, at: str, reason: str) -> bool:
+        """Make an APPROVED hold terminal because the target moved; True iff it was approved.
+
+        THE ONE TRANSITION OUT OF ``APPROVED``, and the reason it is its own
+        method rather than a parameter on an existing one. Both existing
+        resolvers guard on ``status = 'pending'`` deliberately, so that a
+        decided hold is never re-opened or rewritten; neither can express this,
+        and widening either one would widen it for expiry and rotation too. This
+        guards on ``status = 'approved'``, so it can no more touch a pending
+        hold than they can touch a decided one.
+
+        The human decision columns are NOT rewritten: the approval happened and
+        was correct on the state it was given. What changes is the hold's
+        status, so nothing downstream reads it as executable and no retry verb
+        can re-drive it.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     def claim_pending_execution(self, pending_id: int, claimed_at: str) -> bool:
         """Atomically claim the right to execute a hold; True iff this call won.
 

@@ -63,6 +63,15 @@ EXECUTION_REFUSAL_REASONS: frozenset[str] = frozenset({
     "descriptor_field_mismatch",            # one named field differs
     "descriptor_missing_action",            # no concrete ExecutableAction
     "descriptor_absent",                    # no validated descriptor at all
+    # -- re-observation: the live target against what the hold was pinned to --
+    # Three reasons, not one, because the three have different consequences for
+    # the hold: the first leaves it PENDING, the second makes it TERMINAL, and
+    # the third is doctrine #1's "could not run" and halts wherever it is found.
+    "target_state_moved_before_approval",   # moved while the human was deciding
+    "state_moved_after_approval",           # moved after approval: hold is terminal
+    "target_state_unreadable",              # wholly or partly unreadable; never compared
+    "target_state_aspects_differ",          # two digests over different covered sets
+    "target_state_absent",                  # a v2 record carrying no target_state at all
 })
 
 

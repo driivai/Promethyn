@@ -30,6 +30,8 @@ in `spec/invariants.md` is a major version bump.
   title/body — in CI on every pull request and push to `main`, and as
   `commit-msg`/`pre-push` hooks (`python scripts/install_git_hooks.py`). The
   `pre-push` hook also refuses to resurrect a merged-and-deleted branch.
+  **Review comments are outside every one of those surfaces and are checked by
+  nothing** (`docs/OPEN-GAPS.md` G28).
 - **The sanctioned skip set is a manifest** (`tests/conformance/skip_manifest.txt`,
   `scripts/check_skip_manifest.py`), checked by name on every matrix version.
 - **The platform gate converts three channels** — a refusal raised, returned

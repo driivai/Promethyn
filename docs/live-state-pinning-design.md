@@ -1,6 +1,127 @@
-# Re-observation at execution — DESIGN ONLY, revision 3
+# Re-observation at execution — revision 4: PHASE 1 IMPLEMENTED for `branch.delete`
 
-**Status: design. Nothing of re-observation is implemented.** Revision 3
+**Status: the mechanism is built for ONE action class.** `branch.delete` is
+re-observed end to end — captured at hold creation, compared before the
+approval is recorded, and re-read immediately before the executor is called —
+and `sandbox.execute` and `database.migrate` are **opted out by name**, which
+is a value in the record rather than an absence. Everything below revision 3's
+heading is the design as ruled; this section records what landed, what it is
+allowed to claim, and what it does not do.
+
+## WHAT SHIPPED, AND WHY THIS CLASS FIRST
+
+`branch.delete`'s live-state check already existed — the merge proof counts
+commits reachable from the branch and absent from the base
+(`tools/git.py:141-158`) — so the staleness gap is demonstrable rather than
+hypothetical, and the reproduction is a real one. It is kept as a passing test:
+`test_the_gap_without_reobservation_a_delete_executes_on_replayed_evidence`
+wires the controller with no re-observation, lets the branch gain a commit
+after review, and shows the executor reached with an approved decision whose
+evidence says the delete is lossless.
+
+| piece | where |
+|---|---|
+| the covered set, derived from a frozen dataclass | `policy/target_state.py` — `BranchDeleteState`, three aspects, `aspects_of` reads the field names off the class |
+| the digest, reusing the snapshot encoder under its **own** domain | `policy/target_state.py` — `prom-target-state-v1`, with the state type's name committed inside the preimage |
+| the observer, the same reader the merge proof uses | `tools/git.py` — `GitBranchStateObserver` over `GitTool` |
+| the registry, total over `ACTION_CLASSES`, opt-out per class | `policy/reobservation.py` — `ReObservation` |
+| capture at hold creation | `execution/pending.py` — `_capture_target_state`, into the pinned record's `target_state` |
+| comparison one, before the approval is recorded | `execution/pending.py` — `_require_state_unmoved_before_approval` |
+| comparison two, immediately before the executor | `execution/controller.py` — in `_execute`, after the claim |
+| the terminal transition out of `APPROVED` | `ledger/sqlite_ledger.py` — `mark_state_moved`, guarded on `status = 'approved'` |
+| the observation record, chained, keyed on the execution attempt | `policy/reobservation.py` + `execution/pending.py` — `_compare_now` |
+
+## WHAT THE DOCS MAY CLAIM — the exact sentence
+
+> **The pinned aspects have not changed since review, and here is the aspect
+> list.**
+
+That is the whole of it. **Never "the reviewed assumptions hold."** The
+difference is not stylistic: the aspect list is what this code read, and the
+reviewer's assumptions are a larger set nobody has enumerated. Schema rehearsal
+is the successor feature that would narrow the gap between them, and until it
+exists the narrow sentence is the only true one. The aspect list travels in
+both records precisely so the claim can be checked rather than believed.
+
+## THE TOCTOU RESIDUAL — bounded, not closed
+
+Recorded verbatim, and it now describes a **read-to-execute** window rather
+than an approve-to-execute one:
+
+> *A state comparison immediately before execution narrows the window to the
+> gap between two statements in one transaction at READ COMMITTED. It does not
+> eliminate it. A session that commits DDL inside that window is not detected.
+> The control against that is a lock on the target, which this design does not
+> take.*
+
+**What bounds it here.** The re-read runs after the execution claim is taken
+(`claim_pending_execution`), so no concurrent driver of this system can slip an
+execution between the read and the executor call; and it runs with nothing
+between it and `executor.execute`. For `branch.delete` the residual is a third
+party committing to the branch in that window — a person at a shell, or another
+tool — which nothing in this design excludes. Narrower than it was, not zero.
+
+## THE HUMAN-FACING CONSEQUENCE — both failures, and an operator will hit the second
+
+**Failure one: the approval is refused at the moment it is given.** A reviewer
+reads the plan, decides yes, clicks approve, and is told the approval was not
+recorded because the target moved while they were deciding. Their decision is
+discarded — not deferred, not queued — because it was predicated on a state
+that no longer exists. The hold stays PENDING and can be re-reviewed against
+the current state.
+
+**Failure two: an approval that SUCCEEDED, followed by a terminal execution
+refusal.** This is the one an operator will hit and the one the interface has
+to explain. The hold reads `state_moved_after_approval`. It did not expire and
+no policy rotated. The approval is still on the record, with the approver's
+name and time, because it was a correct decision on the state it was shown;
+what cannot stand is executing on it. The hold is not retryable by any verb —
+`retry_decision` refuses it like any other non-approved status, and the
+execution claim is deliberately not released. The remedy is a NEW hold with a
+NEW approval, which means the whole review again, against the new state.
+
+An operator who reads "refused" on something they approved and is not told why
+will retry, find they cannot, and then remove the requirement. That is the G21
+road, and it is why all three of these are obligations on the interface rather
+than notes: the refusal must say **what moved** (the aspect list is what makes
+that possible), it must say **the approval stands as a record**, and it must
+name **the remedy**.
+
+## WHAT PHASE 1 DOES NOT DO
+
+- **Two of three action classes are opted out**, by name, in the deployment the
+  tests wire. The opt-out is real machinery and its reason is in the record;
+  it is not coverage.
+- **The opt-out is not in the attested posture.** It is a constructor argument
+  at the composition root, not a `Config` field on `SECURITY_FIELDS`, so it is
+  not in the configuration-attestation digest. A deployment's choice is in
+  every hold's record and is not in its posture attestation. Named here rather
+  than discovered; moving it into `Config` is its own change with its own
+  attestation re-pin.
+- **The state pin is not a `PolicyRequirement`.** §3.1 framed it as one so that
+  unavailability would flow through coverage. The claim was verified and is
+  TRUE — an `Unavailable` in a `BoundResult` is recorded at
+  `policy/coverage.py:331-334` and refused as `coverage.incomplete` at `:388` —
+  but it is not the path used, because §2.1 ruled the capture point at **hold
+  creation**, which is downstream of assessment and therefore downstream of
+  coverage. Unavailability at capture, at approval and at execution therefore
+  halts by its own path (`StateUnreadable`), which is the same ruled behaviour
+  reached without pretending a requirement carried it. Making the capture
+  itself coverage-validated is a follow-up, and it would additionally put the
+  observer under the implementation registry.
+- **A deployment that wires nothing gets nothing** — and its records say so.
+  `target_state` is present in every v2 record with `observed: false` and the
+  reason, because an absent block and a passing comparison would be the same
+  bytes.
+- `database.migrate` re-observation, schema rehearsal, `REPEATABLE READ` and a
+  target-keyed advisory lock are all still out.
+
+---
+
+# Revision 3 — the design as ruled
+
+**Status at revision 3: design. Nothing of re-observation was implemented.**
+Revision 3
 records four rulings from the owner (§7.1's second comparison, §3.4's opt-out
 scope, §2.2's record key, and a correction to the owner's own Q2 answer),
 generalises the fifth finding's exclusion into a principle and sweeps the

@@ -84,7 +84,13 @@ from prometheus_protocol.policy.snapshot import BoundRequirement
 #: The record's shape. A reader tells which shape it is looking at from this,
 #: not by inferring from which keys happen to be present. A row without it is
 #: a pre-record blob and is refused as re-verification required.
-RECORD_VERSION = 1
+#: Bumped 1 -> 2 when the record gained ``target_state`` (re-observation). Every
+#: pre-existing hold therefore reads as a pre-record blob and is refused as
+#: ``reverification_required`` — the fail-closed direction, and an operational
+#: event for a release note rather than a discovery for an operator. The bump is
+#: what makes the new block's ABSENCE impossible: a v2 record always carries
+#: one, so "no target_state" is a shape error and never a quiet "not checked".
+RECORD_VERSION = 2
 
 #: The audit-chain event under which a hold's record is bound (subject
 #: ``pending:<id>``). Approval requires exactly one such entry, matching the
@@ -93,11 +99,21 @@ PINNED_HOLD_EVENT = "pending.hold"
 
 
 def authorization_record(
-    authorization: AuthorizedExecution[Any], *, pinned_at: str
+    authorization: AuthorizedExecution[Any],
+    *,
+    pinned_at: str,
+    target_state: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The record for a seam-minted authorization. ``pinned_at`` is the hold's
     creation time for a hold, and the authorization time for an execution row
-    that came from no hold."""
+    that came from no hold.
+
+    ``target_state`` is the live-state block (``policy/reobservation.py``): the
+    digest and aspect list the hold is pinned to, or the NAMED reason there is
+    none. It is never omitted from a v2 record — a caller that passes nothing
+    gets the explicit "this deployment wired no re-observation" block, because
+    an absent block and a passing comparison would be the same bytes.
+    """
 
     descriptor = authorization.descriptor
     assessment = authorization.assessment
@@ -156,8 +172,22 @@ def authorization_record(
             for item in authorization.requirements
         ],
         "coverage": coverage,
+        "target_state": (
+            dict(target_state)
+            if target_state is not None
+            else _unconfigured_target_state()
+        ),
         "pinned_at": pinned_at,
     }
+
+
+def _unconfigured_target_state() -> dict[str, Any]:
+    # Imported lazily: ``policy/reobservation.py`` imports ``policy/execution.py``,
+    # which this module also imports, and a module-level import here would make
+    # the pair circular. The default lives THERE rather than being spelled twice.
+    from prometheus_protocol.policy.reobservation import unconfigured_target_state
+
+    return unconfigured_target_state()
 
 
 def is_versioned_record(record: object) -> bool:

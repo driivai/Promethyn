@@ -73,10 +73,17 @@ needs conformance tests under `tests/conformance/`.
 contains a banned tooling or vendor token. Describe work by its engineering
 outcome and keep the codebase neutral.
 
-The same rule holds for what is NOT a tracked file: commit messages, commit
-author and committer identities, and pull request titles and bodies.
-`scripts/check_message_hygiene.py` refuses a banned token in any of them, and CI
-runs it over every commit in a pull request and over the PR's title and body.
+The same rule holds for three things that are NOT tracked files: commit
+messages, commit author and committer identities, and pull request titles and
+bodies. `scripts/check_message_hygiene.py` refuses a banned token in any of
+them, and CI runs it over every commit in a pull request and over the PR's
+title and body.
+
+**Review comments are NOT checked, by anything.** No workflow reads them, this
+checker is never pointed at them, and a banned token in a review comment
+reaches the repository's conversation with no refusal anywhere. See
+`docs/OPEN-GAPS.md` G28 for the measurement and for the route that puts them
+there.
 To be refused before a push rather than at the PR, point your clone at the
 repository's hooks once:
 

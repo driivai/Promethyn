@@ -30,6 +30,11 @@ name: PR text hygiene
 # Named limit, outside this file: whether a pull request can merge while this is
 # red is a branch-protection setting, not a workflow property.
 #
+# Named limit, INSIDE the surface this file claims: a pull request's "text" here
+# means its TITLE and BODY. It does not mean its review comments, which neither
+# this workflow nor ci.yml reads, and which nothing in the repository can see.
+# docs/OPEN-GAPS.md G28 has the measured count and the route.
+#
 # THE SPLIT'S OTHER CONSEQUENCE, observed on #108 (2026-09-15) the first time it
 # was exercised in anger. The split runs in BOTH directions: because ci.yml
 # reads `github.event.pull_request.body` — the event PAYLOAD, frozen when the

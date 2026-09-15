@@ -61,6 +61,8 @@ from prometheus_protocol.core.models import (
 )
 from prometheus_protocol.gate.promotion import GateDecision
 from prometheus_protocol.policy.implementations import GIT_MERGE_CHECK
+from prometheus_protocol.policy.reobservation import Unreadable
+from prometheus_protocol.policy.target_state import BranchDeleteState
 from prometheus_protocol.sandbox import Limits, Sandbox, build_sandbox
 from prometheus_protocol.swarm.executor import Executor
 from prometheus_protocol.swarm.models import ExecutionResult
@@ -161,6 +163,109 @@ class GitTool:
         """The one write op, as a gate-shaped action (never executed here)."""
 
         return ExecutableAction(kind=ACTION_GIT_DELETE_BRANCH, code=branch)
+
+    def rev(self, ref: str) -> str | None:
+        """The commit ``ref`` resolves to, or ``None`` when it cannot be read.
+
+        ``None`` rather than a raise, and never an empty string: the caller
+        turns any unreadable aspect into an unavailability, and an empty string
+        would be a value that digests.
+        """
+
+        if not _BRANCH_RE.match(ref):
+            return None
+        result = self._run("rev-parse", "--verify", f"{ref}^{{commit}}")
+        if not result.started_ok or result.exit_status != 0:
+            return None
+        tip = result.stdout.strip()
+        return tip or None
+
+
+class GitBranchStateObserver:
+    """Reads the live state of a ``branch.delete`` target: two tips and a count.
+
+    THE OBSERVER IS THE SAME READER THE MERGE PROOF USES. It goes through the
+    same :class:`GitTool` — the same sandbox, the same repository, the same
+    ``rev-list --count`` — so the state a hold is pinned to and the evidence the
+    hold was authorized on are readings of one subject by one instrument. A
+    second reader would be a second definition of "unmerged", and two
+    definitions of the subject is how a digest comes to be stable under a change
+    it should catch.
+
+    ANY UNREADABLE ASPECT MAKES THE WHOLE READING UNAVAILABLE, and the refusal
+    NAMES which aspects could not be read. A partial state is never returned:
+    a digest over the readable half is a different measurement wearing the same
+    name, and it would compare equal while the unreadable half moved. That is
+    the same fail-closed direction the merge check itself takes — a count it
+    could not establish is ``None``, never a zero.
+    """
+
+    def __init__(self, tool: GitTool) -> None:
+        self._tool = tool
+
+    @property
+    def repo_path(self) -> str:
+        return self._tool.repo_path
+
+    def observe(
+        self, *, target_canonical: str, action: ExecutableAction
+    ) -> BranchDeleteState | Unreadable:
+        expected = f"git://{self._tool.repo_path}"
+        if target_canonical != expected:
+            # The observer is bound to ONE repository at construction. A
+            # descriptor naming another principal is not a target this observer
+            # can speak about, and answering anyway would be an observation of
+            # the wrong subject reported under the right name — the §7.5
+            # substitution, at the observer.
+            return self._unreadable(
+                f"execution descriptor names {target_canonical!r}; this observer "
+                f"is bound to {expected!r}",
+                aspects_unread=("branch_tip", "base_tip", "unmerged_commits"),
+            )
+        if action.kind != ACTION_GIT_DELETE_BRANCH:
+            return self._unreadable(
+                f"action kind {action.kind!r} is not a branch delete",
+                aspects_unread=("branch_tip", "base_tip", "unmerged_commits"),
+            )
+        branch = action.code
+        unread: list[str] = []
+        branch_tip = self._tool.rev(branch)
+        if branch_tip is None:
+            unread.append("branch_tip")
+        base_tip = self._tool.rev(self._tool.base_branch)
+        if base_tip is None:
+            unread.append("base_tip")
+        classification = self._tool.classify(branch)
+        if classification.unmerged_commits is None:
+            unread.append("unmerged_commits")
+        if unread:
+            return self._unreadable(
+                f"could not read {len(unread)} aspect(s) of branch {branch!r}",
+                aspects_unread=tuple(unread),
+            )
+        assert branch_tip is not None and base_tip is not None  # narrowed above
+        return BranchDeleteState(
+            branch_tip=branch_tip,
+            base_tip=base_tip,
+            unmerged_commits=classification.unmerged_commits or 0,
+        )
+
+    @staticmethod
+    def _unreadable(detail: str, *, aspects_unread: tuple[str, ...]) -> Unreadable:
+        """``Unreadable``, not ``Unavailable``, and the difference is the list.
+
+        Doctrine #1's ``Unavailable`` says a check could not run. This says
+        which ASPECTS of the target could not be read, which is what a partial
+        read has to carry: "could not read the branch tip" and "could not reach
+        the repository at all" are different operational findings with
+        different remedies, and a single string collapses them.
+        """
+
+        return Unreadable(
+            reason="aspects_unreadable",
+            detail=detail,
+            aspects_unread=aspects_unread,
+        )
 
 
 def evidence_for(classification: BranchClassification) -> Evidence | Unavailable:

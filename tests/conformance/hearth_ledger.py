@@ -389,6 +389,38 @@ EXPECTED_PROTECTED_FILES = 21
 #:   import their identity from a policy-package leaf instead, and that leaf
 #:   imports nothing above ``policy/snapshot.py``.
 #:
+#: * **RE-OBSERVATION AT EXECUTION, PHASE 1 (G29)** — three files, and each
+#:   change is an ADDITION at a named point rather than a rewrite of anything
+#:   that was there. No existing branch was removed or re-ordered, and no
+#:   existing refusal fires on different input than before.
+#:
+#:   - ``core/interfaces.py`` — the Ledger port gains ``mark_state_moved``, the
+#:     ONE transition out of ``APPROVED``. It is a new abstract method rather
+#:     than a parameter on an existing resolver because both existing resolvers
+#:     guard on ``status = 'pending'`` deliberately, so that a decided hold is
+#:     never re-opened; widening either would widen it for expiry and rotation
+#:     too. Nothing else on the port moved.
+#:   - ``execution/pending.py`` — the live state is CAPTURED at hold creation
+#:     into the pinned record's ``target_state``, and ``approve`` gains the
+#:     pre-approval comparison. The comparison sits after the TTL check and
+#:     before the APPROVED write: before the write is the invariant (an approval
+#:     on the record is one whose premise still held), and after the TTL is a
+#:     sub-ruling recorded in the code — a live read spent on a hold that has
+#:     already lapsed would produce an unavailability that MASKS a plain expiry.
+#:     Also gains the pre-execution entry point the controller calls, and the
+#:     chained observation record both comparisons write.
+#:   - ``execution/controller.py`` — ``_execute`` gains the pre-execution
+#:     re-read, placed after the at-most-once claim and immediately before
+#:     ``executor.execute`` with nothing between them. That placement IS the
+#:     bound it provides; the residual is recorded in the design's §7.1.
+#:
+#:   Deployments that wire no re-observation are unaffected in behaviour: the
+#:   registry is optional and every existing suite passes with it absent. What
+#:   they do NOT get is silence — ``policy/record.py``'s ``RECORD_VERSION`` moved
+#:   1 -> 2 and a v2 record always carries a ``target_state`` block saying which
+#:   of the three cases it is, because an absent block and a passing comparison
+#:   would otherwise be the same bytes.
+#:
 #: Those sprints are why these bytes are what they are. They do NOT license the
 #: next edit to the same files: updating a digest below is a fresh decision, and
 #: the reason for it belongs beside it.
@@ -398,15 +430,15 @@ DIGESTS: dict[str, str] = {
     "src/prometheus_protocol/benchmarks/judge_eval.py":
         "25430b5645aff6f655cfaccf33edd9e1cea3e5b4d0c62ef7f23183d9da9f3866",
     "src/prometheus_protocol/core/interfaces.py":
-        "a4c79dcda974c8bd969374e970333698b681c3f9c2b0f850a0425417d270915b",
+        "7bb8ad3df7c1b2ffbea5b9f4e69c0ed0d205f0cd47c0d2f6e46247e57ceb97b7",
     "src/prometheus_protocol/core/models.py":
         "96fe20410439abdb87fd9a34becdffab032fd106a5fa70f80271527a79df5910",
     "src/prometheus_protocol/execution/controller.py":
-        "3e97f7a6c70d30f4f20d777b3e5ec6a88483b52c62424736c2484ba035598dcf",
+        "38aa91d6211350cc5487c6888402d0b335b8e2447d6e9f2eff6112f9c745c2d9",
     "src/prometheus_protocol/execution/executor.py":
         "7fc5ee28f1a76417a9350ee9a0ab1913483991a89d60d9670ffd8149ab6afb0f",
     "src/prometheus_protocol/execution/pending.py":
-        "a2f0330fdf523db07219ffa8249092edb116758d9a6816acd0126b6fcc4058b8",
+        "bde57b1094a1f4c60b95722b1ece9efdade4282de03d80bb3f85dd6fb231184e",
     "src/prometheus_protocol/forge/miner.py":
         "b0e2a53440df5b38a1031cc9648e19b3f9df20081ee34d4e035beda2b6973a29",
     "src/prometheus_protocol/gate/authorization.py":
