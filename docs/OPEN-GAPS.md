@@ -1902,3 +1902,74 @@ parametrised over every step so no step is covered only by the easy case.
 identifier's SCOPE is. A bare name is scoped to nothing; the thing being
 identified is scoped to a module. A pin over the narrower key passes every
 substitution that stays inside the wider one.
+
+---
+
+## G26 — `PolicyRequirement` never checks that an implementation exists
+
+**Surfaced by the live-state design review (PR #109), and it is a defect in the
+EXISTING policy model rather than in that feature.** Filed separately for that
+reason: folding it into a feature entry would hide a general defect inside a
+specific one.
+
+**What.** `PolicyRequirement.__post_init__` validates, measured:
+
+* identity and permitted-set **normalisation**, via a `BoundRequirement` probe;
+* that `applies_to` is a sequence and not a string;
+* that it is **non-empty** — "applies to no action class" is refused;
+* that every entry is a **known action class**;
+* that there are no duplicates.
+
+It does **not** validate that any name in `permitted` corresponds to an
+implementation that exists. There is no registry to validate against: the
+`IMPL_*` constants in `policy/profile.py` are bare strings —
+
+```
+IMPL_SUBPROCESS = "subprocess-tests"
+IMPL_SWARM_STRUCTURAL = "swarm-checks"
+IMPL_GIT_MERGE_CHECK = "git-merge-check"
+```
+
+— and their own comments say they were *"read off `SubprocessVerifier.VERIFIER_ID`"*
+and *"read off `tools.git.MERGE_CHECK_VERIFIER_ID`, not invented here."* That is
+correct because a person copied it correctly, not because anything checks.
+
+**The consequence.** A typo in a `permitted` entry constructs cleanly. The
+requirement then can never be satisfied — no result ever carries that
+implementation identity — so every assessment refuses with
+`coverage.incomplete`. **Which reads as a runtime outage, not a configuration
+error.** An operator sees "a required check did not run" and looks at the
+verifier, the sandbox, the network; the cause is a misspelled string in the
+policy.
+
+Fail-closed, so nothing is authorized that should not be. But a configuration
+error that presents as an infrastructure fault costs the wrong debugging, and
+the failure is *permanent and total* for that action class.
+
+**Where it bites hardest: a customer-supplied policy.** The shipped profile has
+constants beside the verifiers they name. A policy supplied as data has nothing
+protecting it, and R1 already records that a customer-supplied, digest-pinned
+policy is the intended later supplier of that value.
+
+**This is also why the live-state design's covered set is FIXED rather than
+per-policy** (`docs/live-state-pinning-design.md` §1.4). A per-policy aspect
+list would hand the same unchecked surface to a second security parameter, where
+a typo or a deliberate narrowing would be indistinguishable.
+
+**What closes it.** An implementation registry resolved at policy construction:
+every name in `permitted` must resolve to a registered implementation, and an
+unknown one is refused **there**, with the policy in hand, rather than hours
+later as coverage that never completes. The registry is the allowlist — over
+what is PERMITTED to answer a check, keyed on implementation identity.
+
+**The residual to state when it is built:** a registry proves the name resolves
+to *something registered*, not that the something does what the check means. A
+stub registered under a real implementation's identity would satisfy the
+registry and answer the requirement. That is a different control — implementation
+identity is already what coverage keys on, and `coverage.invalid_evidence` is
+already the refusal for an unpermitted implementation answering — but the
+registry must not be described as closing it.
+
+**Test.** None yet. Deliberately: the remedy is a mechanism this tree does not
+have, and a test written against the absent registry would pin a shape nobody
+has ruled on.
