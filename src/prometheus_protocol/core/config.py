@@ -34,6 +34,107 @@ PROVIDER_REMOTE = "remote"
 #: name fails here, not at the first run.
 SANDBOX_NAMES = ("auto", "namespace", "container", "unsafe")
 
+#: The spellings that NAME a deliberately unenforced verifier bound.
+#:
+#: An ALLOWLIST over what varies — the permitted spellings — in the sense the
+#: rest of this project uses the word: anything else is refused, and a further
+#: spelling is added by writing it down here, never by a guard learning to
+#: tolerate one more shape.
+#:
+#: A bare ``0`` is deliberately NOT a member. Unbounded is a posture an operator
+#: states; ``0`` states nothing — it is what an unset variable, a truncated
+#: template and a slipped keystroke all look like, and it used to be accepted
+#: silently. Measured (OPEN-GAPS G21): with ``verifier_memory_mb=0`` a candidate
+#: that allocates 300 MiB returns ``Verdict.PASS`` where the same bytes under a
+#: 64 MiB cap return ``Verdict.FAIL``. The bound does not merely remove a
+#: refusal path, it changes the verdict, so the zero has to be spoken aloud.
+UNBOUNDED_SPELLINGS = frozenset({"unbounded"})
+
+#: The canonical spelling. Prefer this constant to the literal at call sites.
+UNBOUNDED = "unbounded"
+
+#: The fields that accept ``UNBOUNDED`` in place of a positive bound.
+#:
+#: The other three bounds — ``verifier_timeout_s``, ``request_timeout_s`` and
+#: ``provider_max_response_bytes`` — have no unbounded spelling at all, because
+#: none of them HAS a safe unbounded meaning: a verifier with no wall clock
+#: never returns, and a response with no ceiling is the one an adversary sizes.
+#: Three fields in this struct failing closed while three did not was the
+#: inconsistency; the fix is a named posture on the three that can honour one,
+#: not a zero on the three that cannot.
+NAMEABLY_UNBOUNDED_FIELDS = (
+    "verifier_memory_mb",
+    "verifier_cpu_seconds",
+    "verifier_max_processes",
+)
+
+
+def require_bound(value: object, *, name: str) -> int | str:
+    """A positive integer bound, or a named unbounded spelling. Never a bare 0.
+
+    Returns the CANONICAL form — the int, or ``UNBOUNDED`` — so that whatever is
+    stored re-validates to itself. ``dataclasses.replace`` re-runs
+    ``__post_init__`` over the stored value, so a normalisation that did not
+    round-trip would make a valid ``Config`` un-copyable.
+    """
+
+    # bool before int: bool is an int subclass, and ``True`` as a 1 MiB cap is
+    # a quiet nonsense rather than a setting.
+    if isinstance(value, bool):
+        raise ConfigError(
+            f"{name} must be a positive integer or {UNBOUNDED!r}, got a bool",
+            reason="unknown_unbounded_spelling",
+        )
+    if isinstance(value, int):
+        if value >= 1:
+            return value
+        if value == 0:
+            raise ConfigError(
+                f"{name}=0 is not a bound and is no longer accepted as one. "
+                f"Zero disables the cap entirely — measured, that turns a "
+                f"Verdict.FAIL into a Verdict.PASS on identical candidate code "
+                f"(OPEN-GAPS G21). If that is what you want, say so: "
+                f"{name}={UNBOUNDED!r}.",
+                reason="bound_zero_is_not_unbounded",
+            )
+        raise ConfigError(
+            f"{name} must not be negative, got {value!r}: a negative cap "
+            f"disables the cap it was supposed to impose",
+            reason="bound_zero_is_not_unbounded",
+        )
+    if isinstance(value, str):
+        spelling = value.strip().lower()
+        if spelling in UNBOUNDED_SPELLINGS:
+            return UNBOUNDED
+        raise ConfigError(
+            f"{name}={value!r} is neither a positive integer nor a permitted "
+            f"spelling of unbounded ({', '.join(sorted(UNBOUNDED_SPELLINGS))})",
+            reason="unknown_unbounded_spelling",
+        )
+    raise ConfigError(
+        f"{name} must be a positive integer or {UNBOUNDED!r}, "
+        f"got {type(value).__name__}",
+        reason="unknown_unbounded_spelling",
+    )
+
+
+def resolve_bound(value: int | str) -> int:
+    """The integer the runtime limit APIs take: the bound, or 0 for "no limit".
+
+    ``SubprocessVerifier`` and ``Limits`` both read 0 that way and that contract
+    is UNCHANGED — inside the library, where the value arrives from a caller who
+    wrote it on the same line, 0 is unambiguous. This is the single place the
+    operator-facing posture is translated into it, so ``Config`` can refuse a
+    zero without every internal caller having to spell one.
+    """
+
+    # Statement form, not a ternary: narrowing a union in expression position is
+    # refused by `test_no_union_is_narrowed_in_expression_position`, and it was
+    # right to — this is the one line that decides whether a cap is imposed.
+    if isinstance(value, str):
+        return 0
+    return value
+
 #: Every field on ``Config`` that holds a credential. Normalised to ``Secret``
 #: in ``__post_init__`` so that construction by ANY route — ``from_env``, a
 #: direct call, ``dataclasses.replace`` — stores the wrapper and therefore
@@ -50,15 +151,28 @@ SECRET_FIELDS = (
 
 #: Every Config field that expresses a security requirement or a security bound.
 #:
-#: A field listed here must be CONSUMED by the code that honours it. A
-#: conformance test parses the source tree and fails if any of these is read
-#: nowhere outside this module — which is exactly how ``require_digest_pin``
-#: shipped: a setting an operator could turn on, that ``build_sandbox`` never
-#: received, so a deployment asking for digest pinning got a sandbox reporting
-#: ``False`` (threat model §5). The same test fails if a field whose NAME looks
-#: like a security flag (``require_*``, ``allow_*``, ``enforce_*``, ``deny_*``,
-#: ``strict*``) is added without being listed here, so the list ratchets both
-#: ways: it cannot silently miss a flag, and a flag cannot silently do nothing.
+#: A field listed here must be CONSUMED by the code that honours it, and two
+#: separate instruments say so — deliberately, because for a long time only the
+#: first existed and its name overstated what it proved (OPEN-GAPS G17).
+#:
+#: 1. A SPELLING check (``test_security_posture.py``) parses the source tree and
+#:    fails if any of these names appears nowhere outside this module. That is
+#:    exactly how ``require_digest_pin`` shipped: a setting an operator could
+#:    turn on, that ``build_sandbox`` never received, so a deployment asking for
+#:    digest pinning got a sandbox reporting ``False`` (threat model §5). It is
+#:    a typo-and-omission check; it cannot tell a live consumption from a dead
+#:    store, and it was measured not to.
+#: 2. A BEHAVIOURAL proof per field (``test_security_field_behaviour.py`` for the
+#:    fourteen whose absence changes an authorization outcome,
+#:    ``test_resource_bound_outcomes.py`` for the six resource bounds, which flip
+#:    a VERDICT rather than producing a refusal). Two fields —
+#:    ``ledger_anchor_retention_days`` and ``max_role_calls`` — are covered by
+#:    (1) alone and are recorded as such rather than implied to be covered.
+#:
+#: A third test fails if a field whose NAME looks like a security flag
+#: (``require_*``, ``allow_*``, ``enforce_*``, ``deny_*``, ``strict*``) is added
+#: without being listed here, so the list ratchets both ways: it cannot silently
+#: miss a flag, and a flag cannot silently do nothing.
 SECURITY_FIELDS = (
     "sandbox",
     "require_digest_pin",
@@ -118,6 +232,23 @@ def _as_int(value: str | None, default: int) -> int:
     return int(value)
 
 
+def _as_bound(value: str | None, default: int) -> int | str:
+    """Unset means the default; a decimal integer means that bound.
+
+    Anything else is passed through AS WRITTEN for ``__post_init__`` to refuse
+    against the allowlist, so ``PROM_VERIFIER_MEMORY_MB=unbouned`` names the
+    setting and the permitted spellings instead of dying inside ``int()``.
+    """
+
+    if value is None or value.strip() == "":
+        return default
+    text = value.strip()
+    try:
+        return int(text)
+    except ValueError:
+        return text
+
+
 @dataclass(frozen=True)
 class Config:
     """Resolved configuration for a runtime instance."""
@@ -163,9 +294,13 @@ class Config:
     trust_store_path: Path = Path(".prometheus/trust.db")
 
     verifier_timeout_s: float = 5.0
-    verifier_memory_mb: int = 256
-    verifier_cpu_seconds: int = 5
-    verifier_max_processes: int = 64
+    #: A positive bound, or ``UNBOUNDED`` — see ``NAMEABLY_UNBOUNDED_FIELDS``.
+    #: The annotation names the ACCEPTED input; what is STORED is the canonical
+    #: form, an ``int`` or the literal ``"unbounded"``. Use ``resolve_bound`` to
+    #: get the integer the limit APIs take.
+    verifier_memory_mb: int | str = 256
+    verifier_cpu_seconds: int | str = 5
+    verifier_max_processes: int | str = 64
 
     # Sandbox adapter for executing untrusted candidate code: "auto" (pick the
     # best available isolating adapter), "namespace", "container", or "unsafe"
@@ -308,9 +443,15 @@ class Config:
             self.judge_temperature, name="judge_temperature", minimum=0.0, maximum=2.0
         )
         require_positive(self.verifier_timeout_s, name="verifier_timeout_s")
-        require_non_negative_int(self.verifier_memory_mb, name="verifier_memory_mb")
-        require_non_negative_int(self.verifier_cpu_seconds, name="verifier_cpu_seconds")
-        require_non_negative_int(self.verifier_max_processes, name="verifier_max_processes")
+        # A positive bound or a NAMED unbounded posture; a bare 0 is refused
+        # here rather than quietly disabling the cap (G21). Normalised in place
+        # so every consumer sees the canonical form.
+        for field_name in NAMEABLY_UNBOUNDED_FIELDS:
+            object.__setattr__(
+                self,
+                field_name,
+                require_bound(getattr(self, field_name), name=field_name),
+            )
         require_unit_interval(self.gate_threshold, name="gate_threshold")
         require_non_negative_int(self.retrieval_k, name="retrieval_k")
         require_unit_interval(self.escalate_below, name="escalate_below")
@@ -450,9 +591,11 @@ class Config:
                 env.get("PROM_TRUST_STORE_PATH", ".prometheus/trust.db")
             ),
             verifier_timeout_s=_as_float(env.get("PROM_VERIFIER_TIMEOUT_S"), 5.0),
-            verifier_memory_mb=_as_int(env.get("PROM_VERIFIER_MEMORY_MB"), 256),
-            verifier_cpu_seconds=_as_int(env.get("PROM_VERIFIER_CPU_SECONDS"), 5),
-            verifier_max_processes=_as_int(env.get("PROM_VERIFIER_MAX_PROCESSES"), 64),
+            verifier_memory_mb=_as_bound(env.get("PROM_VERIFIER_MEMORY_MB"), 256),
+            verifier_cpu_seconds=_as_bound(env.get("PROM_VERIFIER_CPU_SECONDS"), 5),
+            verifier_max_processes=_as_bound(
+                env.get("PROM_VERIFIER_MAX_PROCESSES"), 64
+            ),
             sandbox=env.get("PROM_SANDBOX", "auto"),
             require_digest_pin=_env_bool(env, "PROM_REQUIRE_DIGEST_PIN"),
             gate_threshold=_as_float(env.get("PROM_GATE_THRESHOLD"), 0.0),

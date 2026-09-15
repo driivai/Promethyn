@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from prometheus_protocol import Config, build_orchestrator
+from prometheus_protocol import UNBOUNDED, Config, build_orchestrator
 from prometheus_protocol._examples.python_functions import build_benchmark
 from prometheus_protocol.core.models import Case, Task, Verdict
 from prometheus_protocol.verifier.runner import SubprocessVerifier
@@ -75,7 +75,7 @@ def test_example_benchmark_rates_unchanged(tmp_path):
         Config(
             registry_dir=tmp_path / "skills",
             ledger_path=":memory:",
-            verifier_memory_mb=0,
+            verifier_memory_mb=UNBOUNDED,
         )
     )
     assert orch.baseline(bench.heldout).pass_rate == 0.4

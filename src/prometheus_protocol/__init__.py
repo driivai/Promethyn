@@ -17,7 +17,7 @@ is an implementation detail and may change without notice.
 
 from __future__ import annotations
 
-from prometheus_protocol.core.config import Config
+from prometheus_protocol.core.config import UNBOUNDED, Config
 from prometheus_protocol.core.errors import (
     ConfigError,
     PrometheusError,
@@ -117,6 +117,7 @@ __all__ = [
     "__version__",
     # configuration
     "Config",
+    "UNBOUNDED",
     # domain errors
     "PrometheusError",
     "StateError",

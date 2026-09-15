@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from prometheus_protocol import Config, build_orchestrator
+from prometheus_protocol import UNBOUNDED, Config, build_orchestrator
 from prometheus_protocol._examples.python_functions import build_benchmark
 from prometheus_protocol.gate.authorization import ActionGate
 from prometheus_protocol.gate.promotion import GateDecision
@@ -35,7 +35,7 @@ def orch(tmp_path):
         Config(
             registry_dir=tmp_path / "skills",
             ledger_path=":memory:",
-            verifier_memory_mb=0,
+            verifier_memory_mb=UNBOUNDED,
         )
     )
 

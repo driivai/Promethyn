@@ -23,7 +23,7 @@ import pytest
 
 from harness.benchmarks.python_functions import build_benchmark, build_solution_book
 from prometheus_protocol.core.booleans import parse_env_bool
-from prometheus_protocol import Config, FirewallError, build_orchestrator
+from prometheus_protocol import UNBOUNDED, Config, FirewallError, build_orchestrator
 from prometheus_protocol.benchmarks.sql_items import (
     CLUSTER_DISTINCT,
     CLUSTER_NULL,
@@ -236,7 +236,7 @@ def test_promoted_sql_skill_is_scoped_to_its_domain(tmp_path):
         provider="mock",
         registry_dir=tmp_path / "skills",
         ledger_path=":memory:",
-        verifier_memory_mb=0,
+        verifier_memory_mb=UNBOUNDED,
     )
     code_orchestrator = build_orchestrator(
         config, solution_book=build_solution_book()

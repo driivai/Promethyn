@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 
 from harness.benchmarks.python_functions import build_benchmark
-from prometheus_protocol import Config, build_orchestrator
+from prometheus_protocol import UNBOUNDED, Config, build_orchestrator
 
 
 @pytest.fixture
@@ -35,7 +35,7 @@ def config(tmp_path):
         provider="mock",
         registry_dir=tmp_path / "skills",
         ledger_path=":memory:",
-        verifier_memory_mb=0,
+        verifier_memory_mb=UNBOUNDED,
     )
 
 

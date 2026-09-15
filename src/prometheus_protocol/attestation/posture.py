@@ -118,9 +118,13 @@ class ResolvedPosture:
 
     # -- the numeric caps in effect -----------------------------------------
     verifier_timeout_s: float
-    verifier_memory_mb: int
-    verifier_cpu_seconds: int
-    verifier_max_processes: int
+    #: A positive cap, or the literal ``"unbounded"`` when the operator named
+    #: that posture. Recorded as written: a resolved 0 would not distinguish
+    #: "no cap was asked for" from "a cap of zero", and G21 is the measurement
+    #: that the difference changes a verdict.
+    verifier_memory_mb: int | str
+    verifier_cpu_seconds: int | str
+    verifier_max_processes: int | str
     request_timeout_s: float
     provider_max_response_bytes: int
     max_role_calls: int

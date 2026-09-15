@@ -20,17 +20,31 @@ was guarding against — couldn't-verify collapsing into verified-clean at the
 resource layer — is NOT what happens: there is no couldn't-verify state on this
 path to collapse from.
 
-WHAT IS TRUE, AND IS THE FINDING (OPEN-GAPS G21). Three of the six bounds accept
-``0`` as "no bound" at `Config` load, and removing the bound turns a FAIL into a
-PASS on byte-identical candidate code. The bound is therefore outcome-affecting
-in the strongest sense — it does not merely remove a refusal path, it changes
-the verdict — and an operator who sets one to zero silently widens what passes.
+WHAT IS TRUE, AND IS THE FINDING (OPEN-GAPS G21). Three of the six bounds could
+be neutralized, and removing the bound turns a FAIL into a PASS on byte-identical
+candidate code. The bound is therefore outcome-affecting in the strongest sense:
+it does not merely remove a refusal path, it changes the verdict.
+
+THE REMEDY, ruled and landed in the same change as this note. Unbounded is kept
+— `Limits` documents that a disabled address-space cap avoids refusing
+legitimate workloads, and this repository relies on that — but it must now be
+NAMED: `Config(verifier_memory_mb=UNBOUNDED)`. A bare ``0`` is refused at load
+with a typed reason, which is how the other three bounds already behaved. Three
+fields in one struct failing closed while three did not was the inconsistency;
+this removes it without pretending the unbounded posture is never wanted.
+
+THIS FILE'S PROOF SHAPE IS NOT THE ONE THE OTHER 20 FIELDS USE, and the
+difference is deliberate — see `test_security_posture.py`. There, neutralizing a
+field makes a named test RED. Here, neutralizing a bound produces a DIFFERENT
+VERDICT, which no refusal test can catch because nothing refuses. A verdict flip
+is the stronger observation and the weaker guarantee, and conflating the two
+would let this file be read as evidence of a refusal path that does not exist.
 
 THE CONTROL THAT EXISTS, named so this is not read as worse than it is: every
 one of these values is captured in the startup posture record
-(`attestation/runtime.py`), so the budget a verdict was produced under is
-recorded rather than implicit. That is what those fields are doing in the
-attestation snapshot.
+(`attestation/runtime.py`) as the operator SPELLED it, so a run under no memory
+cap is distinguishable in the record from one under a cap of zero. That is what
+those fields are doing in the attestation snapshot.
 
 These tests are deliberately SLOW (real subprocesses, real limits). They are
 the measurement; a faster version would be a different measurement.
@@ -38,9 +52,12 @@ the measurement; a faster version would be a different measurement.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
-from prometheus_protocol.core.config import Config
+from prometheus_protocol.core.config import UNBOUNDED, Config, resolve_bound
+from prometheus_protocol.core.errors import ConfigError
 from prometheus_protocol.core.models import Case, Evidence, Task, Unavailable, Verdict
 from prometheus_protocol.verifier.runner import SubprocessVerifier
 
@@ -87,6 +104,13 @@ NEUTRALIZABLE = [
     pytest.param("max_processes", 4, FORKER, id="max_processes"),
 ]
 
+#: `SubprocessVerifier`'s keyword -> the `Config` field that supplies it.
+_CONFIG_FIELD = {
+    "memory_mb": "verifier_memory_mb",
+    "cpu_seconds": "verifier_cpu_seconds",
+    "max_processes": "verifier_max_processes",
+}
+
 
 def _verify(
     code: str,
@@ -122,26 +146,85 @@ def test_removing_a_resource_bound_turns_a_FAIL_into_a_PASS(bound, enforced, cod
 
 
 @pytest.mark.parametrize("bound,enforced,code", NEUTRALIZABLE)
-def test_each_neutralizable_bound_accepts_a_zero_at_config_load(bound, enforced, code):
-    """Zero is reachable through Config, which is what makes the above a
-    deployment property rather than a laboratory one."""
+def test_a_bare_zero_is_refused_at_config_load(bound, enforced, code):
+    """The G21 remedy. Unbounded stays reachable, but only by NAME.
 
-    field = {"memory_mb": "verifier_memory_mb", "cpu_seconds": "verifier_cpu_seconds",
-             "max_processes": "verifier_max_processes"}[bound]
-    assert getattr(Config(**{field: 0}), field) == 0
-    with pytest.raises(ValueError):
+    A bare 0 is what an unset variable, a truncated template and a slipped
+    keystroke all look like, and it used to load silently into the verdict flip
+    above. It is now a refusal with a typed reason, asserted structurally rather
+    than by message (G19).
+    """
+
+    field = _CONFIG_FIELD[bound]
+    with pytest.raises(ConfigError) as refusal:
+        Config(**{field: 0})
+    assert refusal.value.reason == "bound_zero_is_not_unbounded"
+
+    with pytest.raises(ConfigError) as negative:
         Config(**{field: -1})
+    assert negative.value.reason == "bound_zero_is_not_unbounded"
 
 
-def test_the_three_fail_closed_bounds_refuse_a_zero():
-    """The other half of the six. These cannot be neutralized at all, which is
-    why they are not in the table above — the asymmetry is the point."""
+@pytest.mark.parametrize("bound,enforced,code", NEUTRALIZABLE)
+def test_the_positive_control_the_named_value_loads_and_still_widens(bound, enforced, code):
+    """Doctrine #4: the refusal above is only worth something if the posture it
+    replaced is still reachable. So this asserts BOTH halves — the named value
+    loads, AND it produces the documented widened behaviour: the candidate that
+    FAILs under the bound PASSes without it.
+
+    Without this, `test_a_bare_zero_is_refused_at_config_load` is equally
+    consistent with unbounded having been removed outright, which is a different
+    product and not what was ruled.
+    """
+
+    field = _CONFIG_FIELD[bound]
+    loaded = Config(**{field: UNBOUNDED})
+    assert getattr(loaded, field) == UNBOUNDED
+    assert resolve_bound(getattr(loaded, field)) == 0
+
+    widened = _verify(code, **{bound: resolve_bound(getattr(loaded, field))})
+    assert isinstance(widened, Evidence), type(widened).__name__
+    assert widened.verdict is Verdict.PASS, (bound, widened.verdict)
+
+
+@pytest.mark.parametrize("bound,enforced,code", NEUTRALIZABLE)
+def test_an_unrecognised_spelling_of_unbounded_is_refused(bound, enforced, code):
+    """The allowlist is over the permitted SPELLINGS, so a near-miss is refused
+    rather than falling back to a bound or to unbounded. Both directions of the
+    near-miss: a typo, and a stringified number."""
+
+    field = _CONFIG_FIELD[bound]
+    for spelling in ("unbouned", "none", "0", str(enforced), "inf"):
+        with pytest.raises(ConfigError) as refusal:
+            Config(**{field: spelling})
+        assert refusal.value.reason == "unknown_unbounded_spelling", spelling
+
+
+@pytest.mark.parametrize("bound,enforced,code", NEUTRALIZABLE)
+def test_a_named_unbounded_config_round_trips_through_replace(bound, enforced, code):
+    """`__post_init__` re-validates whatever was STORED, so a normalisation that
+    did not round-trip would make a valid Config un-copyable — and `replace` is
+    how most of this tree derives one config from another."""
+
+    field = _CONFIG_FIELD[bound]
+    once = Config(**{field: UNBOUNDED})
+    twice = replace(once)
+    assert getattr(twice, field) == UNBOUNDED
+
+
+def test_the_three_fail_closed_bounds_have_no_unbounded_spelling_at_all():
+    """The other half of the six, and the asymmetry that REMAINS after the
+    remedy — deliberately, because none of these has a safe unbounded meaning:
+    a verifier with no wall clock never returns, and a response body with no
+    ceiling is the one an adversary sizes."""
 
     for field in ("verifier_timeout_s", "request_timeout_s", "provider_max_response_bytes"):
         with pytest.raises(ValueError):
             Config(**{field: 0})
         with pytest.raises(ValueError):
             Config(**{field: -1})
+        with pytest.raises((ValueError, TypeError)):
+            Config(**{field: UNBOUNDED})
 
 
 def test_a_confirmed_start_that_runs_past_the_wall_clock_is_ABSTAIN_not_FAIL():
