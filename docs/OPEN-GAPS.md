@@ -2369,6 +2369,16 @@ its body inspected for the footer. PR BODIES are not in this set — #111's and
 #112's created bodies carried it, were refused by CI, and were rewritten
 through the update tool, which appends nothing; the stored bodies are clean.
 
+**THIRD OCCURRENCE OF THE BODY ROUTE, #113, 2026-09-15.** The pull request was
+opened with a one-line PLACEHOLDER body and rewritten through the update path
+immediately, rather than opened with the real body and repaired afterwards.
+That is the remedy this entry's table implies, used deliberately for the first
+time: the created body still carried the footer and still refused, but it
+carried nothing else, so nothing of substance was ever in a refused payload and
+the rewrite was one call rather than a reconstruction. `ci.yml` reads the
+frozen payload, so the three build jobs still need a push to clear — which is
+what the commit carrying this paragraph is.
+
 **The coverage claim was narrowed in six places** rather than left to be
 read around, the same correction G23 took: `CONTRIBUTING.md`, `CHANGELOG.md`,
 this file's G6 control paragraph, `scripts/check_message_hygiene.py`'s
