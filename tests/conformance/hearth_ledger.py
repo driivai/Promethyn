@@ -371,6 +371,24 @@ EXPECTED_PROTECTED_FILES = 21
 #:   the one in ``test_execution_authorization_record.py`` sat in the same file
 #:   where Block 1a nearly closed on the wrong evidence.
 #:
+#: * **G26 (the implementation registry)** — four files, the SAME two-line
+#:   change in each: ``verifier/runner.py``, ``verifier/sql.py``,
+#:   ``verifier/grounding.py``, ``verifier/model_judge.py``. One import from
+#:   ``policy/implementations.py`` and ``VERIFIER_ID = <the declared object>``
+#:   in place of the literal it used to re-spell. The identity each verifier
+#:   REPORTS is byte-identical to before (``"subprocess-tests"`` and so on);
+#:   what changed is that it is now the same object as the policy module's
+#:   ``IMPL_*`` constant and as the registry's declaration, so the three copies
+#:   that agreed by hand are one declaration and two references, and a policy
+#:   naming a misspelling is refused at construction rather than on every
+#:   assessment. No verdict, no tier, no evidence field, no sandbox call moved.
+#:
+#:   The reason it had to touch Hearth files at all: the derivation cannot run
+#:   the other way. ``swarm/runtime.py`` imports the policy module, so the
+#:   policy module cannot import the implementations; the implementations
+#:   import their identity from a policy-package leaf instead, and that leaf
+#:   imports nothing above ``policy/snapshot.py``.
+#:
 #: Those sprints are why these bytes are what they are. They do NOT license the
 #: next edit to the same files: updating a digest below is a fresh decision, and
 #: the reason for it belongs beside it.
@@ -408,13 +426,13 @@ DIGESTS: dict[str, str] = {
     "src/prometheus_protocol/verifier/bank.py":
         "68464ca7ba79e03d8b77f9322af89a3df3f3f4b0ce547efcd0d9d9a6a18d70aa",
     "src/prometheus_protocol/verifier/grounding.py":
-        "edb44c93c371cbf4a5099e607f4de0332d1bb902d47913bdd3708d5be1b4da3f",
+        "ce0b5efcac33802e2c3f5668589f401d2b7bce30062625fe51b4fc0c732de255",
     "src/prometheus_protocol/verifier/model_judge.py":
-        "bd0c73eea1f36e81bd5fdff7d2734b6c8d9b11580f700e08ce52f40ba3600937",
+        "d4d2edcea250a4f5ea9825e11add33e3dea82500cb31d7dafde63c6068654d48",
     "src/prometheus_protocol/verifier/runner.py":
-        "9caf32cca57dc7abe0e873efb5f4da017cebe547a6200189e8f3f780e4600e01",
+        "ce1618f8a550a2de1398bfd48734c3b36fec6df7c2c959f6bd2c99c752680281",
     "src/prometheus_protocol/verifier/sql.py":
-        "4a01962dc971c7426a72a5a26e6645cf64bc786aae9c5c87f5aa319b463a3a6b",
+        "c7ed91d3c1a3e25d70a52fb1708247768c103c58db7faad428bd532e54ba279e",
     "src/prometheus_protocol/verifier/trust.py":
         "e043b87e1b03613a18e7fa9ec037759f8049ca731b7cbe9d5bbac7622322792e",
 }

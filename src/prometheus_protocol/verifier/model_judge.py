@@ -23,6 +23,7 @@ import time
 from prometheus_protocol.core.diagnostics import Diagnostic
 from prometheus_protocol.core.interfaces import Provider, Verifier
 from prometheus_protocol.core.models import Evidence, Task, Tier, Unavailability, Unavailable, Verdict
+from prometheus_protocol.policy.implementations import MODEL_JUDGE
 
 _JUDGE_SYSTEM_PROMPT = (
     "You are a strict, independent reviewer. Decide whether the candidate "
@@ -44,7 +45,8 @@ _VERDICT_BY_WORD = {
 class ModelJudgeVerifier(Verifier):
     """A soft verifier that grades an outcome via the model provider."""
 
-    VERIFIER_ID = "model-judge"
+    #: The declared identity, by reference (``policy/implementations.py``, G26).
+    VERIFIER_ID = MODEL_JUDGE
     TIER = Tier.SOFT
 
     def __init__(

@@ -33,6 +33,7 @@ from prometheus_protocol.core.validation import (
     require_non_negative_int,
     require_positive,
 )
+from prometheus_protocol.policy.implementations import SUBPROCESS_TESTS
 from prometheus_protocol.sandbox import Limits, Sandbox, build_sandbox
 from prometheus_protocol.verifier import _value_codec
 
@@ -111,8 +112,10 @@ class SubprocessVerifier(Verifier[Task]):
       or a fail.
     """
 
-    #: Stable identifier this verifier reports in every Evidence it emits.
-    VERIFIER_ID = "subprocess-tests"
+    #: Stable identifier this verifier reports in every Evidence it emits. The
+    #: DECLARED object from ``policy/implementations.py``, by reference — not a
+    #: literal that a policy constant elsewhere has to agree with by hand (G26).
+    VERIFIER_ID = SUBPROCESS_TESTS
     #: A sandboxed test run is an authoritative hard check.
     TIER = Tier.HARD
 

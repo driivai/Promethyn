@@ -60,11 +60,15 @@ from prometheus_protocol.policy.resolver import resolve
 from prometheus_protocol.policy.snapshot import ACTION_SANDBOX_EXECUTE, snapshot_digest
 from prometheus_protocol.verifier.bank import VerifierBank
 from prometheus_protocol.verifier.store import InMemoryTrustStore
+from tests.support.assessments import declare_test_implementations
 
 CHECK = "the.requirement"
 
 
 def a_policy(*permitted: str) -> VerificationPolicy:
+    # G26: a policy may only name declared implementations. These are test
+    # doubles (and wrapper-composed ids), declared under the test site.
+    declare_test_implementations(*permitted)
     return VerificationPolicy(
         policy_id="p",
         version=1,

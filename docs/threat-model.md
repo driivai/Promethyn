@@ -218,6 +218,21 @@ coverage.
    the body, ends with a trailer) passes both defects. Where a real artifact
    exists to compare against, compare against it; a model of another system's
    behaviour that nobody diffed against that system is a guess with tests.
+10. **A design document's claim about EXISTING behaviour carries a file and
+    line, or is marked UNVERIFIED.** Doctrine #9 covers a document falsified by
+    new code. This is the reverse: a document falsified by code that was already
+    there. Measured on the live-state design (PR #109): findings 3 and 4 of its
+    review were the same error twice. Revision 1 claimed that refuse-vs-route on
+    an unreadable target "is already a policy property" and that a requirement
+    nothing can satisfy "is already refused at policy construction". Neither had
+    been read before it was written. `ActionGate.decide` returns a terminal
+    `OUTCOME_UNAVAILABLE` before any routing runs (`gate/authorization.py:137-149`),
+    and `PolicyRequirement.__post_init__` validated shape, action classes and
+    duplicates and never implementation existence (`policy/profile.py`, before
+    G26 added the registry). Both claims arrived in the document arguing against
+    exactly that shape. So every sentence a design document makes about what the
+    code does today names where, as `path:line`, or says UNVERIFIED — and a
+    reviewer can tell a reading from a recollection.
 
 ## The model on one page
 

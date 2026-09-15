@@ -39,6 +39,7 @@ from dataclasses import dataclass
 
 from prometheus_protocol.core.interfaces import Provider, Verifier
 from prometheus_protocol.core.models import Evidence, Tier, Unavailability, Unavailable, Verdict
+from prometheus_protocol.policy.implementations import GROUNDING_JUDGE
 
 #: The production grounding-judge prompt. One verdict token, then a stated
 #: confidence in [0, 1]. Judgment is entailment-by-the-source ONLY.
@@ -90,7 +91,8 @@ class GroundingTask:
 class GroundingVerifier(Verifier[GroundingTask]):
     """A soft verifier that judges claim-vs-source grounding via the provider."""
 
-    VERIFIER_ID = "grounding-judge"
+    #: The declared identity, by reference (``policy/implementations.py``, G26).
+    VERIFIER_ID = GROUNDING_JUDGE
     TIER = Tier.SOFT
 
     def __init__(

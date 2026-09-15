@@ -37,6 +37,10 @@ from prometheus_protocol.core.models import (
 )
 from prometheus_protocol.policy.assessment import PolicyAssessment, mint
 from prometheus_protocol.policy.coverage import BoundResult
+from prometheus_protocol.policy.implementations import (
+    declare_implementation,
+    is_registered,
+)
 from prometheus_protocol.policy.profile import (
     PolicyRequirement,
     VerificationPolicy,
@@ -54,6 +58,32 @@ IMPL = "test-verifier"
 ARTIFACT = "a" * 64
 TARGET = "sandbox://test"
 
+#: The ONE site every test-double identity is declared under. One, so two
+#: modules that both name "auditor" declare the same (identity, site) pair and
+#: the registry's conflict refusal stays reserved for what it exists for: two
+#: DIFFERENT implementations claiming one identity.
+TEST_IMPLEMENTATION_SITE = "tests.support.assessments"
+
+
+def declare_test_implementations(*identities: str) -> tuple[str, ...]:
+    """Register test-double identities so a test policy may name them (G26).
+
+    ``PolicyRequirement`` refuses, at construction, a permitted name no
+    implementation has declared. Test code is trusted and may declare doubles.
+    What it must NOT do is re-declare a SHIPPED identity under this site: that
+    would conflict, or worse would let a test believe it registered something
+    the package already reports under. An identity the package declared is
+    therefore left exactly as the package declared it.
+    """
+
+    for identity in identities:
+        if not is_registered(identity):
+            declare_implementation(identity, implemented_by=TEST_IMPLEMENTATION_SITE)
+    return identities
+
+
+declare_test_implementations(IMPL)
+
 
 def a_policy(
     *,
@@ -64,6 +94,7 @@ def a_policy(
     """A one-requirement policy value. R1: the resolver takes a VALUE, so a test
     supplying its own policy is the intended shape, not a workaround."""
 
+    declare_test_implementations(implementation)
     return VerificationPolicy(
         policy_id="test-profile",
         version=1,
@@ -192,6 +223,7 @@ def workflow_policy(*implementations: str) -> VerificationPolicy:
 
     from prometheus_protocol.policy.profile import CHECK_WORKFLOW_GRADE
 
+    declare_test_implementations(*implementations)
     return VerificationPolicy(
         policy_id="test-workflow",
         version=1,

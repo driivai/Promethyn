@@ -68,6 +68,7 @@ from prometheus_protocol.core.models import (
     Unavailable,
     Verdict,
 )
+from prometheus_protocol.policy.implementations import SQL_RESULT_EQUIVALENCE
 from prometheus_protocol.sandbox import Limits, Sandbox, build_sandbox
 
 _RESULT_FILE = "result.json"
@@ -244,7 +245,8 @@ def results_equivalent(
 class SqlVerifier(Verifier[SqlTask]):
     """HARD-tier SQL verifier: sandboxed execution + result equivalence."""
 
-    VERIFIER_ID = "sql-result-equivalence"
+    #: The declared identity, by reference (``policy/implementations.py``, G26).
+    VERIFIER_ID = SQL_RESULT_EQUIVALENCE
     TIER = Tier.HARD
 
     def __init__(self, *, sandbox: Sandbox | None = None, timeout_s: float = 10.0) -> None:

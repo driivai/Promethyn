@@ -48,6 +48,7 @@ from prometheus_protocol.policy.snapshot import ACTION_SANDBOX_EXECUTE, snapshot
 from prometheus_protocol.swarm.executor import Executor
 from prometheus_protocol.swarm.models import ExecutionResult, content_hash
 from prometheus_protocol.verifier.bank import VerifierBank
+from tests.support.assessments import declare_test_implementations
 from tests.support.chain_rewrite import rewrite_entry_and_rehash
 
 TARGET = "sandbox://pinning"
@@ -56,6 +57,8 @@ CLOCK = "2026-09-12T00:00:00+00:00"
 
 
 def _policy(version: int, *check_ids: str) -> VerificationPolicy:
+    # G26: the doubles this policy permits must be declared before it names them.
+    declare_test_implementations(*(f"{check}-impl" for check in check_ids))
     return VerificationPolicy(
         policy_id="pinning-test",
         version=version,

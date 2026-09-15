@@ -85,7 +85,10 @@ RECEIPT = REPO / "type-gate-receipt.json"
 #: grows it. Never lower it to accommodate a narrowing — a smaller tree passing
 #: is not this tree passing. The tolerance absorbs a file or two in flight; it is
 #: not a budget for removing directories.
-EXPECTED_CHECKED_FILES = 314
+#:
+#: Observed 316 on 2026-09-15 (was 314): G26 added
+#: ``policy/implementations.py`` and ``tests/conformance/test_implementation_registry.py``.
+EXPECTED_CHECKED_FILES = 316
 CHECKED_FILE_TOLERANCE = 2
 MINIMUM_CHECKED_FILES = EXPECTED_CHECKED_FILES - CHECKED_FILE_TOLERANCE
 

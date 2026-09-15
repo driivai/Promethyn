@@ -62,11 +62,15 @@ from prometheus_protocol.policy.snapshot import ACTION_SANDBOX_EXECUTE, snapshot
 from prometheus_protocol.swarm.executor import Executor
 from prometheus_protocol.swarm.models import ExecutionResult, content_hash
 from prometheus_protocol.verifier.bank import VerifierBank
+from tests.support.assessments import declare_test_implementations
 from tests.support.chain_rewrite import rewrite_entry_and_rehash
 
 TARGET = "sandbox://record"
 ATTEMPT = "attempt-1"
 CLOCK = "2026-09-12T00:00:00+00:00"
+
+# G26: the doubles the policy below permits, declared before it names them.
+declare_test_implementations("runner-a", "runner-b", "auditor")
 
 #: Two requirements, two permitted implementations on one of them, so the
 #: record has something to say: WHICH answered, WHICH could not.

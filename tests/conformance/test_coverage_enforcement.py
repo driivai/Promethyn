@@ -38,6 +38,7 @@ from prometheus_protocol.policy.profile import (
 from prometheus_protocol.policy.resolver import resolve
 from prometheus_protocol.policy.snapshot import snapshot_digest
 from prometheus_protocol.verifier.bank import VerifierBank
+from tests.support.assessments import declare_test_implementations
 
 ARTIFACT = "a" * 64
 TARGET = '{"host":"db.internal","dbname":"appdb"}'
@@ -46,8 +47,9 @@ ATTEMPT = "attempt-0001"
 #: A second permitted implementation, for the R3 boundary cases. Named here
 #: rather than in the shipped profile: the shipped baseline permits exactly one,
 #: and inventing a sibling in production data to make a test convenient would be
-#: writing the policy to fit the test.
-IMPL_SIBLING = "container-tests"
+#: writing the policy to fit the test. Declared as a test double (G26) so the
+#: policies below may name it; the package itself reports nothing under it.
+IMPL_SIBLING = declare_test_implementations("container-tests")[0]
 
 
 def a_snapshot(*, policy: VerificationPolicy | None = None):

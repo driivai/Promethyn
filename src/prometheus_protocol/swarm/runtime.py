@@ -41,6 +41,7 @@ from prometheus_protocol.swarm.models import (
     content_hash,
 )
 from prometheus_protocol.policy.coverage import BoundResult
+from prometheus_protocol.policy.implementations import SWARM_CHECKS
 from prometheus_protocol.policy.profile import (
     CHECK_EXECUTABLE_CASES,
     CHECK_STRUCTURAL,
@@ -67,8 +68,9 @@ ACTION_SANDBOX_EXECUTE = _ACTION_SANDBOX_EXECUTE
 
 # The deterministic check runner reports under this stable id, at the hard tier
 # (surviving concrete falsification checks is an authoritative basis to act, for
-# this skeleton; live-tool evidence is follow-up).
-CHECK_VERIFIER_ID = "swarm-checks"
+# this skeleton; live-tool evidence is follow-up). The DECLARED object from
+# ``policy/implementations.py``, by reference, not a re-spelled literal (G26).
+CHECK_VERIFIER_ID = SWARM_CHECKS
 
 
 @dataclass(frozen=True)
