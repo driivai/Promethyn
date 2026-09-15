@@ -46,6 +46,7 @@ from prometheus_protocol.policy.profile import (
     PolicyError,
     VerificationPolicy,
     policy_digest,
+    verify_policy_implementations,
 )
 from prometheus_protocol.policy.snapshot import (
     ACTION_CLASSES,
@@ -97,6 +98,22 @@ def resolve(
             "that says nothing about an action class cannot authorize it — silence "
             "is not permission."
         )
+
+    # G26, second check (PR #111 P2): every permitted name's declared site must
+    # resolve and report that identity. A policy VALUE handed straight here —
+    # the customer-supplied shape R1 anticipates — never went through
+    # ``load_profile``, and this is the one door every policy passes on its way
+    # to an assessment. A declaration pointing nowhere is refused HERE, typed,
+    # rather than surfacing as incomplete coverage on every assessment.
+    try:
+        verify_policy_implementations(policy, action_class=action_class)
+    except PolicyError as exc:
+        raise ResolutionRefused(
+            str(exc),
+            reason=exc.reason,
+            implementation=exc.implementation,
+            check_id=exc.check_id,
+        ) from exc
 
     required = tuple(item.bound() for item in policy.applicable(action_class))
     if not required:

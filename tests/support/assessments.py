@@ -58,27 +58,38 @@ IMPL = "test-verifier"
 ARTIFACT = "a" * 64
 TARGET = "sandbox://test"
 
-#: The ONE site every test-double identity is declared under. One, so two
-#: modules that both name "auditor" declare the same (identity, site) pair and
-#: the registry's conflict refusal stays reserved for what it exists for: two
-#: DIFFERENT implementations claiming one identity.
-TEST_IMPLEMENTATION_SITE = "tests.support.assessments"
+def _double_for(identity: str) -> type:
+    """A class that REPORTS ``identity`` at class level and does nothing else.
+
+    The registry verifies a declaration made with the class in hand on the
+    spot (PR #111, P2: a declaration is a claim, and a path-only claim used to
+    go unchecked), so a test double is declared the way a deployment's own
+    implementation should be — by class — and is verified before any policy
+    names it. Built here, in one module, so two test modules that both name
+    "auditor" declare the same site and the registry's conflict refusal stays
+    reserved for what it exists for: two DIFFERENT implementations claiming one
+    identity.
+    """
+
+    name = "Double_" + "".join(ch if ch.isalnum() else "_" for ch in identity)
+    return type(name, (), {"VERIFIER_ID": identity, "__doc__": f"test double reporting {identity!r}"})
 
 
 def declare_test_implementations(*identities: str) -> tuple[str, ...]:
     """Register test-double identities so a test policy may name them (G26).
 
     ``PolicyRequirement`` refuses, at construction, a permitted name no
-    implementation has declared. Test code is trusted and may declare doubles.
-    What it must NOT do is re-declare a SHIPPED identity under this site: that
-    would conflict, or worse would let a test believe it registered something
-    the package already reports under. An identity the package declared is
-    therefore left exactly as the package declared it.
+    implementation has declared, and resolution refuses a declared site that
+    does not report its identity. Test code is trusted and may declare doubles.
+    What it must NOT do is re-declare a SHIPPED identity: that would conflict,
+    or worse would let a test believe it registered something the package
+    already reports under. An identity the package declared is therefore left
+    exactly as the package declared it.
     """
 
     for identity in identities:
         if not is_registered(identity):
-            declare_implementation(identity, implemented_by=TEST_IMPLEMENTATION_SITE)
+            declare_implementation(identity, implemented_by=_double_for(identity))
     return identities
 
 

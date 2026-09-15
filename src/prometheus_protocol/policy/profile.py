@@ -69,7 +69,9 @@ from prometheus_protocol.policy.implementations import (
     GIT_MERGE_CHECK,
     SUBPROCESS_TESTS,
     SWARM_CHECKS,
+    ImplementationSiteUnresolved,
     registered_implementations,
+    verify_implementation,
 )
 from prometheus_protocol.policy.snapshot import (
     ACTION_CLASSES,
@@ -101,6 +103,7 @@ ACCEPTANCE_CONDITIONS: frozenset[str] = frozenset({ACCEPT_PASS})
 POLICY_REFUSAL_REASONS: frozenset[str] = frozenset({
     "implementation_not_registered",  # a permitted name no declared implementation reports under
     "implementation_registry_empty",  # nothing is declared; validating against nothing is refused
+    "implementation_site_unresolved", # declared, but the declared site is missing or reports another identity
 })
 
 
@@ -448,12 +451,46 @@ PROFILES: dict[str, VerificationPolicy] = {
 DEFAULT_PROFILE_ID = _BASELINE.policy_id
 
 
+def verify_policy_implementations(
+    policy: VerificationPolicy, *, action_class: str | None = None
+) -> None:
+    """The second registry check (G26, PR #111 P2): every permitted name's
+    DECLARED SITE must resolve and report that identity.
+
+    Construction checked that each name is declared. A declaration is a claim,
+    and this is the claim being tested — when the policy is put to use, which is
+    the earliest moment every site is importable (see the registry's module
+    docstring for why not at declaration). ``action_class`` narrows the check to
+    the requirements that apply; the resolver passes it, ``load_profile`` checks
+    the whole profile. Refuses with ``implementation_site_unresolved``, naming
+    the implementation and the requirement, so a declaration pointing nowhere is
+    a configuration error here and not incomplete coverage on every assessment.
+    """
+
+    items = policy.requirements if action_class is None else policy.applicable(action_class)
+    for item in items:
+        for name in item.permitted:
+            try:
+                verify_implementation(name)
+            except ImplementationSiteUnresolved as exc:
+                raise PolicyError(
+                    f"policy {policy.policy_id!r}, requirement {item.check_id!r}: {exc}",
+                    reason="implementation_site_unresolved",
+                    implementation=name,
+                    check_id=item.check_id,
+                ) from exc
+
+
 def load_profile(profile_id: str) -> VerificationPolicy:
     """One supplier of a policy value: the committed profile with this id.
 
     Refuses an unknown id rather than falling back to a default. A typo in the
     selected profile must not silently authorize under a policy nobody chose —
     that is the omission attack wearing a configuration error.
+
+    Also verifies every permitted implementation's declared site
+    (:func:`verify_policy_implementations`): a committed profile whose declared
+    implementation has gone missing is refused at load, with the site named.
     """
 
     try:
@@ -468,4 +505,5 @@ def load_profile(profile_id: str) -> VerificationPolicy:
             "defaulted: authorizing under a policy nobody selected is the "
             "failure this refusal exists to prevent."
         )
+    verify_policy_implementations(policy)
     return policy

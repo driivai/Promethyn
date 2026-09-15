@@ -19,12 +19,22 @@ BOTH ATTACK CLASSES, applied to the new instrument (G25's lesson):
   or two sites claiming one identity. The value check and the reverse sweep
   catch the first; the registry's own conflict refusal catches the second.
 
+TWO CHECKS. Construction checks that a permitted name is DECLARED. A
+declaration is a claim — "this identity is reported at this site" — and the
+claim is tested when the policy is put to use: ``load_profile`` and the resolver
+resolve the declared site and require it to report the identity (PR #111, P2:
+before this, ``declare_implementation("custom", implemented_by="missing.module.Verifier")``
+let a policy construct and fail forever as incomplete coverage — G26 one layer
+up). A declaration made with the class in hand is verified at the declaration.
+
 WHAT IT DOES NOT PROVE, stated so it is not read as proved. That a registered
 implementation does what the check means: a stub reporting a real identity
 satisfies this registry, and the control against it is implementation identity
 at coverage plus the trust store's fixed tier (G26's residual, unchanged). And a
-registered-for-registered swap inside a POLICY is not the registry's property
-at all; the proof of that shows what catches it instead, which is not nothing.
+registered-for-registered swap PRESENT WHEN A POLICY IS AUTHORED is caught by
+nothing — not by this registry, not by the digest, not by coverage (PR #111,
+P2, corrected here; OPEN-GAPS G27). The proof of that is a named limit, and it
+says what the stale-evidence refusal it used to lean on actually proves.
 """
 
 from __future__ import annotations
@@ -57,9 +67,12 @@ from prometheus_protocol.policy.implementations import (
     SUBPROCESS_TESTS,
     SWARM_CHECKS,
     ImplementationConflict,
+    ImplementationSiteUnresolved,
     declarations,
     declare_implementation,
+    implemented_by,
     is_registered,
+    is_verified,
     registered_implementations,
 )
 from prometheus_protocol.policy.profile import (
@@ -73,7 +86,7 @@ from prometheus_protocol.policy.profile import (
     load_profile,
     policy_digest,
 )
-from prometheus_protocol.policy.resolver import resolve
+from prometheus_protocol.policy.resolver import ResolutionRefused, resolve
 from prometheus_protocol.policy.snapshot import (
     ACTION_SANDBOX_EXECUTE,
     BoundRequirement,
@@ -296,8 +309,9 @@ def test_a_misspelled_implementation_is_refused_at_construction_with_the_typed_r
 
 
 def test_the_correct_identifier_constructs_and_its_requirement_is_satisfiable():
-    """The paired positive (doctrine #4). Without it, the refusal above is
-    consistent with a registry that refuses everything."""
+    """The paired positive control (doctrine #4), registered in
+    ``positive_controls.json`` beside its three negatives. Without it, the
+    refusal above is consistent with a registry that refuses everything."""
 
     policy = _policy(IMPL_SUBPROCESS)
     snapshot = _snapshot(policy)
@@ -478,25 +492,45 @@ def test_two_sites_cannot_claim_one_identity_and_one_site_may_repeat_itself():
     assert declarations()[SUBPROCESS_TESTS] == site
 
 
-def test_a_swap_between_two_registered_implementations_is_NOT_the_registrys_property():
-    """Stated plainly: registration cannot catch a policy that permits
-    ``swarm-checks`` where it meant ``subprocess-tests``. Both exist. What
-    catches it is (1) the policy digest, which is bound into every snapshot and
-    every pinned record, and (2) coverage, which refuses the implementation the
-    policy no longer permits as invalid evidence. Detectable — by other
-    instruments, not this one."""
+def test_a_swap_between_registered_implementations_present_at_authoring_is_caught_by_NOTHING():
+    """G27, as a passing test (doctrine #5). Registration cannot catch a policy
+    that permits ``swarm-checks`` where it meant ``subprocess-tests``: both
+    exist. The first version of this test then claimed the policy digest and
+    coverage catch it. Review (PR #111, P2) showed that claim covered only a
+    swap made AFTER authoring, judged against evidence for the ORIGINAL policy.
+    A swap PRESENT at authoring is self-consistent: the digest faithfully binds
+    the swapped policy, and coverage accepts an authoritative ``swarm-checks``
+    result bound to ``executable.cases`` because ``implementation`` and the
+    evidence's ``verifier_id`` agree. Nothing binds an implementation to the
+    checks it may answer. The stale-evidence refusal below proves MISMATCH
+    REJECTION, not swap detection, and is kept labelled as exactly that."""
 
     swapped = _policy(SWARM_CHECKS)  # constructs: the registry has no objection
     original = _policy(SUBPROCESS_TESTS)
+    # Distinguishable is not detected: two different policies have two digests,
+    # and nothing compares the swapped one with what the author meant.
     assert policy_digest(swapped) != policy_digest(original)
 
     snapshot = _snapshot(swapped)
-    outcome = validate_coverage(
+    # THE LIMIT. The swapped policy's own implementation satisfies its own
+    # requirement, authoritatively. This is the CoverageSatisfied the review
+    # described, and no instrument in this tree objects to it.
+    accepted = validate_coverage(
+        snapshot,
+        [_bound(snapshot, _passing(SWARM_CHECKS), implementation=SWARM_CHECKS)],
+    )
+    assert isinstance(accepted, CoverageSatisfied)
+    assert accepted.answered_by == {CHECK_EXECUTABLE_CASES: SWARM_CHECKS}
+
+    # What the withdrawn claim actually proved: evidence for the ORIGINAL
+    # policy's implementation is refused under the swapped one. Mismatch
+    # rejection — useful, and not the same property.
+    stale = validate_coverage(
         snapshot,
         [_bound(snapshot, _passing(SUBPROCESS_TESTS), implementation=SUBPROCESS_TESTS)],
     )
-    assert isinstance(outcome, CoverageRefused)
-    assert outcome.reason == REFUSED_INVALID_EVIDENCE
+    assert isinstance(stale, CoverageRefused)
+    assert stale.reason == REFUSED_INVALID_EVIDENCE
 
 
 def test_a_declaration_must_precede_the_policy_that_names_it():
@@ -540,3 +574,123 @@ def test_requested_checks_are_not_validated_here_and_that_is_a_named_limit():
     assert isinstance(outcome, CoverageRefused)
     assert outcome.reason == REFUSED_INCOMPLETE
     assert outcome.check_id == "extra.lint"
+
+
+# ---------------------------------------------------------------------------
+# the second check: a declaration is a claim, and the claim is tested at use
+# ---------------------------------------------------------------------------
+
+
+class CustomExtensionVerifier:
+    """A deployment's own implementation, declared WITH THE CLASS IN HAND."""
+
+    VERIFIER_ID = "custom-extension"
+
+
+class MisreportingExtension:
+    """Declared for one identity, reports another."""
+
+    VERIFIER_ID = "something-else"
+
+
+#: A module constant that does NOT report the identity a declaration will
+#: claim for it — the path form of the misreporting class.
+LIAR_CONSTANT = "not-custom-liar"
+
+
+def test_an_extension_declared_with_its_class_is_verified_on_the_spot_and_works():
+    """The positive control for the second check (doctrine #4). A deployment
+    declares its own implementation by class; the registry verifies, right
+    there, that the class reports the identity; a policy naming it constructs,
+    resolves, and is satisfied by that implementation's evidence."""
+
+    identity = declare_implementation("custom-extension", implemented_by=CustomExtensionVerifier)
+    assert is_registered(identity)
+    assert is_verified(identity)
+    # The site is read OFF THE CLASS (pytest imports this module under its bare
+    # name, so a hard-coded dotted path would pin the import mode, not the site).
+    assert implemented_by(identity) == (
+        f"{CustomExtensionVerifier.__module__}.{CustomExtensionVerifier.__qualname__}"
+    )
+    policy = _policy(identity)
+    snapshot = _snapshot(policy)  # resolution runs the second check; it passes
+    outcome = validate_coverage(
+        snapshot, [_bound(snapshot, _passing(identity), implementation=identity)]
+    )
+    assert isinstance(outcome, CoverageSatisfied)
+    assert outcome.answered_by == {CHECK_EXECUTABLE_CASES: identity}
+
+
+def test_an_extension_class_reporting_another_identity_is_refused_at_declaration():
+    """Substitution at the declaration itself, with the class in hand: refused
+    before anything is recorded, so a refused declaration declares nothing."""
+
+    with pytest.raises(ImplementationSiteUnresolved) as refusal:
+        declare_implementation("custom-mismatch", implemented_by=MisreportingExtension)
+    assert refusal.value.identity == "custom-mismatch"
+    assert "something-else" in str(refusal.value)
+    assert not is_registered("custom-mismatch")
+
+
+def test_a_declaration_pointing_nowhere_is_refused_when_the_policy_is_resolved():
+    """THE REVIEW'S EXAMPLE (PR #111, P2), as a test. Before the second check,
+    ``declare_implementation("custom", implemented_by="missing.module.Verifier")``
+    made a policy permitting it construct and then fail forever as incomplete
+    coverage. Now: it still constructs — the name IS declared — and the first
+    use, resolution, refuses with a typed reason that names the site, before any
+    assessment runs. Configuration error, not runtime outage."""
+
+    identity = declare_implementation("custom-nowhere", implemented_by="missing.module.Verifier")
+    assert is_registered(identity)
+    assert not is_verified(identity)
+    policy = _policy(identity)  # constructs: declared
+    with pytest.raises(ResolutionRefused) as refusal:
+        _snapshot(policy)
+    assert refusal.value.reason == "implementation_site_unresolved"
+    assert refusal.value.implementation == identity
+    assert refusal.value.check_id == CHECK_EXECUTABLE_CASES
+    assert "missing.module.Verifier" in str(refusal.value)
+    assert not is_verified(identity)
+
+
+def test_a_declaration_whose_site_reports_a_different_identity_is_refused_at_resolution():
+    """The path form of substitution: the site exists and resolves, and reports
+    something else. Refused at resolution, naming both identities."""
+
+    identity = declare_implementation(
+        "custom-liar",
+        implemented_by="tests.conformance.test_implementation_registry.LIAR_CONSTANT",
+    )
+    policy = _policy(identity)
+    with pytest.raises(ResolutionRefused) as refusal:
+        _snapshot(policy)
+    assert refusal.value.reason == "implementation_site_unresolved"
+    assert refusal.value.implementation == identity
+    assert LIAR_CONSTANT in str(refusal.value)
+
+
+def test_the_committed_profiles_verify_every_declared_site_at_load(monkeypatch):
+    """``load_profile`` runs the second check over the whole profile. Positive:
+    both committed profiles load, and every permitted name is verified after.
+    Negative: a shipped declaration re-pointed at a missing site is refused at
+    load, typed, naming the implementation — and the tree is put back."""
+
+    for profile_id in PROFILES:
+        profile = load_profile(profile_id)
+        for requirement in profile.requirements:
+            for name in requirement.permitted:
+                assert is_verified(name), (profile_id, name)
+
+    with monkeypatch.context() as patched:
+        patched.setitem(
+            implementations._DECLARED, SUBPROCESS_TESTS, "missing.module.SubprocessVerifier"
+        )
+        patched.setattr(
+            implementations, "_VERIFIED", set(implementations._VERIFIED) - {SUBPROCESS_TESTS}
+        )
+        with pytest.raises(PolicyError) as refusal:
+            load_profile("baseline")
+        assert refusal.value.reason == "implementation_site_unresolved"
+        assert refusal.value.implementation == SUBPROCESS_TESTS
+        assert refusal.value.check_id == CHECK_EXECUTABLE_CASES
+    assert load_profile("baseline") is PROFILES["baseline"]

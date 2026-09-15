@@ -2056,13 +2056,14 @@ disjoint —
 **Substitution, not only deletion.** A policy that swaps one registered
 identity for another — `swarm-checks` where it meant `subprocess-tests` —
 constructs. **Registration cannot catch that, and this entry does not claim it
-does.** What catches it is the policy digest, bound into every snapshot and
-every pinned record, and coverage refusing the no-longer-permitted
-implementation as `coverage.invalid_evidence`:
-`test_a_swap_between_two_registered_implementations_is_NOT_the_registrys_property`.
-At a SITE, a swapped reference is caught by the forward check (the site reports
-another declaration's identity) and by the reverse sweep; two sites claiming
-one identity are refused by the registry itself (`ImplementationConflict`).
+does.** The first version of this paragraph then claimed the policy digest and
+coverage catch it. Review (PR #111, P2) showed that holds only for a swap made
+AFTER authoring, judged against evidence for the original policy, and that a
+swap PRESENT at authoring is caught by nothing in this tree — see the review
+round below, and **G27**. At a SITE, a swapped reference is caught by the
+forward check (the site reports another declaration's identity) and by the
+reverse sweep; two sites claiming one identity are refused by the registry
+itself (`ImplementationConflict`).
 
 **The empty set.** With the registry emptied, construction refuses under its
 own reason rather than under "not registered" N times, and the positive control
@@ -2095,6 +2096,19 @@ identical.
 | M6 the declaration deleted (`SUBPROCESS_TESTS = "subprocess-tests"` in the leaf, no `declare_implementation`) | deletion | **no summary line** — every target module failed at COLLECTION: importing `policy/profile.py` raises `PolicyError: requirement 'executable.cases' permits 'subprocess-tests', which is not the identity of any declared implementation` at the baseline profile's own construction (`profile.py:409` → `:180`) | The shipped profile refuses to exist without the declaration: correct, and the strongest possible red. See the note below |
 | M7 the baseline policy swaps one registered identity for another (`permitted=(IMPL_SWARM_STRUCTURAL,)` on `executable.cases`) | substitution in the policy | **19 failed, 143 passed**, across coverage enforcement (11), policy enforcement regression (5), the execution descriptor (2), and the registry module's requested-checks limit proof (1). `test_a_swap_between_two_registered_implementations_is_NOT_the_registrys_property` stayed GREEN, as it states | Registration does not catch it and no proof claims it does; the policy digest and coverage do, nineteen times over |
 
+**Round two — the site check, after the PR #111 review.** Same runner, same
+disposable-worktree discipline, four target modules (the registry proofs,
+coverage enforcement, advisory-cannot-satisfy, the execution descriptor), 91
+tests, all green unmutated.
+
+| mutation | class | observed | what it establishes |
+|---|---|---|---|
+| M9 site verification removed from the resolver | deletion | **2 failed, 89 passed**: the pointing-nowhere proof, the reports-another-identity proof | The resolver's check is load-bearing, and both path-declared refusals name it |
+| M10 site verification removed from `load_profile` | deletion | **1 failed, 90 passed**: `test_the_committed_profiles_verify_every_declared_site_at_load` | The load-time check is separately load-bearing: the resolver's check does not stand in for it, because a committed profile is loaded before anything is resolved |
+| M11 path declarations marked verified without checking (the cache poisoned) | cross-context substitution | **2 failed, 89 passed** — the same two as M9 | A verified mark that nothing earned is caught exactly where the missing check would be: the proofs test the property, not the code path |
+| M12 a resolved site that reports a different identity accepted | substitution | **1 failed, 90 passed**: the reports-another-identity proof | The identity comparison, not merely the import, is what the proof pins |
+| M13 the class-in-hand check removed at declaration | deletion | **1 failed, 90 passed**: `test_an_extension_class_reporting_another_identity_is_refused_at_declaration` | The on-the-spot form has its own proof; the path form's proofs do not cover it, and were not expected to |
+
 **A note on M6, because it is the doctrine #8 shape inside the tool.** The
 mutation runner reported `(no summary)` and an EMPTY red list. Read carelessly,
 that is GREEN. It was a collection failure, and the raw pytest output was
@@ -2105,14 +2119,140 @@ instrument built to find failures. Not changed here — outside this sprint's
 scope — and recorded so the next mutation proof reads that value as "not
 measured", never as green.
 
-**The residual, unchanged from when this was filed:** a registry proves the
-name resolves to *something declared*, not that the something does what the
-check means. A stub registered under a real implementation's identity would
-satisfy the registry and answer the requirement. That is a different control —
-implementation identity is what coverage keys on (`policy/coverage.py:272-284`),
-and a verifier's tier is fixed once known (`verifier/bank.py:138-165`) — and
-the registry is not described as closing it.
+### Review round on PR #111 — two findings, both correct, both changed this entry
 
-**Tests.** `tests/conformance/test_implementation_registry.py` (13), in CI's
+**Finding 1 (`policy/implementations.py`, P2): "Validate extension
+implementation sites before registering them."** Quoted: *"this assignment
+accepts any non-empty `implemented_by` string without resolving it or checking
+that the target reports `identity`; `PolicyRequirement` subsequently checks
+only the resulting key. For example,
+`declare_implementation("custom", implemented_by="missing.module.Verifier")`
+makes a policy permitting `custom` construct successfully and then fail forever
+as incomplete coverage—the exact configuration-as-runtime-outage case this
+registry is intended to prevent. The conformance sweep does not protect
+installed extensions, so registration needs runtime validation or a production
+validation/finalization step."* **Correct.** The sweep verified only sites
+under `prometheus_protocol.`, and only in the suite. A deployment's declaration
+was G26's unchecked string, one layer up.
+
+**What changed.** A declaration is a CLAIM, and the claim is now tested. Two
+forms. Declared **with the class in hand** — `implemented_by=MyVerifier` — the
+registry verifies at the declaration that the class reports the identity at
+class level; if it does not, the declaration is refused and nothing is
+recorded. Declared **by dotted path** — recorded, and verified by
+`verify_implementation()` when the policy is put to use: `load_profile()`
+verifies the whole profile, and the trusted resolver verifies the applicable
+requirements on every `resolve()` (`policy/resolver.py`), which is the one door
+every policy passes on its way to an assessment, so a policy VALUE that never
+went through `load_profile` — the customer-supplied shape R1 anticipates — is
+checked there. The refusal is the new typed reason
+`implementation_site_unresolved`, carrying the implementation, its requirement
+and the site. Why a path is not verified at declaration: the shipped
+declarations name sites inside the package that the registry module cannot
+import (the cycle recorded above), and a deployment module declaring itself by
+path while it is being imported has the same shape. A verified identity is
+remembered for the process. **Named limit:** the identity must be reported at
+CLASS level (own `VERIFIER_ID` or `verifier_id`) or by a module constant; an
+instance-only identity cannot be verified without constructing the verifier,
+which the registry will not do, and such a site is refused as reporting
+nothing.
+
+Tests: the review's example, verbatim
+(`test_a_declaration_pointing_nowhere_is_refused_when_the_policy_is_resolved`);
+a site that resolves but reports another identity
+(`test_a_declaration_whose_site_reports_a_different_identity_is_refused_at_resolution`);
+a class declared for an identity it does not report
+(`test_an_extension_class_reporting_another_identity_is_refused_at_declaration`);
+the committed profiles verified at load, with a shipped declaration re-pointed
+at a missing site refused there
+(`test_the_committed_profiles_verify_every_declared_site_at_load`); and the
+positive control, an extension declared by class that resolves and satisfies
+its requirement
+(`test_an_extension_declared_with_its_class_is_verified_on_the_spot_and_works`).
+The test doubles every existing suite declares now go through the class form,
+so they are verified before any policy names them.
+
+**Finding 2 (`docs/OPEN-GAPS.md`, this entry, P2): "Correct the claimed
+protection against registered-ID swaps."** Quoted: *"When the wrong registered
+identity is already present when a policy is authored, neither cited control
+catches the substitution: the digest faithfully binds the swapped policy, and
+coverage accepts a result whose `implementation` and `outcome.verifier_id` both
+equal that newly permitted identity. In particular, an authoritative
+`swarm-checks` result bound to `executable.cases` produces `CoverageSatisfied`;
+the referenced test only supplies stale `subprocess-tests` evidence and
+therefore proves mismatch rejection, not swap detection. This claim can lead
+readers to rely on a nonexistent authorization control and should be removed or
+backed by an implementation-to-check binding."* **Correct.** The claim is
+withdrawn (the substitution paragraph above now says so). What it described
+catches a swap made after authoring, against evidence for the original policy;
+a swap present at authoring is self-consistent, and nothing in this tree
+objects, because nothing binds an implementation to the checks it may answer.
+Filed as **G27**, with the reason the binding is not built here. The test is
+renamed to what it proves
+(`test_a_swap_between_registered_implementations_present_at_authoring_is_caught_by_NOTHING`)
+and now asserts the `CoverageSatisfied` the review described, with the
+stale-evidence refusal kept and labelled as mismatch rejection.
+
+**The residual, unchanged from when this was filed:** a registry proves the
+name resolves to *something declared* — and now, when used, to something that
+REPORTS the identity — not that the something does what the check means. A stub
+registered under a real implementation's identity would satisfy the registry
+and answer the requirement. That is a different control — implementation
+identity is what coverage keys on (`policy/coverage.py:272-284`), and a
+verifier's tier is fixed once known (`verifier/bank.py:138-165`) — and the
+registry is not described as closing it. A policy that permits the wrong
+registered implementation for a check is G27's, and is closed by nothing yet.
+
+**Tests.** `tests/conformance/test_implementation_registry.py` (18), in CI's
 full-suite job, none skipped. Four Hearth files re-sanctioned with the reason
 beside the digests; the type gate re-pinned 314 → 316.
+
+---
+
+## G27 — no implementation-to-check binding: a policy may permit the wrong registered implementation for a check, and nothing objects
+
+**Found by review (PR #111, P2), as a false claim in G26's closing text.**
+
+**What.** `PolicyRequirement.permitted` says which implementations may satisfy
+a check. The registry (G26) now guarantees each name is an implementation that
+exists and, when used, reports that identity. Nothing guarantees it is an
+implementation OF THAT CHECK. A policy authored with `permitted=("swarm-checks",)`
+on `executable.cases` constructs, resolves, and is satisfied by an
+authoritative `swarm-checks` result bound to that check: coverage compares the
+result's `implementation` with the evidence's `verifier_id` and with the
+permitted set (`policy/coverage.py:272-284`), and all three agree. The policy
+digest binds the swapped policy faithfully. It is self-consistent, and wrong.
+
+**Why it was misdescribed.** G26's first closing text said the digest and
+coverage catch a registered-for-registered swap. They catch a swap made AFTER
+authoring: evidence produced for the original policy's implementation is
+refused under the swapped one as `coverage.invalid_evidence`, and a pinned
+record's policy digest no longer matches the selected policy. That is mismatch
+rejection. A swap present at authoring has no original to mismatch against. The
+test that carried the claim supplied only the stale evidence and so proved the
+narrower property; it is renamed, and now asserts the acceptance as well.
+
+**Where the line is.** Which implementations may answer which check is the
+policy author's assertion: R3 says the permitted set is the operator's
+equivalence claim, and R1 says the policy is the deployment's risk decision. A
+wrong permitted set is therefore an authoring error above every mechanism in
+this tree. The control that would catch it is an **implementation-to-check
+binding** — each implementation declares the check identities it answers, and
+policy construction refuses a permitted implementation that does not answer
+the requirement's check. That needs a ruling on who declares (the
+implementation, beside its identity in `policy/implementations.py`, for the
+shipped ones) and on how a customer implementation declares, and it is not
+built here: a control nobody has ruled on would pin a shape, which is the same
+reason G26 itself was filed without a test.
+
+**Test.** The limit, as a passing test (doctrine #5):
+`test_a_swap_between_registered_implementations_present_at_authoring_is_caught_by_NOTHING`
+in `tests/conformance/test_implementation_registry.py` — the swapped policy's
+own authoritative result is `CoverageSatisfied`.
+
+**Docs corrected under this entry (doctrine #9):** G26's substitution
+paragraph, and `docs/live-state-pinning-design.md` §7.5, whose
+`CHECK_TARGET_STATE` row claimed the registry covers "a different
+implementation answering it". It covers an UNDECLARED one, one whose declared
+site does not report it, and a second site claiming the identity — not a wrong
+registered one the policy itself permits.

@@ -34,7 +34,7 @@ execution"* is a property of the seam, which is what the product sells.
 | 8 | §2.2 left open: the observation record's subject key | **RULED: keyed on the EXECUTION ATTEMPT**, not the hold, not the action. Measured consequence recorded rather than smoothed over: a retry re-drives the SAME hold with the SAME verification attempt (`execution/controller.py:244-290`), so "execution attempt" needs an identity the code does not mint today, or a retry's observation would overwrite the first — which the ruling forbids | §2.2, §6.2 |
 | 9 | §1.2/§1.3: per-session settings excluded, as a case | **Generalised to a principle:** the covered set excludes not only what cannot be meaningfully compared but what THE ACT OF EXECUTING CHANGES. Sweeping the remaining aspects under it found a second member of the class: the runner's own receipt schema and table are CREATED on the way in (`chokepoint/runner.py:842-862`) | §1.2, §1.3, §1.5 (new) |
 | 10 | §2.1: "Q2 — schema rehearsal is a PREREQUISITE" | **CORRECTED BY THE OWNER.** The answer was incoherent: it called rehearsal a prerequisite and then explained it as a constraint on the CLAIM. The claim constraint stands; rehearsal is a SUCCESSOR feature, not an ordering prerequisite. Rev 2 transcribed the answer without flagging the incoherence, which the reading discipline of doctrine #10 should have caught | §2.1 |
-| 11 | §3.1: implementation-registry validation "a stated prerequisite, filed as G26" | **LANDED, in the same change.** `policy/implementations.py` declares each identity once; `PolicyRequirement.__post_init__` refuses an undeclared permitted name with `implementation_not_registered` and an empty registry with `implementation_registry_empty` (`policy/profile.py:168-192`). This design's `CHECK_TARGET_STATE` implementation will be declared there like any other | §3.1 |
+| 11 | §3.1: implementation-registry validation "a stated prerequisite, filed as G26" | **LANDED, in the same change.** `policy/implementations.py` declares each identity once; `PolicyRequirement.__post_init__` refuses an undeclared permitted name with `implementation_not_registered` and an empty registry with `implementation_registry_empty` (`policy/profile.py:168-192`); after review (PR #111), `load_profile` and the resolver also verify each declared site resolves and reports its identity (`implementation_site_unresolved`). This design's `CHECK_TARGET_STATE` implementation will be declared there like any other. What the registry does NOT cover was also found by that review and is G27: a policy permitting the wrong registered implementation for a check | §3.1, §7.5 |
 | — | `audit_chain.record_chained` cited as the append-only write | **Citation corrected.** `record_chained` is a Ledger port method (`core/interfaces.py:389`, implemented at `ledger/sqlite_ledger.py:849`); `ledger/audit_chain.py` holds `ChainTip`/`ChainVerification`. A wrong citation is the reverse of doctrine #10's rule, and it was found only by applying the rule | §0.2, §2.2 |
 
 ---
@@ -351,15 +351,28 @@ at assessment (`policy/coverage.py:331-334`), and the two vocabularies are
 disjoint (`tests/conformance/test_implementation_registry.py`,
 `test_no_such_implementation_and_implementation_unavailable_are_different_refusals`).
 
+**The second check, added after review (PR #111, P2).** A declaration is a
+claim. `load_profile` and the trusted resolver (`policy/resolver.py`) verify
+that every permitted name's declared site resolves and reports the identity,
+refusing with `implementation_site_unresolved`; a declaration made with the
+class in hand is verified at the declaration. So a deployment that misdeclares
+its own implementation gets a configuration error at first use, not incomplete
+coverage on every assessment — the G26 failure one layer up, closed the same
+way.
+
 **What this buys the design.** `CHECK_TARGET_STATE`'s implementation is declared
-in the registry like `git-merge-check` is; a stub cannot answer it under a free
-string (§7.5), and a customer policy that misspells it is refused when the
-policy is constructed, not on every assessment thereafter. The registry's own
-stated limit carries over: registered means "some code reports this identity",
-not that the code does what the check means; a stub reporting the real identity
-is caught by implementation identity at coverage
+in the registry like `git-merge-check` is; a policy naming a misspelling of it,
+or a declaration of it that points nowhere, is refused when the policy is
+constructed or first used, not on every assessment thereafter. The registry's
+own stated limits carry over: registered means "the code at this site reports
+this identity", not that the code does what the check means — a stub reporting
+the real identity is caught by implementation identity at coverage
 (`policy/coverage.py:272-284`) and the trust store's fixed tier, not by
-registration.
+registration — and a policy that permits the WRONG registered implementation
+for `CHECK_TARGET_STATE` is caught by nothing today (OPEN-GAPS G27: no
+implementation-to-check binding exists). The state-pin requirement's permitted
+set is therefore a shipped-profile constant, not a customer-editable field,
+until G27 is ruled on.
 
 ### 3.2 The four cases
 
@@ -766,7 +779,7 @@ detected. After §1.5, that explicitly includes DDL inside `promethyn_internal`.
 |---|---|---|
 | `TargetState` / `STATE_ASPECTS` | An aspect removed narrows the digest silently. **Needs a pinned aspect count plus the aspect list in the record** | An aspect **renamed** keeps the count and changes the preimage. Worse: an aspect whose *collection query* is repointed at a different object — same field name, different subject — yields a valid-looking digest of the wrong thing. **Needs a known-answer test per aspect** binding the name to what it reads, including the `promethyn_internal` exclusion and the `pg_settings` source filter |
 | The state digest encoder | Field dropped from the preimage. Caught by the existing test **if the encoder is reused** | Reusing the *requirements* domain separator would let a requirements preimage and a state preimage collide. `test_the_domain_is_not_shared_with_the_posture_digest` (`test_bound_requirements_encoding.py:146`) is the precedent; **the state digest needs its own domain and its own version of that test** |
-| `CHECK_TARGET_STATE` requirement | Removed from the policy → no check. Visible in the policy digest, which is in the record | A **different implementation** answering it — a stub returning a constant digest. Covered by the implementation-identity rule (`coverage.invalid_evidence`, `policy/coverage.py:272-284`) **now that G26's registry exists**: the implementation is declared in `policy/implementations.py`, a policy naming a misspelling is refused at construction, and a second site claiming the identity is refused by the registry |
+| `CHECK_TARGET_STATE` requirement | Removed from the policy → no check. Visible in the policy digest, which is in the record | A **different implementation** answering it. Three shapes, and the registry covers two: a stub under an UNDECLARED name is refused at construction; a declaration whose site does not report the identity is refused at first use; a second site claiming the identity is refused by the registry (`policy/implementations.py`). The third — the policy itself permitting a **wrong registered** implementation for the check — is caught by nothing (OPEN-GAPS G27, found by review of PR #111; the earlier version of this row claimed it was covered). Until G27 is ruled on, the permitted set for this requirement ships as a profile constant and the record carries the policy digest that fixed it |
 | **The execution-observation record** | Not written → no observation. **A missing record must be a refusal, not an absence**: §6.2's rule that omitting the unavailable field is indistinguishable from passing applies to omitting the whole record, and to omitting the `pre_execution` entry after the `pre_approval` one | **Written against the wrong subject** — a valid observation record chained under another attempt's key, or a `pre_execution` entry whose restated `prior` differs from the `pre_approval` entry. The key is structural (§2.2); the restatement is checked against its source (§6.2); a test must show each is refused |
 | The comparison, twice | Deleted → nothing compares. Either comparison deleted → the other still runs and the record shows one entry where two are required | **Compared against the wrong capture** — the observed digest against itself, which always matches. **This passes every deletion probe** and is the shape the composition pins shipped with. Any implementation sprint must prove it with a substitution mutation, for BOTH comparisons |
 | The placement of the re-read (§1.5) | Moved before the bootstrap → matches on a fresh target only by luck of ordering | Moved after `:912` → measures the execution itself and mismatches on every run. **A known-answer test pins the statement it runs before** |
