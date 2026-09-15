@@ -29,6 +29,20 @@ name: PR text hygiene
 #
 # Named limit, outside this file: whether a pull request can merge while this is
 # red is a branch-protection setting, not a workflow property.
+#
+# THE SPLIT'S OTHER CONSEQUENCE, observed on #108 (2026-09-15) the first time it
+# was exercised in anger. The split runs in BOTH directions: because ci.yml
+# reads `github.event.pull_request.body` — the event PAYLOAD, frozen when the
+# run was triggered — a body FIXED after the fact does not clear ci.yml's
+# matrix. This workflow re-ran on `edited` and went green; ci.yml's three build
+# jobs kept showing the stale refusal, against a body that no longer existed,
+# and the only way to clear them is a push (`synchronize`), because a re-run
+# replays the same payload.
+#
+# So a red ci.yml text check can outlive its cause. That is the correct
+# direction to fail in — it refuses rather than passing on a body it has not
+# seen — but anyone reading the checks should know that this job, not ci.yml's
+# copy, is the one that reflects the CURRENT body.
 
 on:
   pull_request:
