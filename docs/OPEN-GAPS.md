@@ -2349,7 +2349,7 @@ Whether that matters for the provenance story is a judgement for whoever runs
 Part B; what is recorded here is that it is **not** swept by it, so the
 question is answered before diligence rather than during it.
 
-### THE BOUNDED SET — nineteen carriers, every one read back
+### THE BOUNDED SET — twenty-two carriers, twenty read back
 
 | PR | kind | id |
 |---|---|---|
@@ -2372,9 +2372,13 @@ question is answered before diligence rather than during it.
 | #114 | review reply | `4021539074` |
 | #114 | review reply | `4021539794` |
 | #115 | review reply | `4021825848` |
+| #117 | review reply | `4022309714` |
+| #116 | review reply | `4022357029` — **not read back** |
+| #118 | review reply | `4022525539` — **not read back** |
 
-Eighteen review replies and one PR comment. Not approximate: each was fetched
-and its body inspected for the footer. The six #113 replies are the answers to
+Twenty-one review replies and one PR comment. Not approximate: each of the
+twenty confirmed rows was fetched and its body inspected for the footer; the
+two marked rows were not, and are marked for that reason. The six #113 replies are the answers to
 that PR's six findings, posted after it merged; `4020508859` was read back and
 the footer is present, so the route is unchanged and this entry is not stale. PR BODIES are not in this set — #111's and
 #112's created bodies carried it, were refused by CI, and were rewritten
@@ -2453,6 +2457,28 @@ clears `pr-text` on the `edited` event but NOT the three build jobs: those
 carry the stale payload and fail at the hygiene step in about thirty seconds,
 before any suite runs. Only a push clears them. On #115 that cost a full build
 cycle on three Pythons for a body that was already correct in storage.
+
+**TWO CARRIERS ARE LISTED WITHOUT BEING READ BACK, and the heading says so.**
+`4022357029` and `4022525539` were each posted while the review-thread listing
+was rate-limited, so the footer on them is EXPECTED and not OBSERVED. They are
+marked rather than omitted so the carrier set stays complete: a row that is an
+inference, recorded as if it were a reading, would make this table exactly the
+kind of claim it exists to replace. (`4022525539` is the G37 reply on #118; the
+listing returned `API rate limit already exceeded` on the read-back attempt
+immediately after posting.)
+
+**A SECOND CHANNEL FOR THE SAME OBSERVATION, found while waiting on the
+first.** `4022309714` was also posted under the rate limit and was first
+recorded as not read back. It then came back through the PR-activity webhook,
+whose payload carries the comment body AS STORED — footer included, and this
+session did not write that footer. So the stored body was observed without the
+GraphQL listing at all.
+
+That matters beyond one row: the listing is hourly-limited and the webhook is
+not, so "the footer cannot be confirmed right now" is a statement about ONE
+channel rather than about the fact. Where a reply is answered by a later
+webhook event, the confirmation is already in hand. Recorded because the
+earlier paragraph implied waiting was the only option, and it was not.
 
 **SIXTH OCCURRENCE, #116 — identical to the fifth, and that is the point.**
 Same placeholder body, same appended footer, same two-token refusal, same three
@@ -2901,15 +2927,28 @@ be a second definition free to drift — accepting a name the tool then refuses,
 which is this defect reintroduced at one remove. New typed reason
 `reobservation_base_branch_unusable`.
 
+> **CORRECTION, 2026-09-16 (doctrine #9).** "The composition root asks the same
+> question the reads ask" was true when written and **stopped being true the
+> moment G36 strengthened the predicate**: the root moved to the stronger rule
+> and the reads stayed on `_BRANCH_RE`, so the two questions diverged. The
+> window is `c8709cc..98e8587`, both on this branch and neither on `main`, so
+> no released commit carried it — but it was carried in a commit whose own
+> message said the opposite. That is **G37**, found by review on #118 and now
+> closed: every read calls the predicate, pinned structurally. The sentence
+> above is true again; it is left standing with this note because deleting it
+> would hide that a claim of this exact shape had already gone stale once.
+
 **Both routes, not one.** The supplied `GitTool` is validated as well as the
 synthesised one: a reader handed in with an unusable base fails identically, and
 checking one route while trusting the other is the asymmetry the guard exists to
 close.
 
 **What it does NOT add.** The dash-leading cases are the option-injection shape
-`_BRANCH_RE` already refuses at the read boundary, so no new security property
-is gained there. What is gained is that the diagnosis lands at the wiring rather
-than at the repository.
+the read boundary already refuses, so no new security property is gained there.
+What is gained is that the diagnosis lands at the wiring rather than at the
+repository. (Named as `_BRANCH_RE` when written; since G37 the reads go through
+`is_usable_branch_name`, which still starts with that pattern, so the property
+is unchanged and only the mechanism's name has moved.)
 
 **Executed mutations**, through `scripts/mutation_worktree.py`, both attack
 classes, 100 tests green unmutated:
@@ -3045,3 +3084,185 @@ prose with no instrument behind it.
 produces branch-delete evidence is not frozen. Noticed while re-sanctioning
 `execution/executor.py`, which is. Recorded rather than changed: widening the
 protected set is its own decision with its own re-pin.
+
+---
+
+## G36 — a branch-name predicate that was a charset, not git's rules
+
+Reported on the base-branch validation change and correct. That change added
+`is_usable_branch_name` so a base git will not read is refused at composition
+instead of failing every hold later. The predicate was a charset pattern, and
+git's reference-name rules are more than a charset — so names git rejects
+passed it, and the delayed denial it existed to prevent came back for those.
+
+**Measured against `git check-ref-format --branch`:**
+
+| name | ours | git | why git refuses |
+|---|---|---|---|
+| `release/` | accepted | rejected | trailing slash |
+| `a..b` | accepted | rejected | the range operator |
+| `a.lock` | accepted | rejected | git's own lock suffix |
+| `main\n` | accepted | rejected | Python's `$` matches before a trailing newline |
+| `a//b` | accepted | rejected | empty path component |
+| `a.` | accepted | rejected | trailing dot |
+
+**Two more came from widening the corpus, not from the report**: `a.lock/b` and
+`a/.b`. **Git's rules are PER COMPONENT**, and a whole-name check cannot
+express them. `HEAD` was a third: it passed the charset and is a symbolic ref,
+not a branch.
+
+**The `$` case is worth naming on its own.** Python's `$` also matches
+immediately before a trailing newline, so `"main\n"` matched a pattern that
+looks exactly like it should not. The anchor is now `\Z`, and a test pins the
+pattern itself — the behavioural proof alone would still pass if something
+upstream happened to strip the newline, and the anchor could then regress
+quietly.
+
+**RULING: check against the authority, every run.** The rules belong to git.
+Any spelling of them here is a second definition free to drift — which is this
+defect. So `tests/conformance/test_git_ref_format.py` runs the predicate and
+`git check-ref-format --branch` over the same corpus, hand-written plus 400
+seeded random names, and asserts agreement in the direction that matters.
+
+**THE INVARIANT IS ONE-DIRECTIONAL, and the other direction is asserted as a
+NON-property.** Anything the predicate accepts, git must accept. The converse
+deliberately does not hold: the predicate is a conservative SUBSET, refusing a
+leading underscore, a bare `@`, a mid-path component ending in a dot. Refusing
+a name git would have taken costs a caller an error message; accepting one git
+will reject costs every hold on that deployment. Both directions are tested, so
+a later reader who assumes exact agreement cannot "fix" the strictness and
+widen the accepted set without a test saying so.
+
+**Executed mutations**, through `scripts/mutation_worktree.py`, both attack
+classes, 100 tests green unmutated:
+
+| mutation | observed |
+|---|---|
+| R1 deletion: the anchor reverts to `$` | 3 red, incl. the pattern pin |
+| R2 deletion: the per-component loop removed | 7 red |
+| R3 substitution: components checked on the whole name instead | 5 red |
+| R4 deletion: the range-operator and reserved-name check removed | 3 red |
+| R5 substitution: `.lock` dropped from the forbidden suffixes | 3 red |
+
+**The test requires git rather than skipping without it.** This module's whole
+claim is that the predicate agrees with its authority; a run without git would
+assert nothing while reporting success, which is the empty-instrument pass
+doctrine #8 refuses.
+
+**What this does not do.** It does not make the predicate equal to git's rules,
+and does not claim to. It makes the accepted set a subset of git's, checked on
+every run over a corpus that is itself pinned as non-trivial in both directions.
+
+## G37 — the strengthened rule reached the composition root and not the reads
+
+Reported by review on #118 and **confirmed by direct probe before being
+accepted**. G36 strengthened `is_usable_branch_name` past the charset pattern
+and exported it so the composition root could refuse an unusable base branch
+where an operator can see it. The reads were not changed. `GitTool.classify`,
+`GitTool.rev` and `GitBranchDeleteExecutor.execute` went on matching
+`_BRANCH_RE` directly, so the stronger rule reached the root and stopped
+there — and the exported predicate became **the second definition its own
+docstring said it existed to prevent**, drifting in the direction that costs.
+
+**Measured, on a real repository checked out on `main`:**
+
+| probe | observed |
+|---|---|
+| `is_usable_branch_name("HEAD")` | `False` |
+| `_BRANCH_RE.match("HEAD")` | matches |
+| `git rev-parse --verify 'HEAD^{commit}'` | exit 0, resolves to a commit |
+| `git rev-list --count main..HEAD` | `0`, exit 0 |
+| `git check-ref-format --branch HEAD` | exit 128 |
+| `git branch -D HEAD` | exit 1, `branch 'HEAD' not found` |
+
+**Zero commits absent from the base is the merged verdict** — the exact
+evidence an irreversible delete is authorised on. So a symbolic ref could be
+observed as a branch, classified as provably merged, approved on that evidence,
+and then fail at the one step that was supposed to be the formality. Not a lost
+branch: a decision taken on a subject that was never a branch, recorded as
+though it had been.
+
+**THE BOUNDARY, stated rather than left absolute.** The merged verdict needs
+`HEAD` at or behind base. Measured on a checkout one commit ahead,
+`rev-list --count main..HEAD` returned `1` — not merged, so no approval. The
+review's wording ("in a repository on `main`") is exactly right, and
+`test_the_escalation_needs_HEAD_AT_OR_BEHIND_BASE_and_that_is_stated` pins it
+so the finding is not later read as broader than it is, or narrower.
+
+**THE OTHER REFUSED SHAPES WERE SAFE ONLY BY ACCIDENT.** Recorded because it
+changes what the fix is worth. `release/`, `a..b`, `a.lock`, `a//b`, `a.`,
+`a/.b` and `a.lock/b` all pass `_BRANCH_RE` and were handed to git, which
+refused each at exit 128 — so the reads returned "not provably merged" for a
+reason that had nothing to do with the predicate. **`HEAD` is the single member
+of the refused set where that accident does not hold.** This is the same shape
+`_ran` was found in one function away, where the reads were safe only because
+the shipped adapters happen to leave `exit_status` at `None`.
+
+**A TEST IN THE SUITE ASSERTED THE WRONG PROPERTY AND PASSED.**
+`test_the_validator_is_the_tools_OWN_rule_not_a_second_spelling` pinned
+`is_usable_branch_name` as EQUAL to `_BRANCH_RE`, over the corpus
+`("main", "", "   ", "--x", "a/b.c-d", "..", "a b", "0")` on which the two
+coincide. Once G36 landed the equality was false — and that test would have
+FAILED on a corpus wide enough to hold one divergent name. It did not, because
+the corpus was not. **It pinned the predicate TO the pattern: the drift it
+names in its own docstring, asserted as the invariant.** It now checks what its
+name claims, and the identity is asserted as a NON-property.
+
+**RULING: one definition, enforced on the source.** The three reads call
+`is_usable_branch_name`. An AST allowlist in
+`tests/conformance/test_git_ref_format.py` permits exactly one function to
+mention `_BRANCH_RE`, keyed on the enclosing function rather than on a count —
+a count would be satisfied by moving the defect to a new read. The behavioural
+proofs cover the reads that exist today; the allowlist covers the read added
+next month.
+
+**Executed mutations**, through `scripts/mutation_worktree.py`, both attack
+classes, 118 tests green unmutated:
+
+| mutation | class | observed |
+|---|---|---|
+| S1 `classify` reverts to the charset pattern (the defect, restored) | deletion | 5 red |
+| S2 `rev` reverts to the charset pattern | deletion | 4 red |
+| S3 the delete executor reverts to the charset pattern | deletion | 4 red |
+| S4 `classify` checks the right function on the WRONG subject (`base_branch`) | substitution | 2 red |
+| S5 the delete executor checks `base_branch`, not the action's branch | substitution | 1 red |
+| S6 `rev` checks `base_branch`, not the ref it was handed | substitution | 1 red |
+| S7 the reserved-name check removed from the predicate itself | deletion | 7 red |
+| S8 the AST allowlist widened to permit all three reads | substitution | **GREEN** |
+| S9 the outcome assertion weakened from `is None` to `in (None, 0)` | second-order | **GREEN** |
+
+**THE TWO GREENS WERE PROBED DIRECTLY RATHER THAN EXPLAINED AWAY.** Both are
+no-ops against fixed code: the widened allowlist permits three functions that
+no longer mention `_BRANCH_RE` at all, and the weakened assertion still holds
+because `classify("HEAD")` returns `None`, which satisfies both spellings.
+Neither green says an instrument is untested; each says the mutation never
+reached a state the instrument discriminates. **The real question is whether
+each still catches the DEFECT**, so each was re-run with the defect restored
+underneath it:
+
+| paired probe | observed |
+|---|---|
+| T1 defect restored, both instruments intact (the control) | 5 red |
+| T2 defect restored **and** the allowlist widened | 4 red |
+| T3 defect restored **and** the outcome assertion weakened | 4 red |
+| T4 defect restored, allowlist widened **and** assertion weakened | 3 red |
+| T5 allowlist emptied on FIXED code — does the scan reach the source? | 1 red |
+
+**Which half carries the property: neither, and that is the finding.** T2 shows
+the behavioural test catches it with the structural pin disabled; T3 shows the
+structural pin catches it with the behavioural assertion weakened; **T4 shows
+three further instruments still catch it with both named halves removed** —
+the allowlist's own positive control, the boundary test, and the corrected
+one-definition test. T5 confirms the scan reaches real source rather than
+passing on an empty set (doctrine #8). There is no single point of failure to
+name.
+
+**The pattern this is the fourth instance of.** #113 shipped a mechanism
+nothing reached; #114 wired it and built the reader its own sibling class
+forbids; #115 required a base but not a usable one; #116's predicate was a
+charset, not git's rules — and this one strengthened that predicate everywhere
+except the code that uses it. **Each fix was correct about the case it named
+and narrower than the sentence describing it.** The instrument that keeps
+catching it is review, not the suite: this one had green proofs, reddening
+mutations in both attack classes, and a test asserting the inverse of the
+property, all at once.

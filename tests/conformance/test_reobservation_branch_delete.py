@@ -1970,9 +1970,55 @@ def test_the_validator_is_the_tools_OWN_rule_not_a_second_spelling(tmp_path):
     A composition root that re-spelled the rule would be free to drift from the
     one the reads actually use — accepting a name the tool then refuses, which
     is the defect this part fixes, reintroduced at one remove.
+
+    THIS TEST ASSERTED THE WRONG PROPERTY AND PASSED ANYWAY. It pinned
+    ``is_usable_branch_name`` as EQUAL to ``_BRANCH_RE``, over the corpus
+    ``("main", "", "   ", "--x", "a/b.c-d", "..", "a b", "0")`` on which the two
+    happen to agree. Once the rule was strengthened past the charset pattern
+    the equality became false — ``is_usable_branch_name("HEAD")`` is ``False``
+    where ``_BRANCH_RE.match("HEAD")`` is truthy — and this test would have
+    FAILED on a corpus wide enough to contain one divergent name. It did not,
+    because the corpus was not.
+
+    So it pinned the predicate TO the pattern: the drift it names in its own
+    docstring, asserted as the invariant. It now checks what the name claims —
+    that the root and the READS consult one function — and the identity with
+    the charset pattern is asserted as a NON-property, since that pattern is a
+    strict subset of the rule.
     """
+
+    import ast
+    import inspect
 
     from prometheus_protocol.tools.git import _BRANCH_RE, is_usable_branch_name
 
-    for name in ("main", "", "   ", "--x", "a/b.c-d", "..", "a b", "0"):
-        assert is_usable_branch_name(name) is bool(_BRANCH_RE.match(name)), name
+    # The pattern is a SUBSET, not the rule. Pinned so nobody restores the
+    # equality the corpus above used to imply.
+    assert _BRANCH_RE.match("HEAD") and not is_usable_branch_name("HEAD"), (
+        "the predicate has collapsed back onto the charset pattern"
+    )
+
+    # And the root and the reads consult the same function. Checked on the
+    # source of both, because that is the property the name claims.
+    from prometheus_protocol.runtime import factory
+
+    assert "is_usable_branch_name" in inspect.getsource(factory.build_reobservation)
+
+    import prometheus_protocol.tools.git as git_module
+
+    tree = ast.parse(Path(git_module.__file__).read_text(encoding="utf-8"))
+    for reader in ("classify", "rev", "execute"):
+        node = next(
+            n
+            for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef) and n.name == reader
+        )
+        called = {
+            inner.func.id
+            for inner in ast.walk(node)
+            if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name)
+        }
+        assert "is_usable_branch_name" in called, (
+            f"{reader} does not consult the tool's rule, so the root and the "
+            "reads are two definitions again"
+        )
