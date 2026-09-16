@@ -2349,7 +2349,7 @@ Whether that matters for the provenance story is a judgement for whoever runs
 Part B; what is recorded here is that it is **not** swept by it, so the
 question is answered before diligence rather than during it.
 
-### THE BOUNDED SET — sixteen carriers, every one read back
+### THE BOUNDED SET — eighteen carriers, every one read back
 
 | PR | kind | id |
 |---|---|---|
@@ -2369,8 +2369,10 @@ question is answered before diligence rather than during it.
 | #113 | review reply | `4020511688` |
 | #113 | review reply | `4020512632` |
 | #113 | review reply | `4020513244` |
+| #114 | review reply | `4021539074` |
+| #114 | review reply | `4021539794` |
 
-Fifteen review replies and one PR comment. Not approximate: each was fetched
+Seventeen review replies and one PR comment. Not approximate: each was fetched
 and its body inspected for the footer. The six #113 replies are the answers to
 that PR's six findings, posted after it merged; `4020508859` was read back and
 the footer is present, so the route is unchanged and this entry is not stale. PR BODIES are not in this set — #111's and
