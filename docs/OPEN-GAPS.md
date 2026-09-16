@@ -2349,7 +2349,7 @@ Whether that matters for the provenance story is a judgement for whoever runs
 Part B; what is recorded here is that it is **not** swept by it, so the
 question is answered before diligence rather than during it.
 
-### THE BOUNDED SET — twenty-five carriers, ALL twenty-five read back
+### THE BOUNDED SET — twenty-six carriers, ALL twenty-six read back
 
 | PR | kind | id |
 |---|---|---|
@@ -2378,8 +2378,9 @@ question is answered before diligence rather than during it.
 | #119 | PR body | `4544106496` — read back, confirmed, stripped |
 | #119 | review reply | `4022679600` — confirmed via REST, same minute |
 | #120 | PR body | `4547756338` — read back, confirmed, stripped |
+| #120 | review reply | `4026263917` — confirmed via REST, same minute |
 
-Twenty-two review replies, one PR comment and two PR bodies. Not approximate:
+Twenty-three review replies, one PR comment and two PR bodies. Not approximate:
 every row was fetched and its body inspected for the footer. The last two
 unconfirmed rows were closed on 2026-09-16 through the REST channel described
 below, and every row added since has been confirmed in the minute it was
@@ -3547,3 +3548,20 @@ passed happily against a set of seventeen while the prose said nineteen. The
 pin now asserts `== 17`, and the docstring states plainly that the count is not
 the property; membership is. The count is asserted only because this entry
 quotes a number.
+
+**THE THREAD WATCHER HAS A FALSE-POSITIVE MODE, recorded before it misleads
+someone.** The REST poll that caught #120's finding keys each comment on
+`path:line` alongside its id. When a push makes a comment OUTDATED, GitHub
+sets `line` to `null`, the formatted row changes, and the diff against the
+previous poll emits the SAME comment a second time as though it were new.
+
+Observed on #120: finding `4026187551` was emitted twice, once at
+`test_execution_start_signal.py:635` and again at `:None` after a push. The
+listing at that moment showed **one** finding and **one** reply, so the second
+event was an artefact of the watcher, not a second report.
+
+Recorded because the failure mode is the inverse of the one this entry was
+correcting: over-reporting rather than under-reporting. It is the safer
+direction — a duplicate is noticed, a miss is not — but a watcher that cries
+twice teaches its reader to discount it, which eventually produces the miss
+anyway. **Key on the comment id alone, not on id plus mutable coordinates.**
