@@ -663,6 +663,9 @@ _AUTHORIZATION_REFUSAL_REASONS = frozenset({
     "decision_differs_from_chain_entry",
     "outcome_entry_missing",
     "outcome_differs_from_chain_entry",
+    # the inverse walk (review of #121): a receipt whose row is gone
+    "execution_row_missing",
+    "hold_row_missing",
 })
 
 
@@ -693,7 +696,7 @@ def test_the_authorization_vocabulary_names_no_harness_fault():
     # The count is asserted too, and it is NOT the property — membership is.
     # It is here because G35 quotes a number, and a quoted number that nothing
     # checks is how "nineteen" was written for a set of seventeen.
-    assert len(EXECUTION_REFUSAL_REASONS) == 21
+    assert len(EXECUTION_REFUSAL_REASONS) == 23
     assert "descriptor_absent" in EXECUTION_REFUSAL_REASONS
 
 

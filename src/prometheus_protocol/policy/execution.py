@@ -86,6 +86,11 @@ EXECUTION_REFUSAL_REASONS: frozenset[str] = frozenset({
     "decision_differs_from_chain_entry",    # the row's decision columns were altered
     "outcome_entry_missing",                # an execution row nothing chained
     "outcome_differs_from_chain_entry",     # the row's outcome columns were altered
+    # The inverse walk (review of #121): a receipt on the chain whose ROW is
+    # gone. A deleted execution row with the claim nulled was a double
+    # execution at retry; a deleted hold row left its entries orphaned.
+    "execution_row_missing",                # a chained outcome, no execution row
+    "hold_row_missing",                     # a chained hold/decision, no pending row
 })
 
 

@@ -303,3 +303,16 @@ def test_an_untouched_ledger_with_every_transition_verifies(tmp_path):
     assert verdict.ok, verdict.render()
     assert verdict.holds_checked == 2
     assert verdict.executions_checked == 2  # one refused, one executed
+
+
+def test_the_hold_event_spelled_here_is_the_one_the_hold_writes():
+    """``ledger/receipts.HOLD_EVENT`` mirrors ``policy/record.PINNED_HOLD_EVENT``
+    rather than importing it, to keep ``ledger/`` below ``policy/`` in the
+    import graph. Two spellings of one name are two chances to drift; this
+    pins them equal, so the inverse walk keys on the event ``hold()`` really
+    writes."""
+
+    from prometheus_protocol.ledger.receipts import HOLD_EVENT
+    from prometheus_protocol.policy.record import PINNED_HOLD_EVENT
+
+    assert HOLD_EVENT == PINNED_HOLD_EVENT

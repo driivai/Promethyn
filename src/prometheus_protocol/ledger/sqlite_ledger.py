@@ -36,10 +36,13 @@ from prometheus_protocol.ledger.audit_chain import (
 from prometheus_protocol.ledger.receipts import (
     DECISION_EVENT,
     OUTCOME_EVENT,
+    LedgerVerification,
     decision_subject,
     outcome_subject,
     project_decision,
     project_outcome,
+    unverifiable,
+    verify_ledger,
 )
 from prometheus_protocol.ledger.tip_anchor import (
     AnchorUnavailable,
@@ -1152,8 +1155,14 @@ def verify_ledger_file(
     *,
     tip_anchor: TipAnchor | None = None,
     expected_tips: list[ChainTip] | None = None,
-) -> ChainVerification:
+) -> LedgerVerification:
     """Verify a ledger on disk and ALWAYS return a verdict, never raise.
+
+    BOTH VERDICTS: the hash walk and the receipt check (``ledger/receipts.py``).
+    Review on #121 found this function — the documented programmatic entry
+    point — returning VALID over a forged execution row because it ran the
+    hash walk alone while the CLI ran both. It now returns the same combined
+    verdict the CLI prints, through the same ``verify_ledger``.
 
     The auditor-facing entry point. :class:`SqliteLedger` raises
     :class:`StateError` when a file cannot be opened at all — correct fail-closed
@@ -1171,22 +1180,16 @@ def verify_ledger_file(
 
     location = Path(os.fspath(path))
     if not location.exists():
-        return ChainVerification(
-            NOT_VERIFIABLE,
-            0,
-            None,
-            f"no ledger file at {location}",
-        )
+        return unverifiable(f"no ledger file at {location}")
     try:
         ledger = SqliteLedger(location, tip_anchor=tip_anchor)
     except (StateError, sqlite3.DatabaseError, OSError) as exc:
-        return ChainVerification(
-            NOT_VERIFIABLE,
-            0,
-            None,
-            f"the ledger could not be opened: {exc}",
-        )
+        return unverifiable(f"the ledger could not be opened: {exc}")
     try:
-        return ledger.verify_chain(expected_tips=expected_tips)
+        return verify_ledger(ledger, expected_tips=expected_tips)
+    except sqlite3.DatabaseError as exc:
+        # The chain read succeeded and the row read did not: a file corrupt
+        # in the tables the receipts project. Couldn't-verify, not clean.
+        return unverifiable(f"the ledger's rows could not be read: {exc}")
     finally:
         ledger.close()

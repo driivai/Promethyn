@@ -44,6 +44,12 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from prometheus_protocol.core.interfaces import Ledger
+from prometheus_protocol.ledger.audit_chain import (
+    NOT_VERIFIABLE,
+    VALID,
+    ChainTip,
+    ChainVerification,
+)
 
 #: The audit-chain event under which a hold's DECISION is bound, subject
 #: ``pending:<id>`` — the same subject as the hold's own ``pending.hold``
@@ -63,12 +69,25 @@ DECISION_EVENT = "pending.decision"
 #: the prefix already; that is recorded in the tracker, not widened here.
 OUTCOME_EVENT = "outcome.execution"
 
+#: The hold's own entry. Mirrors ``policy/record.PINNED_HOLD_EVENT`` — spelled
+#: here rather than imported so this module stays below ``policy/`` in the
+#: import graph; ``test_receipt_derivation.py`` pins the two equal.
+HOLD_EVENT = "pending.hold"
+
 #: Receipt-verification reasons, drawn from the closed authorization set in
-#: ``policy/execution.py`` so a test can assert WHICH one.
+#: ``policy/execution.py`` so a test can assert WHICH one. Three shapes per
+#: record, because they are three findings: the entry is missing (a row the
+#: chain never saw), the entry differs (a row rewritten after its receipt), or
+#: the ROW is missing (a receipt whose row was deleted — the inverse walk).
 DECISION_ENTRY_MISSING = "decision_entry_missing"
 DECISION_DIFFERS = "decision_differs_from_chain_entry"
+HOLD_ROW_MISSING = "hold_row_missing"
 OUTCOME_ENTRY_MISSING = "outcome_entry_missing"
 OUTCOME_DIFFERS = "outcome_differs_from_chain_entry"
+EXECUTION_ROW_MISSING = "execution_row_missing"
+
+#: A ledger whose chain verifies but whose rows disagree with it.
+RECEIPTS_INVALID = "receipts_invalid"
 
 
 def decision_subject(pending_id: int) -> str:
@@ -170,6 +189,44 @@ def _decoded(payload: object) -> dict | None:
     return payload
 
 
+def subject_row_id(subject: object) -> int | None:
+    """The integer id a ``pending:<id>`` or ``execution:<id>`` subject names,
+    or ``None`` for any other subject shape (an observation, a chokepoint
+    entry, a malformed string). Never raises: a subject this module cannot
+    parse is a subject this module does not vouch for."""
+
+    if not isinstance(subject, str) or ":" not in subject:
+        return None
+    _, _, tail = subject.partition(":")
+    return int(tail) if tail.isdigit() else None
+
+
+def outcome_entries_for(events: list[dict], *, pending_id: int) -> list[tuple[int, dict]]:
+    """Every chained outcome whose payload names ``pending_id``, as
+    ``(execution row id, payload)`` in storage order.
+
+    THE CHAIN-SIDE ENUMERATION, and why it exists. Retry once discovered which
+    receipts to check by walking the ROWS for the hold. Review on #121 found
+    the inverse: delete the row (or re-attribute its ``pending_id``) and null
+    the claim, and that walk saw nothing — the hold read as never executed and
+    the executor ran AGAIN. Measured. The chain's payloads carry
+    ``pending_id`` and cannot be re-attributed without the mismatch showing, so
+    this is the authority on which receipts a hold has.
+    """
+
+    found: list[tuple[int, dict]] = []
+    for entry in events:
+        if entry.get("event") != OUTCOME_EVENT:
+            continue
+        payload = _decoded(entry.get("payload"))
+        if payload is None or payload.get("pending_id") != pending_id:
+            continue
+        row_id = subject_row_id(entry.get("subject"))
+        if row_id is not None:
+            found.append((row_id, payload))
+    return found
+
+
 def latest_entry(events: list[dict], *, event: str, subject: str) -> dict | None:
     """The LAST chain entry for ``(event, subject)`` in storage order, decoded,
     or ``None`` when there is none. Storage order is the order verify walks, so
@@ -216,18 +273,24 @@ class ReceiptFinding:
 
 @dataclass(frozen=True)
 class ReceiptVerification:
-    """The auditor's verdict on rows-versus-chain. ``ok`` only when every
-    decided hold and every execution row equals its latest chained receipt."""
+    """The auditor's verdict on rows-versus-chain. ``ok`` only when the check
+    RAN and every decided hold, every execution row, and every chained receipt
+    has its counterpart. ``checked=False`` is the couldn't-verify state — a
+    chain that could not be read leaves nothing to compare rows against — and
+    it is never ``ok``."""
 
     holds_checked: int
     executions_checked: int
     findings: tuple[ReceiptFinding, ...]
+    checked: bool = True
 
     @property
     def ok(self) -> bool:
-        return not self.findings
+        return self.checked and not self.findings
 
     def render(self) -> str:
+        if not self.checked:
+            return "receipts not checked (the chain could not be verified)"
         if self.ok:
             return (
                 f"receipts valid ({self.holds_checked} holds, "
@@ -285,8 +348,117 @@ def verify_receipts(ledger: Ledger) -> ReceiptVerification:
         if differs:
             findings.append(ReceiptFinding(subject, OUTCOME_DIFFERS, differs))
 
+    # THE INVERSE WALK: every receipt must have its row. The two walks above
+    # project ROWS, so a row that has been DELETED is invisible to them and its
+    # receipt sits orphaned on the chain. Measured, before this walk existed:
+    # a deleted execution row with the claim nulled was a double execution at
+    # retry; a deleted hold row left its two entries orphaned with
+    # ``holds_checked=0`` and nothing reported. Subject-keyed, event-filtered,
+    # so an entry this module did not write (an observation, a chokepoint
+    # record) is not mistaken for a receipt without a row.
+    hold_ids = {row["id"] for row in holds}
+    execution_ids = {row["id"] for row in executions}
+    orphaned: set[str] = set()
+    for entry in events:
+        event = entry.get("event")
+        # Its own name: ``subject`` above is bound as ``str`` by the row walks,
+        # and this one is whatever the chain row carries until narrowed.
+        chained_subject = entry.get("subject")
+        if not isinstance(chained_subject, str) or chained_subject in orphaned:
+            continue
+        row_id = subject_row_id(chained_subject)
+        if row_id is None:
+            continue
+        if event in (HOLD_EVENT, DECISION_EVENT) and chained_subject.startswith("pending:"):
+            if row_id not in hold_ids:
+                orphaned.add(chained_subject)
+                findings.append(ReceiptFinding(chained_subject, HOLD_ROW_MISSING))
+        elif event == OUTCOME_EVENT and chained_subject.startswith("execution:"):
+            if row_id not in execution_ids:
+                orphaned.add(chained_subject)
+                findings.append(ReceiptFinding(chained_subject, EXECUTION_ROW_MISSING))
+
     return ReceiptVerification(
         holds_checked=len(holds),
         executions_checked=len(executions),
         findings=tuple(findings),
     )
+
+
+@dataclass(frozen=True)
+class LedgerVerification:
+    """Both verdicts on one ledger: the hash walk and the receipt check.
+
+    ``ok`` only when both hold. The two are complementary — an intact chain
+    under rewritten rows fails the receipts (F13, F14); honest rows over a
+    rewritten chain fail the hash walk — and an auditor who runs one is told
+    about the other. Review on #121 found the documented programmatic entry
+    point, ``verify_ledger_file``, returning VALID over a forged outcome row
+    because it ran the hash walk alone; this is what it returns now.
+
+    The chain verdict's fields are proxied so every existing consumer of a
+    ``ChainVerification`` — ``.status``, ``.broken_index``, ``.detail``,
+    ``.length``, ``.render()`` — keeps working, and ``status`` gains one value:
+    ``receipts_invalid``, for a chain that verifies over rows that do not.
+    """
+
+    chain: ChainVerification
+    receipts: ReceiptVerification
+
+    @property
+    def ok(self) -> bool:
+        return self.chain.ok and self.receipts.ok
+
+    @property
+    def status(self) -> str:
+        if not self.chain.ok:
+            return self.chain.status
+        return VALID if self.receipts.ok else RECEIPTS_INVALID
+
+    @property
+    def length(self) -> int:
+        return self.chain.length
+
+    @property
+    def broken_index(self) -> int | None:
+        return self.chain.broken_index
+
+    @property
+    def detail(self) -> str:
+        if not self.chain.ok:
+            return self.chain.detail
+        return "" if self.receipts.ok else self.receipts.render()
+
+    def render(self) -> str:
+        return f"{self.chain.render()}; {self.receipts.render()}"
+
+
+def unverifiable(detail: str) -> LedgerVerification:
+    """The couldn't-verify verdict for a ledger that could not be opened or
+    read: chain NOT_VERIFIABLE, receipts not checked, never ``ok``."""
+
+    return LedgerVerification(
+        chain=ChainVerification(NOT_VERIFIABLE, 0, None, detail),
+        receipts=ReceiptVerification(0, 0, (), checked=False),
+    )
+
+
+def verify_ledger(
+    ledger: Ledger,
+    *,
+    expected_tip: ChainTip | None = None,
+    expected_tips: list[ChainTip] | None = None,
+) -> LedgerVerification:
+    """The shared programmatic verifier: the hash walk, then the receipts.
+
+    Used by ``verify_ledger_file`` and by ``audit --verify-chain``, so the CLI
+    and the API cannot disagree about what "verified" means. When the chain
+    itself could not be read there is nothing trustworthy to compare rows
+    against, and the receipts are reported as NOT CHECKED rather than as
+    clean.
+    """
+
+    chain = ledger.verify_chain(expected_tip=expected_tip, expected_tips=expected_tips)
+    if chain.status == NOT_VERIFIABLE:
+        return LedgerVerification(chain, ReceiptVerification(0, 0, (), checked=False))
+    return LedgerVerification(chain, verify_receipts(ledger))

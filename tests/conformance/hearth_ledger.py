@@ -545,7 +545,7 @@ DIGESTS: dict[str, str] = {
     "src/prometheus_protocol/execution/executor.py":
         "4ab23cc2c96ba2ff17115126c6786bc1600ddad1109f9dabb814c97622bb0508",
     "src/prometheus_protocol/execution/pending.py":
-        "a872ed4f43d8174d303964452902ee4262b30526342f494f50269b88c002a0cf",
+        "c28810b8653eb35c00b3713f4c5a01f0caf860964d646a7fcaed3e38c2311c9c",
     "src/prometheus_protocol/forge/miner.py":
         "b0e2a53440df5b38a1031cc9648e19b3f9df20081ee34d4e035beda2b6973a29",
     "src/prometheus_protocol/gate/authorization.py":

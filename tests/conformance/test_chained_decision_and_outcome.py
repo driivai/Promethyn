@@ -340,3 +340,166 @@ def test_F13_a_decided_hold_reset_to_pending_cannot_be_approved_again(tmp_path):
     from prometheus_protocol.ledger.receipts import DECISION_EVENT
     last = [e for e in ledger.chained_events() if e["event"] == DECISION_EVENT][-1]
     assert json.loads(last["payload"])["status"] == "rejected"
+
+
+# ---------------------------------------------------------------------------
+# PART 5 — the inverse walk, and the programmatic verifier (review of #121)
+#
+# Two P1 findings on this PR, both confirmed by direct probe before a line was
+# written. Retry discovered which receipts to check by walking ROWS, so a
+# deleted or re-attributed row (plus a nulled claim) was a DOUBLE EXECUTION
+# with the chain VALID — G42 had been filed as an orphaned-entry curiosity,
+# and that severity was wrong. And ``verify_ledger_file``, the documented
+# programmatic entry point, ran the hash walk alone and returned VALID over a
+# forged outcome row while the CLI correctly exited 2.
+# ---------------------------------------------------------------------------
+
+
+def test_F14_a_DELETED_execution_row_does_NOT_let_retry_execute_twice(tmp_path):
+    """Delete the row and null the claim. The chain still holds the receipt
+    that says the hold executed; retry must refuse on the missing ROW."""
+
+    ledger = anchored(tmp_path)
+    ctl, spy, _ = fx.controller(ledger, route_high_risk=True)
+    held = fx.hold(ctl, fx.action())
+    assert ctl.approve(held.id, identity="human").executed
+
+    ledger._conn.execute("DELETE FROM executions WHERE pending_id = ?", (held.id,))
+    ledger._conn.commit()
+    release_claim(ledger, held.id)
+
+    with pytest.raises(ExecutionNotAuthorized) as refused:
+        ctl.retry_execution(held.id, identity="retrier")
+
+    assert len(spy.calls) == 1, "DOUBLE EXECUTION: the deleted row hid the receipt from retry"
+    assert refused.value.reason == "execution_row_missing"
+    assert ledger.verify_chain().ok
+
+
+def test_F14_a_RE_ATTRIBUTED_execution_row_does_NOT_let_retry_execute_twice(tmp_path):
+    """Point the row's ``pending_id`` at another hold and null the claim. The
+    chained payload still names THIS hold; the row differs from it on
+    ``pending_id``; retry must refuse on the difference."""
+
+    ledger = anchored(tmp_path)
+    ctl, spy, _ = fx.controller(ledger, route_high_risk=True)
+    held = fx.hold(ctl, fx.action())
+    assert ctl.approve(held.id, identity="human").executed
+
+    ledger._conn.execute("UPDATE executions SET pending_id = 999 WHERE pending_id = ?", (held.id,))
+    ledger._conn.commit()
+    release_claim(ledger, held.id)
+
+    with pytest.raises(ExecutionNotAuthorized) as refused:
+        ctl.retry_execution(held.id, identity="retrier")
+
+    assert len(spy.calls) == 1, "DOUBLE EXECUTION: the re-attributed row hid the receipt from retry"
+    assert refused.value.reason == "outcome_differs_from_chain_entry"
+    assert "pending_id" in str(refused.value)
+
+
+def test_the_verifier_walks_entries_to_rows_a_deleted_execution_row_is_a_finding(tmp_path):
+    """G42, closed. The orphaned receipt is reported, naming the execution."""
+
+    from prometheus_protocol.ledger.receipts import verify_receipts
+
+    ledger = anchored(tmp_path)
+    ctl, _spy, _ = fx.controller(ledger, route_high_risk=True)
+    held = fx.hold(ctl, fx.action())
+    assert ctl.approve(held.id, identity="human").executed
+    row_id = ledger.executions_for_pending(held.id)[0]["id"]
+
+    ledger._conn.execute("DELETE FROM executions WHERE id = ?", (row_id,))
+    ledger._conn.commit()
+
+    verdict = verify_receipts(ledger)
+    assert not verdict.ok
+    assert [(f.subject, f.reason) for f in verdict.findings] == [
+        (f"execution:{row_id}", "execution_row_missing")
+    ]
+
+
+def test_the_verifier_walks_entries_to_rows_a_deleted_HOLD_row_is_a_finding(tmp_path):
+    """The other table. A deleted hold leaves its ``pending.hold`` and
+    ``pending.decision`` entries orphaned; reported ONCE per subject."""
+
+    from prometheus_protocol.ledger.receipts import verify_receipts
+
+    ledger = anchored(tmp_path)
+    ctl, _spy, _ = fx.controller(ledger, route_high_risk=True)
+    held = fx.hold(ctl, fx.action())
+    ctl.reject(held.id, identity="human", reason="no")
+
+    ledger._conn.execute("DELETE FROM pending_actions WHERE id = ?", (held.id,))
+    ledger._conn.commit()
+
+    verdict = verify_receipts(ledger)
+    assert not verdict.ok
+    assert [(f.subject, f.reason) for f in verdict.findings] == [
+        (f"pending:{held.id}", "hold_row_missing")
+    ]
+    assert verdict.holds_checked == 0
+
+
+def test_verify_ledger_file_reports_receipt_failures_not_just_the_chain(tmp_path):
+    """The documented programmatic entry point. A forged outcome row under an
+    intact chain must come back NOT ok, with a status an auditor can branch
+    on — and every field a ``ChainVerification`` consumer reads must still be
+    there. Positive first."""
+
+    from prometheus_protocol.ledger.sqlite_ledger import verify_ledger_file
+
+    path, anchor = tmp_path / "ledger.db", FileTipAnchor(tmp_path / "tip.json")
+    ledger = SqliteLedger(path, tip_anchor=anchor)
+    ctl, _spy, _ = fx.controller(ledger, route_high_risk=True)
+    held = fx.hold(ctl, fx.action())
+    assert ctl.approve(held.id, identity="human").executed
+    ledger.close()
+
+    honest = verify_ledger_file(path, tip_anchor=anchor)
+    assert honest.ok and honest.status == "valid"
+    assert honest.chain.ok and honest.receipts.ok
+    assert "chain valid" in honest.render() and "receipts valid" in honest.render()
+
+    ledger = SqliteLedger(path, tip_anchor=anchor)
+    forge_outcome(ledger, held.id)
+    ledger.close()
+
+    forged = verify_ledger_file(path, tip_anchor=anchor)
+    assert not forged.ok
+    assert forged.status == "receipts_invalid"
+    assert forged.chain.ok, "the chain is intact; only the row lies"
+    assert forged.broken_index is None and forged.length == forged.chain.length
+    assert "outcome_differs_from_chain_entry" in forged.detail
+    assert "receipts INVALID" in forged.render()
+
+
+def test_verify_ledger_file_still_reports_a_broken_chain_first(tmp_path):
+    """The chain's own failures keep their status: a rewritten entry is
+    ``broken`` through the combined verdict, not hidden behind a receipts
+    label, and the receipts are still reported alongside."""
+
+    from prometheus_protocol.ledger.sqlite_ledger import verify_ledger_file
+    from tests.support.chain_rewrite import rewrite_entry_and_rehash
+
+    path, anchor = tmp_path / "ledger.db", FileTipAnchor(tmp_path / "tip.json")
+    ledger = SqliteLedger(path, tip_anchor=anchor)
+    ctl, _spy, _ = fx.controller(ledger, route_high_risk=True)
+    held = fx.hold(ctl, fx.action())
+    rewrite_entry_and_rehash(ledger, seq=1, payload={"forged": True})
+    ledger.close()
+
+    verdict = verify_ledger_file(path, tip_anchor=anchor)
+    assert not verdict.ok and verdict.status == "broken"
+    assert verdict.receipts.checked, "the chain was readable; receipts were still compared"
+
+
+def test_verify_ledger_file_on_a_missing_file_is_NOT_VERIFIABLE_with_receipts_unchecked(tmp_path):
+    """Couldn't-verify is not verified-clean, in both halves."""
+
+    from prometheus_protocol.ledger.sqlite_ledger import verify_ledger_file
+
+    verdict = verify_ledger_file(tmp_path / "absent.db")
+    assert not verdict.ok and verdict.status == "not_verifiable"
+    assert not verdict.receipts.checked and not verdict.receipts.ok
+    assert "not checked" in verdict.render()

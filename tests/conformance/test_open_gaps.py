@@ -380,35 +380,11 @@ def test_G40_the_outcome_event_was_named_OUTSIDE_the_prefix_and_decodes_cleanly(
     _decode_rows(ledger.chained_events())  # must not raise
 
 
-def test_G42_the_receipt_check_walks_rows_not_entries(tmp_path):
-    """The inverse walk is absent. Delete an execution row outright: its
-    ``outcome.execution`` entry is orphaned on the chain and ``verify_receipts``
-    reports nothing, because there is no row to project. Written to FAIL when
-    the reverse direction is added — then close G42 and remove this pin."""
-
-    import test_execution_authorization_record as fx
-    from prometheus_protocol.ledger.receipts import OUTCOME_EVENT, verify_receipts
-    from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
-
-    ledger = SqliteLedger(tmp_path / "ledger.db")
-    ctl, _spy, _ = fx.controller(ledger, route_high_risk=True)
-    held = fx.hold(ctl, fx.action())
-    assert ctl.approve(held.id, identity="human").executed
-    row_id = ledger.executions_for_pending(held.id)[0]["id"]
-    assert any(
-        e["event"] == OUTCOME_EVENT and e["subject"] == f"execution:{row_id}"
-        for e in ledger.chained_events()
-    )
-
-    ledger._conn.execute("DELETE FROM executions WHERE id = ?", (row_id,))
-    ledger._conn.commit()
-
-    verdict = verify_receipts(ledger)
-    assert verdict.ok, (
-        "G42 appears CLOSED — the verifier now sees an orphaned outcome entry. "
-        "Remove this pin and the tracker entry in the same change."
-    )
-    assert verdict.executions_checked == 0
+# G42 — the receipt check walked rows, not entries — CLOSED. The pin that held
+# it open fired exactly as written when the inverse walk landed, and is gone;
+# review of #121 found the gap was a P1 (a deleted row plus a nulled claim was
+# a double execution at retry), and the proofs of the closed state live in
+# ``test_chained_decision_and_outcome.py`` PART 5.
 
 
 def test_G39_through_G42_are_named_in_the_tracker():

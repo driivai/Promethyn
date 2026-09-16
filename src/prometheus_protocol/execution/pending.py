@@ -119,6 +119,7 @@ from prometheus_protocol.ledger.receipts import (
     decision_subject,
     differing_fields,
     latest_entry,
+    outcome_entries_for,
     outcome_subject,
     project_decision,
     project_outcome,
@@ -496,29 +497,47 @@ class PendingActionService:
         # ``outcome_entry_missing``, a row that differs from its receipt as
         # ``outcome_differs_from_chain_entry``, and only a receipt that says
         # executed counts as executed.
+        #
+        # IN BOTH DIRECTIONS, and the second is the one review found. The first
+        # version walked the ROWS for this hold and checked each against its
+        # receipt. Delete the row — or re-attribute its ``pending_id`` — and
+        # null the claim, and that walk saw nothing: the hold read as never
+        # executed and the executor ran AGAIN, chain VALID. Measured on #121.
+        # So the receipts for this hold are enumerated from the CHAIN, whose
+        # payloads carry ``pending_id`` and cannot be re-attributed without
+        # the mismatch showing, and each must have its row. The rows are
+        # ALSO walked, so an inserted row with no receipt is refused.
         events = self._ledger.chained_events()
+        rows_by_id = {row["id"]: row for row in self._ledger.executions()}
         executed: list[dict] = []
-        for row in self._ledger.executions_for_pending(pending_id):
-            chained = latest_entry(
-                events, event=OUTCOME_EVENT, subject=outcome_subject(row["id"])
-            )
-            if chained is None:
+        for execution_id, chained in outcome_entries_for(events, pending_id=pending_id):
+            row = rows_by_id.get(execution_id)
+            if row is None:
                 raise ExecutionNotAuthorized(
-                    f"pending action {pending_id}: execution #{row['id']} has no "
-                    "outcome on the tamper-evident chain, so whether it executed "
-                    "cannot be established; refusing to retry",
-                    reason="outcome_entry_missing",
+                    f"pending action {pending_id}: the chain holds an outcome for "
+                    f"execution #{execution_id} and the ledger has no such row; "
+                    "the row was deleted after its receipt was written, and "
+                    "whether the hold executed cannot be read off what remains",
+                    reason="execution_row_missing",
                 )
             differs = differing_fields(project_outcome(row), chained)
             if differs:
                 raise ExecutionNotAuthorized(
-                    f"pending action {pending_id}: execution #{row['id']} differs "
+                    f"pending action {pending_id}: execution #{execution_id} differs "
                     f"from its chained outcome on {', '.join(differs)}; the row "
                     "was altered after the outcome was recorded",
                     reason="outcome_differs_from_chain_entry",
                 )
             if chained["executed"]:
                 executed.append(row)
+        for row in self._ledger.executions_for_pending(pending_id):
+            if latest_entry(events, event=OUTCOME_EVENT, subject=outcome_subject(row["id"])) is None:
+                raise ExecutionNotAuthorized(
+                    f"pending action {pending_id}: execution #{row['id']} has no "
+                    "outcome on the tamper-evident chain, so whether it executed "
+                    "cannot be established; refusing to retry",
+                    reason="outcome_entry_missing",
+                )
         if executed:
             raise ValueError(
                 f"pending action {pending_id} already executed (execution "

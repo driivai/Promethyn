@@ -3785,10 +3785,13 @@ rows fails the second, honest rows over a rewritten chain fail the first.
    a reader of `executions()` about what a run rested on. The coverage block
    in the chained pinned record is the authoritative account; the promoted
    columns are not. Residual, and the backfill path is why.
-5. Delete a whole execution row. The outcome entry remains on the chain with
-   no row — `verify_receipts` walks ROWS, so a missing row is not a finding.
-   **Named gap**: the inverse walk (every `outcome.execution` entry has a row)
-   is not implemented. Filed as G42.
+5. ~~Delete a whole execution row.~~ **Closed on this PR, by review.** Filed
+   first as G42, an orphaned entry the verifier would not see. Review found
+   it was a P1: delete the row (or re-attribute its `pending_id`) and null the
+   claim, and retry — which discovered receipts by walking ROWS — saw nothing
+   and ran the executor AGAIN. Measured. Retry now enumerates receipts from
+   the chain; the verifier walks entries to rows for both tables. G42 records
+   the correction of severity.
 
 Not prevention. Nothing stops the write. The anchor is what turns a rewrite
 from silent into witnessed, and this sprint widened what it witnesses.
@@ -3833,16 +3836,43 @@ receipt's schema, and now the derived receipt check — which would pin the new
 field by construction. Better added once the underlying bytes are committed
 and verifiable, which they now are. Awaiting its own sprint.
 
-## G42 — the receipt check walks rows, not entries
+## G42 — the receipt check walked rows, not entries — CLOSED 2026-09-16 by review of #121, and it was a P1
 
-`verify_receipts` asks "does every row have a matching entry". It does not
-ask "does every entry have a row". An adversary who DELETES an execution row
-leaves its `outcome.execution` entry orphaned on the chain and the verifier
-reports nothing, because there is no row to project. The inverse walk is a
-small addition and is filed rather than folded in: the brief's derived check
-is row-to-chain, and adding the reverse direction in the same change is the
-scope creep that makes a mapping stop being reviewable. Pinned as a named
-limit in G39's residual list.
+**As filed:** `verify_receipts` asked "does every row have an entry" and not
+"does every entry have a row", so a DELETED execution row left its receipt
+orphaned and unreported. Filed as a small gap to fold in later rather than
+widen the sprint.
+
+**THE SEVERITY WAS WRONG, and review of #121 said so.** Retry discovered which
+receipts to check by walking the same ROWS. Measured, both variants, with an
+anchor and the chain VALID:
+
+| adversary write | + null the claim → retry |
+|---|---|
+| `DELETE FROM executions WHERE pending_id = ?` | **executor ran a second time** |
+| `UPDATE executions SET pending_id = 999` | **executor ran a second time** |
+
+Not an orphaned curiosity: the same double execution F14's escalation was
+about, reached through deletion instead of a flipped flag. A deleted HOLD row
+was the safe direction at retry (`KeyError`, nothing runs) but left its two
+entries orphaned with `holds_checked=0` and nothing reported.
+
+**Closed, both directions.** Retry enumerates the receipts for a hold from the
+CHAIN (`outcome_entries_for`, whose payloads carry `pending_id` and cannot be
+re-attributed without the mismatch showing), requires each to have its row
+(`execution_row_missing`), compares it, and only then reads `executed` — and
+still walks the rows, so an inserted row with no receipt is refused.
+`verify_receipts` walks entries to rows for both tables (`execution_row_missing`,
+`hold_row_missing`), subject-keyed and event-filtered so an entry this module
+did not write is never mistaken for a receipt without a row. Membership pin
+21 → 23. The G42 pin that held the gap open fired as written and is removed;
+the proofs of the closed state are `test_chained_decision_and_outcome.py`
+PART 5.
+
+**The lesson recorded with it:** "the derived check is row-to-chain, and the
+reverse direction is scope creep" was the wrong reason to defer. A check that
+walks one direction is a check an adversary evades by deleting. The
+derivation was right; its coverage was half.
 
 **NINTH OCCURRENCE, #121 — and the CI cost observed, not predicted.** Same
 route: the creation tool appended its footer after the hygiene checker ran;
@@ -3852,3 +3882,55 @@ read back, confirmed, stripped, and the strip read back. CI run
 hygiene"** — the standing cost this entry names, now measured on the PR that
 carries this sentence. Nine occurrences across nine pull requests opened
 through that tool. **The rate is 9 of 9.**
+
+### Found by review on #121 before merge — two P1s, both confirmed by probe
+
+**P1 — retry derived its history from mutable rows.** See G42 above; the fix
+and the measurement are there. What this entry adds is where it sat: in the
+very loop this PR wrote to close F14's escalation. The loop read `executed`
+off the CHAIN — correctly — but chose WHICH receipts to read by walking the
+ROWS, so the chain-side truth was reachable only through a row-side index an
+adversary could empty. The mismatch check (D4+M) carried the flipped-flag
+case; nothing carried the deleted-row case, because there was no row to
+mismatch.
+
+**P1 — the documented programmatic verifier ran the hash walk alone.**
+`docs/ledger-integrity.md` tells programmatic auditors to use
+`verify_ledger_file(path, tip_anchor=…)`. Measured: over a ledger whose
+outcome row was rewritten under an intact chain, it returned `ok=True,
+status='valid'` while `verify_receipts` returned `ok=False` and the CLI
+exited 2. Two entry points, two definitions of "verified". Closed with ONE
+shared verifier, `verify_ledger`, used by both: `verify_ledger_file` now
+returns a `LedgerVerification` carrying both verdicts, `ok` only when both
+hold, with every field a `ChainVerification` consumer reads proxied
+(`.status`, `.broken_index`, `.detail`, `.length`, `.render()` — 31 call sites
+across the test suite, all in tests, none in `src/`) and `status` gaining one
+value, `receipts_invalid`. A chain that could not be read reports receipts as
+NOT CHECKED, never as clean.
+
+**Red first, both.** PART 5 of `test_chained_decision_and_outcome.py` against
+HEAD `4b48f82` in a clean worktree: **7 failed of 7** — the two double
+executions on `DID NOT RAISE ExecutionNotAuthorized`, the two orphaned-entry
+cases on `assert not True` (the verifier said ok), and the three programmatic
+verifier tests on `AttributeError: 'ChainVerification' object has no attribute
+'chain'`. After the fix: green.
+
+**Executed mutations**, both attack classes, 202 green unmutated:
+
+| mutation | class | observed |
+|---|---|---|
+| V1 the chain-side enumeration removed (only the row walk left) | deletion | 5 red |
+| V2 receipts selected by the ROW's `pending_id`, not the payload's | substitution | 2 red |
+| V3 the missing-row refusal dropped (a missing row skipped) | deletion | 1 red |
+| V4 `verify_ledger` drops the receipt half | deletion | 2 red |
+| V5 `verify_ledger_file` reverts to the hash walk alone | substitution | 1 red |
+| V6 the inverse walk removed (G42 reopened) | deletion | 2 red |
+
+**V2 is the cross-context substitution and it is the informative one**: the
+enumeration is still chain-side and still "correct" in shape, but the
+`pending_id` it filters on comes from the row the adversary controls, and it
+reddens exactly the two tests the P1 was about — deletion and re-attribution.
+Second-order, defect restored under each proof: deleted-row minus its
+call-count assertion (+V1+V3) 3 red; re-attributed minus its (+V2) 2 red;
+programmatic verifier minus `not forged.ok` (+V5) 1 red. No proof survives;
+`pytest.raises` and the status assertion carry each half respectively.

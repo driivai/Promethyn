@@ -976,8 +976,9 @@ the row must equal its latest entry at approval, at retry, and under
   between honest drivers); rewrite `executions.authorization` on an
   auto-approved row, which has no hold entry; rewrite the promoted
   `verdict/confidence/authoritative` columns, which the backfill path also
-  writes and which are not the chained account; delete an execution row
-  outright, which orphans its entry and is not yet walked in reverse (G42).
+  writes and which are not the chained account. Deleting a row outright is
+  **detected** — the receipts are walked in both directions (G42, closed by
+  review of #121 after it was measured as a double execution at retry).
 
 ---
 
