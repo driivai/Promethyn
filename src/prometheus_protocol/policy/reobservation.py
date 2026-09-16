@@ -157,6 +157,31 @@ def refusal_retains_claim(refusal: BaseException) -> bool:
     return any(isinstance(refusal, kind) for kind in CLAIM_RETAINED_BY)
 
 
+def legacy_observation_subject(attempt_id: str, execution_attempt: int) -> str:
+    """The subject format used BEFORE the pending-hold id was added.
+
+    Kept because a ledger outlives a deployment. A hold approved under the
+    previous release carries its pre-approval receipt under this spelling, and
+    a lookup that searched only the current one would return ``None`` — which
+    the caller reads as "there was no pre-approval reading", so the execution
+    receipt would say ``prior: null`` and lose the evidence that state WAS
+    checked at approval. A false statement in the record whose whole purpose is
+    to show the check happened twice.
+
+    This is NOT a second supported format. Nothing writes it; it exists only so
+    the reader can recognise what an older writer left, and a receipt resolved
+    through it is marked (see ``LEGACY_SUBJECT_RESOLVED``) rather than passed
+    off as a clean match.
+    """
+
+    return f"observation:{_identity(attempt_id, what='attempt_id')}#{execution_attempt}"
+
+
+#: Stamped onto a receipt that was found under the pre-upgrade subject, so the
+#: record says how it was attributed instead of implying an exact match.
+LEGACY_SUBJECT_RESOLVED = "resolved_from_pre_upgrade_subject"
+
+
 @dataclass(frozen=True)
 class Unreadable:
     """Why a reading could not be taken, and which aspects were not read.

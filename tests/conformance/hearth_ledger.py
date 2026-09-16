@@ -469,6 +469,28 @@ EXPECTED_PROTECTED_FILES = 21
 #:     down for a moment. The rule is keyed on TYPE (``CLAIM_RETAINED_BY``) and
 #:     its key set is pinned by a test.
 #:
+#: RE-SANCTIONED for the pre-upgrade observation receipt (OPEN-GAPS G33).
+#: ``execution/pending.py`` moved:
+#:
+#:   - ``pre_approval_entry`` now searches the PRE-UPGRADE subject spelling as
+#:     well as the current one. A ledger outlives a deployment: a hold approved
+#:     by the previous release wrote its receipt under ``observation:<attempt>#0``,
+#:     before the pending-hold id was part of the key, and a lookup that found
+#:     nothing made the execution receipt say ``prior: null`` — the spelling
+#:     that means "this was the first reading". The record stated that state was
+#:     never checked at approval for a hold where it was.
+#:   - A receipt resolved that way is MARKED, never passed off as an exact
+#:     match, and several receipts sharing one legacy subject are REFUSED rather
+#:     than guessed between: taking the first is how the later hold's execution
+#:     comes to restate the earlier hold's reading, which is the collision the
+#:     new key was added to remove.
+#:   - ``require_state_unmoved_for_execution`` refuses a pinned, observed hold
+#:     whose receipt cannot be found under either spelling. The guard is
+#:     CONDITIONED on the registry covering the class, and that condition is
+#:     load-bearing: without it the guard reddens the kept gap reproduction,
+#:     because a deployment that wires nothing pins nothing and would be refused
+#:     at execution for a receipt it had no reason to write.
+#:
 #: Those sprints are why these bytes are what they are. They do NOT license the
 #: next edit to the same files: updating a digest below is a fresh decision, and
 #: the reason for it belongs beside it.
@@ -486,7 +508,7 @@ DIGESTS: dict[str, str] = {
     "src/prometheus_protocol/execution/executor.py":
         "7fc5ee28f1a76417a9350ee9a0ab1913483991a89d60d9670ffd8149ab6afb0f",
     "src/prometheus_protocol/execution/pending.py":
-        "2cd49d4e8b4bf439df13cd9679ff867035c54c170e308ef41a40d62ebe03882c",
+        "f6de30cb1ac77b7b2d4d3a531864ea1eaf5f984cdcd075c895eda5ee945f946f",
     "src/prometheus_protocol/forge/miner.py":
         "b0e2a53440df5b38a1031cc9648e19b3f9df20081ee34d4e035beda2b6973a29",
     "src/prometheus_protocol/gate/authorization.py":

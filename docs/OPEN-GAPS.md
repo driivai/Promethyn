@@ -2349,7 +2349,7 @@ Whether that matters for the provenance story is a judgement for whoever runs
 Part B; what is recorded here is that it is **not** swept by it, so the
 question is answered before diligence rather than during it.
 
-### THE BOUNDED SET — sixteen carriers, every one read back
+### THE BOUNDED SET — eighteen carriers, every one read back
 
 | PR | kind | id |
 |---|---|---|
@@ -2369,8 +2369,10 @@ question is answered before diligence rather than during it.
 | #113 | review reply | `4020511688` |
 | #113 | review reply | `4020512632` |
 | #113 | review reply | `4020513244` |
+| #114 | review reply | `4021539074` |
+| #114 | review reply | `4021539794` |
 
-Fifteen review replies and one PR comment. Not approximate: each was fetched
+Seventeen review replies and one PR comment. Not approximate: each was fetched
 and its body inspected for the footer. The six #113 replies are the answers to
 that PR's six findings, posted after it merged; `4020508859` was read back and
 the footer is present, so the route is unchanged and this entry is not stale. PR BODIES are not in this set — #111's and
@@ -2424,6 +2426,32 @@ jobs and `pr-text` — four red jobs, no test failure, and every step after the
 hygiene check unrun on all three versions. The type gate had already passed
 (320 files, each version) and the repository hygiene check had already passed
 (415 files). A body typo costs a full CI cycle.
+
+**FIFTH OCCURRENCE, #115 — the ORIGINAL route, and now it has a fingerprint.**
+#115 was opened with a placeholder body carrying no author-written link, and
+the created body refused anyway: the creation tool appended the footer after
+the checker had run, which is the route the table above records. The remedy
+worked as designed — nothing of substance was in the refused payload, and the
+rewrite through the update path made the re-triggered `pr-text` pass on the
+`edited` event within forty seconds.
+
+**The two routes are distinguishable from the refusal alone**, which is worth
+recording because the body itself may be gone by the time anyone reads the log:
+
+| route | tokens named in the refusal |
+|---|---|
+| author-written attribution link (#114) | one |
+| the creation tool's appended footer (#115) | two — the vendor name appears both bare and as a two-word product name |
+
+A future reader diagnosing a refused `pr-body.txt` can tell which happened from
+the count, without recovering the payload.
+
+**What it still costs, measured twice now.** `ci.yml` reads
+`github.event.pull_request.body` frozen at trigger time, so rewriting the body
+clears `pr-text` on the `edited` event but NOT the three build jobs: those
+carry the stale payload and fail at the hygiene step in about thirty seconds,
+before any suite runs. Only a push clears them. On #115 that cost a full build
+cycle on three Pythons for a body that was already correct in storage.
 
 **No new instrument.** The same limit as the rest of this entry: nothing in the
 tree can read a PR body before it is posted. What changed is the claim, which
@@ -2713,3 +2741,114 @@ classes:
 field is covered; it is evidence nothing has been measured yet. Probing the
 field directly — constructing two equal, non-identical registries — showed the
 suite could not distinguish the two checks at all.
+
+---
+
+## G33 — two defects the wiring introduced, found by review after #114 merged
+
+Both were reported on #114 and both are correct. Both are consequences of the
+same change — wiring re-observation into the shipped roots — and both were
+**confirmed by direct probe before being accepted**, not taken on the
+reviewer's word.
+
+### 1. The synthesised observer guessed its base branch (P2)
+
+`build_reobservation` built a `GitTool` with that class's own default
+`base_branch="main"` whenever a root named a `git://` target and passed no
+reader. `build_execution_controller` always took that path.
+
+**Measured** on a repository based on `master`, driving the shipped factory:
+
+| reader | `base_branch` | `rev('main')` | `classify(feature-work)` | hold |
+|---|---|---|---|---|
+| the caller's own `GitTool` | `master` | `None` | `unmerged_commits = 0` | — |
+| the factory's synthesised one | `main` | `None` | `Unreadable('base_tip', 'unmerged_commits')` | **refused at creation** |
+
+So the merge proof worked and the observer could not read the base at all, and
+**every `branch.delete` hold was refused at creation** with
+`target_state_unreadable`. Fail-closed in direction, and a total denial of the
+feature for every deployment not based on `main`. The refusal also pointed at
+the repository rather than at the wiring, which is where the defect was.
+
+**The deeper reason it cannot be defaulted at all.** The base branch is not a
+deployment-wide constant — it is *the base the merge proof was evaluated
+against*. An observer reading a different base is precisely the second
+definition of "unmerged" that `GitBranchStateObserver`'s own docstring exists to
+forbid: the state a hold is pinned to would not be the state its evidence
+describes. `build_reobservation` had created exactly the reader its sibling
+class documents as forbidden.
+
+**RULING: refuse, do not guess.** A `git://` principal with neither a `GitTool`
+nor a `base_branch` raises `ConfigError` / `reobservation_base_branch_unknown`
+at COMPOSITION time. A supplied tool whose base disagrees with a supplied
+`base_branch` raises `reobservation_base_branch_conflict` — two definitions of
+"unmerged" for one hold, and neither silently wins. `tools/stale_branch_demo.py`
+is unaffected: it already passes its own reader, which is the preferred route
+and is now pinned by a test.
+
+**Not in `Config`.** There is no base-branch field and this change does not add
+one, so the base a deployment observes against is still outside the attested
+posture — the same limit G30 records for the opt-out.
+
+### 2. A receipt written before the subject key changed was lost (P2)
+
+#114 added the pending-hold id to the observation subject (G32 item 5). A hold
+approved under the PREVIOUS release wrote its pre-approval receipt under
+`observation:<attempt>#0`; the new lookup searched only
+`observation:<attempt>@pending:<id>#0`, found nothing, and returned `None` —
+which the caller reads as "there was no pre-approval reading".
+
+**Measured** by approving under the old key and executing under the new one:
+the pre-execution receipt came back with `prior: null`. That is the spelling
+meaning *this was the first reading*, so **the record stated that state was
+never checked at approval, for a hold where it was** — a false claim inside the
+receipt whose entire purpose is to show the check happened twice.
+
+**RULING: resolve an unambiguous legacy receipt, refuse an ambiguous one.**
+
+| chain contains | behaviour |
+|---|---|
+| the current subject | used, unmarked |
+| exactly one legacy subject | used, **marked** `resolved_from_pre_upgrade_subject` |
+| several legacy subjects | refused — `pre_approval_receipt_ambiguous` |
+| neither, on a pinned and observed hold | refused — `pre_approval_receipt_missing` |
+
+The marking matters: a reader must be able to tell an attribution from an
+identity. The ambiguous case is the exact collision the new key was added to
+remove, met in a ledger written before it — taking the first is how the later
+hold's execution comes to restate the earlier hold's reading, so it refuses.
+
+The missing-receipt guard is **conditioned on coverage**, so the G31
+registry-mismatch refusal still fires with its own reason: "this deployment
+does not observe the class" explains "the receipt is missing" rather than being
+masked by it. An unpinned hold needs no receipt and is not refused — pinned by
+its own test, because a blanket guard here would refuse every hold in a
+deployment that wires nothing.
+
+**What this says about the earlier sprint.** The subject-key change was ruled
+correct and still is; what it lacked was a reader for what the previous writer
+left. A key change is a migration whether or not anything is migrated, and a
+ledger outlives the deployment that wrote it.
+
+### Executed mutations
+
+Through `scripts/mutation_worktree.py`, both attack classes, 78 tests green
+unmutated. Every one reddened a named test.
+
+| mutation | observed |
+|---|---|
+| N1 deletion: the no-base refusal removed, so `GitTool`'s default returns | 1 red |
+| N2 substitution: the named base is accepted and then not passed to the tool | 1 red |
+| N3 deletion: the tool-vs-base conflict check removed | 1 red |
+| N4 deletion: the legacy subject is never searched | 2 red |
+| N5 substitution: an ambiguous legacy set takes the first instead of refusing | 1 red |
+| N6 deletion: a resolved legacy receipt is not marked | 1 red |
+| N7 deletion: a pinned hold with no receipt executes anyway | 1 red |
+| N8 substitution: the missing-receipt guard drops its coverage condition | **4 red, including the gap reproduction itself** |
+
+**N8 is the row that justifies the condition.** Widening the guard to every
+hold with no receipt reddens `test_the_gap_without_reobservation_...` — the
+kept measurement of the unfixed path — because a deployment that wires nothing
+pins nothing and would then be refused at execution for a receipt it never had
+any reason to write. The unconditioned guard does not tighten the control; it
+breaks every deployment that has not adopted it.

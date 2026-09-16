@@ -52,6 +52,8 @@ CONFIG_REFUSAL_REASONS: frozenset[str] = frozenset({
     "bound_zero_is_not_unbounded",  # a 0/negative where unbounded must be named
     "unknown_unbounded_spelling",   # a bound that is neither positive nor named
     "reobservation_registry_discarded",  # a registry the supplied service would not use
+    "reobservation_base_branch_unknown",   # a git principal with no reader and no base
+    "reobservation_base_branch_conflict",  # a supplied reader and base that disagree
 })
 
 

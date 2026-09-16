@@ -73,6 +73,9 @@ EXECUTION_REFUSAL_REASONS: frozenset[str] = frozenset({
     "target_state_aspects_differ",          # two digests over different covered sets
     "target_state_absent",                  # a v2 record carrying no target_state at all
     "target_state_registry_mismatch",       # pinned under a registry this one does not match
+    # -- the pre-approval receipt the execution entry must restate ------------
+    "pre_approval_receipt_missing",         # pinned and observed, but no receipt on the chain
+    "pre_approval_receipt_ambiguous",       # several pre-upgrade receipts share one subject
 })
 
 
