@@ -2349,7 +2349,7 @@ Whether that matters for the provenance story is a judgement for whoever runs
 Part B; what is recorded here is that it is **not** swept by it, so the
 question is answered before diligence rather than during it.
 
-### THE BOUNDED SET — twenty-four carriers, ALL twenty-four read back
+### THE BOUNDED SET — twenty-five carriers, ALL twenty-five read back
 
 | PR | kind | id |
 |---|---|---|
@@ -2377,8 +2377,9 @@ question is answered before diligence rather than during it.
 | #118 | review reply | `4022525539` — confirmed via REST |
 | #119 | PR body | `4544106496` — read back, confirmed, stripped |
 | #119 | review reply | `4022679600` — confirmed via REST, same minute |
+| #120 | PR body | `4547756338` — read back, confirmed, stripped |
 
-Twenty-two review replies, one PR comment and one PR body. Not approximate:
+Twenty-two review replies, one PR comment and two PR bodies. Not approximate:
 every row was fetched and its body inspected for the footer. The last two
 unconfirmed rows were closed on 2026-09-16 through the REST channel described
 below, and every row added since has been confirmed in the minute it was
@@ -3498,3 +3499,10 @@ way a PR body can — `update_pull_request` appends nothing, but there is no
 equivalent for a review reply, so the footer stands on every one of the
 twenty-two. Confirming them promptly does not remove them; it only keeps this
 table honest about what is known versus assumed.
+
+**EIGHTH OCCURRENCE, #120.** Same route, same read-back, same strip. Recorded
+without further commentary: the mechanism has not changed since the fifth, and
+repeating the analysis each time would pad this entry rather than extend it.
+What the count is for is the rate — eight occurrences across eight pull
+requests opened this way, which is every one of them. **The append is not
+intermittent and no PR opened through that tool has escaped it.**
