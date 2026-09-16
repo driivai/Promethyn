@@ -105,6 +105,20 @@ def is_usable_branch_name(name: str) -> bool:
     later. One definition of "a branch name this tool will touch": a root that
     spelled the rule again would be a second definition, free to drift from the
     one the reads actually use.
+
+    THAT SENTENCE WAS ONCE FALSE OF THIS MODULE. When the rule was strengthened
+    past the charset pattern, this function was the only thing strengthened:
+    ``classify``, ``rev`` and ``GitBranchDeleteExecutor.execute`` went on
+    matching ``_BRANCH_RE`` directly, so the tighter rule reached the
+    composition root and nothing else — and the exported predicate became the
+    second definition it exists to prevent, drifting in the one direction that
+    costs. ``HEAD`` is the measured case: git resolves ``HEAD^{commit}`` and
+    reports ``rev-list --count main..HEAD`` as ``0``, so a symbolic ref
+    classified as PROVABLY MERGED — the evidence an irreversible delete is
+    authorised on — and the delete then failed, because ``git branch -D HEAD``
+    cannot work. Every read now calls this function, and
+    ``test_git_ref_format.py`` pins that structurally so the next read added
+    here cannot quietly reintroduce it.
     """
 
     if not _BRANCH_RE.match(name):
@@ -213,7 +227,7 @@ class GitTool:
         human; it never widens what may auto-delete.
         """
 
-        if not _BRANCH_RE.match(branch):
+        if not is_usable_branch_name(branch):
             return BranchClassification(branch=branch, unmerged_commits=None)
         result = self._run(
             "rev-list", "--count", f"{self.base_branch}..{branch}"
@@ -239,7 +253,7 @@ class GitTool:
         would be a value that digests.
         """
 
-        if not _BRANCH_RE.match(ref):
+        if not is_usable_branch_name(ref):
             return None
         result = self._run("rev-parse", "--verify", f"{ref}^{{commit}}")
         if not _ran(result) or result.exit_status != 0:
@@ -477,7 +491,7 @@ class GitBranchDeleteExecutor(Executor):
             return self._refuse(decision, f"unsupported action kind {action.kind!r}")
 
         branch = action.code
-        if not _BRANCH_RE.match(branch):
+        if not is_usable_branch_name(branch):
             return self._refuse(decision, f"unsafe branch name {branch!r}")
         if branch == self.base_branch:
             return self._refuse(decision, "refusing to delete the base branch")
