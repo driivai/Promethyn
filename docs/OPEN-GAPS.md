@@ -2427,6 +2427,32 @@ hygiene check unrun on all three versions. The type gate had already passed
 (320 files, each version) and the repository hygiene check had already passed
 (415 files). A body typo costs a full CI cycle.
 
+**FIFTH OCCURRENCE, #115 — the ORIGINAL route, and now it has a fingerprint.**
+#115 was opened with a placeholder body carrying no author-written link, and
+the created body refused anyway: the creation tool appended the footer after
+the checker had run, which is the route the table above records. The remedy
+worked as designed — nothing of substance was in the refused payload, and the
+rewrite through the update path made the re-triggered `pr-text` pass on the
+`edited` event within forty seconds.
+
+**The two routes are distinguishable from the refusal alone**, which is worth
+recording because the body itself may be gone by the time anyone reads the log:
+
+| route | tokens named in the refusal |
+|---|---|
+| author-written attribution link (#114) | one |
+| the creation tool's appended footer (#115) | two — the vendor name appears both bare and as a two-word product name |
+
+A future reader diagnosing a refused `pr-body.txt` can tell which happened from
+the count, without recovering the payload.
+
+**What it still costs, measured twice now.** `ci.yml` reads
+`github.event.pull_request.body` frozen at trigger time, so rewriting the body
+clears `pr-text` on the `edited` event but NOT the three build jobs: those
+carry the stale payload and fail at the hygiene step in about thirty seconds,
+before any suite runs. Only a push clears them. On #115 that cost a full build
+cycle on three Pythons for a body that was already correct in storage.
+
 **No new instrument.** The same limit as the rest of this entry: nothing in the
 tree can read a PR body before it is posted. What changed is the claim, which
 now says the update path protects against the tool and not against the author.
