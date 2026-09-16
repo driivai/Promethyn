@@ -2349,7 +2349,7 @@ Whether that matters for the provenance story is a judgement for whoever runs
 Part B; what is recorded here is that it is **not** swept by it, so the
 question is answered before diligence rather than during it.
 
-### THE BOUNDED SET — twenty-four carriers, ALL twenty-four read back
+### THE BOUNDED SET — twenty-six carriers, ALL twenty-six read back
 
 | PR | kind | id |
 |---|---|---|
@@ -2377,8 +2377,10 @@ question is answered before diligence rather than during it.
 | #118 | review reply | `4022525539` — confirmed via REST |
 | #119 | PR body | `4544106496` — read back, confirmed, stripped |
 | #119 | review reply | `4022679600` — confirmed via REST, same minute |
+| #120 | PR body | `4547756338` — read back, confirmed, stripped |
+| #120 | review reply | `4026263917` — confirmed via REST, same minute |
 
-Twenty-two review replies, one PR comment and one PR body. Not approximate:
+Twenty-three review replies, one PR comment and two PR bodies. Not approximate:
 every row was fetched and its body inspected for the footer. The last two
 unconfirmed rows were closed on 2026-09-16 through the REST channel described
 below, and every row added since has been confirmed in the minute it was
@@ -3004,6 +3006,72 @@ the executor already has, and `candidate_started=False` becomes the refusal
 `timed_out`: a candidate that started and was then wall-clock killed really ran
 and its side effects happened.
 
+### CAN THE RECORD SAY IT? Half yes, and the half that is missing is named
+
+The brief that produced this fix asked for this explicitly and **the answer was
+not written down at the time — this section closes that shortfall.** The
+question is whether the outcome vocabulary can express "the harness failed
+before the candidate ran", because F14 chains it.
+
+**STRUCTURALLY, YES — and that is what the fix added.** `ExecutionResult`
+carries `started_ok` and `candidate_started` as two separate booleans, so the
+pair `(True, False)` names this state exactly and distinguishes it from a
+missing runtime `(False, False)`. Before the fix the executor wrote
+`started_ok=False` for both, collapsing two harness faults with different
+remedies into one value;
+`test_the_two_harness_faults_are_DISTINGUISHABLE_in_the_record` pins the
+separation. A consumer can branch on the pair today, and it is structured data,
+not prose.
+
+**AS A TYPED REASON, NO.** Measured:
+
+    dataclasses.fields(ExecutionResult) ->
+        executed, subject_id, detail, refused, started_ok,
+        candidate_started, sandbox_name, exit_status, stdout
+
+There is **no reason field drawn from a closed set**. `detail` is free text —
+here, `"refused: sandbox started but the candidate never did, ..."`. The
+closed vocabulary that does exist, `EXECUTION_REFUSAL_REASONS`
+(`policy/execution.py:54`), has **seventeen** members and **every one names an
+AUTHORIZATION condition** — chain integrity, descriptor binding, re-observation,
+the pre-approval receipt. Not one names a harness fault or any execution-time
+sandbox condition, because that set belongs to a different stage: it is the
+vocabulary for *why a hold may not proceed*, not for *what happened when it
+did*.
+
+> **CORRECTION.** This paragraph first said **nineteen**. The set has
+> seventeen; nineteen was arrived at by counting lines in the source, which
+> includes comment lines, instead of the set. Withdrawn here rather than
+> quietly edited, because a number nothing checks is exactly the failure this
+> section is about — and the membership pin below now asserts the count so the
+> same slip cannot recur silently.
+
+**So the seam is half-typed**, and the asymmetry is the finding rather than an
+oversight to paper over: the authorization stage refuses with a closed-set
+reason a test can assert on, and the execution stage refuses with a sentence.
+A consumer that wants "harness fault, candidate never started" as a *token*
+must either read the two booleans — available, structured, and the recommended
+route — or match on `detail`, which is fragile and which nothing pins.
+
+**WHAT F14 WILL HAVE TO CHAIN, stated so the vocabulary is settled before it
+starts.** F14 needs to know which of these it is building on:
+
+1. The boolean pair is the contract, and F14 branches on `(started_ok,
+   candidate_started)`. Nothing more is owed here. This is what the code
+   supports **today**.
+2. Or `ExecutionResult` gains a typed reason from a closed set — a new set for
+   the execution stage, *not* a widening of `EXECUTION_REFUSAL_REASONS`, which
+   would conflate two stages that refuse for unrelated causes. That is a design
+   decision with a migration behind it (every construction site, every
+   consumer, the receipt schema), and **it is deliberately NOT taken here**:
+   this entry's fix was the smallest correct one, and inventing a vocabulary
+   while fixing a mapping is how the mapping stops being reviewable.
+
+**This entry does not decide between them.** It records that (1) is what
+exists, that (2) is unbuilt, and that the choice is F14's to make with the cost
+of (2) visible in advance — which is the whole reason the question was asked
+before F14 rather than during it.
+
 ### The class, swept
 
 | site | fields read before | total? |
@@ -3439,3 +3507,61 @@ way a PR body can — `update_pull_request` appends nothing, but there is no
 equivalent for a review reply, so the footer stands on every one of the
 twenty-two. Confirming them promptly does not remove them; it only keeps this
 table honest about what is known versus assumed.
+
+**EIGHTH OCCURRENCE, #120.** Same route, same read-back, same strip. Recorded
+without further commentary: the mechanism has not changed since the fifth, and
+repeating the analysis each time would pad this entry rather than extend it.
+What the count is for is the rate — eight occurrences across eight pull
+requests opened this way, which is every one of them. **The append is not
+intermittent and no PR opened through that tool has escaped it.**
+
+### The vocabulary pin was itself inferred from names, and review caught it
+
+Reported on #120 and **confirmed by direct probe before being accepted.** The
+first version of `test_the_authorization_vocabulary_names_no_harness_fault`
+asked whether any member of `EXECUTION_REFUSAL_REASONS` contained one of seven
+substrings — `sandbox`, `harness`, `candidate`, `started`, `timeout`,
+`timed_out`, `isolation`. Measured, by adding one member at a time to the set:
+
+| addition | caught? |
+|---|---|
+| `runtime_unavailable` | **missed** |
+| `setup_failed` | **missed** |
+| `infra_fault` | **missed** |
+| `execution_did_not_run` | **missed** |
+| `sandbox_candidate_never_started` | caught |
+
+**Four of five missed**, and the one it caught was the one that happened to
+contain the author's own tokens. So the test did not detect the change it
+claimed to pin, and G35's statement could have gone stale under any plausibly
+named addition.
+
+**This is G25 restated: a name is not a membership.** A predicate over
+spellings infers semantics from whatever fragments the author thought of, while
+an addition is free to be called anything. The set is now pinned **as a set**:
+any addition fails whatever it is named, and the failure message sends the
+author back to this entry to decide whether the new reason belongs to the
+authorization stage at all.
+
+**The same review pass produced the count correction above** — `len(...) >= 15`
+passed happily against a set of seventeen while the prose said nineteen. The
+pin now asserts `== 17`, and the docstring states plainly that the count is not
+the property; membership is. The count is asserted only because this entry
+quotes a number.
+
+**THE THREAD WATCHER HAS A FALSE-POSITIVE MODE, recorded before it misleads
+someone.** The REST poll that caught #120's finding keys each comment on
+`path:line` alongside its id. When a push makes a comment OUTDATED, GitHub
+sets `line` to `null`, the formatted row changes, and the diff against the
+previous poll emits the SAME comment a second time as though it were new.
+
+Observed on #120: finding `4026187551` was emitted twice, once at
+`test_execution_start_signal.py:635` and again at `:None` after a push. The
+listing at that moment showed **one** finding and **one** reply, so the second
+event was an artefact of the watcher, not a second report.
+
+Recorded because the failure mode is the inverse of the one this entry was
+correcting: over-reporting rather than under-reporting. It is the safer
+direction — a duplicate is noticed, a miss is not — but a watcher that cries
+twice teaches its reader to discount it, which eventually produces the miss
+anyway. **Key on the comment id alone, not on id plus mutable coordinates.**

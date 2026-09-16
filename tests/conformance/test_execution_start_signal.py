@@ -576,3 +576,127 @@ def test_the_branch_delete_executor_keeps_the_same_distinction(tmp_path):
     assert setup_timeout.started_ok is True
     assert not setup_timeout.candidate_started
     assert tool.rev(fixture.BRANCH) is not None  # nothing was deleted either way
+
+
+# ---------------------------------------------------------------------------
+# PART 7 — the vocabulary claim, pinned rather than left in prose
+#
+# G35's "CAN THE RECORD SAY IT?" section states two things about the outcome
+# vocabulary, and F14 is expected to build on them. A contract-completeness
+# claim carried in prose with no instrument behind it is precisely what that
+# same entry criticises in F18, so both halves are pinned here. These are
+# STATE-OF-THE-WORLD pins: they are written to fail when the world changes, so
+# that whoever changes it also updates the entry F14 reads.
+# ---------------------------------------------------------------------------
+
+
+def test_the_execution_record_has_NO_typed_reason_field():
+    """Half one: the record carries free text, not a closed-set token.
+
+    If someone adds a typed reason to ``ExecutionResult`` this fails, and that
+    is the intent — G35 tells F14 that option (2) is UNBUILT, and a silently
+    built option (2) would leave F14 reading a stale entry.
+    """
+
+    import dataclasses
+
+    from prometheus_protocol.swarm.models import ExecutionResult
+
+    names = {f.name for f in dataclasses.fields(ExecutionResult)}
+
+    assert names == {
+        "executed", "subject_id", "detail", "refused", "started_ok",
+        "candidate_started", "sandbox_name", "exit_status", "stdout",
+    }, f"ExecutionResult's fields changed: {sorted(names)}"
+    assert not {n for n in names if "reason" in n}, (
+        "ExecutionResult gained a reason field — G35's 'as a typed reason, NO' "
+        "is now false and F14's choice has been made by accident"
+    )
+    # And the field that DOES carry the cause is plain text.
+    detail = next(f for f in dataclasses.fields(ExecutionResult) if f.name == "detail")
+    assert detail.type in (str, "str"), detail.type
+
+
+#: ``EXECUTION_REFUSAL_REASONS`` as it stands, pinned by MEMBERSHIP.
+#:
+#: WHY THE EXACT SET AND NOT A PREDICATE OVER NAMES. The first version of the
+#: test below asked whether any member contained one of seven substrings
+#: ("sandbox", "harness", "candidate", ...). Review found that it does not
+#: detect the change it claims to pin, and a direct probe agreed: adding
+#: ``runtime_unavailable``, ``setup_failed``, ``infra_fault`` or
+#: ``execution_did_not_run`` to the set left every assertion GREEN — four of
+#: five counterexamples missed, and the one it caught was the one that happened
+#: to contain the author's own tokens.
+#:
+#: That is G25's rule restated: A NAME IS NOT A MEMBERSHIP. A predicate over
+#: spellings infers semantics from whatever fragments the author thought of,
+#: and an addition is free to be named anything. So the set is pinned as a set.
+#: Any addition fails, whatever it is called, and the failure sends the author
+#: to G35 to decide whether it belongs to this stage at all.
+_AUTHORIZATION_REFUSAL_REASONS = frozenset({
+    # integrity of a pinned record against its chain entry
+    "chain_did_not_verify",
+    "chain_entry_count_wrong",
+    "record_differs_from_chain_entry",
+    "reverification_required",
+    # descriptor binding
+    "descriptor_absent",
+    "descriptor_field_mismatch",
+    "descriptor_missing_action",
+    "descriptor_policy_cannot_authorize",
+    "descriptor_snapshot_mismatch",
+    # re-observation of the live target
+    "state_moved_after_approval",
+    "target_state_absent",
+    "target_state_aspects_differ",
+    "target_state_moved_before_approval",
+    "target_state_registry_mismatch",
+    "target_state_unreadable",
+    # the pre-approval receipt
+    "pre_approval_receipt_ambiguous",
+    "pre_approval_receipt_missing",
+})
+
+
+def test_the_authorization_vocabulary_names_no_harness_fault():
+    """Half two: ``EXECUTION_REFUSAL_REASONS`` belongs to a different stage.
+
+    G35 says widening THIS set would conflate authorization with execution.
+    That argument only holds while the set really contains no execution-stage
+    member, so its membership is pinned rather than inferred from spellings —
+    see the note above for what the inferred version missed.
+    """
+
+    from prometheus_protocol.policy.execution import EXECUTION_REFUSAL_REASONS
+
+    added = EXECUTION_REFUSAL_REASONS - _AUTHORIZATION_REFUSAL_REASONS
+    removed = _AUTHORIZATION_REFUSAL_REASONS - EXECUTION_REFUSAL_REASONS
+
+    assert not added, (
+        f"EXECUTION_REFUSAL_REASONS gained {sorted(added)}. If these are "
+        "authorization conditions, add them to the pin above. If any is an "
+        "EXECUTION-stage condition, G35's argument against widening this set "
+        "has been overridden and that entry must be updated — F14 reads it."
+    )
+    assert not removed, (
+        f"EXECUTION_REFUSAL_REASONS lost {sorted(removed)}; a shrinking closed "
+        "set silently widens what passes unchallenged elsewhere"
+    )
+    # The count is asserted too, and it is NOT the property — membership is.
+    # It is here because G35 quotes a number, and a quoted number that nothing
+    # checks is how "nineteen" was written for a set of seventeen.
+    assert len(EXECUTION_REFUSAL_REASONS) == 17
+    assert "descriptor_absent" in EXECUTION_REFUSAL_REASONS
+
+
+def test_the_boolean_pair_IS_expressible_which_is_the_other_half():
+    """G35 says structurally YES. Asserted, because "half yes" is only honest
+    if the yes half is real: the pair must distinguish the two harness faults
+    on the live mapping, not merely exist as two fields."""
+
+    setup_timeout = _execute(started_ok=True, candidate_started=False, timed_out=True)
+    no_runtime = _execute(started_ok=False, candidate_started=False, timed_out=False)
+
+    assert (setup_timeout.started_ok, setup_timeout.candidate_started) == (True, False)
+    assert (no_runtime.started_ok, no_runtime.candidate_started) == (False, False)
+    assert not setup_timeout.executed and not no_runtime.executed
