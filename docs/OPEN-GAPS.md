@@ -2349,7 +2349,7 @@ Whether that matters for the provenance story is a judgement for whoever runs
 Part B; what is recorded here is that it is **not** swept by it, so the
 question is answered before diligence rather than during it.
 
-### THE BOUNDED SET — twenty-three carriers, ALL twenty-three read back
+### THE BOUNDED SET — twenty-four carriers, ALL twenty-four read back
 
 | PR | kind | id |
 |---|---|---|
@@ -2375,12 +2375,14 @@ question is answered before diligence rather than during it.
 | #117 | review reply | `4022309714` |
 | #116 | review reply | `4022357029` — confirmed via REST |
 | #118 | review reply | `4022525539` — confirmed via REST |
-| #119 | PR body | `4544106496` — **read back, confirmed, stripped** |
+| #119 | PR body | `4544106496` — read back, confirmed, stripped |
+| #119 | review reply | `4022679600` — confirmed via REST, same minute |
 
-Twenty-one review replies, one PR comment and one PR body. Not approximate:
+Twenty-two review replies, one PR comment and one PR body. Not approximate:
 every row was fetched and its body inspected for the footer. The last two
 unconfirmed rows were closed on 2026-09-16 through the REST channel described
-below. The six #113 replies are the answers to
+below, and every row added since has been confirmed in the minute it was
+created — which is what that channel buys. The six #113 replies are the answers to
 that PR's six findings, posted after it merged; `4020508859` was read back and
 the footer is present, so the route is unchanged and this entry is not stale. PR BODIES are not in this set — #111's and
 #112's created bodies carried it, were refused by CI, and were rewritten
@@ -3423,3 +3425,17 @@ one, which is precisely doctrine #8.** The finding in that thread was correct.
 reason to wait. Waiting is the last resort, after every channel has refused, and
 the channels are four: the GraphQL listing, the PR-activity webhook, the REST
 pull endpoint for bodies, and the REST review-comment endpoints for replies.
+
+**FIRST CARRIER CREATED AND CONFIRMED UNDER THE CORRECTED RULE.**
+`4022679600`, the reply on #119, was read back through
+`GET /repos/{o}/{r}/pulls/comments/{id}` immediately after posting: HTTP 200,
+footer present, **observed**. No wait, no inference, no row marked pending.
+
+That is the whole practical difference the fourth channel makes, and it is
+worth stating as a number rather than a principle: under the old rule this row
+would have read "not read back" for up to an hour, and two such rows stayed
+that way across three pull requests. **A REPLY CARRIER CANNOT BE STRIPPED** the
+way a PR body can — `update_pull_request` appends nothing, but there is no
+equivalent for a review reply, so the footer stands on every one of the
+twenty-two. Confirming them promptly does not remove them; it only keeps this
+table honest about what is known versus assumed.
