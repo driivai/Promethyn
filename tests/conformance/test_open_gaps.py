@@ -158,3 +158,140 @@ def test_the_sweep_does_not_refuse_a_healthy_tree(tmp_path, monkeypatch):
     monkeypatch.setattr(sweep, "ROOTS", ("src",))
     hits = sweep.positional_constructions({"Anything": (6, False)})
     assert hits == {"Anything": ["src/fine.py:1"]}
+
+
+# ---------------------------------------------------------------------------
+# G38 — the `$` anchor in the TLS diagnostic guard
+#
+# Pinned as a PASSING TEST rather than left as prose (doctrine #5). The gap is
+# RECORDED and deliberately NOT FIXED on the change that found it: a different
+# module, a different guard, unrelated to the review finding that surfaced the
+# class. These tests hold it at exactly its measured size, so it can close but
+# cannot grow while nobody is looking.
+# ---------------------------------------------------------------------------
+
+
+def _tls_reason_accepted(value: str) -> bool:
+    """Whether the GUARD accepts ``value`` — through the real constructor.
+
+    THIS WENT THROUGH THE REGEX OBJECT FIRST, AND THAT WAS THE WRONG SUBJECT.
+    Measured: with the pin reading ``_TLS_REASON.match(...)``, the mutation
+    changing the CALL SITE from ``.match`` to ``.fullmatch`` — which genuinely
+    closes this gap — left every assertion green. The pin's sentence was about
+    the guard and its reach was the pattern, one of the two things that
+    determine the outcome. The same defect as G37, in the instrument written to
+    record G37's sibling.
+
+    Going through ``Diagnostic`` makes the derivation total over both: the
+    anchor AND the method the call site uses.
+    """
+
+    from prometheus_protocol.core.diagnostics import (
+        REASON_CODES,
+        Diagnostic,
+        UnboundedDiagnostic,
+    )
+
+    try:
+        Diagnostic(reason=sorted(REASON_CODES)[0], context={"tls_reason": value})
+    except UnboundedDiagnostic:
+        return False
+    return True
+
+
+def test_G38_the_tls_reason_guard_is_loose_by_exactly_one_trailing_newline():
+    """The gap, at its measured size. Written to FAIL when it is fixed.
+
+    ``$`` matches at end-of-string or immediately before a single final
+    newline, and ``[A-Z0-9_]`` cannot consume a newline — so the widening is
+    exactly one trailing ``\\n`` and there is no second character that can
+    follow. This is NOT a text-injection channel, and the assertions below say
+    which half is which so a reader cannot take the gap for more than it is.
+    """
+
+    # The gap itself. When the guard is corrected — by the anchor OR by the
+    # call site's method — this line fails, which is the intent: closing a gap
+    # should require deleting its pin deliberately.
+    assert _tls_reason_accepted("CERT_EXPIRED\n"), (
+        "G38 appears to be FIXED — the guard no longer accepts a trailing "
+        "newline. Remove this pin and the tracker entry in the same change."
+    )
+
+    # The boundary, so the gap is never read as wider than it is.
+    for refused in ("CERT_EXPIRED\n\n", "CERT_EXPIRED\nX", "CERT_EXPIRED\r\n",
+                    "CERT_EXPIRED\r", "CERT_EXPIRED\nsecret leaked here"):
+        assert not _tls_reason_accepted(refused), (
+            f"G38 is WIDER than recorded: {refused!r} now passes the guard, so "
+            "the tracker's 'exactly one trailing newline' is no longer true"
+        )
+
+
+def test_G38_the_newline_reaches_the_RENDERED_message_not_just_the_field():
+    """Why the gap is worth a pin at all, measured at the sink.
+
+    A value that passes the guard but is dropped before rendering would cost
+    nothing. It is not dropped: ``message()`` is the only rendering, and it
+    emits the newline verbatim — so one diagnostic becomes two lines in any
+    line-oriented sink. That is the whole exposure, stated at the point where
+    it lands rather than at the point where it is admitted.
+    """
+
+    from prometheus_protocol.core.diagnostics import REASON_CODES, Diagnostic
+
+    rendered = Diagnostic(
+        reason=sorted(REASON_CODES)[0], context={"tls_reason": "CERT_EXPIRED\n"}
+    ).message()
+
+    assert rendered.endswith("CERT_EXPIRED\n"), rendered
+    assert "\n" in rendered, (
+        "the newline no longer reaches the rendered message, so G38 is closed "
+        "at the sink even if the guard still admits it — re-measure and rewrite"
+    )
+
+
+def test_G38_the_paired_positive_control_the_guard_still_works():
+    """Doctrine #4. Without it the assertions above are equally consistent with
+    a guard that has stopped refusing anything at all."""
+
+    from prometheus_protocol.core.diagnostics import _TLS_REASON
+
+    assert _TLS_REASON.match("CERT_EXPIRED")
+    assert _TLS_REASON.match("WRONG_VERSION_NUMBER")
+    for refused in ("cert_expired", "1CERT", "CERT EXPIRED", "", "A" * 65):
+        assert not _TLS_REASON.match(refused), refused
+
+
+def test_G38_the_sibling_regex_swept_alongside_it_is_NOT_the_same_shape():
+    """The sweep's NEGATIVE result, recorded as a measurement rather than a
+    silence (doctrine #8). ``_GCP_KEY`` has three users and every one calls
+    ``.fullmatch`` on the same object — the regex IS the rule there, with no
+    stricter wrapper to diverge from. Pinned so that if a fourth user is added
+    with ``.match``, this says so."""
+
+    import ast
+    import pathlib
+
+    module = REPO / "src" / "prometheus_protocol" / "chokepoint" / "audit_normalization.py"
+    tree = ast.parse(pathlib.Path(module).read_text(encoding="utf-8"))
+
+    methods = {
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "_GCP_KEY"
+    }
+
+    assert methods == {"fullmatch"}, (
+        f"_GCP_KEY is now consulted with {sorted(methods)}; a '.match' user "
+        "would make it the G37/G38 shape and it must be assessed, not assumed"
+    )
+
+
+def test_G38_is_named_in_the_tracker():
+    """The gap lives in both places or in neither."""
+
+    text = TRACKER.read_text(encoding="utf-8")
+    for gap in ("G36", "G37", "G38"):
+        assert re.search(rf"^## {gap}\b", text, re.M), f"no tracker entry {gap}"

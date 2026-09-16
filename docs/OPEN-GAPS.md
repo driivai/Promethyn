@@ -3266,3 +3266,102 @@ and narrower than the sentence describing it.** The instrument that keeps
 catching it is review, not the suite: this one had green proofs, reddening
 mutations in both attack classes, and a test asserting the inverse of the
 property, all at once.
+
+## G38 — the same `$` anchor defect, in the TLS diagnostic guard — RECORDED, NOT FIXED HERE
+
+Found by sweeping the CLASS of G36/G37 rather than the instance, and **not by
+any report**. The sweep asked a mechanical question across `src/`: which
+module-private compiled regexes have more than one user, and of those, which
+have a public wrapper that some other site bypasses? Two candidates came back.
+One is not the shape; one is.
+
+**Not the shape.** `chokepoint/audit_normalization.py`'s `_GCP_KEY` has three
+users — `normalize_gcp_event`, `from_public_key_export`, `__post_init__` — and
+every one calls `.fullmatch()` on the same object. The regex IS the rule there;
+there is no stricter wrapper to diverge from. Recorded so the sweep's negative
+result is a measurement rather than a silence.
+
+**The shape.** `core/diagnostics.py:186`:
+
+```python
+_TLS_REASON = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
+```
+
+consulted at line 238 as `_TLS_REASON.match(str(value))`. **`$`, not `\Z`, and
+`.match`, not `.fullmatch`** — G36's defect exactly, one module over.
+
+**Measured, not inferred:**
+
+| value | `.match` | `.fullmatch` |
+|---|---|---|
+| `CERT_EXPIRED` | True | True |
+| `CERT_EXPIRED\n` | **True** | False |
+| `CERT_EXPIRED\n\n` | False | False |
+| `CERT_EXPIRED\nX` | False | False |
+| `CERT_EXPIRED\r\n` | False | False |
+| `CERT_EXPIRED\r` | False | False |
+| `CERT_EXPIRED\nsecret` | False | False |
+
+**THE EXPOSURE IS EXACTLY ONE TRAILING NEWLINE AND NOTHING ELSE**, and saying
+so precisely is the point. `$` matches at end-of-string or immediately before a
+single final newline, and `[A-Z0-9_]` cannot consume a newline, so no second
+character can follow. **This is not a text-injection channel**: arbitrary prose
+does not pass, and the table above is the evidence rather than the reasoning.
+
+**Why it is still a defect.** The guard's own comment says the shape is
+enforced here "so even a handler that put something else on the attribute could
+not turn this key into a text channel" — defence in depth against a value that
+is not the OpenSSL symbolic constant. A value that is supposed to be one
+symbolic token can carry a line break, and a line break in a log record is the
+one character that ends a record. **The guard is one character looser than the
+sentence describing it** — the recurring shape this document keeps naming.
+
+**In practice the field is filled by CPython from OpenSSL's table**, so nothing
+reaching it today carries a newline. That is a statement about the current
+caller, not about the guard, and the guard exists precisely for the case where
+the caller is not what it was.
+
+**RECORDED, NOT FIXED HERE, and that is deliberate.** This is a different
+module, a different guard, and unrelated to the review finding that opened
+#118. Fixing it in this PR would be scope this PR was not asked for, and the
+precedent for splitting is the F16/F18 one: report the sibling finding with its
+measurement, fix it in its own change. What is owed here is that it was swept
+for, found, measured, and written down rather than left as an unexamined green.
+
+**Neither file is in the Hearth ledger.** `core/diagnostics.py` is not
+protected, nor is `tools/git.py` (G35). So the integrity ledger did not and
+would not see either of these changes.
+
+**THE PIN WRITTEN TO RECORD THIS GAP HAD G37'S DEFECT, and it is recorded
+rather than quietly corrected.** The first version asserted on
+`_TLS_REASON.match(...)` — the regex object. Two things determine whether the
+guard admits a value: the anchor, and the method the call site uses. Measured
+through `scripts/mutation_worktree.py` against a real baseline of 26:
+
+| probe | first pin | corrected pin |
+|---|---|---|
+| U1 gap closed via the ANCHOR (`$` → `\Z`) | 1 red | 2 red |
+| U2 gap closed via the CALL SITE (`.match` → `.fullmatch`) | **GREEN** | 2 red |
+| U3 gap WIDENED (charset admits a newline) | 1 red | 1 red |
+| U4 `_GCP_KEY` consulted with `.match` | 1 red | 1 red |
+
+**U2 is the point.** Changing the call site genuinely closes this gap, and the
+first pin stayed green through it: the pin's sentence was about the guard and
+its reach was the pattern — a derivation over one of the two fields that
+determine the outcome, which is G35's shape and G37's shape, in the instrument
+written to record G37's sibling. The corrected pin goes through the real
+`Diagnostic` constructor, so it is total over both.
+
+**A SECOND ASSERTION WAS ADDED AT THE SINK**, because "the guard admits it"
+and "it reaches the output" are different claims. Measured:
+`Diagnostic(...).message()` renders `body_not_json tls_reason=CERT_EXPIRED\n`
+— the newline is not dropped before rendering, so one diagnostic becomes two
+lines in any line-oriented sink. That is the whole exposure, pinned where it
+lands rather than where it is admitted.
+
+**AN EARLIER RUN OF THIS PROBE REPORTED FOUR GREENS AND PROVED NOTHING.** Its
+targets included a test module that does not exist, so pytest exited with no
+summary, and the harness reported `(no summary)` with an empty failure list —
+which a careless reader takes for "nothing reddened". The baseline assertion
+(`"passed" in summary`) was added for that reason and is what caught it. The
+empty-instrument pass, doctrine #8, in the tool used to check for it.
