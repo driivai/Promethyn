@@ -3004,6 +3004,65 @@ the executor already has, and `candidate_started=False` becomes the refusal
 `timed_out`: a candidate that started and was then wall-clock killed really ran
 and its side effects happened.
 
+### CAN THE RECORD SAY IT? Half yes, and the half that is missing is named
+
+The brief that produced this fix asked for this explicitly and **the answer was
+not written down at the time — this section closes that shortfall.** The
+question is whether the outcome vocabulary can express "the harness failed
+before the candidate ran", because F14 chains it.
+
+**STRUCTURALLY, YES — and that is what the fix added.** `ExecutionResult`
+carries `started_ok` and `candidate_started` as two separate booleans, so the
+pair `(True, False)` names this state exactly and distinguishes it from a
+missing runtime `(False, False)`. Before the fix the executor wrote
+`started_ok=False` for both, collapsing two harness faults with different
+remedies into one value;
+`test_the_two_harness_faults_are_DISTINGUISHABLE_in_the_record` pins the
+separation. A consumer can branch on the pair today, and it is structured data,
+not prose.
+
+**AS A TYPED REASON, NO.** Measured:
+
+    dataclasses.fields(ExecutionResult) ->
+        executed, subject_id, detail, refused, started_ok,
+        candidate_started, sandbox_name, exit_status, stdout
+
+There is **no reason field drawn from a closed set**. `detail` is free text —
+here, `"refused: sandbox started but the candidate never did, ..."`. The
+closed vocabulary that does exist, `EXECUTION_REFUSAL_REASONS`
+(`policy/execution.py:54`), has nineteen members and **every one names an
+AUTHORIZATION condition** — chain integrity, descriptor binding, re-observation,
+the pre-approval receipt. Not one names a harness fault or any execution-time
+sandbox condition, because that set belongs to a different stage: it is the
+vocabulary for *why a hold may not proceed*, not for *what happened when it
+did*.
+
+**So the seam is half-typed**, and the asymmetry is the finding rather than an
+oversight to paper over: the authorization stage refuses with a closed-set
+reason a test can assert on, and the execution stage refuses with a sentence.
+A consumer that wants "harness fault, candidate never started" as a *token*
+must either read the two booleans — available, structured, and the recommended
+route — or match on `detail`, which is fragile and which nothing pins.
+
+**WHAT F14 WILL HAVE TO CHAIN, stated so the vocabulary is settled before it
+starts.** F14 needs to know which of these it is building on:
+
+1. The boolean pair is the contract, and F14 branches on `(started_ok,
+   candidate_started)`. Nothing more is owed here. This is what the code
+   supports **today**.
+2. Or `ExecutionResult` gains a typed reason from a closed set — a new set for
+   the execution stage, *not* a widening of `EXECUTION_REFUSAL_REASONS`, which
+   would conflate two stages that refuse for unrelated causes. That is a design
+   decision with a migration behind it (every construction site, every
+   consumer, the receipt schema), and **it is deliberately NOT taken here**:
+   this entry's fix was the smallest correct one, and inventing a vocabulary
+   while fixing a mapping is how the mapping stops being reviewable.
+
+**This entry does not decide between them.** It records that (1) is what
+exists, that (2) is unbuilt, and that the choice is F14's to make with the cost
+of (2) visible in advance — which is the whole reason the question was asked
+before F14 rather than during it.
+
 ### The class, swept
 
 | site | fields read before | total? |

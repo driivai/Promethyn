@@ -576,3 +576,85 @@ def test_the_branch_delete_executor_keeps_the_same_distinction(tmp_path):
     assert setup_timeout.started_ok is True
     assert not setup_timeout.candidate_started
     assert tool.rev(fixture.BRANCH) is not None  # nothing was deleted either way
+
+
+# ---------------------------------------------------------------------------
+# PART 7 — the vocabulary claim, pinned rather than left in prose
+#
+# G35's "CAN THE RECORD SAY IT?" section states two things about the outcome
+# vocabulary, and F14 is expected to build on them. A contract-completeness
+# claim carried in prose with no instrument behind it is precisely what that
+# same entry criticises in F18, so both halves are pinned here. These are
+# STATE-OF-THE-WORLD pins: they are written to fail when the world changes, so
+# that whoever changes it also updates the entry F14 reads.
+# ---------------------------------------------------------------------------
+
+
+def test_the_execution_record_has_NO_typed_reason_field():
+    """Half one: the record carries free text, not a closed-set token.
+
+    If someone adds a typed reason to ``ExecutionResult`` this fails, and that
+    is the intent — G35 tells F14 that option (2) is UNBUILT, and a silently
+    built option (2) would leave F14 reading a stale entry.
+    """
+
+    import dataclasses
+
+    from prometheus_protocol.swarm.models import ExecutionResult
+
+    names = {f.name for f in dataclasses.fields(ExecutionResult)}
+
+    assert names == {
+        "executed", "subject_id", "detail", "refused", "started_ok",
+        "candidate_started", "sandbox_name", "exit_status", "stdout",
+    }, f"ExecutionResult's fields changed: {sorted(names)}"
+    assert not {n for n in names if "reason" in n}, (
+        "ExecutionResult gained a reason field — G35's 'as a typed reason, NO' "
+        "is now false and F14's choice has been made by accident"
+    )
+    # And the field that DOES carry the cause is plain text.
+    detail = next(f for f in dataclasses.fields(ExecutionResult) if f.name == "detail")
+    assert detail.type in (str, "str"), detail.type
+
+
+def test_the_authorization_vocabulary_names_no_harness_fault():
+    """Half two: ``EXECUTION_REFUSAL_REASONS`` belongs to a different stage.
+
+    G35 says widening THIS set would conflate authorization with execution.
+    That argument only holds while the set really contains no execution-stage
+    member, so the absence is asserted rather than assumed.
+    """
+
+    from prometheus_protocol.policy.execution import EXECUTION_REFUSAL_REASONS
+
+    forbidden = {
+        reason
+        for reason in EXECUTION_REFUSAL_REASONS
+        for token in ("sandbox", "harness", "candidate", "started", "timeout",
+                      "timed_out", "isolation")
+        if token in reason
+    }
+
+    assert not forbidden, (
+        "EXECUTION_REFUSAL_REASONS now names an execution-stage condition "
+        f"({sorted(forbidden)}); G35 argues against widening this set because "
+        "it is the AUTHORIZATION vocabulary, and that argument is now stale"
+    )
+    # The paired positive control: the set is non-empty and really is the
+    # authorization vocabulary, so the absence above is a finding and not an
+    # empty instrument (doctrine #8).
+    assert len(EXECUTION_REFUSAL_REASONS) >= 15
+    assert "descriptor_absent" in EXECUTION_REFUSAL_REASONS
+
+
+def test_the_boolean_pair_IS_expressible_which_is_the_other_half():
+    """G35 says structurally YES. Asserted, because "half yes" is only honest
+    if the yes half is real: the pair must distinguish the two harness faults
+    on the live mapping, not merely exist as two fields."""
+
+    setup_timeout = _execute(started_ok=True, candidate_started=False, timed_out=True)
+    no_runtime = _execute(started_ok=False, candidate_started=False, timed_out=False)
+
+    assert (setup_timeout.started_ok, setup_timeout.candidate_started) == (True, False)
+    assert (no_runtime.started_ok, no_runtime.candidate_started) == (False, False)
+    assert not setup_timeout.executed and not no_runtime.executed
