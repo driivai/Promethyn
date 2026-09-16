@@ -91,7 +91,10 @@ RECEIPT = REPO / "type-gate-receipt.json"
 #: Observed 319 on 2026-09-15 (was 316): re-observation phase 1 (G29) added
 #: ``policy/target_state.py``, ``policy/reobservation.py`` and
 #: ``tests/conformance/test_reobservation_branch_delete.py``.
-EXPECTED_CHECKED_FILES = 320
+#: Observed 322 on 2026-09-16 (was 321): merging main brought F16's
+#: ``tests/conformance/test_execution_start_signal.py`` alongside this branch's
+#: ``tests/conformance/test_git_ref_format.py``.
+EXPECTED_CHECKED_FILES = 322
 CHECKED_FILE_TOLERANCE = 2
 MINIMUM_CHECKED_FILES = EXPECTED_CHECKED_FILES - CHECKED_FILE_TOLERANCE
 

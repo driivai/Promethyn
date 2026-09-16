@@ -92,6 +92,49 @@ class SandboxExecutor(Executor):
                 decision,
                 f"sandbox did not start: {result.detail}",
                 started_ok=False,
+                candidate_started=False,
+            )
+
+        if not result.candidate_started:
+            # ISOLATION CAME UP AND THE CANDIDATE STILL NEVER RAN. The sandbox
+            # contract names this exactly (``sandbox/base.py``): ``started_ok``
+            # answers "did isolation start", ``candidate_started`` is the
+            # stronger, definite signal that the command itself began, and
+            # ``started_ok=True`` with ``candidate_started=False`` — a wall-clock
+            # timeout during SETUP — "stays a harness fault".
+            #
+            # Reading ``started_ok`` alone recorded that as ``executed=True``
+            # with "ran in sandbox": could-not-verify written into the receipt
+            # as verified-clean, at the one point downstream cannot recover the
+            # difference. Doctrine #1 where it is most expensive.
+            #
+            # WHY THIS OUTCOME AND NOT A NEW ONE. ``runner.py``'s three-way
+            # split is the precedent: a resource kill is a verdict ABOUT the
+            # candidate, a harness fault is not a verdict at all, isolation
+            # never starting is the same non-verdict. The executor has no
+            # verdict to give — ``exit_status`` carries the candidate's own
+            # outcome — so the split collapses onto the two outcomes it already
+            # has, and this is the second for the same reason ``started_ok=False``
+            # already is. The verifier seam has classified this triple as
+            # ``Unavailable(INFRA_FAULT)`` since the same bug was found there;
+            # this is the executor catching up to its own contract.
+            #
+            # KEYED ON ``candidate_started``, NOT ON ``timed_out``: a candidate
+            # that STARTED and was then killed by the wall clock really did run
+            # and its side effects happened. Keying on the timeout would discard
+            # that execution's record.
+            return self._refuse(
+                decision,
+                "sandbox started but the candidate never did, so nothing ran "
+                f"and nothing can be claimed about it: {result.detail}",
+                # ISOLATION REALLY DID START, and the record says so. Writing
+                # ``started_ok=False`` here would overwrite a true fact with a
+                # false one and make this indistinguishable from a missing
+                # runtime — two harness faults with different remedies,
+                # collapsed into one value. ``candidate_started`` carries what
+                # actually went wrong.
+                started_ok=True,
+                candidate_started=False,
             )
 
         # The action ran inside isolation. exit_status records its own success
@@ -112,7 +155,12 @@ class SandboxExecutor(Executor):
         )
 
     def _refuse(
-        self, decision: GateDecision, detail: str, *, started_ok: bool = True
+        self,
+        decision: GateDecision,
+        detail: str,
+        *,
+        started_ok: bool = True,
+        candidate_started: bool = True,
     ) -> ExecutionResult:
         return ExecutionResult(
             executed=False,
@@ -120,6 +168,7 @@ class SandboxExecutor(Executor):
             detail=f"refused: {detail}",
             refused=True,
             started_ok=started_ok,
+            candidate_started=candidate_started,
             sandbox_name=self._sandbox.name,
             exit_status=None,
             stdout="",

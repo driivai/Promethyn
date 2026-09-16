@@ -424,6 +424,24 @@
       "property": "the composition-time validator refuses bases the tool would not read without refusing the ones it would — so the refusal is about usability, not about naming a base at all"
     },
     {
+      "module": "tests/conformance/test_execution_start_signal.py",
+      "positive": "test_a_genuine_execution_is_still_recorded_as_executed",
+      "negatives": [
+        "test_a_setup_timeout_is_NOT_recorded_as_a_successful_execution",
+        "test_a_candidate_that_ran_and_then_timed_out_is_still_an_execution"
+      ],
+      "property": "the executor refuses a candidate that never started without refusing one that did — including one the wall clock killed after it started, whose side effects really happened"
+    },
+    {
+      "module": "tests/conformance/test_execution_start_signal.py",
+      "positive": "test_the_same_reads_still_work_when_git_actually_ran",
+      "negatives": [
+        "test_a_git_read_after_a_setup_timeout_answers_NOTHING",
+        "test_the_branch_delete_executor_does_not_claim_a_delete_that_never_ran"
+      ],
+      "property": "the git reads and the branch-delete executor refuse a command that never ran without refusing one that did — so the merge proof is still produced when git actually executes"
+    },
+    {
       "module": "tests/conformance/test_git_ref_format.py",
       "positive": "test_a_name_git_accepts_is_still_accepted",
       "negatives": [
