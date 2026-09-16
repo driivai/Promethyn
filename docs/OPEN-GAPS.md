@@ -2349,7 +2349,7 @@ Whether that matters for the provenance story is a judgement for whoever runs
 Part B; what is recorded here is that it is **not** swept by it, so the
 question is answered before diligence rather than during it.
 
-### THE BOUNDED SET — twenty-one carriers, nineteen read back
+### THE BOUNDED SET — twenty-one carriers, twenty read back
 
 | PR | kind | id |
 |---|---|---|
@@ -2372,7 +2372,7 @@ question is answered before diligence rather than during it.
 | #114 | review reply | `4021539074` |
 | #114 | review reply | `4021539794` |
 | #115 | review reply | `4021825848` |
-| #117 | review reply | `4022309714` — **not read back** |
+| #117 | review reply | `4022309714` |
 | #116 | review reply | `4022357029` — **not read back** |
 
 Eighteen review replies and one PR comment. Not approximate: each was fetched
@@ -2456,14 +2456,25 @@ carry the stale payload and fail at the hygiene step in about thirty seconds,
 before any suite runs. Only a push clears them. On #115 that cost a full build
 cycle on three Pythons for a body that was already correct in storage.
 
-**TWO CARRIERS ARE LISTED WITHOUT BEING READ BACK, and the heading says so.**
-The listing was rate-limited when those two replies were posted, so the footer
-on them is EXPECTED and not OBSERVED. Every other row in this table was fetched
-and inspected. The distinction is kept because this entry's whole value is that
-its rows are measurements: a row that is an inference, recorded as if it were a
-reading, would make the table exactly the kind of claim it exists to replace.
-They are marked rather than omitted so the carrier set stays complete, and the
-next reader with a working listing can confirm or correct them.
+**ONE CARRIER IS LISTED WITHOUT BEING READ BACK, and the heading says so.**
+`4022357029` was posted while the review-thread listing was rate-limited, so
+the footer on it is EXPECTED and not OBSERVED. It is marked rather than omitted
+so the carrier set stays complete: a row that is an inference, recorded as if
+it were a reading, would make this table exactly the kind of claim it exists to
+replace.
+
+**A SECOND CHANNEL FOR THE SAME OBSERVATION, found while waiting on the
+first.** `4022309714` was also posted under the rate limit and was first
+recorded as not read back. It then came back through the PR-activity webhook,
+whose payload carries the comment body AS STORED — footer included, and this
+session did not write that footer. So the stored body was observed without the
+GraphQL listing at all.
+
+That matters beyond one row: the listing is hourly-limited and the webhook is
+not, so "the footer cannot be confirmed right now" is a statement about ONE
+channel rather than about the fact. Where a reply is answered by a later
+webhook event, the confirmation is already in hand. Recorded because the
+earlier paragraph implied waiting was the only option, and it was not.
 
 **SIXTH OCCURRENCE, #116 — identical to the fifth, and that is the point.**
 Same placeholder body, same appended footer, same two-token refusal, same three
