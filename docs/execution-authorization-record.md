@@ -147,7 +147,29 @@ record cannot be a JSON column anyone with a database handle can rewrite. At
 | the row relabelled to the NEW policy after a rotation, chain re-hashed | pinned check satisfied; the seam re-resolves the new policy and the assessment's snapshot digest (which commits to the OLD requirements) does not match | **refused**: "re-resolved" |
 
 Each row is a test in `test_execution_authorization_record.py` and
-`test_hold_pinning.py`, including the limit as a passing test. Note what the
+`test_hold_pinning.py`, including the limit as a passing test.
+
+**The record was bound; the DECISION on it and the OUTCOME of it were not**
+(F13/F14, `docs/OPEN-GAPS.md` G39). The table above protected what a hold was
+permitted to do. A writer with the same database access could set the row to
+`approved` with a forged reviewer and retry would honour it; could flip an
+execution row's `executed` and an auditor would believe it; and with one
+further write could have the executor run a second time. Both are now chained
+as their own entries — `pending.decision` after every transition,
+`outcome.execution` with every execution row — and the row must equal its
+latest entry:
+
+| what the adversary changed | what approval / retry sees | result |
+|---|---|---|
+| the row's `status`/`decided_by`/`decided_at` with no matching entry | a decided row the chain never saw | **refused**: `decision_entry_missing` |
+| the row's decision after a genuine one was chained | row ≠ latest `pending.decision` entry | **refused**: `decision_differs_from_chain_entry`, naming the field |
+| a decided row reset to `pending` for a second approval | row ≠ entry (the chain says decided) | **refused** before anything is written |
+| `executions.executed`/`detail` after a genuine execution | row ≠ its `outcome.execution` entry | `verify_receipts` reports it; **retry refuses** `outcome_differs_from_chain_entry`, and does not run again |
+| all of the above AND the entries AND every later hash | self-consistent | **the same limit as the record's**: not detected without an anchor, `BROKEN` with one |
+
+Each is a test in `test_chained_decision_and_outcome.py`,
+`test_receipt_derivation.py` (one case per derived field) and
+`test_receipt_substitution.py`. Note what the
 lying record buys an adversary in the undetected case: a reviewer misled, and
 nothing executed that the seam would not have authorized anyway, because
 enforcement re-resolves the selected policy rather than reading the list. The

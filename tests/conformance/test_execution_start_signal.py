@@ -655,6 +655,17 @@ _AUTHORIZATION_REFUSAL_REASONS = frozenset({
     # the pre-approval receipt
     "pre_approval_receipt_ambiguous",
     "pre_approval_receipt_missing",
+    # the decision and the outcome against their chained receipts (F13/F14).
+    # Integrity conditions of the authorization stage — "why may this hold
+    # not proceed" — alongside record_differs_from_chain_entry, not an
+    # execution-stage vocabulary: none of them describes what the sandbox did.
+    "decision_entry_missing",
+    "decision_differs_from_chain_entry",
+    "outcome_entry_missing",
+    "outcome_differs_from_chain_entry",
+    # the inverse walk (review of #121): a receipt whose row is gone
+    "execution_row_missing",
+    "hold_row_missing",
 })
 
 
@@ -685,7 +696,7 @@ def test_the_authorization_vocabulary_names_no_harness_fault():
     # The count is asserted too, and it is NOT the property — membership is.
     # It is here because G35 quotes a number, and a quoted number that nothing
     # checks is how "nineteen" was written for a set of seventeen.
-    assert len(EXECUTION_REFUSAL_REASONS) == 17
+    assert len(EXECUTION_REFUSAL_REASONS) == 23
     assert "descriptor_absent" in EXECUTION_REFUSAL_REASONS
 
 

@@ -954,6 +954,32 @@ Re-swept after this landed (doctrine #9, `docs/execution-descriptor.md` §6 and
 "re-validates against the currently selected policy" now read "against the
 pinned policy, then re-resolves"; R5/R6 are no longer deferred.
 
+**Widened by F13/F14 (`docs/OPEN-GAPS.md` G39).** The position above covered
+the pinned record. The same adversary, one column over, could forge the
+DECISION (`status`, `decided_by`, `decided_at`) and retry honoured it, and
+could rewrite the OUTCOME (`executed`, `detail`) — and with the at-most-once
+claim nulled, have the executor run twice. Measured with an anchor in place
+and the chain VALID throughout. Both are now chained as their own entries and
+the row must equal its latest entry at approval, at retry, and under
+`verify_receipts`, which `audit --verify-chain` runs with the hash walk.
+
+- **Detected.** A forged approval (`decision_entry_missing`); a decision
+  altered after being chained (`decision_differs_from_chain_entry`); a decided
+  row reset for re-approval; a flipped outcome (`outcome_differs_from_chain_entry`,
+  and no second execution); one hold's entry substituted for another's, even
+  with the chain re-hashed to self-consistency. Each a passing test.
+- **Not detected, as a passing test.** Row, entry and every later hash
+  rewritten together — the record's limit, inherited exactly; `BROKEN` with an
+  external anchor.
+- **What the adversary can still do**, named rather than implied away:
+  null the at-most-once claim (no longer a double execution; still a race
+  between honest drivers); rewrite `executions.authorization` on an
+  auto-approved row, which has no hold entry; rewrite the promoted
+  `verdict/confidence/authoritative` columns, which the backfill path also
+  writes and which are not the chained account. Deleting a row outright is
+  **detected** — the receipts are walked in both directions (G42, closed by
+  review of #121 after it was measured as a double execution at retry).
+
 ---
 
 ## Attacker 4 — the network between Promethyn and its endpoints

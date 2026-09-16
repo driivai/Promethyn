@@ -238,6 +238,10 @@ def test_opening_an_old_ledger_adds_the_columns(tmp_path):
             "executions.authorization",
             "pending_actions.invalidated_at",
             "pending_actions.invalidated_reason",
+            # F13/F14: #120's structural start signals, added additively so an
+            # old ledger's rows read NULL (no executor invoked) rather than 0.
+            "executions.started_ok",
+            "executions.candidate_started",
         }
         cols = {r["name"] for r in ledger._conn.execute("PRAGMA table_info(attempts)")}
         assert {"verdict", "confidence", "unavailable"} <= cols

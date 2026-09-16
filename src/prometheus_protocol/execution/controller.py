@@ -468,6 +468,12 @@ class ExecutionController:
             judgment=_judgment_or_none(decision),
             pending_id=pending_id,
             authorization=record,
+            # #120's structural pair, passed through as the executor measured
+            # it. Every other ``record_execution`` call in this module records
+            # a row for which NO executor was invoked and leaves both at their
+            # ``None`` default — the third state, distinct from ``False``.
+            started_ok=result.started_ok,
+            candidate_started=result.candidate_started,
         )
         # A fail-closed refusal has no side-effect: release the claim so the
         # approved hold stays retry-eligible. A successful execution keeps its

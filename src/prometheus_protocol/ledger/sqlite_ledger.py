@@ -33,6 +33,17 @@ from prometheus_protocol.ledger.audit_chain import (
     entry_hash,
     verify_rows,
 )
+from prometheus_protocol.ledger.receipts import (
+    DECISION_EVENT,
+    OUTCOME_EVENT,
+    LedgerVerification,
+    decision_subject,
+    outcome_subject,
+    project_decision,
+    project_outcome,
+    unverifiable,
+    verify_ledger,
+)
 from prometheus_protocol.ledger.tip_anchor import (
     AnchorUnavailable,
     TipAnchor,
@@ -221,6 +232,13 @@ _ADDITIVE_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("unavailable", "INTEGER"),
         # The versioned authorization record the outcome was decided under.
         ("authorization", "TEXT"),
+        # #120's structural start signals, carried as the executor measured
+        # them and chained with the rest of the outcome (ledger/receipts.py).
+        # NULL means no executor was invoked for this row at all — a blocked,
+        # unavailable or pre-execution-refused row — which is a different fact
+        # from 0 (invoked; isolation did not start).
+        ("started_ok", "INTEGER"),
+        ("candidate_started", "INTEGER"),
     ],
     "pending_actions": [
         ("execution_committed_at", "TEXT"),
@@ -534,6 +552,14 @@ class SqliteLedger(Ledger):
                 f"cannot resolve pending action {pending_id}: it does not exist "
                 "or has already been decided"
             )
+        # THE DECISION RECEIPT (F13). Chained AFTER the row commits, from the
+        # row as stored, so the receipt is what a later reader will project —
+        # never the arguments this call was handed. If this append raises (an
+        # anchor that cannot be written), the row says decided and the chain
+        # says nothing, and retry refuses it as ``decision_entry_missing``:
+        # the fail-closed direction, and the same shape as a hold whose
+        # ``pending.hold`` append failed.
+        self._chain_decision(pending_id, at=decided_at)
 
     def invalidate_pending_action(
         self, pending_id: int, *, invalidated_at: str, reason: str
@@ -564,7 +590,15 @@ class SqliteLedger(Ledger):
             ),
         )
         self._conn.commit()
-        return cur.rowcount == 1
+        changed = cur.rowcount == 1
+        if changed:
+            # The receipt for a system transition, chained like a human one:
+            # the row's status moved, and a reader of the row must be able to
+            # find that move on the chain (F13 covers every writer, not only
+            # approval — a forged ``invalidated`` on a real approval is a
+            # denial of service with the same signature).
+            self._chain_decision(pending_id, at=invalidated_at)
+        return changed
 
     def mark_state_moved(self, pending_id: int, *, at: str, reason: str) -> bool:
         """Make an APPROVED hold terminal; True iff it was approved.
@@ -593,7 +627,14 @@ class SqliteLedger(Ledger):
             ),
         )
         self._conn.commit()
-        return cur.rowcount == 1
+        changed = cur.rowcount == 1
+        if changed:
+            # The one transition OUT of approved, receipted like the others.
+            # ``decided_by``/``decided_at`` are unchanged by design and the
+            # receipt restates them; only ``status`` and the invalidation
+            # columns move, and the receipt says so.
+            self._chain_decision(pending_id, at=at)
+        return changed
 
     def claim_pending_execution(self, pending_id: int, claimed_at: str) -> bool:
         """Atomically claim the right to execute a hold; True iff this call won.
@@ -658,6 +699,8 @@ class SqliteLedger(Ledger):
         judgment: dict | None = None,
         pending_id: int | None = None,
         authorization: dict | None = None,
+        started_ok: bool | None = None,
+        candidate_started: bool | None = None,
     ) -> int:
         # The judgment JSON is the source of record; verdict/confidence/
         # authoritative are promoted from it into queryable columns, from the
@@ -676,8 +719,8 @@ class SqliteLedger(Ledger):
                 subject_id, source, executed, refused, sandbox,
                 exit_status, detail, created_at,
                 verdict, confidence, authoritative, judgment, pending_id, unavailable,
-                authorization
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                authorization, started_ok, candidate_started
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 subject_id,
@@ -695,10 +738,31 @@ class SqliteLedger(Ledger):
                 pending_id,
                 unavailable,
                 json.dumps(authorization) if authorization is not None else None,
+                None if started_ok is None else int(started_ok),
+                None if candidate_started is None else int(candidate_started),
             ),
         )
         self._conn.commit()
-        return _inserted_id(cur)
+        execution_id = _inserted_id(cur)
+        # THE OUTCOME RECEIPT (F14). The row is read back and projected by
+        # name (``ledger/receipts.py``), then chained under this execution's
+        # identity in the same call — so an execution row cannot exist without
+        # a receipt written from the same bytes, and a later rewrite of
+        # ``executed`` or ``detail`` differs from it. Read back rather than
+        # built from the arguments for the same reason as the decision
+        # receipt: the receipt must be what a later projection of the
+        # untouched row produces, through the same conversion, or the two can
+        # drift on a type coercion and read as tampering that never happened.
+        stored = self._conn.execute(
+            "SELECT * FROM executions WHERE id = ?", (execution_id,)
+        ).fetchone()
+        self.record_chained(
+            event=OUTCOME_EVENT,
+            subject=outcome_subject(execution_id),
+            payload=project_outcome(self._execution_row(stored)),
+            created_at=created_at,
+        )
+        return execution_id
 
     def executions(self) -> list[dict]:
         rows = self._conn.execute("SELECT * FROM executions ORDER BY id").fetchall()
@@ -887,6 +951,31 @@ class SqliteLedger(Ledger):
 
     # -- tamper-evident audit chain ----------------------------------------
 
+    def _chain_decision(self, pending_id: int, *, at: str) -> None:
+        """Append the hold's decision columns to the chain, read back by name.
+
+        ONE HELPER, CALLED BY EVERY WRITER of those columns after its UPDATE
+        commits — ``resolve_pending_action``, ``invalidate_pending_action``,
+        ``mark_state_moved``. The receipt is the row AS STORED, projected
+        through the same ``DecisionRecord`` a verifier projects it through,
+        so it is total over what those writers can change and equal to what a
+        later reader will see. Three writers each spelling their own payload
+        would be three chances for a column to reach one and miss another.
+        """
+
+        row = self.pending_action(pending_id)
+        if row is None:
+            raise StateError(
+                f"pending action {pending_id} vanished before its decision "
+                "could be chained"
+            )
+        self.record_chained(
+            event=DECISION_EVENT,
+            subject=decision_subject(pending_id),
+            payload=project_decision(row),
+            created_at=at,
+        )
+
     def record_chained(
         self, *, event: str, subject: str, payload: dict, created_at: str
     ) -> int:
@@ -1048,6 +1137,12 @@ class SqliteLedger(Ledger):
             record["authoritative"] = bool(record["authoritative"])
         if record.get("unavailable") is not None:
             record["unavailable"] = bool(record["unavailable"])
+        # Three-valued on purpose: NULL stays None (no executor invoked), and
+        # only a stored 0/1 becomes a bool. Coercing NULL to False would make
+        # "nothing ran" and "isolation failed to start" the same bytes.
+        for signal in ("started_ok", "candidate_started"):
+            if record.get(signal) is not None:
+                record[signal] = bool(record[signal])
         if record.get("judgment"):
             record["judgment"] = _load_json(record["judgment"])
         if record.get("authorization"):
@@ -1060,8 +1155,14 @@ def verify_ledger_file(
     *,
     tip_anchor: TipAnchor | None = None,
     expected_tips: list[ChainTip] | None = None,
-) -> ChainVerification:
+) -> LedgerVerification:
     """Verify a ledger on disk and ALWAYS return a verdict, never raise.
+
+    BOTH VERDICTS: the hash walk and the receipt check (``ledger/receipts.py``).
+    Review on #121 found this function — the documented programmatic entry
+    point — returning VALID over a forged execution row because it ran the
+    hash walk alone while the CLI ran both. It now returns the same combined
+    verdict the CLI prints, through the same ``verify_ledger``.
 
     The auditor-facing entry point. :class:`SqliteLedger` raises
     :class:`StateError` when a file cannot be opened at all — correct fail-closed
@@ -1079,22 +1180,16 @@ def verify_ledger_file(
 
     location = Path(os.fspath(path))
     if not location.exists():
-        return ChainVerification(
-            NOT_VERIFIABLE,
-            0,
-            None,
-            f"no ledger file at {location}",
-        )
+        return unverifiable(f"no ledger file at {location}")
     try:
         ledger = SqliteLedger(location, tip_anchor=tip_anchor)
     except (StateError, sqlite3.DatabaseError, OSError) as exc:
-        return ChainVerification(
-            NOT_VERIFIABLE,
-            0,
-            None,
-            f"the ledger could not be opened: {exc}",
-        )
+        return unverifiable(f"the ledger could not be opened: {exc}")
     try:
-        return ledger.verify_chain(expected_tips=expected_tips)
+        return verify_ledger(ledger, expected_tips=expected_tips)
+    except sqlite3.DatabaseError as exc:
+        # The chain read succeeded and the row read did not: a file corrupt
+        # in the tables the receipts project. Couldn't-verify, not clean.
+        return unverifiable(f"the ledger's rows could not be read: {exc}")
     finally:
         ledger.close()

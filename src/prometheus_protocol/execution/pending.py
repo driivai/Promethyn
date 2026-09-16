@@ -113,6 +113,17 @@ from prometheus_protocol.policy.record import (
     is_versioned_record,
     restore_coverage,
 )
+from prometheus_protocol.ledger.receipts import (
+    DECISION_EVENT,
+    OUTCOME_EVENT,
+    decision_subject,
+    differing_fields,
+    latest_entry,
+    outcome_entries_for,
+    outcome_subject,
+    project_decision,
+    project_outcome,
+)
 
 
 #: Default time-to-live for a pending human hold (24h). Mirrors Config.
@@ -476,11 +487,57 @@ class PendingActionService:
                 f"pending action {pending_id} is {pending.status.value} and can "
                 "never execute"
             )
-        executed = [
-            row
-            for row in self._ledger.executions_for_pending(pending_id)
-            if row["executed"]
-        ]
+        # "NEVER EXECUTED" IS READ OFF THE CHAIN, NOT THE ROW (F14). This
+        # used to read ``row["executed"]``. Measured: with that flag flipped
+        # to 0 and the at-most-once claim nulled — two UPDATEs — retry believed
+        # the hold had never run and ran it AGAIN: two execution rows for one
+        # approval, ``verify_chain()`` VALID throughout. Each execution row
+        # now has an outcome receipt on the chain, and the decision here is
+        # made from the receipt: a row with none is refused as
+        # ``outcome_entry_missing``, a row that differs from its receipt as
+        # ``outcome_differs_from_chain_entry``, and only a receipt that says
+        # executed counts as executed.
+        #
+        # IN BOTH DIRECTIONS, and the second is the one review found. The first
+        # version walked the ROWS for this hold and checked each against its
+        # receipt. Delete the row — or re-attribute its ``pending_id`` — and
+        # null the claim, and that walk saw nothing: the hold read as never
+        # executed and the executor ran AGAIN, chain VALID. Measured on #121.
+        # So the receipts for this hold are enumerated from the CHAIN, whose
+        # payloads carry ``pending_id`` and cannot be re-attributed without
+        # the mismatch showing, and each must have its row. The rows are
+        # ALSO walked, so an inserted row with no receipt is refused.
+        events = self._ledger.chained_events()
+        rows_by_id = {row["id"]: row for row in self._ledger.executions()}
+        executed: list[dict] = []
+        for execution_id, chained in outcome_entries_for(events, pending_id=pending_id):
+            row = rows_by_id.get(execution_id)
+            if row is None:
+                raise ExecutionNotAuthorized(
+                    f"pending action {pending_id}: the chain holds an outcome for "
+                    f"execution #{execution_id} and the ledger has no such row; "
+                    "the row was deleted after its receipt was written, and "
+                    "whether the hold executed cannot be read off what remains",
+                    reason="execution_row_missing",
+                )
+            differs = differing_fields(project_outcome(row), chained)
+            if differs:
+                raise ExecutionNotAuthorized(
+                    f"pending action {pending_id}: execution #{execution_id} differs "
+                    f"from its chained outcome on {', '.join(differs)}; the row "
+                    "was altered after the outcome was recorded",
+                    reason="outcome_differs_from_chain_entry",
+                )
+            if chained["executed"]:
+                executed.append(row)
+        for row in self._ledger.executions_for_pending(pending_id):
+            if latest_entry(events, event=OUTCOME_EVENT, subject=outcome_subject(row["id"])) is None:
+                raise ExecutionNotAuthorized(
+                    f"pending action {pending_id}: execution #{row['id']} has no "
+                    "outcome on the tamper-evident chain, so whether it executed "
+                    "cannot be established; refusing to retry",
+                    reason="outcome_entry_missing",
+                )
         if executed:
             raise ValueError(
                 f"pending action {pending_id} already executed (execution "
@@ -956,6 +1013,7 @@ class PendingActionService:
                 reason="reverification_required",
             )
         self._require_chain_binding(pending)
+        self._require_decision_binding(pending)
         self._require_pinned_policy(pending)
         # Decode the pinned record inside the seam, which re-resolves the (now
         # confirmed) selected policy for the concrete action, exactly as at hold
@@ -1014,6 +1072,61 @@ class PendingActionService:
                 f"hold #{pending.id}: the tamper-evident chain did not verify "
                 f"({verification.render()}); the pinned record cannot be trusted",
                 reason="chain_did_not_verify",
+            )
+
+    def _require_decision_binding(self, pending: PendingAction) -> None:
+        """The row's decision must be the chain's decision (F13).
+
+        ``_require_chain_binding`` vouches for what the hold was PERMITTED to
+        do. This vouches for what was DECIDED about it. Every writer of the
+        row's decision columns appends the row as stored to the chain
+        (``ledger/receipts.py``, ``DECISION_EVENT``), and here the row must
+        equal the LATEST such entry — so a database write that sets
+        ``status='approved'`` with a forged reviewer and time, which retry
+        used to honour, now has nothing on the chain to match and is refused.
+
+        Two refusals, because they are two findings: a decided row with no
+        entry is ``decision_entry_missing`` — what an adversary who can write
+        rows but not the chain leaves behind, and also what every hold decided
+        before receipts existed looks like, which is the chosen fail-closed
+        consequence of not bumping ``RECORD_VERSION``; a row that differs from
+        its entry is ``decision_differs_from_chain_entry``. A still-pending row
+        with no entry is the genesis state: the hold's own ``pending.hold``
+        entry is its receipt, and no decision has been made to chain.
+
+        Detection, not prevention, with the chain's own limit: a writer who
+        rewrites the row, the entry AND every later hash is caught only by an
+        external anchor, exactly as for the authorization record.
+        """
+
+        row = self._ledger.pending_action(pending.id)
+        if row is None:
+            raise ExecutionNotAuthorized(
+                f"hold #{pending.id} no longer exists in the ledger",
+                reason="decision_entry_missing",
+            )
+        projected = project_decision(row)
+        chained = latest_entry(
+            self._ledger.chained_events(),
+            event=DECISION_EVENT,
+            subject=decision_subject(pending.id),
+        )
+        if chained is None:
+            if row.get("status") == PendingStatus.PENDING.value:
+                return
+            raise ExecutionNotAuthorized(
+                f"hold #{pending.id} is {row.get('status')!r} in the row and has "
+                "no decision on the tamper-evident chain; the row's decision "
+                "cannot be trusted",
+                reason="decision_entry_missing",
+            )
+        differs = differing_fields(projected, chained)
+        if differs:
+            raise ExecutionNotAuthorized(
+                f"hold #{pending.id}: the row's decision differs from its chained "
+                f"receipt on {', '.join(differs)}; the row was altered after the "
+                "decision was recorded",
+                reason="decision_differs_from_chain_entry",
             )
 
     def _require_pinned_policy(self, pending: PendingAction) -> None:

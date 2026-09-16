@@ -94,7 +94,10 @@ RECEIPT = REPO / "type-gate-receipt.json"
 #: Observed 322 on 2026-09-16 (was 321): merging main brought F16's
 #: ``tests/conformance/test_execution_start_signal.py`` alongside this branch's
 #: ``tests/conformance/test_git_ref_format.py``.
-EXPECTED_CHECKED_FILES = 322
+#: Observed 326 on 2026-09-16 (was 322): F13/F14 added ``ledger/receipts.py``
+#: and three proof modules — ``test_chained_decision_and_outcome.py``,
+#: ``test_receipt_derivation.py``, ``test_receipt_substitution.py``.
+EXPECTED_CHECKED_FILES = 326
 CHECKED_FILE_TOLERANCE = 2
 MINIMUM_CHECKED_FILES = EXPECTED_CHECKED_FILES - CHECKED_FILE_TOLERANCE
 

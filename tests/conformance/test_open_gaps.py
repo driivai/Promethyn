@@ -21,7 +21,12 @@ from tests.support.positional_sweep import (
 
 #: Observed 2026-09-15. Was documented as 49, measured 2026-09-12; the tracker's
 #: figure was one stale and is corrected with the measurement, not the reverse.
-WIDE_DATACLASSES = 50
+#: Observed 52 on 2026-09-16 (was 50): F13/F14 added ``DecisionRecord`` (6
+#: fields) and ``OutcomeRecord`` (11) in ``ledger/receipts.py``. Both are
+#: schema declarations that are never constructed — the receipts are projected
+#: to dicts by derived name — so they add to the population and nothing to the
+#: positional-site ceilings.
+WIDE_DATACLASSES = 52
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 TRACKER = REPO / "docs" / "OPEN-GAPS.md"
@@ -326,4 +331,63 @@ def test_G38_is_named_in_the_tracker():
 
     text = TRACKER.read_text(encoding="utf-8")
     for gap in ("G36", "G37", "G38"):
+        assert re.search(rf"^## {gap}\b", text, re.M), f"no tracker entry {gap}"
+
+
+# ---------------------------------------------------------------------------
+# G40 and G42 — named limits from the F13/F14 sprint, pinned as passing tests
+# so each can close but cannot grow unobserved. G39 itself is proofs in three
+# modules; G41 is a filed question with no code to pin.
+# ---------------------------------------------------------------------------
+
+
+def test_G40_the_reconcile_gate_prefix_match_trips_on_the_observation_event():
+    """The measured collision. ``chokepoint/reconcile_gate._decode_rows``
+    treats any ``execute*``/``execution*`` chain event as its own and raises on
+    a payload without ``approval_binding``. The re-observation receipt
+    ``execution.observation`` sits inside that prefix. Written to FAIL when
+    the gate moves to an exact allowlist — remove this pin and G40 together."""
+
+    from prometheus_protocol.chokepoint.reconcile_gate import _decode_rows
+    from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
+
+    ledger = SqliteLedger(":memory:")
+    ledger.record_chained(
+        event="execution.observation",
+        subject="observation:a@pending:1#0",
+        payload={"record_version": 1, "outcome": "unchanged"},
+        created_at="2026-09-16T00:00:00+00:00",
+    )
+    with pytest.raises(LookupError, match="missing legacy history"):
+        _decode_rows(ledger.chained_events())
+
+
+def test_G40_the_outcome_event_was_named_OUTSIDE_the_prefix_and_decodes_cleanly():
+    """The paired positive control: G39's ``outcome.execution`` does not trip
+    the same gate, which is why it is not ``execution.outcome``. If the event
+    is ever renamed into the prefix, this says so before a shared ledger does."""
+
+    from prometheus_protocol.chokepoint.reconcile_gate import _decode_rows
+    from prometheus_protocol.ledger.receipts import OUTCOME_EVENT
+    from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
+
+    assert not OUTCOME_EVENT.startswith(("execute", "execution"))
+    ledger = SqliteLedger(":memory:")
+    ledger.record_chained(
+        event=OUTCOME_EVENT, subject="execution:1", payload={"executed": True},
+        created_at="2026-09-16T00:00:00+00:00",
+    )
+    _decode_rows(ledger.chained_events())  # must not raise
+
+
+# G42 — the receipt check walked rows, not entries — CLOSED. The pin that held
+# it open fired exactly as written when the inverse walk landed, and is gone;
+# review of #121 found the gap was a P1 (a deleted row plus a nulled claim was
+# a double execution at retry), and the proofs of the closed state live in
+# ``test_chained_decision_and_outcome.py`` PART 5.
+
+
+def test_G39_through_G42_are_named_in_the_tracker():
+    text = TRACKER.read_text(encoding="utf-8")
+    for gap in ("G39", "G40", "G41", "G42"):
         assert re.search(rf"^## {gap}\b", text, re.M), f"no tracker entry {gap}"

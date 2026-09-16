@@ -197,9 +197,18 @@ def _verify_chain(config: Config, ledger: SqliteLedger) -> int:
     else:
         posture = "append-only history" if anchor.append_only else "single file, NON-PROTECTING"
         print(f"anchor      : {anchor.name} ({posture}) {config.ledger_anchor}")
-    verification = ledger.verify_chain()
-    print(f"audit chain : {verification.render()}")
-    return 0 if verification.ok else 2
+    # ONE verifier, shared with the programmatic entry point
+    # (``verify_ledger_file``), so the CLI and the API cannot disagree about
+    # what "verified" means. Both verdicts are printed: the hash walk and the
+    # rows against their chained receipts. They are complementary — an intact
+    # chain under rewritten rows (F13, F14) passes the first and fails the
+    # second; both must hold.
+    from prometheus_protocol.ledger.receipts import verify_ledger
+
+    verified = verify_ledger(ledger)
+    print(f"audit chain : {verified.chain.render()}")
+    print(f"receipts    : {verified.receipts.render()}")
+    return 0 if verified.ok else 2
 
 
 def _print_executions(rows: list[dict], title: str) -> None:
