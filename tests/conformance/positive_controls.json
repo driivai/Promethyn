@@ -396,6 +396,23 @@
         "test_a_supplied_service_that_would_discard_the_registry_is_REFUSED"
       ],
       "property": "a deployment that wires no re-observation is untouched by the discard refusal — nothing was requested, so nothing was discarded"
+    },
+    {
+      "module": "tests/conformance/test_reobservation_branch_delete.py",
+      "positive": "test_a_supplied_reader_and_a_MATCHING_base_branch_are_accepted",
+      "negatives": [
+        "test_a_supplied_reader_and_a_conflicting_base_branch_are_refused",
+        "test_a_git_principal_with_no_reader_and_no_base_branch_is_REFUSED"
+      ],
+      "property": "the factory refuses a base branch that disagrees with the supplied reader, and one that is missing entirely, without refusing the combination when the two agree"
+    },
+    {
+      "module": "tests/conformance/test_reobservation_branch_delete.py",
+      "positive": "test_a_receipt_written_under_the_current_key_is_NOT_marked_as_resolved",
+      "negatives": [
+        "test_a_receipt_written_before_the_upgrade_is_still_restated"
+      ],
+      "property": "a receipt found under the pre-upgrade subject is marked as an attribution, and one found under the current subject is not — so the marker distinguishes the two rather than appearing on both"
     }
   ]
 }

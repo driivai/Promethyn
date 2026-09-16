@@ -409,7 +409,10 @@ GIT_TARGET_PREFIX = "git://"
 
 
 def build_reobservation(
-    *, target_canonical: str, git_tool: "GitTool | None" = None
+    *,
+    target_canonical: str,
+    git_tool: "GitTool | None" = None,
+    base_branch: str | None = None,
 ) -> "ReObservation":
     """The re-observation registry for a composition root, from its TARGET.
 
@@ -430,8 +433,24 @@ def build_reobservation(
 
     ``git_tool`` lets a root that ALREADY holds a ``GitTool`` pass it, so the
     observer and the merge proof read through one instance — one sandbox, one
-    repository, one definition of "unmerged". A root that does not pass one
-    gets a tool built for the principal in ``target_canonical``.
+    repository, one definition of "unmerged". That is the preferred route and
+    ``tools/stale_branch_demo.py`` takes it.
+
+    A ROOT THAT PASSES NO TOOL MUST NAME ITS BASE BRANCH, and this refuses
+    rather than guessing. The first version synthesised a ``GitTool`` with
+    ``GitTool``'s own default base of ``main``, which was wrong for every
+    repository based on anything else: measured on a ``master`` repository, the
+    caller's own reader reported ``unmerged_commits = 0`` while the synthesised
+    observer could not read ``main`` at all, so it returned ``Unreadable`` and
+    EVERY ``branch.delete`` hold was refused at creation. Fail-closed, and a
+    total denial of the feature for those deployments.
+
+    The deeper reason it cannot be defaulted: the base branch is not a
+    deployment-wide constant, it is *the base the merge proof was evaluated
+    against*. An observer reading a different base is the second definition of
+    "unmerged" that :class:`GitBranchStateObserver` exists to prevent — the
+    state a hold is pinned to would not be the state its evidence describes.
+    The factory cannot know that base unless it is told, so it asks.
     """
 
     from prometheus_protocol.policy.reobservation import (
@@ -458,10 +477,36 @@ def build_reobservation(
         # a tool for the wrong repository, which is an observer reading a
         # subject the hold was never pinned to.
         tool: "GitTool"
-        if git_tool is None:
-            tool = GitTool(repo_path=target_canonical[len(GIT_TARGET_PREFIX) :])
-        else:
+        if git_tool is not None:
+            # The proof's own reader. If a base branch is ALSO named it must be
+            # that tool's, or the two disagree about the subject and the caller
+            # is told rather than one silently winning.
+            if base_branch is not None and base_branch != git_tool.base_branch:
+                raise ConfigError(
+                    f"re-observation was given a GitTool based on "
+                    f"{git_tool.base_branch!r} and a base_branch of "
+                    f"{base_branch!r}. Those are two definitions of 'unmerged' "
+                    "for one hold. Pass the tool alone, or pass a base branch "
+                    "that matches it.",
+                    reason="reobservation_base_branch_conflict",
+                )
             tool = git_tool
+        elif base_branch is None:
+            raise ConfigError(
+                f"re-observation was asked to observe the git principal "
+                f"{target_canonical!r} but was given neither a GitTool nor a "
+                "base_branch. It will not guess: an observer reading a base "
+                "the merge proof did not use is a second definition of "
+                "'unmerged', and a wrong guess refuses every branch.delete "
+                "hold at creation. Pass the reader the proof uses, or name the "
+                "base branch.",
+                reason="reobservation_base_branch_unknown",
+            )
+        else:
+            tool = GitTool(
+                repo_path=target_canonical[len(GIT_TARGET_PREFIX) :],
+                base_branch=base_branch,
+            )
         observers[ACTION_BRANCH_DELETE] = GitBranchStateObserver(tool)
     else:
         opted_out[ACTION_BRANCH_DELETE] = NOT_THIS_PRINCIPAL
@@ -471,6 +516,7 @@ def build_reobservation(
 def build_execution_controller(
     config: Config | None = None, *, ledger: Ledger | None = None,
     target_canonical: str = "sandbox://execution",
+    base_branch: str | None = None,
 ) -> ExecutionController:
     """Wire the live-execution path: routing gate -> human hold -> sandbox executor.
 
@@ -517,7 +563,12 @@ def build_execution_controller(
         # passes is a feature that does not exist. This is the root the CLI's
         # ``approve`` and ``retry-execution`` commands build, so it is the path
         # a human's decision actually travels.
-        reobservation=build_reobservation(target_canonical=target_canonical),
+        # ``base_branch`` is threaded, not defaulted. For a ``git://`` target
+        # it is required and this refuses without it — see
+        # ``build_reobservation``. For every other target it is unused.
+        reobservation=build_reobservation(
+            target_canonical=target_canonical, base_branch=base_branch
+        ),
     )
 
 

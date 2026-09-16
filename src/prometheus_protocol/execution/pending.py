@@ -95,9 +95,11 @@ from prometheus_protocol.policy.reobservation import (
     OUTCOME_UNAVAILABLE,
     Observation,
     ReObservation,
+    LEGACY_SUBJECT_RESOLVED,
     StateMoved,
     StateUnobservable,
     StateUnreadable,
+    legacy_observation_subject,
     compare,
     observation_record,
     observation_subject,
@@ -807,23 +809,56 @@ class PendingActionService:
         """
 
         subject = observation_subject(attempt_id, 0, pending_id=pending_id)
+        legacy = legacy_observation_subject(attempt_id, 0)
+        legacy_hits: list[dict] = []
         for entry in self._ledger.chained_events():
-            if entry.get("event") == OBSERVATION_EVENT and entry.get("subject") == subject:
-                payload = entry.get("payload")
-                if isinstance(payload, str):
-                    try:
-                        payload = json.loads(payload)
-                    except ValueError:
-                        return None
-                # Narrowed in STATEMENT form, not a ternary. The type gate
-                # refuses the expression spelling here and it is right to: a
-                # payload of a third shape would be taken by the else-branch and
-                # become ``None``, which this method's caller reads as "there
-                # was no pre-approval entry" — a missing receipt reported as an
-                # absent one.
-                if isinstance(payload, dict):
-                    return payload
-                return None
+            if entry.get("event") != OBSERVATION_EVENT:
+                continue
+            found = entry.get("subject")
+            if found != subject and found != legacy:
+                continue
+            payload = entry.get("payload")
+            if isinstance(payload, str):
+                try:
+                    payload = json.loads(payload)
+                except ValueError:
+                    continue
+            # Narrowed in STATEMENT form, not a ternary. The type gate
+            # refuses the expression spelling here and it is right to: a
+            # payload of a third shape would be taken by the else-branch and
+            # become ``None``, which this method's caller reads as "there
+            # was no pre-approval entry" — a missing receipt reported as an
+            # absent one.
+            if not isinstance(payload, dict):
+                continue
+            if found == subject:
+                return payload
+            legacy_hits.append(payload)
+        # NOTHING under the current subject. A hold approved by the previous
+        # release wrote its receipt before the hold id was part of the key, so
+        # the pre-upgrade spelling is searched too — otherwise the execution
+        # receipt would say ``prior: null`` for a hold that WAS checked at
+        # approval, which is the record claiming the opposite of what happened.
+        if len(legacy_hits) == 1:
+            resolved = dict(legacy_hits[0])
+            # Marked, never passed off as an exact match: a reader must be able
+            # to tell an attribution from an identity.
+            resolved[LEGACY_SUBJECT_RESOLVED] = True
+            return resolved
+        if len(legacy_hits) > 1:
+            # The collision the hold id was added to remove. Two holds shared an
+            # attempt_id under the old key, so neither receipt can be attributed
+            # to THIS hold. Refused rather than guessed: picking the first is
+            # how the later hold's execution comes to restate the earlier hold's
+            # reading, which is the defect that motivated the new key.
+            raise StateUnobservable(
+                f"hold #{pending_id}: {len(legacy_hits)} pre-upgrade observation "
+                f"receipts share the subject {legacy!r}, so none of them can be "
+                "attributed to this hold. The pre-approval reading cannot be "
+                "restated, and guessing which one belongs here would put another "
+                "hold's evidence in this one's receipt",
+                reason="pre_approval_receipt_ambiguous",
+            )
         return None
 
     def require_state_unmoved_for_execution(
@@ -851,6 +886,31 @@ class PendingActionService:
             if attempt_id
             else None
         )
+        # A PINNED HOLD THAT THIS SERVICE OBSERVES MUST HAVE A PRE-APPROVAL
+        # RECEIPT, because ``approve`` writes one before it records the
+        # approval. If it cannot be found under either the current subject or
+        # the pre-upgrade one, the receipt is gone — and continuing would write
+        # an execution receipt saying ``prior: null``, which is the spelling
+        # that means "this was the first reading". The record would state that
+        # state was never checked at approval, for a hold where it was.
+        #
+        # Guarded on coverage so the registry-mismatch refusal in
+        # ``_compare_now`` still fires with its OWN reason: "this deployment
+        # does not observe the class" is a different fact from "the receipt is
+        # missing", and the first explains the second.
+        covered = self._reobservation is not None and self._reobservation.covers(
+            str(record.get("action_class", ""))
+        )
+        if prior is None and covered and pinned_reading_of(record) is not None:
+            raise StateUnobservable(
+                f"hold #{pending_id} is pinned to live state and this service "
+                "observes its action class, but no pre-approval observation "
+                "receipt could be found on the chain under either the current "
+                "subject or the pre-upgrade one. Executing would record that "
+                "state was never checked at approval, which is not what "
+                "happened",
+                reason="pre_approval_receipt_missing",
+            )
         outcome, _ = self._compare_now(
             pending,
             moment=MOMENT_PRE_EXECUTION,

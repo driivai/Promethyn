@@ -2713,3 +2713,114 @@ classes:
 field is covered; it is evidence nothing has been measured yet. Probing the
 field directly — constructing two equal, non-identical registries — showed the
 suite could not distinguish the two checks at all.
+
+---
+
+## G33 — two defects the wiring introduced, found by review after #114 merged
+
+Both were reported on #114 and both are correct. Both are consequences of the
+same change — wiring re-observation into the shipped roots — and both were
+**confirmed by direct probe before being accepted**, not taken on the
+reviewer's word.
+
+### 1. The synthesised observer guessed its base branch (P2)
+
+`build_reobservation` built a `GitTool` with that class's own default
+`base_branch="main"` whenever a root named a `git://` target and passed no
+reader. `build_execution_controller` always took that path.
+
+**Measured** on a repository based on `master`, driving the shipped factory:
+
+| reader | `base_branch` | `rev('main')` | `classify(feature-work)` | hold |
+|---|---|---|---|---|
+| the caller's own `GitTool` | `master` | `None` | `unmerged_commits = 0` | — |
+| the factory's synthesised one | `main` | `None` | `Unreadable('base_tip', 'unmerged_commits')` | **refused at creation** |
+
+So the merge proof worked and the observer could not read the base at all, and
+**every `branch.delete` hold was refused at creation** with
+`target_state_unreadable`. Fail-closed in direction, and a total denial of the
+feature for every deployment not based on `main`. The refusal also pointed at
+the repository rather than at the wiring, which is where the defect was.
+
+**The deeper reason it cannot be defaulted at all.** The base branch is not a
+deployment-wide constant — it is *the base the merge proof was evaluated
+against*. An observer reading a different base is precisely the second
+definition of "unmerged" that `GitBranchStateObserver`'s own docstring exists to
+forbid: the state a hold is pinned to would not be the state its evidence
+describes. `build_reobservation` had created exactly the reader its sibling
+class documents as forbidden.
+
+**RULING: refuse, do not guess.** A `git://` principal with neither a `GitTool`
+nor a `base_branch` raises `ConfigError` / `reobservation_base_branch_unknown`
+at COMPOSITION time. A supplied tool whose base disagrees with a supplied
+`base_branch` raises `reobservation_base_branch_conflict` — two definitions of
+"unmerged" for one hold, and neither silently wins. `tools/stale_branch_demo.py`
+is unaffected: it already passes its own reader, which is the preferred route
+and is now pinned by a test.
+
+**Not in `Config`.** There is no base-branch field and this change does not add
+one, so the base a deployment observes against is still outside the attested
+posture — the same limit G30 records for the opt-out.
+
+### 2. A receipt written before the subject key changed was lost (P2)
+
+#114 added the pending-hold id to the observation subject (G32 item 5). A hold
+approved under the PREVIOUS release wrote its pre-approval receipt under
+`observation:<attempt>#0`; the new lookup searched only
+`observation:<attempt>@pending:<id>#0`, found nothing, and returned `None` —
+which the caller reads as "there was no pre-approval reading".
+
+**Measured** by approving under the old key and executing under the new one:
+the pre-execution receipt came back with `prior: null`. That is the spelling
+meaning *this was the first reading*, so **the record stated that state was
+never checked at approval, for a hold where it was** — a false claim inside the
+receipt whose entire purpose is to show the check happened twice.
+
+**RULING: resolve an unambiguous legacy receipt, refuse an ambiguous one.**
+
+| chain contains | behaviour |
+|---|---|
+| the current subject | used, unmarked |
+| exactly one legacy subject | used, **marked** `resolved_from_pre_upgrade_subject` |
+| several legacy subjects | refused — `pre_approval_receipt_ambiguous` |
+| neither, on a pinned and observed hold | refused — `pre_approval_receipt_missing` |
+
+The marking matters: a reader must be able to tell an attribution from an
+identity. The ambiguous case is the exact collision the new key was added to
+remove, met in a ledger written before it — taking the first is how the later
+hold's execution comes to restate the earlier hold's reading, so it refuses.
+
+The missing-receipt guard is **conditioned on coverage**, so the G31
+registry-mismatch refusal still fires with its own reason: "this deployment
+does not observe the class" explains "the receipt is missing" rather than being
+masked by it. An unpinned hold needs no receipt and is not refused — pinned by
+its own test, because a blanket guard here would refuse every hold in a
+deployment that wires nothing.
+
+**What this says about the earlier sprint.** The subject-key change was ruled
+correct and still is; what it lacked was a reader for what the previous writer
+left. A key change is a migration whether or not anything is migrated, and a
+ledger outlives the deployment that wrote it.
+
+### Executed mutations
+
+Through `scripts/mutation_worktree.py`, both attack classes, 78 tests green
+unmutated. Every one reddened a named test.
+
+| mutation | observed |
+|---|---|
+| N1 deletion: the no-base refusal removed, so `GitTool`'s default returns | 1 red |
+| N2 substitution: the named base is accepted and then not passed to the tool | 1 red |
+| N3 deletion: the tool-vs-base conflict check removed | 1 red |
+| N4 deletion: the legacy subject is never searched | 2 red |
+| N5 substitution: an ambiguous legacy set takes the first instead of refusing | 1 red |
+| N6 deletion: a resolved legacy receipt is not marked | 1 red |
+| N7 deletion: a pinned hold with no receipt executes anyway | 1 red |
+| N8 substitution: the missing-receipt guard drops its coverage condition | **4 red, including the gap reproduction itself** |
+
+**N8 is the row that justifies the condition.** Widening the guard to every
+hold with no receipt reddens `test_the_gap_without_reobservation_...` — the
+kept measurement of the unfixed path — because a deployment that wires nothing
+pins nothing and would then be refused at execution for a receipt it never had
+any reason to write. The unconditioned guard does not tighten the control; it
+breaks every deployment that has not adopted it.

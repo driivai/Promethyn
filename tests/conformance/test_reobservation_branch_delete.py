@@ -951,7 +951,13 @@ def _factory_controller(repo: Path) -> tuple:
 
     ledger = SqliteLedger(":memory:")
     controller = build_execution_controller(
-        ledger=ledger, target_canonical=f"git://{_tool(repo).repo_path}"
+        ledger=ledger,
+        target_canonical=f"git://{_tool(repo).repo_path}",
+        # NAMED, not defaulted. The factory refuses a git principal it is given
+        # no reader and no base for, because a guessed base is a second
+        # definition of "unmerged" — and on a repository based on anything but
+        # ``main`` the guess refused every hold at creation (OPEN-GAPS G33).
+        base_branch="main",
     )
     return controller, ledger
 
@@ -1054,7 +1060,9 @@ def _root(repo: Path | None, ledger_path: str):
         return build_execution_controller(ledger=ledger), ledger
     return (
         build_execution_controller(
-            ledger=ledger, target_canonical=f"git://{_tool(repo).repo_path}"
+            ledger=ledger,
+            target_canonical=f"git://{_tool(repo).repo_path}",
+            base_branch="main",
         ),
         ledger,
     )
@@ -1585,3 +1593,300 @@ def test_two_registries_that_are_EQUAL_but_not_the_same_object_are_still_refused
         _bare_controller(tmp_path, pending=service, reobservation=two)
 
     assert refusal.value.reason == "reobservation_registry_discarded"
+
+
+# ---------------------------------------------------------------------------
+# PART 12 — the base branch the observer reads
+# ---------------------------------------------------------------------------
+#
+# REPRODUCTION FIRST. The factory used to synthesise a GitTool with GitTool's
+# own default base of "main" whenever a root named a git:// target and passed
+# no reader. Measured on a repository based on "master": the caller's own tool
+# reported unmerged_commits = 0 — the merge proof worked — while the
+# synthesised observer could not read "main" at all, so it returned Unreadable
+# and EVERY branch.delete hold was refused at creation.
+#
+# The direction was fail-closed, and the effect was a total denial of the
+# feature for every deployment not based on "main".
+
+
+def _master_repo(path: Path) -> None:
+    """The same fixture as ``_make_repo``, based on ``master`` instead."""
+
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["git", "-C", str(path), "-c", "init.defaultBranch=master", "init", "-q"],
+        check=True,
+    )
+    _git(path, "commit", "-q", "--allow-empty", "-m", "base")
+    _git(path, "checkout", "-q", "-b", BRANCH)
+    (path / "a.txt").write_text("a\n", encoding="utf-8")
+    _git(path, "add", "a.txt")
+    _git(path, "commit", "-q", "-m", "work")
+    _git(path, "checkout", "-q", "master")
+    _git(path, "merge", "-q", "--no-ff", "-m", "merge", BRANCH)
+
+
+def _master_tool(repo: Path) -> GitTool:
+    return GitTool(repo_path=repo, sandbox=UnsafeLocalSandbox(), base_branch="master")
+
+
+def test_a_git_principal_with_no_reader_and_no_base_branch_is_REFUSED(tmp_path):
+    """The factory will not guess. Refused at COMPOSITION — early and loud —
+    rather than at hold creation, where the refusal reads as "the target could
+    not be read" and points at the repository instead of the wiring."""
+
+    from prometheus_protocol.runtime.factory import build_reobservation
+
+    with pytest.raises(ConfigError) as refusal:
+        build_reobservation(target_canonical=f"git://{tmp_path}")
+
+    assert refusal.value.reason == "reobservation_base_branch_unknown"
+    assert refusal.value.reason in CONFIG_REFUSAL_REASONS
+
+
+def test_the_synthesised_observer_reads_the_base_branch_it_was_GIVEN(tmp_path):
+    """The repository the default would have broken. With the base named, the
+    observer reads the same base the merge proof did and the hold is created
+    and pinned — the behaviour the default silently denied."""
+
+    from prometheus_protocol.runtime.factory import build_execution_controller
+
+    _master_repo(tmp_path)
+    tool = _master_tool(tmp_path)
+    assert tool.classify(BRANCH).unmerged_commits == 0
+    assert tool.rev("main") is None, "this fixture must NOT have a 'main'"
+
+    controller = build_execution_controller(
+        ledger=SqliteLedger(":memory:"),
+        target_canonical=f"git://{tool.repo_path}",
+        base_branch="master",
+    )
+    observer = controller.pending.reobservation.observers[ACTION_BRANCH_DELETE]
+    assert observer._tool.base_branch == "master"
+
+    pending = _hold(controller, tool)
+    assert pending.record["target_state"]["observed"] is True
+
+
+def test_a_supplied_reader_and_a_conflicting_base_branch_are_refused(tmp_path):
+    """Two definitions of "unmerged" for one hold. Neither silently wins: the
+    caller is told, because whichever won would be a state pin that does not
+    match the evidence the hold was authorized on."""
+
+    from prometheus_protocol.runtime.factory import build_reobservation
+
+    _master_repo(tmp_path)
+    with pytest.raises(ConfigError) as refusal:
+        build_reobservation(
+            target_canonical=f"git://{tmp_path}",
+            git_tool=_master_tool(tmp_path),
+            base_branch="main",
+        )
+
+    assert refusal.value.reason == "reobservation_base_branch_conflict"
+    assert refusal.value.reason in CONFIG_REFUSAL_REASONS
+
+
+def test_a_supplied_reader_and_a_MATCHING_base_branch_are_accepted(tmp_path):
+    """The positive control (doctrine #4). The refusal above is about the two
+    disagreeing, not about naming both — without this it is consistent with a
+    factory that rejects the combination outright."""
+
+    from prometheus_protocol.runtime.factory import build_reobservation
+
+    _master_repo(tmp_path)
+    tool = _master_tool(tmp_path)
+    registry = build_reobservation(
+        target_canonical=f"git://{tmp_path}", git_tool=tool, base_branch="master"
+    )
+
+    assert registry.observers[ACTION_BRANCH_DELETE]._tool is tool
+
+
+def test_the_demo_root_passes_its_own_reader_so_no_base_is_guessed(tmp_path):
+    """``run_hero`` takes the preferred route: it hands over the GitTool the
+    merge proof reads through, so there is nothing for the factory to guess.
+    Pinned because that root is the one that really deletes."""
+
+    import ast
+
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "src/prometheus_protocol/tools/stale_branch_demo.py"
+    ).read_text(encoding="utf-8")
+    calls = [
+        node
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Call)
+        and getattr(node.func, "id", getattr(node.func, "attr", None))
+        == "build_reobservation"
+    ]
+    assert calls, "the demo root no longer builds a registry"
+    for call in calls:
+        passed = {kw.arg for kw in call.keywords}
+        assert "git_tool" in passed, f"line {call.lineno} synthesises a reader"
+
+
+# ---------------------------------------------------------------------------
+# PART 13 — a receipt written before the subject key changed
+# ---------------------------------------------------------------------------
+#
+# A LEDGER OUTLIVES A DEPLOYMENT. PART 9 added the pending-hold id to the
+# observation subject to stop two holds sharing an attempt_id from sharing one
+# receipt. A hold approved under the PREVIOUS release wrote its pre-approval
+# receipt under the old spelling, and a lookup that searched only the new one
+# returned None — which this method's caller reads as "there was no
+# pre-approval reading", so the execution receipt said ``prior: null``.
+#
+# ``prior: null`` is the spelling that means "this was the first reading". The
+# record would have stated that state was never checked at approval, for a hold
+# where it was — a false claim inside the receipt whose entire purpose is to
+# show the check happened twice.
+
+
+def _approve_under_the_previous_subject_format(controller, pending_id: int):
+    """Approve with the pre-upgrade subject key, then restore the current one.
+
+    The patch is on the module the writer imports through, so the receipt
+    genuinely lands under the old spelling; restoring it IS the upgrade.
+    """
+
+    from prometheus_protocol.execution import pending as pending_module
+
+    current = pending_module.observation_subject
+    pending_module.observation_subject = (
+        lambda attempt_id, execution_attempt, *, pending_id: (
+            f"observation:{attempt_id}#{execution_attempt}"
+        )
+    )
+    try:
+        return controller.pending.approve(pending_id, identity="reviewer")
+    finally:
+        pending_module.observation_subject = current
+
+
+def test_a_receipt_written_before_the_upgrade_is_still_restated(tmp_path):
+    """THE REPRODUCTION AND ITS CLOSURE. Approve under the old key, execute
+    under the new one, and the pre-execution receipt still carries the
+    approval-time reading."""
+
+    _make_repo(tmp_path)
+    controller, _, ledger = _controller(
+        tmp_path, reobservation=_reobservation(tmp_path)
+    )
+    pending = _hold(controller, _tool(tmp_path))
+    attempt = pending.record["attempt_id"]
+    _approve_under_the_previous_subject_format(controller, pending.id)
+
+    subjects = [o["subject"] for o in _observations(ledger)]
+    assert subjects == [f"observation:{attempt}#0"], subjects
+
+    controller.pending.require_state_unmoved_for_execution(
+        pending.id, execution_attempt=1, now=CLOCK
+    )
+
+    prior = _observations(ledger)[-1]["payload"]["prior"]
+    assert prior is not None, "the approval-time reading was lost across the upgrade"
+    assert prior["outcome"] == OUTCOME_MATCHED
+    # MARKED, never passed off as an exact match: a reader must be able to tell
+    # an attribution from an identity.
+    assert prior["resolved_from_pre_upgrade_subject"] is True
+
+
+def test_a_receipt_written_under_the_current_key_is_NOT_marked_as_resolved(tmp_path):
+    """The positive control (doctrine #4). The marker means something only if
+    the ordinary path does not carry it."""
+
+    _make_repo(tmp_path)
+    controller, _, ledger = _controller(
+        tmp_path, reobservation=_reobservation(tmp_path)
+    )
+    pending = _hold(controller, _tool(tmp_path))
+    controller.approve(pending.id, identity="reviewer")
+
+    prior = _observations(ledger)[-1]["payload"]["prior"]
+    assert prior is not None
+    assert "resolved_from_pre_upgrade_subject" not in prior
+
+
+def test_two_pre_upgrade_receipts_sharing_a_subject_REFUSE_rather_than_guess(tmp_path):
+    """The exact collision the new key was added to remove, met in a ledger
+    written before it. Two holds shared an attempt_id under the old spelling,
+    so neither receipt can be attributed to THIS hold.
+
+    Refused, not guessed. Taking the first is how the later hold's execution
+    comes to restate the earlier hold's reading — the defect that motivated the
+    key change, reappearing on the upgrade path.
+    """
+
+    _make_repo(tmp_path)
+    tool = _tool(tmp_path)
+    controller, _, ledger = _controller(
+        tmp_path, reobservation=_reobservation(tmp_path)
+    )
+    first = _hold(controller, tool)
+    second = _hold(controller, tool)
+    assert first.record["attempt_id"] == second.record["attempt_id"]
+
+    _approve_under_the_previous_subject_format(controller, first.id)
+    _approve_under_the_previous_subject_format(controller, second.id)
+    subjects = [o["subject"] for o in _observations(ledger)]
+    assert len(subjects) == 2 and len(set(subjects)) == 1, subjects
+
+    with pytest.raises(StateUnobservable) as refusal:
+        controller.pending.require_state_unmoved_for_execution(
+            second.id, execution_attempt=1, now=CLOCK
+        )
+
+    assert refusal.value.reason == "pre_approval_receipt_ambiguous"
+    assert refusal.value.reason in EXECUTION_REFUSAL_REASONS
+
+
+def test_a_pinned_hold_whose_receipt_is_gone_entirely_refuses(tmp_path):
+    """Neither key matches. The receipt is not merely old, it is absent, and
+    executing would write ``prior: null`` for a hold that WAS checked."""
+
+    _make_repo(tmp_path)
+    controller, _, ledger = _controller(
+        tmp_path, reobservation=_reobservation(tmp_path)
+    )
+    pending = _hold(controller, _tool(tmp_path))
+    # Approve under a subject belonging to neither format.
+    from prometheus_protocol.execution import pending as pending_module
+
+    current = pending_module.observation_subject
+    pending_module.observation_subject = (
+        lambda attempt_id, execution_attempt, *, pending_id: (
+            f"observation:elsewhere#{execution_attempt}"
+        )
+    )
+    try:
+        controller.pending.approve(pending.id, identity="reviewer")
+    finally:
+        pending_module.observation_subject = current
+
+    with pytest.raises(StateUnobservable) as refusal:
+        controller.pending.require_state_unmoved_for_execution(
+            pending.id, execution_attempt=1, now=CLOCK
+        )
+
+    assert refusal.value.reason == "pre_approval_receipt_missing"
+    assert refusal.value.reason in EXECUTION_REFUSAL_REASONS
+
+
+def test_an_unpinned_hold_needs_no_receipt_and_is_not_refused(tmp_path):
+    """The boundary, and the reason the guard is conditioned rather than
+    blanket. A deployment that wires no re-observation pins nothing, so there
+    is no reading to restate and nothing to refuse — the refusals above must
+    not reach a hold that never claimed to be checked."""
+
+    _make_repo(tmp_path)
+    controller, spy, ledger = _controller(tmp_path, reobservation=None)
+    pending = _hold(controller, _tool(tmp_path))
+    assert pending.record["target_state"]["observed"] is False
+
+    controller.pending.require_state_unmoved_for_execution(
+        pending.id, execution_attempt=1, now=CLOCK
+    )
+    assert _observations(ledger) == []

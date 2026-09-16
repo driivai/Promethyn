@@ -372,7 +372,9 @@ def test_the_receiver_scan_sees_a_call_it_should_flag():
 
 
 def test_the_factory_observes_branch_delete_for_a_git_principal(tmp_path):
-    registry = build_reobservation(target_canonical=f"git://{tmp_path}")
+    registry = build_reobservation(
+        target_canonical=f"git://{tmp_path}", base_branch="main"
+    )
 
     assert sorted(registry.observers) == [ACTION_BRANCH_DELETE]
     assert registry.opted_out == {
@@ -400,7 +402,11 @@ def test_the_factory_always_returns_a_total_registry(target):
     """Total over the closed action-class set for every principal, so no class
     is ever unobserved by ABSENCE — the posture-by-absence shape G21 refuses."""
 
-    registry = build_reobservation(target_canonical=target)
+    # Every principal gets a total registry; a git one must name its base.
+    registry = build_reobservation(
+        target_canonical=target,
+        base_branch="main" if target.startswith("git://") else None,
+    )
 
     assert set(registry.observers) | set(registry.opted_out) == set(ACTION_CLASSES)
     assert not set(registry.observers) & set(registry.opted_out)
