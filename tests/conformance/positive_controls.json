@@ -478,6 +478,43 @@
         "test_G38_the_sibling_regex_swept_alongside_it_is_NOT_the_same_shape"
       ],
       "property": "the tls_reason guard still refuses everything outside the symbolic alphabet while G38 holds it at exactly one trailing newline — without it, a pin that records a gap is indistinguishable from a guard that has stopped refusing anything at all"
+    },
+    {
+      "module": "tests/conformance/test_chained_decision_and_outcome.py",
+      "positive": "test_a_genuine_approval_still_verifies_and_retry_still_works",
+      "negatives": [
+        "test_F13_a_forged_approval_in_the_row_does_NOT_let_retry_execute",
+        "test_F13_a_decision_altered_AFTER_a_genuine_approval_is_refused_at_retry",
+        "test_F13_a_decided_hold_reset_to_pending_cannot_be_approved_again"
+      ],
+      "property": "a real human decision is chained, matches its row, and retry still executes once — so the decision binding refuses forged and altered decisions without refusing genuine ones"
+    },
+    {
+      "module": "tests/conformance/test_chained_decision_and_outcome.py",
+      "positive": "test_a_genuine_execution_outcome_verifies_with_the_structural_pair",
+      "negatives": [
+        "test_F14_a_flipped_outcome_row_is_DETECTED_against_its_chained_counterpart",
+        "test_F14_a_flipped_outcome_plus_a_released_claim_does_NOT_execute_twice",
+        "test_the_audit_cli_exits_2_when_a_row_disagrees_with_its_receipt"
+      ],
+      "property": "a real execution's outcome is chained with executed, detail and the structural start signals, and the row matches it — so the receipt verifier flags rewritten rows without flagging honest ones"
+    },
+    {
+      "module": "tests/conformance/test_receipt_derivation.py",
+      "positive": "test_an_untouched_ledger_with_every_transition_verifies",
+      "negatives": [
+        "test_each_decision_field_mutated_alone_is_detected",
+        "test_each_outcome_field_mutated_alone_is_detected"
+      ],
+      "property": "every writer exercised on an honest ledger verifies clean — so the per-field detection parametrised over the derived record is not a verifier that flags everything"
+    },
+    {
+      "module": "tests/conformance/test_open_gaps.py",
+      "positive": "test_G40_the_outcome_event_was_named_OUTSIDE_the_prefix_and_decodes_cleanly",
+      "negatives": [
+        "test_G40_the_reconcile_gate_prefix_match_trips_on_the_observation_event"
+      ],
+      "property": "the reconcile gate's prefix match really does trip on execution.observation (the named G40 limit) while G39's outcome.execution, named outside the prefix, decodes cleanly — so the limit is a measurement and the event name is a decision, not luck"
     }
   ]
 }

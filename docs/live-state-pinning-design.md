@@ -444,8 +444,12 @@ is the thing the chain exists to detect.
 |---|---|---|---|---|
 | **Pinned authorization record** (exists today, `policy/record.py`) | once, at hold creation | what was **authorized**: requirements, policy version, coverage, and **the pinned state digest + aspect list** | yes, unchanged mechanism (`execution/pending.py:269` writes it under `_hold_subject(pending_id)`) | the hold, and within it the verification `attempt_id` (`policy/record.py:147`) |
 | **Execution-observation record** (new) | at each comparison (§4.4: two) | what was **found**: pinned and observed digests, the result, or the unavailable reason | yes, its own append-only chained entries | **the execution attempt** (ruled) |
+| **Decision receipt** (F13, G39) | after every decision transition — approve, reject, expire, invalidate, state-moved | what was **decided**: the row's `status`, `decided_by`, `decided_at`, `decision_reason`, invalidation columns, as stored | yes, `pending.decision`, appended by the ledger writer itself | **the hold**; the row must equal the latest entry |
+| **Outcome receipt** (F14, G39) | with every execution row | what **happened**: `executed`, `refused`, `detail`, `exit_status`, the structural start signals, as stored | yes, `outcome.execution`, appended in the same call as the row | **the execution row** |
 
-Both are append-only. Neither is mutated. The pinned record's byte-equality
+All four are append-only. None is mutated. The two receipts are the same
+Block 1a shape as the observation record, for the same reason: a value known
+after the pinned record was written cannot go into it. The pinned record's byte-equality
 check is untouched, so this adds a record without weakening the one that exists.
 
 **Not outside the chain.** An observation in a plain column would be trusted

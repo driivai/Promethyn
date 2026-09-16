@@ -3565,3 +3565,280 @@ correcting: over-reporting rather than under-reporting. It is the safer
 direction — a duplicate is noticed, a miss is not — but a watcher that cries
 twice teaches its reader to discount it, which eventually produces the miss
 anyway. **Key on the comment id alone, not on id plus mutable coordinates.**
+
+## G39 — the human decision and the execution outcome were outside the chain (F13 + F14)
+
+Reproduced at HEAD before anything was written, with an append-only anchor in
+place and `verify_chain().ok` True throughout:
+
+**F13.** `resolve_pending_action` (`ledger/sqlite_ledger.py:505`) stored
+approval status, reviewer identity and decision time in mutable columns, and
+`_require_chain_binding` (`execution/pending.py:973`) bound the AUTHORIZATION
+record, not those columns. Measured: create a genuine hold, `UPDATE` its row
+to `approved` with a forged reviewer and time, invoke retry → **the executor
+ran once**, chain VALID before and after, chain events `['pending.hold']`.
+
+**F14.** `record_execution` (`ledger/sqlite_ledger.py:647`) inserted execution
+rows and chained nothing. Measured: approve and execute, `UPDATE executions
+SET executed=0, detail='forged'` → the forged outcome returned, chain VALID.
+
+**F14, escalated.** The flipped row alone did NOT let retry run again: the
+at-most-once claim (`execution_committed_at`) refused it — a *different*
+mutable column. One more `UPDATE` (null the claim) and retry read the row,
+believed the hold had never executed, and **ran the executor a second time**:
+two execution rows, one approval, chain VALID. A database-write adversary gets
+a second side effect, not just a lying row. Recorded because the audit's
+probe said "changed outcome returned" and the real cost is one write further.
+
+The chain was intact and truthful about what it covered. What it covered
+excluded the two things a receipt exists to establish.
+
+### Reproductions, permanent and red-first
+
+`tests/conformance/test_chained_decision_and_outcome.py`. Observed against
+the unfixed tree, in a clean worktree of `main` with only this module copied
+in: **8 failed of 8**. F13, the F14 escalation, and both PART 4 tests fail on
+`Failed: DID NOT RAISE ExecutionNotAuthorized` — retry and approval returned
+normally, which is the defect: the executor ran, and there was nothing to
+raise. The F14 detection test and both positives fail on
+`ModuleNotFoundError: prometheus_protocol.ledger.receipts`; the CLI test on
+`'receipts    : receipts valid' not in` an output that carried only the
+chain line. (The first red run, before PART 3 and PART 4 existed, was 5 of 5.)
+
+> A first draft of this paragraph said F13 failed on `spy.calls == []` and the
+> escalation on `len(spy.calls) == 1`. That was written from reading the code
+> path, not from the traceback, and it was wrong about WHICH line fires:
+> `pytest.raises` fails first, because the call returns. The executor-call
+> assertions never got to run. Corrected from the captured output, and the
+> second-order table below confirms the same thing from the other side —
+> `pytest.raises` is the assertion that carries each raise half.
+
+After the fix: 8 passed.
+
+| test | asserts |
+|---|---|
+| `test_F13_a_forged_approval_in_the_row_does_NOT_let_retry_execute` | executor never called; refused `decision_entry_missing`; chain VALID before and after |
+| `test_F14_a_flipped_outcome_row_is_DETECTED_against_its_chained_counterpart` | chain VALID; `verify_receipts` names the execution and the fields `executed`, `detail` |
+| `test_F14_a_flipped_outcome_plus_a_released_claim_does_NOT_execute_twice` | one executor call; refused `outcome_differs_from_chain_entry` |
+| `test_F13_a_decision_altered_AFTER_a_genuine_approval_is_refused_at_retry` | an entry exists and the row differs: refused on the DIFFERENCE, field named |
+| `test_F13_a_decided_hold_reset_to_pending_cannot_be_approved_again` | the re-approval attack: row reset to pending, chain says rejected, second approval refused, nothing written |
+| `test_the_audit_cli_exits_2_when_a_row_disagrees_with_its_receipt` | the independent verifier's entry point reports both verdicts and exits 2 |
+
+### Vocabulary ruling — chained the structural pair, introduced nothing
+
+Per the brief and #120. The outcome receipt carries `(started_ok,
+candidate_started)` as the executor measured them. **They had to be carried at
+all first**: `_execute` (`execution/controller.py:454`) dropped both before
+`record_execution`, and the `executions` table had no columns for them. Two
+additive columns, nullable: `NULL` is "no executor was invoked for this row"
+(blocked, unavailable, pre-execution-refused), a third state distinct from
+`0`. The typed-reason question is filed as **G41** with #120's migration cost.
+
+The four new refusal reasons — `decision_entry_missing`,
+`decision_differs_from_chain_entry`, `outcome_entry_missing`,
+`outcome_differs_from_chain_entry` — are AUTHORIZATION-stage integrity
+conditions ("why may this hold not proceed"), alongside
+`record_differs_from_chain_entry`. None describes what the sandbox did. The
+membership pin moves 17 → 21, exact.
+
+### Shape ruling — two new chained event types, not a grown record
+
+**`DECISION_EVENT = "pending.decision"`**, subject `pending:<id>`;
+**`OUTCOME_EVENT = "outcome.execution"`**, subject `execution:<id>`.
+
+**The constraint that made the alternative unworkable** is the Block 1a one
+(`docs/live-state-pinning-design.md`): `_require_chain_binding` compares
+`stored != pending.record` over the WHOLE record (`execution/pending.py`). A
+record written once at hold creation and required byte-equal to its entry
+cannot carry a decision known at approval or an outcome known at execution —
+writing either in would break the binding it is protected by. So each is its
+own append-only entry and the row must equal the LATEST entry for its subject.
+
+**No `RECORD_VERSION` bump.** The authorization record's shape is unchanged,
+so pending holds are NOT staled. The chosen consequence instead: **a hold
+already `approved` before this change, with no decision entry, is refused at
+retry as `decision_entry_missing`** — fail-closed, and narrower than a version
+bump, which stales every pending hold. Stated here so it is chosen rather than
+discovered. An execution row written before this change has no outcome entry
+and reads `outcome_entry_missing` to the verifier — correct: it is
+unverifiable, and the verifier says so rather than passing it.
+
+**Where the chain write lives: inside the ledger methods**, not the service.
+`record_execution` has six call sites in the controller; chaining at each is
+six chances to miss one, which is G37's shape. The three decision writers —
+`resolve_pending_action`, `invalidate_pending_action`, `mark_state_moved` —
+each call one helper after their `UPDATE` commits. The helper reads the row
+back and projects it by name, so the receipt is the row AS STORED through the
+SAME conversion a verifier uses, never the arguments the writer was handed.
+
+**Why not `execution.outcome`.** `chokepoint/reconcile_gate.py:88` classifies
+any chain event starting with `execute`/`execution` as its own and raises
+`LookupError("missing legacy history")` on a payload without
+`approval_binding`. Measured: the EXISTING `execution.observation` event
+already trips it. That is G40, recorded and not widened.
+
+### The derived check — the test that decides the sprint
+
+`tests/conformance/test_receipt_derivation.py`. The rely-upon field sets are
+`dataclasses.fields(DecisionRecord)` and `dataclasses.fields(OutcomeRecord)`
+(`ledger/receipts.py`), and **field names are column names**, so the row is
+projected by name with no hand mapping. The dataclasses are the SCHEMA; the
+projection returns a dict, because a row whose `status` was overwritten with
+a number is a mismatch to report, not a construction error to raise.
+
+- **Two sources, checked against each other:** the columns the three writers'
+  `SET` clauses touch are read off the ledger's source and must equal the
+  derived decision set exactly. A writer that grows a column reddens it.
+- **Per-field totality:** parametrised over the DERIVED lists — 6 decision
+  fields, 11 outcome fields including the structural pair — each column
+  overwritten alone after a genuine transition is reported as exactly that
+  field.
+- **What can vary outside the derivation, pinned EXACTLY** (no floor, per the
+  brief's rule): `pending_actions` has 17 columns, 6 in the record, **11
+  outside**; `executions` has 18, 11 in the record, **7 outside**. Each is
+  named with its reason in the test, and the real table minus the record must
+  equal that set — a column nobody decided about reddens it.
+
+**What could vary outside the derivation, and why each is outside:**
+
+| column | why outside |
+|---|---|
+| `pending_actions.execution_committed_at` | the at-most-once claim. Its role as the SOLE double-execution defence is closed — retry now reads `executed` off the chain, and the escalation test proves the claim is no longer load-bearing for that. Its role as a mutex between honest concurrent drivers is not a receipt property. **Residual.** |
+| `pending_actions.action` | bound by the pinned record's `artifact_sha256`. **Measured**: a forged action column refuses at approval as `descriptor_snapshot_mismatch`, zero executor calls. |
+| `pending_actions.authorization` | IS chained, under `pending.hold`, byte-equal |
+| `pending_actions.{subject_id, risk_class, reason, verdict, confidence, judgment, created_at}` | hold-creation data, covered by the pinned record's descriptor and coverage blocks where it matters; not a decision |
+| `executions.{verdict, confidence, authoritative, judgment}` | what AUTHORIZED, not what HAPPENED; the pinned record's coverage block is the chained account. And `_backfill_executions` legitimately `UPDATE`s `verdict/confidence/authoritative`, so chaining them would flag every backfilled row |
+| `executions.unavailable` | derived from `source` at write time; `source` is in the record, so it cannot vary alone |
+| `executions.authorization` | the pinned record, chained under `pending.hold` for a hold-linked row. **Residual for auto-approved rows**, which have no hold and whose record is chained nowhere |
+| `id` on both | the subject, not a field |
+
+### Executed mutations — both attack classes, the brief's list
+
+Through `scripts/mutation_worktree.py`. First pass 67 green unmutated, second
+pass 52 (a narrower module set).
+
+| mutation | class | observed |
+|---|---|---|
+| D1 the decision event never chained | deletion | 36 red |
+| D2 the outcome event never chained | deletion | 22 red |
+| D3 decision binding removed from `_revalidate` (the F13 defect) | deletion | 3 red |
+| R4 the whole retry loop reverted to the row read (the F14 defect) | deletion | 1 red |
+| S1 the verifier compares the row's projection against ITSELF (§7.5) | self-comparison | 20 red |
+| S2 the service's decision binding compares the row against itself (§7.5) | self-comparison | **GREEN, then 2 red** |
+| D4 retry reads `executed` off the row, alone | deletion | **GREEN** |
+| D4+M the row read AND the field-mismatch check removed | deletion pair | 1 red |
+
+**S2 was green on the first pass and that green was a proof gap, not
+evidence.** The F13 reproduction refuses on `decision_entry_missing` — the
+"no entry" branch — before any comparison runs, so nothing exercised the
+service comparing a row that DIFFERS from an existing entry. The two PART 4
+tests were written for exactly that; S2 then reddens on both.
+
+**D4 alone stays green, and the probe says why rather than an argument.** The
+field-mismatch check immediately above it refuses any row that differs from
+its receipt, so on every path that reaches the `executed` read, the row and
+the chain agree on it — the two spellings are equivalent by construction.
+D4+M removes the mismatch check as well: 1 red, the escalation test. **The
+mismatch check carries the property**; the `chained["executed"]` read is
+correct by intent and masked in practice. Recorded so a later reader does not
+"fix" the redundancy by removing the wrong half.
+
+**Substitution** (`tests/conformance/test_receipt_substitution.py`): one
+hold's chained decision swapped for another's with the chain re-hashed to
+self-consistency. Chain VALID; **detected without an anchor** by the receipt
+check (the row disagrees with its entry) and refused at retry. **The named
+limit**: entry AND row rewritten together is NOT detected without an anchor —
+and what it buys is a downgrade, alice's approval reading as bob's rejection.
+WITH an append-only anchor the same rewrite is `BROKEN` and retry refuses
+`chain_did_not_verify`. The subject is hashed, so relabelling an entry between
+holds is `BROKEN` on its own. Same limit as the authorization record's,
+inherited exactly.
+
+**Second-order**, each proof with its property assertion dropped and the TRUE
+defect restored underneath: O1 (F13, minus `spy.calls == []`, + D3) 3 red; O2
+(escalation, minus the call count, + R4) 1 red; O4 (altered-after-approval,
+minus its reason assertions, + S2) 2 red. No proof survives. In each,
+`pytest.raises` carries the raise half; the executor-call count is
+belt-and-braces against an execute-then-refuse ordering.
+
+### What the docs may claim afterwards — and the residual, plainly
+
+An externally anchored chain protects only chained bytes. After this sprint
+the chained bytes are: the pinned authorization record (`pending.hold`), the
+observation receipts (`execution.observation`), **every decision transition**
+(`pending.decision`) and **every execution outcome** (`outcome.execution`).
+`audit --verify-chain` runs the hash walk AND the receipt check and exits 2
+if either fails; the two are complementary — an intact chain under rewritten
+rows fails the second, honest rows over a rewritten chain fail the first.
+
+**What an adversary with database-write authority can still do:**
+
+1. Rewrite a row AND its entry AND every later hash — detected only by an
+   external anchor outside their authority. Unchanged from `docs/ledger-integrity.md`.
+2. Null `execution_committed_at`. No longer buys a double execution (the
+   chained outcome refuses it); still lets two HONEST drivers race, which the
+   claim exists to prevent. Residual.
+3. Rewrite `executions.authorization` on an **auto-approved** row, which has
+   no hold and no `pending.hold` entry. Residual, named above.
+4. Rewrite `executions.{verdict,confidence,authoritative,judgment}` to mislead
+   a reader of `executions()` about what a run rested on. The coverage block
+   in the chained pinned record is the authoritative account; the promoted
+   columns are not. Residual, and the backfill path is why.
+5. Delete a whole execution row. The outcome entry remains on the chain with
+   no row — `verify_receipts` walks ROWS, so a missing row is not a finding.
+   **Named gap**: the inverse walk (every `outcome.execution` entry has a row)
+   is not implemented. Filed as G42.
+
+Not prevention. Nothing stops the write. The anchor is what turns a rewrite
+from silent into witnessed, and this sprint widened what it witnesses.
+
+### Instruments
+
+- `tests/conformance/test_chained_decision_and_outcome.py` — 8 proofs
+- `tests/conformance/test_receipt_derivation.py` — 24, of which 17 parametrised over the derived fields
+- `tests/conformance/test_receipt_substitution.py` — 4
+- Hearth: `execution/controller.py` and `execution/pending.py` re-sanctioned to measured digests; `ledger/sqlite_ledger.py` and `ledger/receipts.py` are **not** in the protected set (G35's limit, still open)
+- Type gate 322 → 326 (`ledger/receipts.py` and the three proof modules); wide dataclasses 50 → 52; additive-column pin +2; positive controls 54 → 58 (three paired positives for the receipts, one for G40's named limit); `EXECUTION_REFUSAL_REASONS` membership pin 17 → 21. Every one exact, none a floor.
+
+## G40 — `chokepoint/reconcile_gate.py` misclassifies any `execution*` chain event as its own — RECORDED, NOT FIXED HERE
+
+Found while naming G39's outcome event. `_decode_rows` (`chokepoint/reconcile_gate.py:88`)
+routes every chain row whose `event` starts with `execute` or `execution` into
+its execution-binding decoder and raises `LookupError("missing legacy
+history")` when the payload has no `approval_binding`.
+
+**Measured:** a ledger holding one `execution.observation` entry — the
+re-observation receipt `execution/pending.py` has written since G29 — makes
+`_decode_rows` raise. So a deployment that points the chokepoint's reconcile
+gate at the same ledger file the execution controller writes cannot
+reconcile. Whether any deployment shares the file is a deployment property
+this repository does not fix; the collision is in the code regardless.
+
+**Not fixed here**: chokepoint scope, NOT THIS SPRINT. G39's outcome event is
+named `outcome.execution` — outside the prefix, measured to decode cleanly —
+so this sprint does not widen it. The remedy is an exact event allowlist in
+the reconcile gate rather than a prefix, and it belongs to the chokepoint's
+own sprint with its own reproduction.
+
+## G41 — an execution-stage typed reason, filed with its cost
+
+#120 established the harness fault is expressible structurally through
+`(started_ok, candidate_started)` and has no typed reason. G39 chained the
+pair and, per the brief, introduced no vocabulary. The question stands, with
+the cost #120 stated: a NEW execution-stage set (not a widening of
+`EXECUTION_REFUSAL_REASONS`, which is the authorization vocabulary), a field
+on `ExecutionResult`, every construction site, every consumer, the outcome
+receipt's schema, and now the derived receipt check — which would pin the new
+field by construction. Better added once the underlying bytes are committed
+and verifiable, which they now are. Awaiting its own sprint.
+
+## G42 — the receipt check walks rows, not entries
+
+`verify_receipts` asks "does every row have a matching entry". It does not
+ask "does every entry have a row". An adversary who DELETES an execution row
+leaves its `outcome.execution` entry orphaned on the chain and the verifier
+reports nothing, because there is no row to project. The inverse walk is a
+small addition and is filed rather than folded in: the brief's derived check
+is row-to-chain, and adding the reverse direction in the same change is the
+scope creep that makes a mapping stop being reviewable. Pinned as a named
+limit in G39's residual list.

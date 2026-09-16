@@ -350,8 +350,18 @@ class Ledger(ABC):
         judgment: dict | None = None,
         pending_id: int | None = None,
         authorization: dict | None = None,
+        started_ok: bool | None = None,
+        candidate_started: bool | None = None,
     ) -> int:
         """Record one executor outcome (executed, refused, or blocked).
+
+        THE ROW IS ALSO CHAINED. The implementation appends the row's outcome
+        columns to the tamper-evident chain under ``execution:<id>`` in the
+        same call (``ledger/receipts.py``), so a later rewrite of the row is
+        detectable against its receipt. ``started_ok`` and
+        ``candidate_started`` are #120's structural start signals, carried as
+        measured; ``None`` means no executor was invoked for this row at all,
+        which is a different fact from ``False``.
 
         ``judgment`` is the fused Judgment the action rested on; it is stored as
         JSON and promoted to queryable verdict/confidence columns.

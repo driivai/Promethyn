@@ -98,6 +98,26 @@ void guard being closed.
 - **the same, against a witness the ledger-writer cannot silence**, when the
   anchor is one of the external append-only targets below.
 
+**What is in the chain — and therefore what any of the above protects.** An
+externally anchored chain protects only chained bytes; that sentence is
+load-bearing, and F13/F14 (`docs/OPEN-GAPS.md` G39) found the two things a
+receipt exists to establish sitting outside it. The chained bytes are now:
+
+| event | subject | what it commits to | written by |
+|---|---|---|---|
+| `pending.hold` | `pending:<id>` | the pinned authorization record | `hold()` |
+| `pending.decision` | `pending:<id>` | the row's decision columns as stored, after EVERY transition — approve, reject, expire, invalidate, state-moved | every decision writer on the ledger |
+| `execution.observation` | `observation:…` | each live-state comparison | the re-observation seam |
+| `outcome.execution` | `execution:<id>` | the row's outcome columns as stored: `executed`, `refused`, `detail`, `exit_status`, and the structural start signals | `record_execution`, in the same call as the row |
+
+The rows are then required to EQUAL their latest entry: at approval and retry
+(`decision_entry_missing`, `decision_differs_from_chain_entry`,
+`outcome_entry_missing`, `outcome_differs_from_chain_entry`) and by
+`verify_receipts` (`ledger/receipts.py`), which `audit --verify-chain` runs
+alongside the hash walk. The two are complementary: an intact chain under
+rewritten rows fails the receipt check; honest rows over a rewritten chain
+fail the hash walk. Columns NOT in a receipt are named, with reasons, in G39.
+
 **Does NOT detect on its own — named limits, not silent gaps:**
 - **Pure tail-truncation without an anchor.** Lopping entries off the end leaves a
   shorter but internally-valid chain; the chain alone cannot know entries once

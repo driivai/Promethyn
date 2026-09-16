@@ -76,6 +76,16 @@ EXECUTION_REFUSAL_REASONS: frozenset[str] = frozenset({
     # -- the pre-approval receipt the execution entry must restate ------------
     "pre_approval_receipt_missing",         # pinned and observed, but no receipt on the chain
     "pre_approval_receipt_ambiguous",       # several pre-upgrade receipts share one subject
+    # -- the decision and the outcome, against their chained receipts (F13/F14)
+    # Four reasons, two per record, because "nothing chained" and "chained but
+    # different" are different findings: the first is what a row written before
+    # receipts existed looks like, and what an adversary who can write rows but
+    # not the chain leaves behind; the second is a row rewritten after its
+    # receipt was appended. Both refuse; an auditor wants to know which.
+    "decision_entry_missing",               # decided in the row, nothing on the chain
+    "decision_differs_from_chain_entry",    # the row's decision columns were altered
+    "outcome_entry_missing",                # an execution row nothing chained
+    "outcome_differs_from_chain_entry",     # the row's outcome columns were altered
 })
 
 
