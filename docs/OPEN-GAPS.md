@@ -2349,7 +2349,7 @@ Whether that matters for the provenance story is a judgement for whoever runs
 Part B; what is recorded here is that it is **not** swept by it, so the
 question is answered before diligence rather than during it.
 
-### THE BOUNDED SET — twenty-six carriers, ALL twenty-six read back
+### THE BOUNDED SET — twenty-seven carriers, ALL twenty-seven read back
 
 | PR | kind | id |
 |---|---|---|
@@ -2379,8 +2379,9 @@ question is answered before diligence rather than during it.
 | #119 | review reply | `4022679600` — confirmed via REST, same minute |
 | #120 | PR body | `4547756338` — read back, confirmed, stripped |
 | #120 | review reply | `4026263917` — confirmed via REST, same minute |
+| #121 | PR body | `4552026493` — read back, confirmed, stripped, strip confirmed |
 
-Twenty-three review replies, one PR comment and two PR bodies. Not approximate:
+Twenty-three review replies, one PR comment and three PR bodies. Not approximate:
 every row was fetched and its body inspected for the footer. The last two
 unconfirmed rows were closed on 2026-09-16 through the REST channel described
 below, and every row added since has been confirmed in the minute it was
@@ -3842,3 +3843,12 @@ small addition and is filed rather than folded in: the brief's derived check
 is row-to-chain, and adding the reverse direction in the same change is the
 scope creep that makes a mapping stop being reviewable. Pinned as a named
 limit in G39's residual list.
+
+**NINTH OCCURRENCE, #121 — and the CI cost observed, not predicted.** Same
+route: the creation tool appended its footer after the hygiene checker ran;
+read back, confirmed, stripped, and the strip read back. CI run
+`35148672967`, triggered by the open event with the footer frozen in
+`github.event.pull_request.body`, failed **all three build jobs at "Message
+hygiene"** — the standing cost this entry names, now measured on the PR that
+carries this sentence. Nine occurrences across nine pull requests opened
+through that tool. **The rate is 9 of 9.**
