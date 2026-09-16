@@ -2349,7 +2349,7 @@ Whether that matters for the provenance story is a judgement for whoever runs
 Part B; what is recorded here is that it is **not** swept by it, so the
 question is answered before diligence rather than during it.
 
-### THE BOUNDED SET — eighteen carriers, every one read back
+### THE BOUNDED SET — nineteen carriers, every one read back
 
 | PR | kind | id |
 |---|---|---|
@@ -2371,8 +2371,9 @@ question is answered before diligence rather than during it.
 | #113 | review reply | `4020513244` |
 | #114 | review reply | `4021539074` |
 | #114 | review reply | `4021539794` |
+| #115 | review reply | `4021825848` |
 
-Seventeen review replies and one PR comment. Not approximate: each was fetched
+Eighteen review replies and one PR comment. Not approximate: each was fetched
 and its body inspected for the footer. The six #113 replies are the answers to
 that PR's six findings, posted after it merged; `4020508859` was read back and
 the footer is present, so the route is unchanged and this entry is not stale. PR BODIES are not in this set — #111's and
@@ -2452,6 +2453,22 @@ clears `pr-text` on the `edited` event but NOT the three build jobs: those
 carry the stale payload and fail at the hygiene step in about thirty seconds,
 before any suite runs. Only a push clears them. On #115 that cost a full build
 cycle on three Pythons for a body that was already correct in storage.
+
+**SIXTH OCCURRENCE, #116 — identical to the fifth, and that is the point.**
+Same placeholder body, same appended footer, same two-token refusal, same three
+build jobs dead at thirty seconds, same clearing push. Recorded as a single
+line rather than a fifth paragraph, because the route is no longer being
+discovered — it is being paid.
+
+**THE STANDING COST, NAMED ONCE.** With the creation tool appending a footer
+the checker never sees, every pull request opened this way spends one build
+cycle on three Pythons before its first real run. The placeholder keeps
+anything of substance out of the refused payload and the update path stores a
+clean body within a minute, but neither clears the jobs that froze the created
+one. That tax is unavoidable from inside this repository: it is a property of
+the tool that opens the pull request, not of anything the tree can check or
+configure. Stated here so it is a known price rather than a recurring surprise,
+and so a future change to how pull requests are opened has a reason recorded.
 
 **No new instrument.** The same limit as the rest of this entry: nothing in the
 tree can read a PR body before it is posted. What changed is the claim, which
@@ -2855,6 +2872,60 @@ breaks every deployment that has not adopted it.
 
 ---
 
+## G34 — the base-branch refusal honoured its own rationale only for absence
+
+Reported on #115 and correct. G33's fix replaced a *guessed* base branch with a
+*required* one and moved the failure to composition time, and the PR body said
+plainly why that mattered: the delayed failure surfaces as "the target could not
+be read", which blames the repository for a wiring error. **An INVALID base
+still did exactly that.**
+
+**Measured** before the fix, through `build_reobservation`:
+
+| `base_branch` | registry | `observe()` | hold |
+|---|---|---|---|
+| `""` | **built** | `Unreadable('base_tip',)` | refused, `target_state_unreadable` |
+| `"   "` | **built** | `Unreadable('base_tip', 'unmerged_commits')` | same |
+| `"--upload-pack=x"` | **built** | `Unreadable('base_tip', 'unmerged_commits')` | same |
+| `"main"` | built | `BranchDeleteState` | created |
+
+So the registry looked configured, and every `branch.delete` hold was refused at
+creation — the same feature-wide denial G33 exists to remove, reached by a
+different door. **A refusal that covers absence but not invalidity has closed
+one case of the defect and left the other.**
+
+**RULING: validate at composition, using the tool's OWN rule.**
+`tools/git.py` gained `is_usable_branch_name`, exported so the composition root
+asks the same question the reads ask. A root that re-spelled `_BRANCH_RE` would
+be a second definition free to drift — accepting a name the tool then refuses,
+which is this defect reintroduced at one remove. New typed reason
+`reobservation_base_branch_unusable`.
+
+**Both routes, not one.** The supplied `GitTool` is validated as well as the
+synthesised one: a reader handed in with an unusable base fails identically, and
+checking one route while trusting the other is the asymmetry the guard exists to
+close.
+
+**What it does NOT add.** The dash-leading cases are the option-injection shape
+`_BRANCH_RE` already refuses at the read boundary, so no new security property
+is gained there. What is gained is that the diagnosis lands at the wiring rather
+than at the repository.
+
+**Executed mutations**, through `scripts/mutation_worktree.py`, both attack
+classes, 100 tests green unmutated:
+
+| mutation | observed |
+|---|---|
+| P1 deletion: the usability check removed | 7 red |
+| P2 substitution: only the synthesised route checked, a supplied reader trusted | 1 red |
+| P3 substitution: the root re-spells the rule and drifts | 5 red, including the same-rule pin |
+| P4 substitution: emptiness only, so option-injection shapes pass | 6 red |
+
+**The pattern this is the third instance of.** #113 shipped a mechanism nothing
+reached; #114 wired it and built the reader its own sibling class forbids;
+#115 required the base but not a usable one. Each fix was correct about the case
+it named and narrower than the sentence describing it. The instrument that keeps
+catching it is review, not the suite — every one of these had green proofs.
 ## G35 — an outcome derived from a subset of the fields that determine it
 
 **G34 is deliberately skipped here.** It is taken by the base-branch validation

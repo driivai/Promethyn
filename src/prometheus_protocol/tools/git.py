@@ -75,6 +75,19 @@ MERGE_CHECK_VERIFIER_ID = GIT_MERGE_CHECK
 #: (nothing that could read as a git option), no traversal-looking segments.
 _BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 
+
+def is_usable_branch_name(name: str) -> bool:
+    """Whether this tool would accept ``name`` as a branch or ref.
+
+    Exported so a composition root can refuse an unusable base branch WHERE THE
+    OPERATOR CAN SEE IT, instead of building a tool that refuses every read
+    later. One definition of "a branch name this tool will touch": a root that
+    spelled the rule again would be a second definition, free to drift from the
+    one the reads actually use.
+    """
+
+    return bool(_BRANCH_RE.match(name))
+
 _LIMITS = Limits(wall_time_s=20.0, cpu_time_s=10, memory_bytes=0, max_processes=32)
 
 
