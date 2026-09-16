@@ -51,6 +51,7 @@ from prometheus_protocol.execution.executor import SandboxExecutor
 from prometheus_protocol.gate.authorization import ActionGate
 from prometheus_protocol.gate.promotion import GateDecision
 from prometheus_protocol.policy.execution import ExecutionAuthorizer
+from prometheus_protocol.policy.profile import DEFAULT_PROFILE_ID, load_profile
 from prometheus_protocol.sandbox.base import Limits, Sandbox, SandboxResult
 from prometheus_protocol.swarm.models import content_hash
 
@@ -299,3 +300,177 @@ def test_the_adapters_tie_started_to_the_candidate_on_their_normal_paths(module)
 
     source = (SRC / module).read_text(encoding="utf-8")
     assert "started_ok = candidate_started" in source
+
+
+# ---------------------------------------------------------------------------
+# PART 5 — the class, not the instance
+# ---------------------------------------------------------------------------
+#
+# F16 was found by checking ``started_ok`` against ``candidate_started`` in ONE
+# executor. Sweeping every site that derives an execution or verification
+# outcome from the sandbox result found two more in ``tools/git.py``, one of
+# them in the executor that really deletes branches.
+#
+# THE SWEEP, and what each site read BEFORE this change:
+#
+#   verifier/runner.py   8 fields, incl. candidate_started      TOTAL
+#   verifier/sql.py      branches on candidate_started inside
+#                        timed_out and again for a missing
+#                        payload                                TOTAL
+#   execution/executor.py   started_ok alone                    NOT TOTAL (F16)
+#   tools/git.py            started_ok + exit_status            NOT TOTAL (below)
+#   sandbox/namespace.py    produces the result; derives nothing      n/a
+#   execution/controller.py, cli/main.py, the demos
+#                           read exit_status to RECORD, not to derive n/a
+
+
+class _GitTriple(Sandbox):
+    name = "git-triple"
+    isolating = True
+
+    def __init__(self, **fields) -> None:
+        self._fields = fields
+
+    def run(self, *, argv, workspace, limits: Limits = Limits(), stdin: str = ""):
+        return SandboxResult(**self._fields)
+
+
+def _tool(**fields):
+    from prometheus_protocol.tools.git import GitTool
+
+    return GitTool(repo_path="/tmp", sandbox=_GitTriple(**fields), base_branch="main")
+
+
+HARNESS_FAULT = dict(started_ok=True, candidate_started=False, timed_out=True)
+
+
+def test_a_git_read_after_a_setup_timeout_answers_NOTHING():
+    """THE REPRODUCTION FOR THE READS, with ``exit_status=0``.
+
+    Before this change the guards tested ``started_ok or exit_status != 0`` and
+    were safe ONLY BY ACCIDENT: the shipped adapters leave ``exit_status`` at
+    ``None`` on their timeout paths and ``None != 0``. With the same harness
+    fault and a zero exit, ``classify`` returned ``0`` — "zero commits absent
+    from the base", which is precisely the evidence that authorizes an
+    irreversible branch delete — from a run where git never executed.
+    """
+
+    tool = _tool(**HARNESS_FAULT, exit_status=0, stdout="0\n")
+
+    assert tool.classify("feature").unmerged_commits is None, (
+        "a merge proof was produced by a git command that never ran"
+    )
+    assert tool.rev("main") is None
+    with pytest.raises(Exception):
+        tool.branches()
+
+
+def test_the_same_reads_still_work_when_git_actually_ran():
+    """The paired positive control (doctrine #4) for the reads."""
+
+    tool = _tool(started_ok=True, candidate_started=True, exit_status=0, stdout="0\n")
+
+    assert tool.classify("feature").unmerged_commits == 0
+    assert _tool(
+        started_ok=True, candidate_started=True, exit_status=0, stdout="a" * 40 + "\n"
+    ).rev("main") == "a" * 40
+
+
+def test_the_reads_were_previously_saved_by_a_CROSS_MODULE_accident():
+    """Pins the invariant the old guards silently depended on.
+
+    The old code was safe because the isolating adapters leave ``exit_status``
+    unset on their timeout paths. That is a property of a DIFFERENT module, and
+    nothing checked it. It is checked here now: if an adapter starts reporting a
+    zero exit alongside a setup timeout, this fails and names why.
+    """
+
+    for module in ("sandbox/namespace.py", "sandbox/container.py"):
+        source = (SRC / module).read_text(encoding="utf-8")
+        timeout_block = source.split("TimeoutExpired", 1)[1].split("return SandboxResult", 1)[1]
+        head = timeout_block[: timeout_block.index(")")]
+        assert "exit_status=0" not in head, (
+            f"{module} now reports exit_status=0 on its timeout path; the git "
+            "reads no longer have the accidental safety they once had"
+        )
+
+
+def test_the_branch_delete_executor_does_not_claim_a_delete_that_never_ran(tmp_path):
+    """THE SECOND F16, in the executor that really deletes.
+
+    Reading ``started_ok`` alone produced ``executed=False`` — fail-closed, so
+    no branch was lost — with the detail "ran in sandbox but failed (exit None)"
+    and ``started_ok=True``. A record saying the delete was ATTEMPTED and
+    rejected by git, when git never started: an operator would look for the
+    reason git refused, and there is none.
+
+    The AUTHORIZATION is real (a real repository, the real merge check, the real
+    gate); only the executor's sandbox is the fake, because the triple is what
+    is under test.
+    """
+
+    import test_reobservation_branch_delete as fixture
+    from prometheus_protocol.tools.git import GitBranchDeleteExecutor
+
+    fixture._make_repo(tmp_path)
+    tool = fixture._tool(tmp_path)
+    decision = ActionGate(
+        target_canonical=f"git://{tool.repo_path}",
+        authorizer=ExecutionAuthorizer(
+            lambda: load_profile(DEFAULT_PROFILE_ID)
+        ),
+    ).decide(
+        fixture._assessment(tool, fixture.BRANCH),
+        attempt_id=f"delete-branch:{fixture.BRANCH}",
+        action=tool.delete_action(fixture.BRANCH),
+        subject_id="s",
+    )
+    assert decision.approved, "this proof needs an APPROVED delete to execute"
+
+    executor = GitBranchDeleteExecutor(
+        repo_path=tmp_path,
+        sandbox=_GitTriple(**HARNESS_FAULT),
+        allow_delete=True,
+    )
+    result = executor.execute(decision)
+
+    assert not result.executed
+    assert result.refused, "a harness fault was recorded as an attempted delete"
+    assert not result.started_ok
+    assert "ran in sandbox but failed" not in result.detail
+    assert "git never did" in result.detail
+    # And the branch is still there: fail-closed in fact, not only in wording.
+    assert tool.rev(fixture.BRANCH) is not None
+
+
+def test_the_git_read_predicate_is_conservative_under_a_CONTRADICTORY_signal():
+    """``_ran`` requires BOTH flags, and the second one is load-bearing only
+    for a combination no shipped adapter produces.
+
+    ``started_ok=False`` with ``candidate_started=True`` — isolation reported
+    down while the candidate reported running — is contradictory, and the triple
+    table above marks it unreachable for exactly the reason given there. It is
+    asserted anyway, for the same reason those rows are: "no adapter produces
+    this today" is a statement about the adapters, and a predicate that reads
+    the contract must not have a branch decided by nothing.
+
+    FOUND BY A GREEN MUTATION. Dropping ``started_ok`` from the predicate
+    reddened nothing, because every reachable input agrees with
+    ``candidate_started`` alone. Probing the predicate directly over all four
+    combinations showed which input distinguishes them, and this pins it.
+    """
+
+    from prometheus_protocol.tools.git import _ran
+
+    class _Signal:
+        def __init__(self, started_ok, candidate_started):
+            self.started_ok = started_ok
+            self.candidate_started = candidate_started
+
+    assert _ran(_Signal(True, True)) is True
+    assert _ran(_Signal(True, False)) is False
+    assert _ran(_Signal(False, False)) is False
+    # The one that only ``started_ok`` can decide:
+    assert _ran(_Signal(False, True)) is False, (
+        "a contradictory signal was read as a completed run"
+    )

@@ -78,6 +78,28 @@ _BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 _LIMITS = Limits(wall_time_s=20.0, cpu_time_s=10, memory_bytes=0, max_processes=32)
 
 
+def _ran(result) -> bool:
+    """Whether a sandboxed git command ACTUALLY RAN, by the full signal.
+
+    ``started_ok`` answers only "did isolation start". ``candidate_started`` is
+    the definite signal that the command itself began, and the contract
+    (``sandbox/base.py``) says ``started_ok=True`` with
+    ``candidate_started=False`` — a wall-clock timeout during setup — stays a
+    harness fault.
+
+    WHY THIS IS A FUNCTION AND WHY EVERY READ USES IT. Before it, each read here
+    tested ``started_ok or exit_status != 0`` and was SAFE ONLY BY ACCIDENT: the
+    shipped adapters happen to leave ``exit_status`` at ``None`` on their
+    timeout paths, and ``None != 0``. Measured with the same harness-fault
+    signal and ``exit_status=0``: ``classify`` returned ``0`` — "zero commits
+    absent from the base", the exact evidence that authorizes an irreversible
+    delete — from a run where git never executed. The safety of this module
+    rested on a property of a different module, checked by nothing.
+    """
+
+    return bool(result.started_ok and result.candidate_started)
+
+
 class GitToolError(RuntimeError):
     """A read-side git operation could not produce a trustworthy answer."""
 
@@ -130,7 +152,7 @@ class GitTool:
         result = self._run(
             "for-each-ref", "refs/heads", "--format=%(refname:short)"
         )
-        if not result.started_ok or result.exit_status != 0:
+        if not _ran(result) or result.exit_status != 0:
             raise GitToolError(
                 f"could not list branches (exit {result.exit_status}): "
                 f"{(result.stderr or result.detail).strip()}"
@@ -151,7 +173,7 @@ class GitTool:
         result = self._run(
             "rev-list", "--count", f"{self.base_branch}..{branch}"
         )
-        if not result.started_ok or result.exit_status != 0:
+        if not _ran(result) or result.exit_status != 0:
             return BranchClassification(branch=branch, unmerged_commits=None)
         try:
             count = int(result.stdout.strip())
@@ -175,7 +197,7 @@ class GitTool:
         if not _BRANCH_RE.match(ref):
             return None
         result = self._run("rev-parse", "--verify", f"{ref}^{{commit}}")
-        if not result.started_ok or result.exit_status != 0:
+        if not _ran(result) or result.exit_status != 0:
             return None
         tip = result.stdout.strip()
         return tip or None
@@ -450,6 +472,20 @@ class GitBranchDeleteExecutor(Executor):
             return self._refuse(
                 decision,
                 f"sandbox did not start: {result.detail}",
+                started_ok=False,
+            )
+        if not result.candidate_started:
+            # F16, in the executor that really deletes. Isolation came up and
+            # git never ran — a wall-clock timeout during SETUP. Reading
+            # ``started_ok`` alone produced ``executed=False`` (fail-closed, so
+            # no branch was lost) with the detail "ran in sandbox but failed"
+            # and ``started_ok=True``: a record saying the delete was ATTEMPTED
+            # and rejected by git, when git never started. An operator reading
+            # it would look for the reason git refused, and there is none.
+            return self._refuse(
+                decision,
+                "sandbox started but git never did, so the delete did not run "
+                f"and nothing can be claimed about it: {result.detail}",
                 started_ok=False,
             )
         deleted = result.exit_status == 0
