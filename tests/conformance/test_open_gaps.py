@@ -251,14 +251,46 @@ def test_G38_the_newline_reaches_the_RENDERED_message_not_just_the_field():
 
 def test_G38_the_paired_positive_control_the_guard_still_works():
     """Doctrine #4. Without it the assertions above are equally consistent with
-    a guard that has stopped refusing anything at all."""
+    a guard that has stopped refusing anything at all.
 
-    from prometheus_protocol.core.diagnostics import _TLS_REASON
+    THIS CONTROL HAD THE BLIND SPOT THE NEGATIVES WERE JUST REWRITTEN TO CLOSE,
+    and the review that found it was right. The negatives moved onto
+    ``_tls_reason_accepted`` — the real ``Diagnostic`` constructor — and this
+    one was left on ``_TLS_REASON.match``, the regex object. So a change that
+    made ``__post_init__`` start REFUSING legitimate OpenSSL reasons would have
+    left this green, because the pattern still matches them: the control named
+    the guard and measured the pattern, which is the third appearance of that
+    shape in one change.
 
-    assert _TLS_REASON.match("CERT_EXPIRED")
-    assert _TLS_REASON.match("WRONG_VERSION_NUMBER")
+    It goes through the guard now, end to end, exactly as the negatives do.
+
+    WHAT THE FIX IS AND IS NOT WORTH, measured rather than asserted. With the
+    guard mutated to refuse legitimate reasons: the corrected control reddens
+    (5 red), the old one did not (4 red) — and DELETING the old one's body
+    entirely also gives 4 red, the same four. So the old control was not merely
+    blind, it was fully redundant: it added no discrimination the suite did not
+    already have. The four that redden regardless include
+    ``test_a_real_self_signed_certificate_reaches_the_bounded_diagnostic`` and
+    ``test_a_tls_failure_keeps_the_distinction_an_operator_acts_on`` in
+    ``test_secret_sink_regressions.py``, which exercise the guard end to end.
+
+    **So nothing would have shipped unobserved.** The review is right that this
+    control was blind; it is not the case that the property was undefended. The
+    fix makes the control mean what its name says, which matters because a
+    registered positive control is read as evidence for its negatives — and
+    that reading was false. Both halves are recorded so neither is overstated.
+    """
+
+    for accepted in ("CERT_EXPIRED", "WRONG_VERSION_NUMBER",
+                     "CERTIFICATE_VERIFY_FAILED", "A"):
+        assert _tls_reason_accepted(accepted), (
+            f"the guard now REFUSES {accepted!r}, a legitimate OpenSSL symbolic "
+            "reason, so the negatives above are passing against a guard that "
+            "has stopped accepting anything"
+        )
+
     for refused in ("cert_expired", "1CERT", "CERT EXPIRED", "", "A" * 65):
-        assert not _TLS_REASON.match(refused), refused
+        assert not _tls_reason_accepted(refused), refused
 
 
 def test_G38_the_sibling_regex_swept_alongside_it_is_NOT_the_same_shape():

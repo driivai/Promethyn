@@ -2349,7 +2349,7 @@ Whether that matters for the provenance story is a judgement for whoever runs
 Part B; what is recorded here is that it is **not** swept by it, so the
 question is answered before diligence rather than during it.
 
-### THE BOUNDED SET — twenty-three carriers, twenty-one read back
+### THE BOUNDED SET — twenty-three carriers, ALL twenty-three read back
 
 | PR | kind | id |
 |---|---|---|
@@ -2373,13 +2373,14 @@ question is answered before diligence rather than during it.
 | #114 | review reply | `4021539794` |
 | #115 | review reply | `4021825848` |
 | #117 | review reply | `4022309714` |
-| #116 | review reply | `4022357029` — **not read back** |
-| #118 | review reply | `4022525539` — **not read back** |
+| #116 | review reply | `4022357029` — confirmed via REST |
+| #118 | review reply | `4022525539` — confirmed via REST |
 | #119 | PR body | `4544106496` — **read back, confirmed, stripped** |
 
 Twenty-one review replies, one PR comment and one PR body. Not approximate:
-each of the twenty-one confirmed rows was fetched and its body inspected for
-the footer; the two marked rows were not, and are marked for that reason. The six #113 replies are the answers to
+every row was fetched and its body inspected for the footer. The last two
+unconfirmed rows were closed on 2026-09-16 through the REST channel described
+below. The six #113 replies are the answers to
 that PR's six findings, posted after it merged; `4020508859` was read back and
 the footer is present, so the route is unchanged and this entry is not stale. PR BODIES are not in this set — #111's and
 #112's created bodies carried it, were refused by CI, and were rewritten
@@ -2459,14 +2460,14 @@ carry the stale payload and fail at the hygiene step in about thirty seconds,
 before any suite runs. Only a push clears them. On #115 that cost a full build
 cycle on three Pythons for a body that was already correct in storage.
 
-**TWO CARRIERS ARE LISTED WITHOUT BEING READ BACK, and the heading says so.**
-`4022357029` and `4022525539` were each posted while the review-thread listing
-was rate-limited, so the footer on them is EXPECTED and not OBSERVED. They are
-marked rather than omitted so the carrier set stays complete: a row that is an
-inference, recorded as if it were a reading, would make this table exactly the
-kind of claim it exists to replace. (`4022525539` is the G37 reply on #118; the
-listing returned `API rate limit already exceeded` on the read-back attempt
-immediately after posting.)
+**TWO CARRIERS WERE LISTED WITHOUT BEING READ BACK — AND THE WAIT WAS
+UNNECESSARY.** `4022357029` and `4022525539` were each posted while the
+review-thread listing was rate-limited, and were marked EXPECTED-not-OBSERVED
+rather than omitted. Both are now **confirmed**: `GET /repos/{owner}/{repo}/
+pulls/comments/{id}` returned HTTP 200 for each, footer present, while the
+GraphQL listing was still refusing. See the fourth-channel note below — this
+entry's own prescription was wrong, and the rows were markable as read for as
+long as they sat marked as unread.
 
 **A SECOND CHANNEL FOR THE SAME OBSERVATION, found while waiting on the
 first.** `4022309714` was also posted under the rate limit and was first
@@ -3388,3 +3389,37 @@ previously named only two.
 check saw the stale payload regardless of how quickly the body was corrected.
 Only a push clears it. Correcting the body faster does not avoid that; it only
 shortens the window in which the repository's own record is wrong.
+
+**A FOURTH CHANNEL, AND A CORRECTION TO THIS ENTRY'S OWN PRESCRIPTION.** This
+entry has said, and a standing instruction repeated, that when the review-thread
+listing is rate-limited the right response is to WAIT — an hour costs nothing.
+**That was wrong, and it was wrong for the whole time it was written down.**
+
+`get_review_comments` is GraphQL and shares the hourly limit. But review
+comments are also served by plain REST, which does not:
+
+| route | kind | observed |
+|---|---|---|
+| `get_review_comments` (MCP) | GraphQL | `API rate limit already exceeded` |
+| `GET /repos/{o}/{r}/pulls/{n}/comments` | REST | **HTTP 200** |
+| `GET /repos/{o}/{r}/pulls/comments/{id}` | REST | **HTTP 200** |
+
+All three were exercised within the same minute on 2026-09-16: the GraphQL
+listing refused, and both REST routes returned the bodies with the footer
+present. So "the footer cannot be confirmed right now" was never a statement
+about the FACT — it was a statement about one client, generalised to the fact.
+**That is the same error this document names elsewhere as reading an
+instrument's silence as a finding**, committed here in the entry that exists to
+catch it.
+
+**WHAT IT COST.** Two carrier rows sat marked unread across three pull requests
+when a single REST call would have closed them. More seriously, a thread on
+**#119** was posted by a reviewer at 04:59:42Z and reported in this session as
+"no threads on it yet" — a claim resting on the GraphQL listing having refused,
+when REST would have returned it. **An unreadable listing was read as an empty
+one, which is precisely doctrine #8.** The finding in that thread was correct.
+
+**THE RULE NOW:** a rate-limited GraphQL listing is a reason to try REST, not a
+reason to wait. Waiting is the last resort, after every channel has refused, and
+the channels are four: the GraphQL listing, the PR-activity webhook, the REST
+pull endpoint for bodies, and the REST review-comment endpoints for replies.
