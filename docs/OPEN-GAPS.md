@@ -3800,9 +3800,11 @@ from silent into witnessed, and this sprint widened what it witnesses.
 
 ### Instruments
 
-- `tests/conformance/test_chained_decision_and_outcome.py` — 8 proofs
-- `tests/conformance/test_receipt_derivation.py` — 24, of which 17 parametrised over the derived fields
+- `tests/conformance/test_chained_decision_and_outcome.py` — 15 proofs (8 at first push; PART 5 added 7 for the two review findings)
+- `tests/conformance/test_receipt_derivation.py` — 25, of which 17 parametrised over the derived fields
 - `tests/conformance/test_receipt_substitution.py` — 4
+- `tests/conformance/test_open_gaps.py` — 3 added (G40 ×2, the G39–G42 naming pin); the G42 limit pin removed when it closed
+- **47 new proofs in total, counted by collection, not by hand** — the PR body first said 45 from a tally; corrected from the measurement
 - Hearth: `execution/controller.py` and `execution/pending.py` re-sanctioned to measured digests; `ledger/sqlite_ledger.py` and `ledger/receipts.py` are **not** in the protected set (G35's limit, still open)
 - Type gate 322 → 326 (`ledger/receipts.py` and the three proof modules); wide dataclasses 50 → 52; additive-column pin +2; positive controls 54 → 58 (three paired positives for the receipts, one for G40's named limit); `EXECUTION_REFUSAL_REASONS` membership pin 17 → 21. Every one exact, none a floor.
 
