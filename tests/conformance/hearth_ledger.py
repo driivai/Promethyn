@@ -491,6 +491,33 @@ EXPECTED_PROTECTED_FILES = 21
 #:     because a deployment that wires nothing pins nothing and would be refused
 #:     at execution for a receipt it had no reason to write.
 #:
+#: RE-SANCTIONED for F16 — a setup timeout must not record as a successful
+#: execution. ``execution/executor.py`` moved:
+#:
+#:   - ``_run`` decided the outcome from ``started_ok`` ALONE. The sandbox
+#:     contract (``sandbox/base.py``) says ``started_ok`` answers only "did
+#:     isolation start", and that ``started_ok=True`` with
+#:     ``candidate_started=False`` — a wall-clock timeout during SETUP, before
+#:     the candidate ran — "stays a harness fault". Reproduced: that triple
+#:     returned ``executed=True`` with the detail "ran in sandbox".
+#:     Could-not-verify written into the execution record as verified-clean, at
+#:     the point downstream can no longer recover the difference.
+#:   - It now refuses that triple, as it already refused ``started_ok=False``.
+#:     No new outcome category: ``runner.py``'s three-way split has a verdict
+#:     ABOUT the candidate in it, and the executor has no verdict to give —
+#:     ``exit_status`` carries the candidate's own outcome — so the split
+#:     collapses onto the two outcomes the executor already has.
+#:   - KEYED ON ``candidate_started``, NOT on ``timed_out``: a candidate that
+#:     started and was then wall-clock killed really did run and its side
+#:     effects happened, and keying on the timeout would discard that
+#:     execution's record. Pinned by its own test.
+#:
+#:   The verifier seam has classified this same triple as
+#:   ``Unavailable(INFRA_FAULT)`` since the equivalent bug was found there
+#:   (``test_sandbox_fault_classification.py``). The executor was reading fewer
+#:   fields than the verifier for the same underlying fact; this is it catching
+#:   up to its own contract.
+#:
 #: Those sprints are why these bytes are what they are. They do NOT license the
 #: next edit to the same files: updating a digest below is a fresh decision, and
 #: the reason for it belongs beside it.
@@ -506,7 +533,7 @@ DIGESTS: dict[str, str] = {
     "src/prometheus_protocol/execution/controller.py":
         "1c5a671defaf47dc1dbb201bd9c4765c2c0abb1dec16dbe43dfc44e68fd99876",
     "src/prometheus_protocol/execution/executor.py":
-        "7fc5ee28f1a76417a9350ee9a0ab1913483991a89d60d9670ffd8149ab6afb0f",
+        "1018ecf2db4d62fe258ced3757b60cddbbd160bec3915ec41ab8db9eadb09a9b",
     "src/prometheus_protocol/execution/pending.py":
         "f6de30cb1ac77b7b2d4d3a531864ea1eaf5f984cdcd075c895eda5ee945f946f",
     "src/prometheus_protocol/forge/miner.py":

@@ -413,6 +413,15 @@
         "test_a_receipt_written_before_the_upgrade_is_still_restated"
       ],
       "property": "a receipt found under the pre-upgrade subject is marked as an attribution, and one found under the current subject is not — so the marker distinguishes the two rather than appearing on both"
+    },
+    {
+      "module": "tests/conformance/test_execution_start_signal.py",
+      "positive": "test_a_genuine_execution_is_still_recorded_as_executed",
+      "negatives": [
+        "test_a_setup_timeout_is_NOT_recorded_as_a_successful_execution",
+        "test_a_candidate_that_ran_and_then_timed_out_is_still_an_execution"
+      ],
+      "property": "the executor refuses a candidate that never started without refusing one that did — including one the wall clock killed after it started, whose side effects really happened"
     }
   ]
 }
