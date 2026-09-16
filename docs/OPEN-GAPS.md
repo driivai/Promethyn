@@ -2852,3 +2852,60 @@ kept measurement of the unfixed path — because a deployment that wires nothing
 pins nothing and would then be refused at execution for a receipt it never had
 any reason to write. The unconditioned guard does not tighten the control; it
 breaks every deployment that has not adopted it.
+
+---
+
+## G34 — the base-branch refusal honoured its own rationale only for absence
+
+Reported on #115 and correct. G33's fix replaced a *guessed* base branch with a
+*required* one and moved the failure to composition time, and the PR body said
+plainly why that mattered: the delayed failure surfaces as "the target could not
+be read", which blames the repository for a wiring error. **An INVALID base
+still did exactly that.**
+
+**Measured** before the fix, through `build_reobservation`:
+
+| `base_branch` | registry | `observe()` | hold |
+|---|---|---|---|
+| `""` | **built** | `Unreadable('base_tip',)` | refused, `target_state_unreadable` |
+| `"   "` | **built** | `Unreadable('base_tip', 'unmerged_commits')` | same |
+| `"--upload-pack=x"` | **built** | `Unreadable('base_tip', 'unmerged_commits')` | same |
+| `"main"` | built | `BranchDeleteState` | created |
+
+So the registry looked configured, and every `branch.delete` hold was refused at
+creation — the same feature-wide denial G33 exists to remove, reached by a
+different door. **A refusal that covers absence but not invalidity has closed
+one case of the defect and left the other.**
+
+**RULING: validate at composition, using the tool's OWN rule.**
+`tools/git.py` gained `is_usable_branch_name`, exported so the composition root
+asks the same question the reads ask. A root that re-spelled `_BRANCH_RE` would
+be a second definition free to drift — accepting a name the tool then refuses,
+which is this defect reintroduced at one remove. New typed reason
+`reobservation_base_branch_unusable`.
+
+**Both routes, not one.** The supplied `GitTool` is validated as well as the
+synthesised one: a reader handed in with an unusable base fails identically, and
+checking one route while trusting the other is the asymmetry the guard exists to
+close.
+
+**What it does NOT add.** The dash-leading cases are the option-injection shape
+`_BRANCH_RE` already refuses at the read boundary, so no new security property
+is gained there. What is gained is that the diagnosis lands at the wiring rather
+than at the repository.
+
+**Executed mutations**, through `scripts/mutation_worktree.py`, both attack
+classes, 100 tests green unmutated:
+
+| mutation | observed |
+|---|---|
+| P1 deletion: the usability check removed | 7 red |
+| P2 substitution: only the synthesised route checked, a supplied reader trusted | 1 red |
+| P3 substitution: the root re-spells the rule and drifts | 5 red, including the same-rule pin |
+| P4 substitution: emptiness only, so option-injection shapes pass | 6 red |
+
+**The pattern this is the third instance of.** #113 shipped a mechanism nothing
+reached; #114 wired it and built the reader its own sibling class forbids;
+#115 required the base but not a usable one. Each fix was correct about the case
+it named and narrower than the sentence describing it. The instrument that keeps
+catching it is review, not the suite — every one of these had green proofs.

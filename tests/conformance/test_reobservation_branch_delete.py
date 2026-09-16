@@ -1890,3 +1890,89 @@ def test_an_unpinned_hold_needs_no_receipt_and_is_not_refused(tmp_path):
         pending.id, execution_attempt=1, now=CLOCK
     )
     assert _observations(ledger) == []
+
+
+# ---------------------------------------------------------------------------
+# PART 14 — a base branch this tool will not read
+# ---------------------------------------------------------------------------
+#
+# REPRODUCTION FIRST. Requiring a base branch removed the GUESS but not the
+# delayed denial: an empty, whitespace-only or dash-leading base built a
+# registry that looked configured, and then GitTool refused the name, the
+# observer returned Unreadable naming base_tip, and every branch.delete hold
+# was refused at creation as target_state_unreadable — blaming the repository
+# for a wiring error, which is precisely what the composition-time refusal was
+# introduced to stop.
+#
+# Measured before the fix: "" -> Unreadable('base_tip',); "   " and
+# "--upload-pack=x" -> Unreadable('base_tip', 'unmerged_commits'). All three
+# built a registry without complaint.
+
+
+@pytest.mark.parametrize(
+    "base",
+    ["", "   ", "--upload-pack=x", "-rf", "/leading-slash", "a b"],
+    ids=["empty", "whitespace", "option-injection", "dash", "slash", "space"],
+)
+def test_a_base_branch_this_tool_will_not_read_is_refused_at_composition(
+    tmp_path, base
+):
+    """Every unusable spelling refuses where the operator can see it.
+
+    The dash-leading cases are the option-injection shape ``_BRANCH_RE`` already
+    refuses at the read boundary, so this adds no new security property there —
+    what it adds is the diagnosis landing at the wiring instead of at the
+    repository.
+    """
+
+    from prometheus_protocol.runtime.factory import build_reobservation
+
+    with pytest.raises(ConfigError) as refusal:
+        build_reobservation(target_canonical=f"git://{tmp_path}", base_branch=base)
+
+    assert refusal.value.reason == "reobservation_base_branch_unusable"
+    assert refusal.value.reason in CONFIG_REFUSAL_REASONS
+
+
+def test_a_SUPPLIED_reader_carrying_an_unusable_base_is_refused_too(tmp_path):
+    """BOTH routes, not just the synthesised one. A supplied ``GitTool`` whose
+    base this tool will not read fails identically, and checking one route while
+    trusting the other is the asymmetry this guard exists to close."""
+
+    from prometheus_protocol.runtime.factory import build_reobservation
+
+    _make_repo(tmp_path)
+    tool = GitTool(repo_path=tmp_path, sandbox=UnsafeLocalSandbox(), base_branch="")
+
+    with pytest.raises(ConfigError) as refusal:
+        build_reobservation(target_canonical=f"git://{tmp_path}", git_tool=tool)
+
+    assert refusal.value.reason == "reobservation_base_branch_unusable"
+
+
+def test_a_usable_base_branch_is_still_accepted(tmp_path):
+    """The positive control (doctrine #4). Without it the refusals above are
+    consistent with a factory that has stopped accepting any base at all."""
+
+    from prometheus_protocol.runtime.factory import build_reobservation
+
+    _make_repo(tmp_path)
+    for base in ("main", "release/1.2", "feat-a_b.c"):
+        registry = build_reobservation(
+            target_canonical=f"git://{tmp_path}", base_branch=base
+        )
+        assert registry.observers[ACTION_BRANCH_DELETE]._tool.base_branch == base
+
+
+def test_the_validator_is_the_tools_OWN_rule_not_a_second_spelling(tmp_path):
+    """One definition of "a branch name this tool will touch".
+
+    A composition root that re-spelled the rule would be free to drift from the
+    one the reads actually use — accepting a name the tool then refuses, which
+    is the defect this part fixes, reintroduced at one remove.
+    """
+
+    from prometheus_protocol.tools.git import _BRANCH_RE, is_usable_branch_name
+
+    for name in ("main", "", "   ", "--x", "a/b.c-d", "..", "a b", "0"):
+        assert is_usable_branch_name(name) is bool(_BRANCH_RE.match(name)), name

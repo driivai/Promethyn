@@ -54,6 +54,7 @@ CONFIG_REFUSAL_REASONS: frozenset[str] = frozenset({
     "reobservation_registry_discarded",  # a registry the supplied service would not use
     "reobservation_base_branch_unknown",   # a git principal with no reader and no base
     "reobservation_base_branch_conflict",  # a supplied reader and base that disagree
+    "reobservation_base_branch_unusable",  # a base this tool would refuse to read
 })
 
 

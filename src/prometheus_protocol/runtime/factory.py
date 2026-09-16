@@ -470,7 +470,11 @@ def build_reobservation(
         ACTION_DATABASE_MIGRATE: PHASE_ONE_NOT_COVERED,
     }
     if target_canonical.startswith(GIT_TARGET_PREFIX):
-        from prometheus_protocol.tools.git import GitBranchStateObserver, GitTool
+        from prometheus_protocol.tools.git import (
+            GitBranchStateObserver,
+            GitTool,
+            is_usable_branch_name,
+        )
 
         # Narrowed in STATEMENT form. The expression form the type gate refuses
         # would take an argument of a third shape down the else-branch and build
@@ -506,6 +510,27 @@ def build_reobservation(
             tool = GitTool(
                 repo_path=target_canonical[len(GIT_TARGET_PREFIX) :],
                 base_branch=base_branch,
+            )
+        # VALIDATED HERE, whichever route supplied it, because an UNUSABLE base
+        # reproduces exactly the delayed denial the refusal above exists to
+        # remove. Measured: an empty, whitespace-only or dash-leading base
+        # builds a registry that looks configured, and then ``GitTool.rev``
+        # refuses the name, the observer returns ``Unreadable`` naming
+        # ``base_tip``, and EVERY branch.delete hold is refused at creation as
+        # ``target_state_unreadable`` — pointing at the repository rather than
+        # at the wiring, which is where the defect is.
+        #
+        # Both routes, not just the synthesised one: a supplied ``GitTool``
+        # carrying an unusable base fails the same way, and checking one route
+        # while trusting the other is the asymmetry this check exists to close.
+        if not is_usable_branch_name(tool.base_branch):
+            raise ConfigError(
+                f"re-observation was given the base branch "
+                f"{tool.base_branch!r} for {target_canonical!r}, which this "
+                "tool will not read. An unusable base builds a registry that "
+                "looks configured and then refuses every branch.delete hold at "
+                "creation, blaming the repository for a wiring error",
+                reason="reobservation_base_branch_unusable",
             )
         observers[ACTION_BRANCH_DELETE] = GitBranchStateObserver(tool)
     else:
