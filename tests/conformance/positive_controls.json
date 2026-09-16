@@ -413,6 +413,15 @@
         "test_a_receipt_written_before_the_upgrade_is_still_restated"
       ],
       "property": "a receipt found under the pre-upgrade subject is marked as an attribution, and one found under the current subject is not — so the marker distinguishes the two rather than appearing on both"
+    },
+    {
+      "module": "tests/conformance/test_reobservation_branch_delete.py",
+      "positive": "test_a_usable_base_branch_is_still_accepted",
+      "negatives": [
+        "test_a_base_branch_this_tool_will_not_read_is_refused_at_composition",
+        "test_a_SUPPLIED_reader_carrying_an_unusable_base_is_refused_too"
+      ],
+      "property": "the composition-time validator refuses bases the tool would not read without refusing the ones it would — so the refusal is about usability, not about naming a base at all"
     }
   ]
 }
