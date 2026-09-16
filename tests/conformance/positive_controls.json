@@ -468,6 +468,16 @@
         "test_no_read_spells_the_rule_a_second_time"
       ],
       "property": "the AST allowlist pinning _BRANCH_RE to one function is reaching the source it scans — an allowlist that found nothing to look at would pass for the same reason a clean one does (doctrine #8)"
+    },
+    {
+      "module": "tests/conformance/test_open_gaps.py",
+      "positive": "test_G38_the_paired_positive_control_the_guard_still_works",
+      "negatives": [
+        "test_G38_the_tls_reason_guard_is_loose_by_exactly_one_trailing_newline",
+        "test_G38_the_newline_reaches_the_RENDERED_message_not_just_the_field",
+        "test_G38_the_sibling_regex_swept_alongside_it_is_NOT_the_same_shape"
+      ],
+      "property": "the tls_reason guard still refuses everything outside the symbolic alphabet while G38 holds it at exactly one trailing newline — without it, a pin that records a gap is indistinguishable from a guard that has stopped refusing anything at all"
     }
   ]
 }

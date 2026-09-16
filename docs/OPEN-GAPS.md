@@ -2349,7 +2349,7 @@ Whether that matters for the provenance story is a judgement for whoever runs
 Part B; what is recorded here is that it is **not** swept by it, so the
 question is answered before diligence rather than during it.
 
-### THE BOUNDED SET — twenty-two carriers, twenty read back
+### THE BOUNDED SET — twenty-four carriers, ALL twenty-four read back
 
 | PR | kind | id |
 |---|---|---|
@@ -2373,12 +2373,16 @@ question is answered before diligence rather than during it.
 | #114 | review reply | `4021539794` |
 | #115 | review reply | `4021825848` |
 | #117 | review reply | `4022309714` |
-| #116 | review reply | `4022357029` — **not read back** |
-| #118 | review reply | `4022525539` — **not read back** |
+| #116 | review reply | `4022357029` — confirmed via REST |
+| #118 | review reply | `4022525539` — confirmed via REST |
+| #119 | PR body | `4544106496` — read back, confirmed, stripped |
+| #119 | review reply | `4022679600` — confirmed via REST, same minute |
 
-Twenty-one review replies and one PR comment. Not approximate: each of the
-twenty confirmed rows was fetched and its body inspected for the footer; the
-two marked rows were not, and are marked for that reason. The six #113 replies are the answers to
+Twenty-two review replies, one PR comment and one PR body. Not approximate:
+every row was fetched and its body inspected for the footer. The last two
+unconfirmed rows were closed on 2026-09-16 through the REST channel described
+below, and every row added since has been confirmed in the minute it was
+created — which is what that channel buys. The six #113 replies are the answers to
 that PR's six findings, posted after it merged; `4020508859` was read back and
 the footer is present, so the route is unchanged and this entry is not stale. PR BODIES are not in this set — #111's and
 #112's created bodies carried it, were refused by CI, and were rewritten
@@ -2458,14 +2462,14 @@ carry the stale payload and fail at the hygiene step in about thirty seconds,
 before any suite runs. Only a push clears them. On #115 that cost a full build
 cycle on three Pythons for a body that was already correct in storage.
 
-**TWO CARRIERS ARE LISTED WITHOUT BEING READ BACK, and the heading says so.**
-`4022357029` and `4022525539` were each posted while the review-thread listing
-was rate-limited, so the footer on them is EXPECTED and not OBSERVED. They are
-marked rather than omitted so the carrier set stays complete: a row that is an
-inference, recorded as if it were a reading, would make this table exactly the
-kind of claim it exists to replace. (`4022525539` is the G37 reply on #118; the
-listing returned `API rate limit already exceeded` on the read-back attempt
-immediately after posting.)
+**TWO CARRIERS WERE LISTED WITHOUT BEING READ BACK — AND THE WAIT WAS
+UNNECESSARY.** `4022357029` and `4022525539` were each posted while the
+review-thread listing was rate-limited, and were marked EXPECTED-not-OBSERVED
+rather than omitted. Both are now **confirmed**: `GET /repos/{owner}/{repo}/
+pulls/comments/{id}` returned HTTP 200 for each, footer present, while the
+GraphQL listing was still refusing. See the fourth-channel note below — this
+entry's own prescription was wrong, and the rows were markable as read for as
+long as they sat marked as unread.
 
 **A SECOND CHANNEL FOR THE SAME OBSERVATION, found while waiting on the
 first.** `4022309714` was also posted under the rate limit and was first
@@ -3266,3 +3270,172 @@ and narrower than the sentence describing it.** The instrument that keeps
 catching it is review, not the suite: this one had green proofs, reddening
 mutations in both attack classes, and a test asserting the inverse of the
 property, all at once.
+
+## G38 — the same `$` anchor defect, in the TLS diagnostic guard — RECORDED, NOT FIXED HERE
+
+Found by sweeping the CLASS of G36/G37 rather than the instance, and **not by
+any report**. The sweep asked a mechanical question across `src/`: which
+module-private compiled regexes have more than one user, and of those, which
+have a public wrapper that some other site bypasses? Two candidates came back.
+One is not the shape; one is.
+
+**Not the shape.** `chokepoint/audit_normalization.py`'s `_GCP_KEY` has three
+users — `normalize_gcp_event`, `from_public_key_export`, `__post_init__` — and
+every one calls `.fullmatch()` on the same object. The regex IS the rule there;
+there is no stricter wrapper to diverge from. Recorded so the sweep's negative
+result is a measurement rather than a silence.
+
+**The shape.** `core/diagnostics.py:186`:
+
+```python
+_TLS_REASON = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
+```
+
+consulted at line 238 as `_TLS_REASON.match(str(value))`. **`$`, not `\Z`, and
+`.match`, not `.fullmatch`** — G36's defect exactly, one module over.
+
+**Measured, not inferred:**
+
+| value | `.match` | `.fullmatch` |
+|---|---|---|
+| `CERT_EXPIRED` | True | True |
+| `CERT_EXPIRED\n` | **True** | False |
+| `CERT_EXPIRED\n\n` | False | False |
+| `CERT_EXPIRED\nX` | False | False |
+| `CERT_EXPIRED\r\n` | False | False |
+| `CERT_EXPIRED\r` | False | False |
+| `CERT_EXPIRED\nsecret` | False | False |
+
+**THE EXPOSURE IS EXACTLY ONE TRAILING NEWLINE AND NOTHING ELSE**, and saying
+so precisely is the point. `$` matches at end-of-string or immediately before a
+single final newline, and `[A-Z0-9_]` cannot consume a newline, so no second
+character can follow. **This is not a text-injection channel**: arbitrary prose
+does not pass, and the table above is the evidence rather than the reasoning.
+
+**Why it is still a defect.** The guard's own comment says the shape is
+enforced here "so even a handler that put something else on the attribute could
+not turn this key into a text channel" — defence in depth against a value that
+is not the OpenSSL symbolic constant. A value that is supposed to be one
+symbolic token can carry a line break, and a line break in a log record is the
+one character that ends a record. **The guard is one character looser than the
+sentence describing it** — the recurring shape this document keeps naming.
+
+**In practice the field is filled by CPython from OpenSSL's table**, so nothing
+reaching it today carries a newline. That is a statement about the current
+caller, not about the guard, and the guard exists precisely for the case where
+the caller is not what it was.
+
+**RECORDED, NOT FIXED HERE, and that is deliberate.** This is a different
+module, a different guard, and unrelated to the review finding that opened
+#118. Fixing it in this PR would be scope this PR was not asked for, and the
+precedent for splitting is the F16/F18 one: report the sibling finding with its
+measurement, fix it in its own change. What is owed here is that it was swept
+for, found, measured, and written down rather than left as an unexamined green.
+
+**Neither file is in the Hearth ledger.** `core/diagnostics.py` is not
+protected, nor is `tools/git.py` (G35). So the integrity ledger did not and
+would not see either of these changes.
+
+**THE PIN WRITTEN TO RECORD THIS GAP HAD G37'S DEFECT, and it is recorded
+rather than quietly corrected.** The first version asserted on
+`_TLS_REASON.match(...)` — the regex object. Two things determine whether the
+guard admits a value: the anchor, and the method the call site uses. Measured
+through `scripts/mutation_worktree.py` against a real baseline of 26:
+
+| probe | first pin | corrected pin |
+|---|---|---|
+| U1 gap closed via the ANCHOR (`$` → `\Z`) | 1 red | 2 red |
+| U2 gap closed via the CALL SITE (`.match` → `.fullmatch`) | **GREEN** | 2 red |
+| U3 gap WIDENED (charset admits a newline) | 1 red | 1 red |
+| U4 `_GCP_KEY` consulted with `.match` | 1 red | 1 red |
+
+**U2 is the point.** Changing the call site genuinely closes this gap, and the
+first pin stayed green through it: the pin's sentence was about the guard and
+its reach was the pattern — a derivation over one of the two fields that
+determine the outcome, which is G35's shape and G37's shape, in the instrument
+written to record G37's sibling. The corrected pin goes through the real
+`Diagnostic` constructor, so it is total over both.
+
+**A SECOND ASSERTION WAS ADDED AT THE SINK**, because "the guard admits it"
+and "it reaches the output" are different claims. Measured:
+`Diagnostic(...).message()` renders `body_not_json tls_reason=CERT_EXPIRED\n`
+— the newline is not dropped before rendering, so one diagnostic becomes two
+lines in any line-oriented sink. That is the whole exposure, pinned where it
+lands rather than where it is admitted.
+
+**AN EARLIER RUN OF THIS PROBE REPORTED FOUR GREENS AND PROVED NOTHING.** Its
+targets included a test module that does not exist, so pytest exited with no
+summary, and the harness reported `(no summary)` with an empty failure list —
+which a careless reader takes for "nothing reddened". The baseline assertion
+(`"passed" in summary`) was added for that reason and is what caught it. The
+empty-instrument pass, doctrine #8, in the tool used to check for it.
+
+**SEVENTH OCCURRENCE, #119 — and the first one caught and corrected in the same
+minute it was created.** The creation tool appended its footer to the PR body
+after the hygiene checker ran, exactly as the fifth and sixth did. What is
+different is only the response: the body was **read back immediately**, the
+footer **observed** rather than assumed, and stripped via
+`update_pull_request`, which appends nothing. The read-back after the strip
+returned no vendor token, so this row is **confirmed in both directions** — the
+append happened, and the correction took.
+
+That makes `4544106496` the first carrier confirmed on the same channel that
+created it, without waiting on the rate-limited review-thread listing. **A PR
+BODY is readable through the plain REST pull endpoint**, which is not the
+GraphQL listing and not the webhook — a THIRD independent channel, available
+whenever the carrier is a body rather than a reply. Recorded because the entry
+previously named only two.
+
+**The standing cost was still paid.** `ci.yml` reads
+`github.event.pull_request.body` frozen at trigger time, so the open-event text
+check saw the stale payload regardless of how quickly the body was corrected.
+Only a push clears it. Correcting the body faster does not avoid that; it only
+shortens the window in which the repository's own record is wrong.
+
+**A FOURTH CHANNEL, AND A CORRECTION TO THIS ENTRY'S OWN PRESCRIPTION.** This
+entry has said, and a standing instruction repeated, that when the review-thread
+listing is rate-limited the right response is to WAIT — an hour costs nothing.
+**That was wrong, and it was wrong for the whole time it was written down.**
+
+`get_review_comments` is GraphQL and shares the hourly limit. But review
+comments are also served by plain REST, which does not:
+
+| route | kind | observed |
+|---|---|---|
+| `get_review_comments` (MCP) | GraphQL | `API rate limit already exceeded` |
+| `GET /repos/{o}/{r}/pulls/{n}/comments` | REST | **HTTP 200** |
+| `GET /repos/{o}/{r}/pulls/comments/{id}` | REST | **HTTP 200** |
+
+All three were exercised within the same minute on 2026-09-16: the GraphQL
+listing refused, and both REST routes returned the bodies with the footer
+present. So "the footer cannot be confirmed right now" was never a statement
+about the FACT — it was a statement about one client, generalised to the fact.
+**That is the same error this document names elsewhere as reading an
+instrument's silence as a finding**, committed here in the entry that exists to
+catch it.
+
+**WHAT IT COST.** Two carrier rows sat marked unread across three pull requests
+when a single REST call would have closed them. More seriously, a thread on
+**#119** was posted by a reviewer at 04:59:42Z and reported in this session as
+"no threads on it yet" — a claim resting on the GraphQL listing having refused,
+when REST would have returned it. **An unreadable listing was read as an empty
+one, which is precisely doctrine #8.** The finding in that thread was correct.
+
+**THE RULE NOW:** a rate-limited GraphQL listing is a reason to try REST, not a
+reason to wait. Waiting is the last resort, after every channel has refused, and
+the channels are four: the GraphQL listing, the PR-activity webhook, the REST
+pull endpoint for bodies, and the REST review-comment endpoints for replies.
+
+**FIRST CARRIER CREATED AND CONFIRMED UNDER THE CORRECTED RULE.**
+`4022679600`, the reply on #119, was read back through
+`GET /repos/{o}/{r}/pulls/comments/{id}` immediately after posting: HTTP 200,
+footer present, **observed**. No wait, no inference, no row marked pending.
+
+That is the whole practical difference the fourth channel makes, and it is
+worth stating as a number rather than a principle: under the old rule this row
+would have read "not read back" for up to an hour, and two such rows stayed
+that way across three pull requests. **A REPLY CARRIER CANNOT BE STRIPPED** the
+way a PR body can — `update_pull_request` appends nothing, but there is no
+equivalent for a review reply, so the footer stands on every one of the
+twenty-two. Confirming them promptly does not remove them; it only keeps this
+table honest about what is known versus assumed.
