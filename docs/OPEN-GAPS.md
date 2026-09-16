@@ -2349,7 +2349,7 @@ Whether that matters for the provenance story is a judgement for whoever runs
 Part B; what is recorded here is that it is **not** swept by it, so the
 question is answered before diligence rather than during it.
 
-### THE BOUNDED SET — twenty-one carriers, twenty read back
+### THE BOUNDED SET — twenty-two carriers, twenty read back
 
 | PR | kind | id |
 |---|---|---|
@@ -2374,9 +2374,11 @@ question is answered before diligence rather than during it.
 | #115 | review reply | `4021825848` |
 | #117 | review reply | `4022309714` |
 | #116 | review reply | `4022357029` — **not read back** |
+| #118 | review reply | `4022525539` — **not read back** |
 
-Eighteen review replies and one PR comment. Not approximate: each was fetched
-and its body inspected for the footer. The six #113 replies are the answers to
+Twenty-one review replies and one PR comment. Not approximate: each of the
+twenty confirmed rows was fetched and its body inspected for the footer; the
+two marked rows were not, and are marked for that reason. The six #113 replies are the answers to
 that PR's six findings, posted after it merged; `4020508859` was read back and
 the footer is present, so the route is unchanged and this entry is not stale. PR BODIES are not in this set — #111's and
 #112's created bodies carried it, were refused by CI, and were rewritten
@@ -2456,12 +2458,14 @@ carry the stale payload and fail at the hygiene step in about thirty seconds,
 before any suite runs. Only a push clears them. On #115 that cost a full build
 cycle on three Pythons for a body that was already correct in storage.
 
-**ONE CARRIER IS LISTED WITHOUT BEING READ BACK, and the heading says so.**
-`4022357029` was posted while the review-thread listing was rate-limited, so
-the footer on it is EXPECTED and not OBSERVED. It is marked rather than omitted
-so the carrier set stays complete: a row that is an inference, recorded as if
-it were a reading, would make this table exactly the kind of claim it exists to
-replace.
+**TWO CARRIERS ARE LISTED WITHOUT BEING READ BACK, and the heading says so.**
+`4022357029` and `4022525539` were each posted while the review-thread listing
+was rate-limited, so the footer on them is EXPECTED and not OBSERVED. They are
+marked rather than omitted so the carrier set stays complete: a row that is an
+inference, recorded as if it were a reading, would make this table exactly the
+kind of claim it exists to replace. (`4022525539` is the G37 reply on #118; the
+listing returned `API rate limit already exceeded` on the read-back attempt
+immediately after posting.)
 
 **A SECOND CHANNEL FOR THE SAME OBSERVATION, found while waiting on the
 first.** `4022309714` was also posted under the rate limit and was first
