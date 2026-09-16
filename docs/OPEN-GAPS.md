@@ -2349,7 +2349,7 @@ Whether that matters for the provenance story is a judgement for whoever runs
 Part B; what is recorded here is that it is **not** swept by it, so the
 question is answered before diligence rather than during it.
 
-### THE BOUNDED SET — eighteen carriers, every one read back
+### THE BOUNDED SET — nineteen carriers, every one read back
 
 | PR | kind | id |
 |---|---|---|
@@ -2371,8 +2371,9 @@ question is answered before diligence rather than during it.
 | #113 | review reply | `4020513244` |
 | #114 | review reply | `4021539074` |
 | #114 | review reply | `4021539794` |
+| #115 | review reply | `4021825848` |
 
-Seventeen review replies and one PR comment. Not approximate: each was fetched
+Eighteen review replies and one PR comment. Not approximate: each was fetched
 and its body inspected for the footer. The six #113 replies are the answers to
 that PR's six findings, posted after it merged; `4020508859` was read back and
 the footer is present, so the route is unchanged and this entry is not stale. PR BODIES are not in this set — #111's and
@@ -2452,6 +2453,22 @@ clears `pr-text` on the `edited` event but NOT the three build jobs: those
 carry the stale payload and fail at the hygiene step in about thirty seconds,
 before any suite runs. Only a push clears them. On #115 that cost a full build
 cycle on three Pythons for a body that was already correct in storage.
+
+**SIXTH OCCURRENCE, #116 — identical to the fifth, and that is the point.**
+Same placeholder body, same appended footer, same two-token refusal, same three
+build jobs dead at thirty seconds, same clearing push. Recorded as a single
+line rather than a fifth paragraph, because the route is no longer being
+discovered — it is being paid.
+
+**THE STANDING COST, NAMED ONCE.** With the creation tool appending a footer
+the checker never sees, every pull request opened this way spends one build
+cycle on three Pythons before its first real run. The placeholder keeps
+anything of substance out of the refused payload and the update path stores a
+clean body within a minute, but neither clears the jobs that froze the created
+one. That tax is unavoidable from inside this repository: it is a property of
+the tool that opens the pull request, not of anything the tree can check or
+configure. Stated here so it is a known price rather than a recurring surprise,
+and so a future change to how pull requests are opened has a reason recorded.
 
 **No new instrument.** The same limit as the rest of this entry: nothing in the
 tree can read a PR body before it is posted. What changed is the claim, which
