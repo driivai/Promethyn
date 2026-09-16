@@ -172,9 +172,22 @@ class ExecutionResult:
 
     The trailing fields are additive and describe a *real* execution: whether
     the executor ``refused`` (fail-closed) rather than run unsandboxed, whether
-    isolation ``started_ok``, the ``sandbox_name`` that ran it, the process
+    isolation ``started_ok``, whether the candidate itself began
+    (``candidate_started``), the ``sandbox_name`` that ran it, the process
     ``exit_status``, and captured ``stdout``. A no-op recorder leaves them at
     their defaults.
+
+    ``started_ok`` AND ``candidate_started`` ARE TWO FACTS, not one, and the
+    record carries both because their remedies differ. Isolation that never
+    started is a missing or broken runtime; isolation that started while the
+    candidate did not is a setup that ran out of wall clock. Mirrors
+    :class:`~prometheus_protocol.sandbox.base.SandboxResult`, where the same
+    two flags mean the same two things.
+
+    This field was added after a refusal for the second case was recorded with
+    ``started_ok=False`` — overwriting a true fact with a false one and making
+    the two harness faults indistinguishable in the record. Collapsing them is
+    the defect the refusal itself existed to fix, committed one field over.
     """
 
     executed: bool
@@ -182,6 +195,7 @@ class ExecutionResult:
     detail: str = ""
     refused: bool = False
     started_ok: bool = True
+    candidate_started: bool = True
     sandbox_name: str = ""
     exit_status: int | None = None
     stdout: str = ""

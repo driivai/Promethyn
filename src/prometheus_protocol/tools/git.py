@@ -486,6 +486,7 @@ class GitBranchDeleteExecutor(Executor):
                 decision,
                 f"sandbox did not start: {result.detail}",
                 started_ok=False,
+                candidate_started=False,
             )
         if not result.candidate_started:
             # F16, in the executor that really deletes. Isolation came up and
@@ -499,7 +500,11 @@ class GitBranchDeleteExecutor(Executor):
                 decision,
                 "sandbox started but git never did, so the delete did not run "
                 f"and nothing can be claimed about it: {result.detail}",
-                started_ok=False,
+                # Isolation really did start; saying otherwise would collapse
+                # this into "no runtime", a different fault with a different
+                # remedy. ``candidate_started`` carries what went wrong.
+                started_ok=True,
+                candidate_started=False,
             )
         deleted = result.exit_status == 0
         return ExecutionResult(
@@ -522,7 +527,12 @@ class GitBranchDeleteExecutor(Executor):
         )
 
     def _refuse(
-        self, decision: GateDecision, detail: str, *, started_ok: bool = True
+        self,
+        decision: GateDecision,
+        detail: str,
+        *,
+        started_ok: bool = True,
+        candidate_started: bool = True,
     ) -> ExecutionResult:
         return ExecutionResult(
             executed=False,
@@ -530,6 +540,7 @@ class GitBranchDeleteExecutor(Executor):
             detail=f"refused: {detail}",
             refused=True,
             started_ok=started_ok,
+            candidate_started=candidate_started,
             sandbox_name=self._sandbox.name,
             exit_status=None,
             stdout="",

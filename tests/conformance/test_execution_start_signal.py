@@ -141,9 +141,15 @@ def test_the_receipt_says_the_candidate_never_started(tmp_path):
     # And it must not read as a policy decision: the remedy for a harness fault
     # is to repair the harness, not to revisit an authorization.
     assert "refused" in result.detail
-    assert not result.started_ok, (
-        "the execution record still claims the run started"
-    )
+    # WITHDRAWN AND CORRECTED. This first asserted ``not result.started_ok``,
+    # on the reasoning that the record "still claims the run started". That was
+    # wrong: ``ExecutionResult.started_ok`` is documented as whether ISOLATION
+    # started, and here it did. Asserting the false value made the two harness
+    # faults — no runtime, and a setup that ran out of wall clock —
+    # indistinguishable in the record, which is the collapse this whole module
+    # exists to prevent, committed one field over.
+    assert result.started_ok, "isolation started; the record must keep saying so"
+    assert not result.candidate_started
 
 
 # ---------------------------------------------------------------------------
@@ -436,7 +442,8 @@ def test_the_branch_delete_executor_does_not_claim_a_delete_that_never_ran(tmp_p
 
     assert not result.executed
     assert result.refused, "a harness fault was recorded as an attempted delete"
-    assert not result.started_ok
+    assert result.started_ok, "isolation started; the record must keep saying so"
+    assert not result.candidate_started
     assert "ran in sandbox but failed" not in result.detail
     assert "git never did" in result.detail
     # And the branch is still there: fail-closed in fact, not only in wording.
@@ -474,3 +481,98 @@ def test_the_git_read_predicate_is_conservative_under_a_CONTRADICTORY_signal():
     assert _ran(_Signal(False, True)) is False, (
         "a contradictory signal was read as a completed run"
     )
+
+
+# ---------------------------------------------------------------------------
+# PART 6 — two harness faults, two records
+# ---------------------------------------------------------------------------
+#
+# REPORTED ON THE FIX ITSELF, AND CORRECT. The first version of the refusal
+# above wrote ``started_ok=False`` for a case where isolation HAD started. It
+# refused correctly and recorded falsely: ``ExecutionResult.started_ok`` is
+# documented as whether ISOLATION started, so the value was wrong, and it made
+# the two harness faults indistinguishable in the record.
+#
+# That is the same collapse this module exists to prevent — could-not-verify
+# rendered as something it is not — committed one field over while fixing it.
+
+
+def test_the_two_harness_faults_are_DISTINGUISHABLE_in_the_record():
+    """Their remedies differ, so the record must tell them apart.
+
+    Isolation that never started is a missing or broken runtime: install it,
+    check the configuration. Isolation that started while the candidate did not
+    is a setup that ran out of wall clock: raise the limit, look at what setup
+    is doing. An operator handed one value for both has to guess which.
+    """
+
+    no_runtime = _execute(started_ok=False, candidate_started=False)
+    setup_timeout = _execute(
+        started_ok=True, candidate_started=False, timed_out=True
+    )
+
+    # Both refuse, and neither claims an execution.
+    for result in (no_runtime, setup_timeout):
+        assert not result.executed and result.refused
+
+    # And they are not the same record.
+    assert no_runtime.started_ok is False
+    assert setup_timeout.started_ok is True, (
+        "isolation started here; recording False collapses this into 'no runtime'"
+    )
+    assert no_runtime.candidate_started is False
+    assert setup_timeout.candidate_started is False
+    assert (no_runtime.started_ok, no_runtime.candidate_started) != (
+        setup_timeout.started_ok,
+        setup_timeout.candidate_started,
+    )
+
+
+def test_the_execution_record_mirrors_the_sandbox_contract():
+    """Both flags mean in ``ExecutionResult`` what they mean in
+    ``SandboxResult``. Two types carrying the same two facts under the same two
+    names, so a reader does not have to learn which layer redefines them."""
+
+    from prometheus_protocol.swarm.models import ExecutionResult
+
+    for field in ("started_ok", "candidate_started"):
+        assert field in ExecutionResult.__dataclass_fields__
+        assert field in SandboxResult.__dataclass_fields__
+
+    # A real execution carries both as true, so the pair is not vestigial.
+    ran = _execute(started_ok=True, candidate_started=True, exit_status=0)
+    assert ran.started_ok and ran.candidate_started
+
+
+def test_the_branch_delete_executor_keeps_the_same_distinction(tmp_path):
+    """The identical rewrite was in ``GitBranchDeleteExecutor`` and is corrected
+    there too — the reviewer named that site as well, and a fix applied to one
+    executor and not its sibling is the asymmetry this sprint keeps finding."""
+
+    import test_reobservation_branch_delete as fixture
+    from prometheus_protocol.tools.git import GitBranchDeleteExecutor
+
+    fixture._make_repo(tmp_path)
+    tool = fixture._tool(tmp_path)
+    decision = ActionGate(
+        target_canonical=f"git://{tool.repo_path}",
+        authorizer=ExecutionAuthorizer(lambda: load_profile(DEFAULT_PROFILE_ID)),
+    ).decide(
+        fixture._assessment(tool, fixture.BRANCH),
+        attempt_id=f"delete-branch:{fixture.BRANCH}",
+        action=tool.delete_action(fixture.BRANCH),
+        subject_id="s",
+    )
+
+    def run(**fields):
+        return GitBranchDeleteExecutor(
+            repo_path=tmp_path, sandbox=_GitTriple(**fields), allow_delete=True
+        ).execute(decision)
+
+    no_runtime = run(started_ok=False, candidate_started=False)
+    setup_timeout = run(**HARNESS_FAULT)
+
+    assert no_runtime.started_ok is False
+    assert setup_timeout.started_ok is True
+    assert not setup_timeout.candidate_started
+    assert tool.rev(fixture.BRANCH) is not None  # nothing was deleted either way

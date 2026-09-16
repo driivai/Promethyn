@@ -92,6 +92,7 @@ class SandboxExecutor(Executor):
                 decision,
                 f"sandbox did not start: {result.detail}",
                 started_ok=False,
+                candidate_started=False,
             )
 
         if not result.candidate_started:
@@ -126,7 +127,14 @@ class SandboxExecutor(Executor):
                 decision,
                 "sandbox started but the candidate never did, so nothing ran "
                 f"and nothing can be claimed about it: {result.detail}",
-                started_ok=False,
+                # ISOLATION REALLY DID START, and the record says so. Writing
+                # ``started_ok=False`` here would overwrite a true fact with a
+                # false one and make this indistinguishable from a missing
+                # runtime — two harness faults with different remedies,
+                # collapsed into one value. ``candidate_started`` carries what
+                # actually went wrong.
+                started_ok=True,
+                candidate_started=False,
             )
 
         # The action ran inside isolation. exit_status records its own success
@@ -147,7 +155,12 @@ class SandboxExecutor(Executor):
         )
 
     def _refuse(
-        self, decision: GateDecision, detail: str, *, started_ok: bool = True
+        self,
+        decision: GateDecision,
+        detail: str,
+        *,
+        started_ok: bool = True,
+        candidate_started: bool = True,
     ) -> ExecutionResult:
         return ExecutionResult(
             executed=False,
@@ -155,6 +168,7 @@ class SandboxExecutor(Executor):
             detail=f"refused: {detail}",
             refused=True,
             started_ok=started_ok,
+            candidate_started=candidate_started,
             sandbox_name=self._sandbox.name,
             exit_status=None,
             stdout="",

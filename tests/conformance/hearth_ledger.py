@@ -518,6 +518,16 @@ EXPECTED_PROTECTED_FILES = 21
 #:   fields than the verifier for the same underlying fact; this is it catching
 #:   up to its own contract.
 #:
+#: AMENDED IN THE SAME SPRINT, after review of the fix itself. The refusal
+#: above first wrote ``started_ok=False`` for a case where isolation HAD
+#: started. It refused correctly and recorded falsely — ``started_ok`` is
+#: documented as whether ISOLATION started — and made the two harness faults
+#: (no runtime; a setup that ran out of wall clock) indistinguishable in the
+#: record. That is the collapse the refusal existed to prevent, committed one
+#: field over. ``ExecutionResult`` now carries ``candidate_started`` beside
+#: ``started_ok``, mirroring ``SandboxResult``, and each refusal states both
+#: facts truthfully.
+#:
 #: Those sprints are why these bytes are what they are. They do NOT license the
 #: next edit to the same files: updating a digest below is a fresh decision, and
 #: the reason for it belongs beside it.
@@ -533,7 +543,7 @@ DIGESTS: dict[str, str] = {
     "src/prometheus_protocol/execution/controller.py":
         "1c5a671defaf47dc1dbb201bd9c4765c2c0abb1dec16dbe43dfc44e68fd99876",
     "src/prometheus_protocol/execution/executor.py":
-        "1018ecf2db4d62fe258ced3757b60cddbbd160bec3915ec41ab8db9eadb09a9b",
+        "4ab23cc2c96ba2ff17115126c6786bc1600ddad1109f9dabb814c97622bb0508",
     "src/prometheus_protocol/execution/pending.py":
         "f6de30cb1ac77b7b2d4d3a531864ea1eaf5f984cdcd075c895eda5ee945f946f",
     "src/prometheus_protocol/forge/miner.py":
