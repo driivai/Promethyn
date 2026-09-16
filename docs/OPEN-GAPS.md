@@ -3031,12 +3031,19 @@ not prose.
 There is **no reason field drawn from a closed set**. `detail` is free text —
 here, `"refused: sandbox started but the candidate never did, ..."`. The
 closed vocabulary that does exist, `EXECUTION_REFUSAL_REASONS`
-(`policy/execution.py:54`), has nineteen members and **every one names an
+(`policy/execution.py:54`), has **seventeen** members and **every one names an
 AUTHORIZATION condition** — chain integrity, descriptor binding, re-observation,
 the pre-approval receipt. Not one names a harness fault or any execution-time
 sandbox condition, because that set belongs to a different stage: it is the
 vocabulary for *why a hold may not proceed*, not for *what happened when it
 did*.
+
+> **CORRECTION.** This paragraph first said **nineteen**. The set has
+> seventeen; nineteen was arrived at by counting lines in the source, which
+> includes comment lines, instead of the set. Withdrawn here rather than
+> quietly edited, because a number nothing checks is exactly the failure this
+> section is about — and the membership pin below now asserts the count so the
+> same slip cannot recur silently.
 
 **So the seam is half-typed**, and the asymmetry is the finding rather than an
 oversight to paper over: the authorization stage refuses with a closed-set
@@ -3506,3 +3513,37 @@ repeating the analysis each time would pad this entry rather than extend it.
 What the count is for is the rate — eight occurrences across eight pull
 requests opened this way, which is every one of them. **The append is not
 intermittent and no PR opened through that tool has escaped it.**
+
+### The vocabulary pin was itself inferred from names, and review caught it
+
+Reported on #120 and **confirmed by direct probe before being accepted.** The
+first version of `test_the_authorization_vocabulary_names_no_harness_fault`
+asked whether any member of `EXECUTION_REFUSAL_REASONS` contained one of seven
+substrings — `sandbox`, `harness`, `candidate`, `started`, `timeout`,
+`timed_out`, `isolation`. Measured, by adding one member at a time to the set:
+
+| addition | caught? |
+|---|---|
+| `runtime_unavailable` | **missed** |
+| `setup_failed` | **missed** |
+| `infra_fault` | **missed** |
+| `execution_did_not_run` | **missed** |
+| `sandbox_candidate_never_started` | caught |
+
+**Four of five missed**, and the one it caught was the one that happened to
+contain the author's own tokens. So the test did not detect the change it
+claimed to pin, and G35's statement could have gone stale under any plausibly
+named addition.
+
+**This is G25 restated: a name is not a membership.** A predicate over
+spellings infers semantics from whatever fragments the author thought of, while
+an addition is free to be called anything. The set is now pinned **as a set**:
+any addition fails whatever it is named, and the failure message sends the
+author back to this entry to decide whether the new reason belongs to the
+authorization stage at all.
+
+**The same review pass produced the count correction above** — `len(...) >= 15`
+passed happily against a set of seventeen while the prose said nineteen. The
+pin now asserts `== 17`, and the docstring states plainly that the count is not
+the property; membership is. The count is asserted only because this entry
+quotes a number.

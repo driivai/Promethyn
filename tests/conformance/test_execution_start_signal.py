@@ -617,33 +617,75 @@ def test_the_execution_record_has_NO_typed_reason_field():
     assert detail.type in (str, "str"), detail.type
 
 
+#: ``EXECUTION_REFUSAL_REASONS`` as it stands, pinned by MEMBERSHIP.
+#:
+#: WHY THE EXACT SET AND NOT A PREDICATE OVER NAMES. The first version of the
+#: test below asked whether any member contained one of seven substrings
+#: ("sandbox", "harness", "candidate", ...). Review found that it does not
+#: detect the change it claims to pin, and a direct probe agreed: adding
+#: ``runtime_unavailable``, ``setup_failed``, ``infra_fault`` or
+#: ``execution_did_not_run`` to the set left every assertion GREEN — four of
+#: five counterexamples missed, and the one it caught was the one that happened
+#: to contain the author's own tokens.
+#:
+#: That is G25's rule restated: A NAME IS NOT A MEMBERSHIP. A predicate over
+#: spellings infers semantics from whatever fragments the author thought of,
+#: and an addition is free to be named anything. So the set is pinned as a set.
+#: Any addition fails, whatever it is called, and the failure sends the author
+#: to G35 to decide whether it belongs to this stage at all.
+_AUTHORIZATION_REFUSAL_REASONS = frozenset({
+    # integrity of a pinned record against its chain entry
+    "chain_did_not_verify",
+    "chain_entry_count_wrong",
+    "record_differs_from_chain_entry",
+    "reverification_required",
+    # descriptor binding
+    "descriptor_absent",
+    "descriptor_field_mismatch",
+    "descriptor_missing_action",
+    "descriptor_policy_cannot_authorize",
+    "descriptor_snapshot_mismatch",
+    # re-observation of the live target
+    "state_moved_after_approval",
+    "target_state_absent",
+    "target_state_aspects_differ",
+    "target_state_moved_before_approval",
+    "target_state_registry_mismatch",
+    "target_state_unreadable",
+    # the pre-approval receipt
+    "pre_approval_receipt_ambiguous",
+    "pre_approval_receipt_missing",
+})
+
+
 def test_the_authorization_vocabulary_names_no_harness_fault():
     """Half two: ``EXECUTION_REFUSAL_REASONS`` belongs to a different stage.
 
     G35 says widening THIS set would conflate authorization with execution.
     That argument only holds while the set really contains no execution-stage
-    member, so the absence is asserted rather than assumed.
+    member, so its membership is pinned rather than inferred from spellings —
+    see the note above for what the inferred version missed.
     """
 
     from prometheus_protocol.policy.execution import EXECUTION_REFUSAL_REASONS
 
-    forbidden = {
-        reason
-        for reason in EXECUTION_REFUSAL_REASONS
-        for token in ("sandbox", "harness", "candidate", "started", "timeout",
-                      "timed_out", "isolation")
-        if token in reason
-    }
+    added = EXECUTION_REFUSAL_REASONS - _AUTHORIZATION_REFUSAL_REASONS
+    removed = _AUTHORIZATION_REFUSAL_REASONS - EXECUTION_REFUSAL_REASONS
 
-    assert not forbidden, (
-        "EXECUTION_REFUSAL_REASONS now names an execution-stage condition "
-        f"({sorted(forbidden)}); G35 argues against widening this set because "
-        "it is the AUTHORIZATION vocabulary, and that argument is now stale"
+    assert not added, (
+        f"EXECUTION_REFUSAL_REASONS gained {sorted(added)}. If these are "
+        "authorization conditions, add them to the pin above. If any is an "
+        "EXECUTION-stage condition, G35's argument against widening this set "
+        "has been overridden and that entry must be updated — F14 reads it."
     )
-    # The paired positive control: the set is non-empty and really is the
-    # authorization vocabulary, so the absence above is a finding and not an
-    # empty instrument (doctrine #8).
-    assert len(EXECUTION_REFUSAL_REASONS) >= 15
+    assert not removed, (
+        f"EXECUTION_REFUSAL_REASONS lost {sorted(removed)}; a shrinking closed "
+        "set silently widens what passes unchallenged elsewhere"
+    )
+    # The count is asserted too, and it is NOT the property — membership is.
+    # It is here because G35 quotes a number, and a quoted number that nothing
+    # checks is how "nineteen" was written for a set of seventeen.
+    assert len(EXECUTION_REFUSAL_REASONS) == 17
     assert "descriptor_absent" in EXECUTION_REFUSAL_REASONS
 
 
