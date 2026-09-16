@@ -96,7 +96,9 @@ fault attribution matches the namespace adapter.
 `python:3.12-slim@sha256:…`). By default a bare tag is accepted but logged as a
 supply-chain risk. Set **`PROM_REQUIRE_DIGEST_PIN=1`** to make that posture
 enforceable: the adapter then *refuses* to run a bare-tag image — a
-could-not-verify (`started_ok=False` → the verifier ABSTAINs), checked before
+could-not-verify (`started_ok=False` → the verifier returns `Unavailable`,
+never an ABSTAIN — an authoritative check that could not run must not degrade
+into an abstention), checked before
 the container is created so it is deterministic. A bare tag can be silently
 repointed at a different image after it was vetted; the flag closes that
 substitution window. It is off by default for dev convenience and is the
@@ -192,10 +194,25 @@ Two transports carry the same signal (`sandbox/_start_signal.py`):
   The adapter strips the harness's own signal lines from the reported stderr;
   candidate output is preserved verbatim.
 
-Both adapters report the start fail-closed: no token (the bootstrap never
-ran), a setup-failed token, or a revoked start (the exec failed — the
-candidate never ran) all yield `started_ok=False`, which callers treat as a
-harness fault — never a pass, a fail, or a claimed execution.
+Both adapters report the start fail-closed on their **normal** path: no token
+(the bootstrap never ran), a setup-failed token, or a revoked start (the exec
+failed — the candidate never ran) all yield `started_ok=False`, because both
+set `started_ok = candidate_started` there.
+
+**The timeout path is different, and reading this paragraph as if it were not
+is how F16 happened.** On a wall-clock timeout both adapters report
+`started_ok=True` as a literal and take `candidate_started` from whatever the
+signal carried. A timeout that fired during SETUP therefore yields
+`started_ok=True, candidate_started=False` — the harness fault this whole
+section is about, reported with `started_ok` *set*. A caller that reads
+`started_ok` alone sees a started run.
+
+So the fail-closed property belongs to `candidate_started`, not to
+`started_ok`. Callers must treat `candidate_started=False` as the harness
+fault — never a pass, a fail, or a claimed execution — and
+`tests/conformance/test_execution_start_signal.py` pins the whole
+`(started_ok, candidate_started, timed_out)` space against the outcome each
+combination must produce, with its reachability stated.
 
 ## Classification
 
