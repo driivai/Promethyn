@@ -2926,3 +2926,71 @@ reached; #114 wired it and built the reader its own sibling class forbids;
 #115 required the base but not a usable one. Each fix was correct about the case
 it named and narrower than the sentence describing it. The instrument that keeps
 catching it is review, not the suite — every one of these had green proofs.
+
+---
+
+## G36 — a branch-name predicate that was a charset, not git's rules
+
+Reported on the base-branch validation change and correct. That change added
+`is_usable_branch_name` so a base git will not read is refused at composition
+instead of failing every hold later. The predicate was a charset pattern, and
+git's reference-name rules are more than a charset — so names git rejects
+passed it, and the delayed denial it existed to prevent came back for those.
+
+**Measured against `git check-ref-format --branch`:**
+
+| name | ours | git | why git refuses |
+|---|---|---|---|
+| `release/` | accepted | rejected | trailing slash |
+| `a..b` | accepted | rejected | the range operator |
+| `a.lock` | accepted | rejected | git's own lock suffix |
+| `main\n` | accepted | rejected | Python's `$` matches before a trailing newline |
+| `a//b` | accepted | rejected | empty path component |
+| `a.` | accepted | rejected | trailing dot |
+
+**Two more came from widening the corpus, not from the report**: `a.lock/b` and
+`a/.b`. **Git's rules are PER COMPONENT**, and a whole-name check cannot
+express them. `HEAD` was a third: it passed the charset and is a symbolic ref,
+not a branch.
+
+**The `$` case is worth naming on its own.** Python's `$` also matches
+immediately before a trailing newline, so `"main\n"` matched a pattern that
+looks exactly like it should not. The anchor is now `\Z`, and a test pins the
+pattern itself — the behavioural proof alone would still pass if something
+upstream happened to strip the newline, and the anchor could then regress
+quietly.
+
+**RULING: check against the authority, every run.** The rules belong to git.
+Any spelling of them here is a second definition free to drift — which is this
+defect. So `tests/conformance/test_git_ref_format.py` runs the predicate and
+`git check-ref-format --branch` over the same corpus, hand-written plus 400
+seeded random names, and asserts agreement in the direction that matters.
+
+**THE INVARIANT IS ONE-DIRECTIONAL, and the other direction is asserted as a
+NON-property.** Anything the predicate accepts, git must accept. The converse
+deliberately does not hold: the predicate is a conservative SUBSET, refusing a
+leading underscore, a bare `@`, a mid-path component ending in a dot. Refusing
+a name git would have taken costs a caller an error message; accepting one git
+will reject costs every hold on that deployment. Both directions are tested, so
+a later reader who assumes exact agreement cannot "fix" the strictness and
+widen the accepted set without a test saying so.
+
+**Executed mutations**, through `scripts/mutation_worktree.py`, both attack
+classes, 100 tests green unmutated:
+
+| mutation | observed |
+|---|---|
+| R1 deletion: the anchor reverts to `$` | 3 red, incl. the pattern pin |
+| R2 deletion: the per-component loop removed | 7 red |
+| R3 substitution: components checked on the whole name instead | 5 red |
+| R4 deletion: the range-operator and reserved-name check removed | 3 red |
+| R5 substitution: `.lock` dropped from the forbidden suffixes | 3 red |
+
+**The test requires git rather than skipping without it.** This module's whole
+claim is that the predicate agrees with its authority; a run without git would
+assert nothing while reporting success, which is the empty-instrument pass
+doctrine #8 refuses.
+
+**What this does not do.** It does not make the predicate equal to git's rules,
+and does not claim to. It makes the accepted set a subset of git's, checked on
+every run over a corpus that is itself pinned as non-trivial in both directions.

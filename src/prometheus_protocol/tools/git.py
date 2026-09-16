@@ -73,7 +73,28 @@ MERGE_CHECK_VERIFIER_ID = GIT_MERGE_CHECK
 
 #: Branch names the tool will touch: conservative charset, no leading dash
 #: (nothing that could read as a git option), no traversal-looking segments.
-_BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
+#:
+#: ``\Z``, NOT ``$``. Python's ``$`` also matches immediately before a trailing
+#: newline, so ``"main\n"`` matched this pattern while ``git check-ref-format
+#: --branch`` rejects it. Measured, and it is the reason the anchor is spelled
+#: this way rather than the usual one.
+_BRANCH_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._/-]*\Z")
+
+#: Git's reference-name rules are PER COMPONENT, not per whole name. Found by
+#: widening the differential corpus below: ``a.lock/b`` and ``a/.b`` both passed
+#: a whole-name check and are both rejected by ``git check-ref-format``. So the
+#: constructs are checked on each slash-separated component:
+#:
+#:   * no component may be empty (catches ``a//b``, a trailing ``/``)
+#:   * no component may begin with ``.`` (catches ``a/.b``)
+#:   * no component may end with ``.`` or ``.lock`` (catches ``a.``, ``a.lock/b``)
+#:   * ``..`` may not appear anywhere (a range operator)
+_FORBIDDEN_COMPONENT_PREFIXES = (".",)
+_FORBIDDEN_COMPONENT_SUFFIXES = (".", ".lock")
+
+#: Names git reserves and will not accept as a BRANCH, whatever their shape.
+#: ``HEAD`` is a symbolic ref, not a branch, and passed the charset pattern.
+_RESERVED_NAMES = frozenset({"HEAD"})
 
 
 def is_usable_branch_name(name: str) -> bool:
@@ -86,7 +107,18 @@ def is_usable_branch_name(name: str) -> bool:
     one the reads actually use.
     """
 
-    return bool(_BRANCH_RE.match(name))
+    if not _BRANCH_RE.match(name):
+        return False
+    if ".." in name or name in _RESERVED_NAMES:
+        return False
+    for component in name.split("/"):
+        if not component:
+            return False
+        if component.startswith(_FORBIDDEN_COMPONENT_PREFIXES):
+            return False
+        if component.endswith(_FORBIDDEN_COMPONENT_SUFFIXES):
+            return False
+    return True
 
 _LIMITS = Limits(wall_time_s=20.0, cpu_time_s=10, memory_bytes=0, max_processes=32)
 

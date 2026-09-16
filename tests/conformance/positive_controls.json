@@ -422,6 +422,15 @@
         "test_a_SUPPLIED_reader_carrying_an_unusable_base_is_refused_too"
       ],
       "property": "the composition-time validator refuses bases the tool would not read without refusing the ones it would — so the refusal is about usability, not about naming a base at all"
+    },
+    {
+      "module": "tests/conformance/test_git_ref_format.py",
+      "positive": "test_a_name_git_accepts_is_still_accepted",
+      "negatives": [
+        "test_a_name_git_rejects_is_refused_by_the_predicate",
+        "test_the_predicate_never_accepts_what_git_rejects"
+      ],
+      "property": "the branch-name predicate refuses every name git refuses without refusing the names git takes — so tightening it did not simply stop accepting anything"
     }
   ]
 }
