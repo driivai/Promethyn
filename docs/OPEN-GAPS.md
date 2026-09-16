@@ -2852,3 +2852,125 @@ kept measurement of the unfixed path — because a deployment that wires nothing
 pins nothing and would then be refused at execution for a receipt it never had
 any reason to write. The unconditioned guard does not tighten the control; it
 breaks every deployment that has not adopted it.
+
+---
+
+## G35 — an outcome derived from a subset of the fields that determine it
+
+**G34 is deliberately skipped here.** It is taken by the base-branch validation
+change, open and unmerged at the time this was written. Reusing the number
+would make two different findings share one label across two branches, and the
+tracker is read by number.
+
+**The reported defect, reproduced at `03010a9`.** `SandboxExecutor._run` decided
+the outcome from `started_ok` alone. Fed `started_ok=True`,
+`candidate_started=False`, `timed_out=True`:
+
+    ExecutionResult(executed=True, refused=False, started_ok=True,
+                    detail="ran in sandbox 'triple' (exit 0, network denied)")
+
+A wall-clock timeout that fired during SETUP, before the candidate ran,
+recorded as a clean execution. Could-not-verify written into the execution
+record as verified-clean, at the point downstream can no longer recover the
+difference.
+
+**The contract already said so**, at `sandbox/base.py`: `started_ok` answers
+only "did isolation start", `candidate_started` is the stronger definite
+signal, and `started_ok=True` with `candidate_started=False` — "a wall-clock
+timeout during setup, before the candidate ran" — "stays a harness fault". Not
+a missing rule; a rule the executor did not read. The verifier seam has
+classified the same triple as `Unavailable(INFRA_FAULT)` since the equivalent
+bug was found there, so this was one seam catching up to the other.
+
+**RULING: no fourth category.** `runner.py`'s three-way split contains a verdict
+ABOUT the candidate; the executor has no verdict to give, because `exit_status`
+carries the candidate's own outcome. The split collapses onto the two outcomes
+the executor already has, and `candidate_started=False` becomes the refusal
+`started_ok=False` already was. Keyed on `candidate_started`, never on
+`timed_out`: a candidate that started and was then wall-clock killed really ran
+and its side effects happened.
+
+### The class, swept
+
+| site | fields read before | total? |
+|---|---|---|
+| `verifier/runner.py` | 8, incl. `candidate_started` | yes |
+| `verifier/sql.py` | branches on `candidate_started` inside `timed_out`, and again for a missing payload | yes |
+| `execution/executor.py` | `started_ok` alone | **no — the reported defect** |
+| `tools/git.py` reads | `started_ok` + `exit_status` | **no** |
+| `tools/git.py` delete executor | `started_ok` alone | **no — the same defect** |
+| `execution/controller.py`, `cli/main.py`, the three demos | `exit_status`, to RECORD rather than derive | n/a |
+
+**The git reads were safe only by accident, and that is the entry's point.**
+`branches`, `classify` and `rev` tested `started_ok or exit_status != 0`. With
+the signal the adapters really produce (`exit_status=None` on a timeout) all
+three fail closed. With the same harness fault and `exit_status=0`, `classify`
+returned `0` — "zero commits absent from the base", the exact evidence that
+authorizes an irreversible branch delete — from a run where git never executed.
+**The safety of one module rested on a property of another, checked by
+nothing.** A shared `_ran()` predicate now requires both flags, and a test pins
+the cross-module invariant the old guards depended on.
+
+**The branch-delete executor had the defect exactly**, in the tool that really
+deletes: `executed=False` (fail-closed, so nothing was lost) with the detail
+"delete of branch 'x' ran in sandbox but failed (exit None)" and
+`started_ok=True` — a record saying the delete was attempted and rejected by
+git, when git never started.
+
+### Reachability, measured
+
+Both isolating adapters hard-code `started_ok=True` on their TIMEOUT paths
+while taking `candidate_started` from the start signal, and both tie
+`started_ok = candidate_started` on their NORMAL paths. So for shipped
+adapters the triple arises ONLY with `timed_out=True`, and
+`started_ok=False` with `candidate_started=True` cannot arise at all. Pinned by
+tests that read the adapters' source, so the fake sandbox in the proofs stands
+in for a state the shipped code really produces.
+
+### Executed mutations
+
+| mutation | observed |
+|---|---|
+| Q1 deletion: the executor reverts to `started_ok` alone | 4 red |
+| Q2 substitution: keys on `timed_out` instead of `candidate_started` | 3 red |
+| Q3 substitution: refuses but still claims the run started | 1 red |
+| Q4 deletion: git reads revert to the accidentally-safe guard | 1 red |
+| Q5 substitution: `_ran` drops `started_ok` | **0 red first run**; 1 red after the probe below |
+| Q6 deletion: the branch-delete executor drops its guard | 1 red |
+
+**Q5 went green, and the probe is the record.** Reading `_ran` directly over all
+four combinations showed `started_ok` decides only the CONTRADICTORY input —
+isolation down, candidate confirmed running — which no adapter produces. It is
+asserted anyway, for the reason the unreachable triple rows are asserted: a
+predicate that reads the contract must not have a branch decided by nothing.
+
+**Second-order probes, and which half each assertion carries.** Dropping any
+single OUTCOME assertion still reddens, because the parametrised triple table
+pins `executed`/`refused` for every combination independently — redundancy by
+design, not weakness. The RECEIPT WORDING is different: a refusal whose detail
+says nothing useful reddens exactly one test, and with that assertion dropped it
+passes everything. That assertion is the sole carrier of "the record says what
+happened".
+
+### Two false doc claims, corrected
+
+`docs/sandbox.md` said a setup failure, a setup-failed token or a revoked start
+"all yield `started_ok=False`, which callers treat as a harness fault — never a
+pass, a fail, or a claimed execution". Both halves were wrong: the timeout path
+hard-codes `started_ok=True`, and "never a claimed execution" is precisely what
+the executor was doing. The same file said `started_ok=False` makes the verifier
+ABSTAIN; it returns `Unavailable`, and
+`test_isolation_not_started_is_unavailable` has asserted so all along.
+
+**F18 is a separate finding and is NOT fixed here.** Its claim — "never silently
+weaker", about `SandboxResult.limiter`, in `docs/sandbox.md`,
+`spec/invariants.md` and `sandbox/base.py` — does **not** share wording with
+these. What it shares is the shape: a contract-completeness claim carried in
+prose with no instrument behind it.
+
+### Named limit
+
+`tools/git.py` is **not** in the Hearth protected set, so the reader that
+produces branch-delete evidence is not frozen. Noticed while re-sanctioning
+`execution/executor.py`, which is. Recorded rather than changed: widening the
+protected set is its own decision with its own re-pin.
