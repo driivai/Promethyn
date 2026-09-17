@@ -29,12 +29,12 @@
   ],
   "steps": {
     "reachability": {
-      "description": "F1/F2 startup obligations, future-root discovery, F3 authoritative readers, and the unreceipted/tampered classification; observed 145 passing cases before pinning, re-pinned from 130 when the undecodable-ledger defect reported on #123 was fixed (classification 27 -> 42, of which 11 are the derived per-reader parametrisation)",
+      "description": "F1/F2 startup obligations, future-root discovery, F3 authoritative readers, and the unreceipted/tampered classification; observed 151 passing cases before pinning, re-pinned from 130 when the undecodable-ledger defect reported on #123 was fixed (classification 27 -> 48: 11 are the derived per-reader parametrisation and 6 pin the strict/tolerant decode boundary that fix does NOT cover, G47)",
       "counts": {
         "tests.conformance.test_security_build": 57,
         "tests.conformance.test_security_build_inventory": 13,
         "tests.conformance.test_reachability_readers": 33,
-        "tests.conformance.test_receipt_classification": 42
+        "tests.conformance.test_receipt_classification": 48
       },
       "required": {
         "tests.conformance.test_security_build": [
@@ -113,7 +113,10 @@
           "test_a_malformed_row_makes_the_file_verifier_report_not_verifiable",
           "test_every_guarded_reader_refuses_an_undecodable_row_in_the_typed_vocabulary",
           "test_the_undecodable_verdict_is_not_checked_rather_than_clean",
-          "test_a_readable_ledger_still_verifies_and_reads"
+          "test_a_readable_ledger_still_verifies_and_reads",
+          "test_the_two_decoders_are_split_exactly_as_the_limit_says",
+          "test_a_strictly_decoded_hold_column_refuses_and_is_not_verifiable",
+          "test_a_tolerantly_decoded_execution_column_is_silently_none_and_still_valid"
         ]
       }
     },

@@ -4129,8 +4129,9 @@ named five readers, which is exactly the "a name is not a membership" failure
 (G25) in a test written to fix a different one.
 
 **Observed on the fix**, read off runs rather than predicted: reachability
-proofs `145 passed`, zero skips, the classification module re-pinned `27 -> 42`
-of which 11 are the derived per-reader parametrisation; receipt-classification
+proofs `151 passed`, zero skips, the classification module re-pinned `27 -> 48`
+of which 11 are the derived per-reader parametrisation and 6 pin G47's
+boundary; receipt-classification
 mutations `29 rows, 29 first-order red, zero survivors` (was 23), `7 of 29`
 still red under second-order assertion deletion; record-revert mutations
 unchanged at `7 / 18`, which matters because their companion edits anchor into
@@ -4139,8 +4140,12 @@ unchanged at `7 / 18`, which matters because their companion edits anchor into
 the +16 being 15 classification cases and one case in `test_positive_control_set`,
 which collects one per registered control.
 
-**Not claimed:** that corrupted-storage inputs are now covered generally. One
-column shape, in three tables, on the read path. See G46.
+**Not claimed:** that corrupted-storage inputs are now covered generally, or
+even that every JSON column is covered. One column shape, on the read path, and
+only where the projector decodes STRICTLY -- `_execution_row` decodes
+best-effort and swallows the same corruption into `None`. See G47 for that
+boundary, measured and pinned, and G46 for the unreceipted-column family it
+belongs to.
 
 ## G46 — an unreceipted column survives tampering with the ledger still `valid` — RECORDED, NOT FIXED HERE
 
@@ -4167,3 +4172,58 @@ change with its own migration question, not in a review response.
 
 **Not measured:** the other tables' unreceipted columns, and whether any other
 unreceipted column feeds a routing or threshold decision.
+
+## G47 — a malformed execution column is normalised to `None` and nothing says so — RECORDED, NOT FIXED HERE
+
+**Found by probing the boundary of G45's own fix rather than by trusting it**,
+which is the only reason it is here: the claim "a malformed JSON column
+refuses" was about to be written without checking whether it was true of every
+JSON column. It is not.
+
+The two receipted tables do not decode alike. Derived from the projectors'
+source by `test_the_two_decoders_are_split_exactly_as_the_limit_says`:
+
+| projector | column | decoder |
+|---|---|---|
+| `_pending_row` | `action`, `judgment`, `authorization` | `json.loads` — strict |
+| `_attempt_row` | `skills_used`, `evidence` | `json.loads` — strict |
+| `_execution_row` | `judgment`, `authorization` | `_load_json` — best-effort |
+
+`_load_json` says what it is in its own docstring: "returns ``None`` on empty
+or malformed input". Measured end to end, on a ledger holding one hold and one
+execution, each column overwritten with `{not json`:
+
+```text
+pending_actions.action         reader -> refused 'ledger_rows_unreadable'   file -> not_verifiable
+pending_actions.judgment       reader -> refused 'ledger_rows_unreadable'   file -> not_verifiable
+pending_actions.authorization  reader -> refused 'ledger_rows_unreadable'   file -> not_verifiable
+audit_chain.payload            verify_chain -> not_verifiable               file -> not_verifiable
+executions.judgment            reader -> RETURNED None                      file -> valid ok=True
+executions.authorization       reader -> RETURNED None                      file -> valid ok=True
+```
+
+**Both channels miss it at once,** which is what makes it worth an entry rather
+than a footnote. The read path turns the corruption into `None`, which every
+caller reads as "this row had no judgment" — a rewrite presented as an absence,
+doctrine #8 on a path G45 does not touch. And the receipt does not catch it
+either: neither column is a field of `OutcomeRecord`, so the chained outcome
+receipt never compares them. Same family as G46, one table over.
+
+**Why it is not fixed here.** Making `_execution_row` strict would refuse every
+read of any ledger that ever legitimately held a non-JSON string in those
+columns. Every writer in the tree today serialises with `json.dumps`
+(`sqlite_ledger.py` lines 711-712 and 939-942), so no current writer can
+produce one — but whether a HISTORICAL writer did is unmeasured, and refusing a
+pre-upgrade shape on an unmeasured assumption is exactly what made F-3 wrong
+three weeks ago. The archaeology belongs in its own change, with the same
+provenance discipline `test_the_fixture_is_the_pre_receipt_shape` applies.
+
+**Pinned as behaviour, not prose.** Two parametrised tests hold the covered and
+uncovered sides apart, and the decoder split is derived from source rather than
+listed. The day someone makes the decode strict, the limit test reddens and has
+to be withdrawn deliberately — with the history question answered — instead of
+the surrounding claim quietly becoming true.
+
+**Not measured:** whether any shipped ledger contains such a row; the same
+question for `promotions` and `workflow_steps`, whose projectors decode nothing
+and so are outside this table entirely.

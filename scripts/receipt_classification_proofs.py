@@ -186,6 +186,24 @@ MUTATIONS = (
      '    "ledger_rows_unreadable",        # a JSON column would not decode at all',
      '    "ledger_chain_unreadable",       # a JSON column would not decode at all',
      CLASSIFICATION, "test_every_guarded_reader_refuses_an_undecodable_row_in_the_typed_vocabulary"),
+    # ---- the boundary of that fix, and its tripwire (G47) --------------------
+    # The LIMIT TEST'S OWN PROOF. A limit pinned as behaviour is only worth
+    # having if it actually notices the day the behaviour changes, so this row
+    # makes exactly that change -- the execution projector decoding strictly --
+    # and requires the limit test to redden and be withdrawn deliberately.
+    ("execution-decode-made-strict", LEDGER,
+     '            record["judgment"] = _load_json(record["judgment"])',
+     '            record["judgment"] = json.loads(record["judgment"])',
+     CLASSIFICATION, "test_a_tolerantly_decoded_execution_column_is_silently_none_and_still_valid"),
+    # CROSS-CONTEXT: the RIGHT decoder from the WRONG projector. Best-effort
+    # decoding is correct where the tree already accepts the cost of an absent
+    # column; moved onto the hold, it swallows exactly the corruption the guard
+    # exists to catch and hands the reader a row with `judgment=None`. Nothing
+    # raises, so every "does it refuse" probe on the OTHER columns still passes.
+    ("hold-decode-made-best-effort", LEDGER,
+     '        record["judgment"] = json.loads(record["judgment"])',
+     '        record["judgment"] = _load_json(record["judgment"])',
+     CLASSIFICATION, "test_a_strictly_decoded_hold_column_refuses_and_is_not_verifiable"),
 )
 
 

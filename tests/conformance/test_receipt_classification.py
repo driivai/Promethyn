@@ -696,3 +696,138 @@ def test_a_readable_ledger_still_verifies_and_reads(tmp_path):
     assert verify_receipts(ledger).checked is True
     ledger.close()
     assert verify_ledger_file(tmp_path / "clean.db").ok is True
+
+
+# ---------------------------------------------------------------------------
+# 8. the boundary of the section above, measured rather than assumed
+# ---------------------------------------------------------------------------
+#
+# THE CLAIM "a malformed JSON column refuses" IS NOT TRUE OF EVERY JSON COLUMN,
+# and saying it without this section would be the shape this tree keeps finding.
+# The two receipted tables do not decode alike:
+#
+#     pending_actions.action/.judgment/.authorization  json.loads   -> refuses
+#     executions.judgment/.authorization               _load_json   -> None
+#
+# ``_load_json`` is best-effort by construction — its own docstring says so —
+# so a malformed column there is normalised into ``None``, which every caller
+# reads as "this row had no judgment". Neither column is a field of
+# ``OutcomeRecord``, so the receipt does not cover them either: the corruption
+# is invisible on both channels at once. Recorded as docs/OPEN-GAPS.md G47 and
+# NOT fixed here, because making the decode strict would refuse every read of
+# any ledger that ever legitimately held a non-JSON string in those columns,
+# and whether one exists is a history question of exactly the kind that made
+# F-3 wrong. That measurement belongs in its own change.
+
+
+def _decode_sites(projector: str) -> dict[str, str]:
+    """``{column: 'strict'|'tolerant'}``, read off the projector's own source.
+
+    DERIVED, not hand-listed: a projector that switches a column from one
+    decoder to the other reddens the pin below rather than quietly moving the
+    boundary this section states.
+    """
+
+    import textwrap
+
+    source = textwrap.dedent(inspect.getsource(getattr(SqliteLedger, projector)))
+    sites: dict[str, str] = {}
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Call):
+            continue
+        function = node.value.func
+        decoder = None
+        if isinstance(function, ast.Attribute) and function.attr == "loads":
+            decoder = "strict"
+        elif isinstance(function, ast.Name) and function.id == "_load_json":
+            decoder = "tolerant"
+        if decoder is None:
+            continue
+        for target in node.targets:
+            if not isinstance(target, ast.Subscript):
+                continue
+            index = target.slice
+            if not isinstance(index, ast.Constant):
+                continue
+            # Statement form, not a ternary: `ast.Constant.value` is every
+            # literal type, and the repository's type gate refuses an
+            # `isinstance` in expression position on a union.
+            column = index.value
+            if not isinstance(column, str):
+                continue
+            sites[column] = decoder
+    return sites
+
+
+def test_the_two_decoders_are_split_exactly_as_the_limit_says():
+    """Exact, per projector. A count would not distinguish these."""
+
+    assert _decode_sites("_pending_row") == {
+        "action": "strict", "judgment": "strict", "authorization": "strict",
+    }
+    assert _decode_sites("_execution_row") == {
+        "judgment": "tolerant", "authorization": "tolerant",
+    }
+    assert _decode_sites("_attempt_row") == {
+        "skills_used": "strict", "evidence": "strict",
+    }
+
+
+def _seeded(path: Path) -> SqliteLedger:
+    ledger = SqliteLedger(path)
+    ledger.record_pending_action(
+        subject_id="s", risk_class="low", reason="r", verdict="pass",
+        confidence=0.9, action={"kind": "noop"}, judgment={"verdict": "pass"},
+        created_at="2026-09-16T00:00:00Z",
+    )
+    ledger.record_execution(
+        subject_id="s", source="human", executed=True, refused=False,
+        sandbox_name="namespace", exit_status=0, detail="d",
+        created_at="2026-09-16T00:00:01Z", judgment={"verdict": "pass"},
+        authorization={"record_version": 2, "requirements": ["a"]},
+    )
+    return ledger
+
+
+@pytest.mark.parametrize("column", ["action", "judgment", "authorization"])
+def test_a_strictly_decoded_hold_column_refuses_and_is_not_verifiable(tmp_path, column):
+    """The covered side, on all three of the hold's JSON columns rather than
+    the one the reproduction happened to use."""
+
+    from prometheus_protocol.ledger.sqlite_ledger import verify_ledger_file
+
+    ledger = _seeded(tmp_path / "strict.db")
+    ledger._conn.execute(f"UPDATE {HOLD_TABLE} SET {column} = ?", ("{not json",))
+    ledger._conn.commit()
+    with pytest.raises(ExecutionNotAuthorized) as refused:
+        ledger.pending_actions()
+    assert refused.value.reason == "ledger_rows_unreadable"
+    ledger.close()
+    assert verify_ledger_file(tmp_path / "strict.db").status == NOT_VERIFIABLE
+
+
+@pytest.mark.parametrize("column", ["judgment", "authorization"])
+def test_a_tolerantly_decoded_execution_column_is_silently_none_and_still_valid(
+    tmp_path, column
+):
+    """THE LIMIT, pinned as behaviour so it cannot rot into prose (G47).
+
+    This is not the desired behaviour. It is the CURRENT behaviour, and pinning
+    it means the day someone makes the decode strict this test reddens and the
+    limit has to be withdrawn deliberately, with the history question answered,
+    rather than the section above quietly becoming true.
+    """
+
+    from prometheus_protocol.ledger.sqlite_ledger import verify_ledger_file
+
+    ledger = _seeded(tmp_path / "tolerant.db")
+    ledger._conn.execute(f"UPDATE {EXECUTION_TABLE} SET {column} = ?", ("{not json",))
+    ledger._conn.commit()
+    rows = ledger.executions()
+    assert rows[0][column] is None, "the malformed column reads as an absent one"
+    ledger.close()
+    verdict = verify_ledger_file(tmp_path / "tolerant.db")
+    assert verdict.status == "valid" and verdict.ok is True, (
+        "measured: neither column is an OutcomeRecord field, so the receipt "
+        "does not cover them and the corruption is invisible on both channels"
+    )

@@ -78,8 +78,20 @@ decoder error, under a reason minted for it: `ledger_rows_unreadable` is not
 parametrisation is DERIVED from `reader_methods`, not a hand-listed five, so
 "every guarded reader" is a membership rather than a sentence.
 
-The limit: this is the READ path. A malformed column is still a corrupted
-ledger and no repair is offered, exactly as for an unreceipted row.
+**The limit, measured rather than assumed, because the sentence above is not
+true of every JSON column.** This is the READ path, and only its STRICTLY
+decoded half. `_pending_row` and `_attempt_row` decode with `json.loads`, so a
+malformed column there reaches the guard; `_execution_row` decodes `judgment`
+and `authorization` with `_load_json`, which is best-effort by construction and
+returns `None` on malformed input. Neither of those two is an `OutcomeRecord`
+field, so the receipt does not cover them either, and the corruption is
+invisible on both channels at once — a rewrite presented as an absence.
+Observed: `executions.judgment` overwritten with `{not json` returns `None`
+from `executions()` and `verify_ledger_file` reports `valid`, `ok=True`.
+`docs/OPEN-GAPS.md` G47 carries it with the reason it is not fixed here, and
+two parametrised tests hold the covered and uncovered sides apart so the limit
+is behaviour rather than prose. A malformed column is still a corrupted ledger
+and no repair is offered, exactly as for an unreceipted row.
 
 ## What changed
 
