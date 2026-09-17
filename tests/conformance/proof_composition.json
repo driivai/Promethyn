@@ -29,11 +29,11 @@
   ],
   "steps": {
     "reachability": {
-      "description": "F1/F2 startup obligations, future-root discovery, F3 authoritative readers, the unreceipted/tampered classification, and the two component scopes; observed 169 passing cases before pinning, re-pinned from 156 when F-1's ruling made non-discovery a refusal (security_build 57 -> 70)",
+      "description": "F1/F2 startup obligations, future-root discovery, F3 authoritative readers, the unreceipted/tampered classification, the two component scopes, and F-5's six credit paths; observed 187 passing cases before pinning, re-pinned from 169 (security_build 70 -> 87)",
       "counts": {
-        "tests.conformance.test_security_build": 70,
+        "tests.conformance.test_security_build": 87,
         "tests.conformance.test_security_build_inventory": 13,
-        "tests.conformance.test_reachability_readers": 33,
+        "tests.conformance.test_reachability_readers": 34,
         "tests.conformance.test_receipt_classification": 53
       },
       "required": {
@@ -72,7 +72,14 @@
           "test_no_shipped_root_hides_a_component_from_the_credited_walk",
           "test_an_unregistered_carrier_of_a_compared_attribute_refuses",
           "test_every_registered_carrier_is_a_class_and_the_map_is_exact",
-          "test_the_named_residuals_of_the_discovery_scope_are_real"
+          "test_the_named_residuals_of_the_discovery_scope_are_real",
+          "test_an_external_attestation_signer_earns_the_custody_credit",
+          "test_a_pin_requirement_with_no_sandbox_at_all_is_refused",
+          "test_a_retaining_anchor_earns_the_retention_credit",
+          "test_a_role_budget_disagreeing_with_the_config_is_refused",
+          "test_a_remote_provider_disagreeing_with_the_bound_is_refused",
+          "test_an_endpoint_swapped_after_construction_is_still_revalidated",
+          "test_the_carrier_name_collisions_are_pinned_exactly"
         ],
         "tests.conformance.test_security_build_inventory": [
           "test_every_config_bearing_public_assembly_is_classified_across_the_package",
@@ -91,7 +98,8 @@
           "test_unannotated_future_public_reader_is_not_silently_unclassified",
           "test_unsupported_public_descriptor_or_callable_is_refused",
           "test_new_scalar_readers_cannot_escape_the_default_guard",
-          "test_persisted_observation_obligation_cannot_be_erased_or_borrowed"
+          "test_persisted_observation_obligation_cannot_be_erased_or_borrowed",
+          "test_an_alternate_ledger_implementation_is_outside_this_derivation"
         ],
         "tests.conformance.test_receipt_classification": [
           "test_the_fixture_is_the_pre_receipt_shape",

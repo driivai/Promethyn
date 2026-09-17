@@ -288,6 +288,31 @@ def validate_ledger(config: Config, ledger: object) -> None:
         raise BuildRefused("ledger_anchor", "injected anchor has a different destination")
 
 
+def _configs_reachable_from(values: Iterable[Any]) -> list[Config]:
+    """Configs the interpreter can reach from a root's arguments (F-8).
+
+    The wider scope for ``guarded_root``'s ``discover``, and the same instrument
+    Section 1 uses for components: ``gc.get_referents`` rather than a second
+    hand-written list of carrier shapes. Classes, modules and functions are
+    opaque -- following them reaches every module-level Config in the package
+    and would refuse every root.
+    """
+
+    seen: set[int] = set()
+    todo = [value for value in values]
+    found: list[Config] = []
+    while todo:
+        obj = todo.pop()
+        if id(obj) in seen or isinstance(obj, _DISCOVERY_OPAQUE + (types.FunctionType,)):
+            continue
+        seen.add(id(obj))
+        if isinstance(obj, Config):
+            found.append(obj)
+            continue
+        todo.extend(gc.get_referents(obj))
+    return found
+
+
 def security_attribute_carriers() -> dict[str, tuple[type, ...]]:
     """Attribute name -> the ONLY classes permitted to carry it, fail-closed.
 
@@ -608,6 +633,34 @@ def guarded_root(function: Callable[..., Any]) -> Callable[..., Any]:
         if isinstance(migration_config, MigrationRunnerConfig) and not configs:
             if bound.arguments.get("settings") is not None:
                 raise BuildRefused("Config", "migration settings must be a classified Config")
+        if not configs:
+            # F-8. THE GUARD USED TO SUBSTITUTE A DIFFERENT CONFIG HERE, SILENTLY.
+            #
+            # `discover` walks Config, dict, list and tuple. A Config held by any
+            # other carrier is invisible to it, `configs` stays empty, and the
+            # fallback below builds one from the environment instead. The guard
+            # does not decline: it validates that OTHER Config and writes a
+            # report describing it. Reproduced on a root taking one opaque
+            # holder, with `require_ledger_anchor=True` and `ledger_anchor` set:
+            #
+            #     discoverable parameter  -> REFUSED, "ledger has no supported tip anchor"
+            #     opaque carrier          -> BUILT, ledger_anchor='not_requested'
+            #
+            # "Not requested" for a property that WAS requested is the same
+            # class of defect as F-1's `applied` for a component never seen:
+            # a state the guard could not establish, written down as a clean
+            # one. So it refuses, by the same two-scope method -- the carrier's
+            # referents are asked whether a Config is in there, and the
+            # env fallback survives only when genuinely none is.
+            hidden = _configs_reachable_from(bound.arguments.values())
+            if hidden:
+                raise BuildRefused(
+                    "Config",
+                    "a Config is reachable from this root's arguments but is not "
+                    "held in a traversed container, so the guard would validate a "
+                    "DIFFERENT Config built from the environment and report on that "
+                    "one instead",
+                )
         environment = bound.arguments.get("env")
         if environment is None:
             environment = os.environ

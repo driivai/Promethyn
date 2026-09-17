@@ -3857,7 +3857,7 @@ from silent into witnessed, and this sprint widened what it witnesses.
 - `tests/conformance/test_receipt_substitution.py` — 4
 - `tests/conformance/test_open_gaps.py` — 3 added (G40 ×2, the G39–G42 naming pin); the G42 limit pin removed when it closed
 - **47 new proofs in total, counted by collection, not by hand** — the PR body first said 45 from a tally; corrected from the measurement
-- Hearth: `execution/controller.py` and `execution/pending.py` re-sanctioned to measured digests; `ledger/sqlite_ledger.py` and `ledger/receipts.py` are **not** in the protected set (G35's limit, still open)
+- Hearth: `execution/controller.py` and `execution/pending.py` re-sanctioned to measured digests; `ledger/sqlite_ledger.py` and `ledger/receipts.py` are **not** in the protected set (G35's limit, still open). **CORRECTED 2026-09-17 (F-12):** this enumeration was incomplete. `runtime/security_build.py` and `ledger/readers.py` -- the build guard and the reader-population derivation, the two modules that decide what every other guard's verdict MEANS -- were also outside the set, and not by a recorded decision: they were never added. Both are protected now and the pin moves 21 -> 23. The two ledger modules remain excluded, and that exclusion IS chosen, under G35.
 - Type gate 322 → 326 (`ledger/receipts.py` and the three proof modules); wide dataclasses 50 → 52; additive-column pin +2; positive controls 54 → 58 (three paired positives for the receipts, one for G40's named limit); `EXECUTION_REFUSAL_REASONS` membership pin 17 → 21. Every one exact, none a floor.
 
 ## G40 — `chokepoint/reconcile_gate.py` misclassifies any `execution*` chain event as its own — RECORDED, NOT FIXED HERE
@@ -4099,6 +4099,26 @@ set of mechanisms that carry a given property, so the next guard added over an
 already-proved fact will disarm its proof the same way, and only a red pin or
 a reviewer will say so. Deriving that set is not attempted here.
 
+### THE STANDING RULE, earned when G44 recurred a second time
+
+**A shared refusal label is a shared cause.** Three component-level refusals in
+`security_build.py` all carried `property_name == "component"`. Adding the third
+(non-discovery) made `external-subclass-refusal-deleted` SURVIVE: deleting that
+refusal left components undiscovered, the new rule refused in its place, and the
+proof went green while the mechanism it names was gone. Exactly G44's shape,
+through a different door.
+
+So: **adding a refusal to an existing label requires re-running every runner
+that pins refusals on that label, at the moment the refusal is added** — not at
+the end of the sprint, when the survivor is one red line in a long log and the
+change that caused it is twenty edits back. The fix is to name the causes apart
+(`component_not_discovered`, `component_unregistered_carrier`), which restored
+the runner to 28 rows all red with no pin relaxed.
+
+There is no single doctrine file in this repository — the numbered doctrines are
+referenced across this tracker and `docs/live-state-pinning-design.md` but never
+enumerated in one place — so the rule lives here, with the entry it generalises.
+
 ## G45 — the three diagnostics an auditor reaches for on a corrupted ledger were the three that crashed on one — CLOSED 2026-09-17 by review of #123
 
 **Reported by independent review of #123's opening head `2d23871`, against
@@ -4162,7 +4182,15 @@ best-effort and swallows the same corruption into `None`. See G47 for that
 boundary, measured and pinned, and G46 for the unreceipted-column family it
 belongs to.
 
-## G46 — an unreceipted column survives tampering with the ledger still `valid` — RECORDED, NOT FIXED HERE
+## G46 — an unreceipted column survives tampering with the ledger still `valid` — ON THE CRITICAL PATH FOR THE RECEIPT CONTRACT
+
+> **THIS IS NOT A GENERAL GAP.** `confidence` is unreceipted and two threshold
+> readers route on it (`executions_below_confidence`, `authoritative_pass_below`),
+> so a receipt can claim an authorization path whose threshold decision rests on
+> tamperable bytes. The receipt says the decision was made; it does not cover the
+> value the decision turned on. That is the **fourth clause of the release gate**,
+> not a backlog item, and it blocks the receipt contract rather than waiting on
+> it.
 
 Measured 2026-09-17 while scoping G45, on a ledger with one recorded hold:
 
@@ -4298,3 +4326,223 @@ Two mutation rows widen each handler back to `ValueError` and must redden.
 `TypeError`, not `JSONDecodeError`, and is not caught. It is unreachable
 through the schema — every JSON column on the hold is `NOT NULL`, and SQLite
 refuses the UPDATE with `IntegrityError: NOT NULL constraint failed`.
+
+## G49 — what neither component scope can see, named rather than left to be found
+
+F-1's ruling made non-discovery a refusal (`security_build.py`, `_discovered`).
+A total traversal of arbitrary Python objects is not achievable, so these are
+the residuals — each a place a component could exist where the guard would not
+know, and each a PASSING TEST rather than a paragraph
+(`test_the_named_residuals_of_the_discovery_scope_are_real`, four cases):
+
+| residual | why it is not closed |
+|---|---|
+| an object built lazily on first use | it does not exist when the guard runs |
+| an object behind `__getattr__` or a property | the walk will not INVOKE it; running arbitrary code during a security check is a worse bargain than the gap |
+| an object captured by a closure the CALLER wrote | only the package's own closures are followed. Measured: following every closure cell failed 4 chokepoint tests and errored 71 more on an in-memory audit medium behind a test-supplied executor |
+| an object reachable only from module globals | not reachable from the root at all |
+
+Two further shapes the collector itself cannot see: an object held only by a C
+extension without `tp_traverse`, and one held only in a frame the walk never
+reaches. Neither is reproducible as a test here and both are listed UNVERIFIED.
+
+**Not claimed:** that the credited and discovered scopes agree on anything but
+the objects carrying a compared attribute. The refusal is scoped to those
+deliberately — see G50.
+
+## G50 — the carrier discriminator is an attribute NAME, which is F-7's shape
+
+`security_attribute_carriers` refuses a credited object that carries an
+attribute a property is compared on and is not a registered consumer. The
+discriminator is the NAME. That is the shape F-7 reports on
+`type(obj).__module__`, inside the fix for F-4.
+
+**Why it ships anyway, stated rather than glossed.** F-7's pin fails OPEN — a
+foreign class sets `__module__` to a package-looking string, which need not name
+a module that exists, and escapes the guard. This one fails CLOSED: an
+unregistered carrier REFUSES THE BUILD. The cost is a false refusal a developer
+resolves by registering the class, not a missed detection.
+
+**Measured package-wide**, eight classes declare a compared attribute without
+being registered consumers, pinned exactly by
+`test_the_carrier_name_collisions_are_pinned_exactly`:
+
+* three on `Config`, which both walks exclude, so they never reach the rule;
+* `ResolvedPosture.escalate_below` — records a resolved escalation, does not
+  implement the gate that honours it. NAME COINCIDENCE;
+* four `signer` carriers — two request records, an in-memory audit model's
+  signer factory, and the migration runner's config. METADATA CARRIERS.
+
+Exactly one of the eight is REACHED by any graph the suite builds —
+`AuthorizationContext`, whose `signer` is a dict of identity metadata — and it
+is registered for that reason. `name` is excluded from the map entirely:
+`core.models.Tier` carries it in the shipped swarm graph, so keying on it would
+refuse a correct build.
+
+**Not fixed because the population is not derivable.** Which class honours a
+Config field is semantic and attribute names do not carry it: `timeout_s` is on
+`SubprocessVerifier`, `RemoteModelProvider` and `HttpAppendOnlyLog` for three
+different fields.
+
+## G51 — the alternate-ledger and private-SQL limit lived only in two report sentences
+
+Stated at `docs/reachability-build.md:32-33` and
+`docs/reachability-readers.md:120` and nowhere in the tree. Doctrine #5: a named
+gap is a passing test, and a limit that exists only in a report is a limit
+nothing re-checks.
+
+**What the limit is.** The reader guard is a boundary on the shipped
+`SqliteLedger` public reader API. Trusted code can use the private `_conn`, the
+`_receipt_source()` diagnostic, monkeypatch methods, mislabel a new reader as a
+writer/diagnostic, or introduce a different `Ledger` implementation entirely —
+none of which the derivation covers.
+
+**Now a passing test**, `test_an_alternate_ledger_implementation_is_outside_this_derivation`.
+Measured: `reader_methods` RECOGNISES `pending_actions` on an unrelated
+implementation and the guard never WRAPS it, because `guard_readers` is applied
+through `SqliteLedger.__init_subclass__` and an unrelated class never triggers
+it. The read hands back rows nothing verified. If a future change starts
+guarding alternate implementations, that test reddens and both documents must be
+corrected rather than quietly becoming right.
+
+**Not closed**, and the reason is the one the reports give: this is a
+composition contract, not a sandbox against trusted Python. Closing it means
+deciding what an alternate `Ledger` implementation must PROVE before its reads
+count as authoritative, which is a design question and not a test.
+
+## G52 — the guard-form audit: three name-keyed sweeps, one with a firing bypass
+
+TYPE-GATE-HARDEN-2 applied the allowlist doctrine to the type gate's own guards
+and flagged the rest as the next sprint. This is that audit.
+
+**Population.** 91 conformance modules. The doctrine is about guards that SWEEP
+the tree and judge what they find — an ordinary behavioural test constructs a
+state and asserts the outcome, which is the second permitted form by
+construction. Sweeping guards, measured by their use of `read_text`, `rglob`,
+`walk_packages`, `ast.parse` or `getsource`: **62**.
+
+**Shape 1 — a name pin on a writable attribute — found three times outside
+`security_build.py`:**
+
+| guard | discriminator |
+|---|---|
+| `tests/conformance/test_secret_canary_sweep.py:142` | `obj.__module__ == module.name` |
+| `tests/conformance/test_implementation_registry.py:271` | `obj.__module__ == info.name` |
+| `tests/conformance/test_sandbox_unbounded_reaches_the_command.py:174` | `cls.__module__.startswith("prometheus_protocol.")` |
+
+**The bypass probe FIRES.** Against the secret-canary sweep, which exists to
+find credential-bearing fields, with a dataclass planted in
+`prometheus_protocol.core.config`:
+
+```text
+baseline credential fields discovered      : 9
+with __module__ set honestly               : 10  (+1)
+with __module__ set to a module that does
+  not exist                                :  9  (+0)   <-- invisible
+```
+
+A credential-bearing dataclass escapes the sweep by lying about its module.
+`__module__` is a writable string and the module it names need not exist.
+
+**NOT FIXED HERE, and the reason is a design question.** The replacement for a
+module-name discriminator is a derived one — the set of classes actually defined
+in the file being swept, read from its AST rather than from an attribute the
+class controls. That is constructible, but it changes what "belongs to this
+module" means for every sweep at once, and re-pins three populations. It is one
+change with one ruling, not three one-liners.
+
+**Shape 2 — a search term that cannot match the value it looks for — not found
+in this population.** The known instance (a bare `on:` key resolving to boolean
+`True` under YAML 1.1, so a guard looking for the string `"on"` found nothing
+and passed) is in workflow parsing, and the sweeps here read Python, not YAML.
+Recorded as measured-absent rather than as clean.
+
+### The per-guard inventory
+
+Classified by static shape: does the guard state a PERMITTED set, prove the
+property BEHAVIOURALLY (`pytest.raises` on a constructed defect), both, or
+neither. Counts over the 62 sweeping guards:
+
+| form | guards |
+|---|---|
+| both | 19 |
+| PERMITTED set | 18 |
+| PERMITTED set (exact equality) | 14 |
+| BEHAVIOURAL | 6 |
+| **NEITHER — name-keyed discriminator** | 5 |
+
+**Two of the five flagged are FALSE POSITIVES of the classifier, checked by
+hand rather than reported as findings:** `scripts/reachability_build_proofs.py`
+carries `__module__` only inside the mutation STRING it applies, and
+`tests/conformance/test_security_build.py` carries it inside
+`test_the_carrier_name_collisions_are_pinned_exactly`, which is the pin for this
+very shape. The three genuine instances are the ones tabled above.
+
+The classifier is a static heuristic and its output is evidence, not a verdict —
+which is why the three it found were each confirmed by reading the code and one
+by a firing bypass probe. Full table:
+
+| guard | form |
+|---|---|
+| `scripts/check_hygiene.py` | PERMITTED set (exact equality) |
+| `scripts/check_ip_consistency.py` | PERMITTED set (exact equality) |
+| `scripts/check_message_hygiene.py` | PERMITTED set |
+| `scripts/check_proof_composition.py` | PERMITTED set (exact equality) |
+| `scripts/check_skip_manifest.py` | PERMITTED set |
+| `scripts/check_type_gate_manifest.py` | PERMITTED set (exact equality) |
+| `scripts/check_type_gate_receipt.py` | PERMITTED set |
+| `scripts/f11_reconcile_revert_proofs.py` | PERMITTED set |
+| `scripts/f11_source_revert_proofs.py` | PERMITTED set |
+| `scripts/fix_b_revert_proofs.py` | PERMITTED set |
+| `scripts/mountinfo_diagnostic.py` | PERMITTED set (exact equality) |
+| `scripts/mutation_worktree.py` | PERMITTED set (exact equality) |
+| `scripts/phase_1_2c_checkpoint_b_revert_proofs.py` | PERMITTED set |
+| `scripts/phase_1_2c_record_revert_proofs.py` | PERMITTED set |
+| `scripts/pih4a_revert_proofs.py` | PERMITTED set |
+| `scripts/reachability_build_proofs.py` | **NEITHER** — name-keyed discriminator |
+| `scripts/reachability_reader_proofs.py` | PERMITTED set (exact equality) |
+| `scripts/receipt_classification_proofs.py` | PERMITTED set |
+| `scripts/type_gate_floor.py` | PERMITTED set (exact equality) |
+| `scripts/type_gate_revert_proofs.py` | PERMITTED set |
+| `tests/conformance/test_advisory_cannot_satisfy.py` | both |
+| `tests/conformance/test_bank_decision_surface.py` | PERMITTED set |
+| `tests/conformance/test_ci_collection_pins.py` | PERMITTED set (exact equality) |
+| `tests/conformance/test_ci_single_source.py` | PERMITTED set (exact equality) |
+| `tests/conformance/test_composed_message_guard.py` | both |
+| `tests/conformance/test_config_attestation.py` | BEHAVIOURAL |
+| `tests/conformance/test_dependency_closure.py` | PERMITTED set |
+| `tests/conformance/test_execution_start_signal.py` | both |
+| `tests/conformance/test_fix_b_revert_pins.py` | both |
+| `tests/conformance/test_git_ref_format.py` | PERMITTED set |
+| `tests/conformance/test_implementation_registry.py` | **NEITHER** — name-keyed discriminator |
+| `tests/conformance/test_no_second_aggregator.py` | both |
+| `tests/conformance/test_open_gaps.py` | both |
+| `tests/conformance/test_phase_1_2a_revert_pins.py` | both |
+| `tests/conformance/test_phase_1_2b_revert_pins.py` | both |
+| `tests/conformance/test_phase_1_2c_checkpoint_b_revert_pins.py` | both |
+| `tests/conformance/test_phase_1_2c_revert_pins.py` | both |
+| `tests/conformance/test_pih4a_revert_pins.py` | both |
+| `tests/conformance/test_platform_contract.py` | BEHAVIOURAL |
+| `tests/conformance/test_policy_enforcement_regression.py` | BEHAVIOURAL |
+| `tests/conformance/test_positive_control_set.py` | PERMITTED set (exact equality) |
+| `tests/conformance/test_prod_fix_1_revert_pins.py` | both |
+| `tests/conformance/test_prod_fix_2_revert_pins.py` | both |
+| `tests/conformance/test_proof_composition.py` | PERMITTED set (exact equality) |
+| `tests/conformance/test_receipt_classification.py` | both |
+| `tests/conformance/test_receipt_derivation.py` | PERMITTED set (exact equality) |
+| `tests/conformance/test_reobservation_branch_delete.py` | both |
+| `tests/conformance/test_reobservation_wiring.py` | PERMITTED set |
+| `tests/conformance/test_sandbox.py` | BEHAVIOURAL |
+| `tests/conformance/test_sandbox_unbounded_reaches_the_command.py` | **NEITHER** — name-keyed discriminator |
+| `tests/conformance/test_secret_canary_sweep.py` | **NEITHER** — name-keyed discriminator |
+| `tests/conformance/test_security_build.py` | **NEITHER** — name-keyed discriminator |
+| `tests/conformance/test_security_build_inventory.py` | PERMITTED set |
+| `tests/conformance/test_security_field_behaviour.py` | BEHAVIOURAL |
+| `tests/conformance/test_security_posture.py` | BEHAVIOURAL |
+| `tests/conformance/test_skip_manifest_guard.py` | PERMITTED set |
+| `tests/conformance/test_stdlib_floor.py` | PERMITTED set (exact equality) |
+| `tests/conformance/test_strict_booleans.py` | both |
+| `tests/conformance/test_substrate_revert_pins.py` | both |
+| `tests/conformance/test_swarm_invariants.py` | both |
+| `tests/conformance/test_type_gate.py` | PERMITTED set |
+| `tests/conformance/test_type_gate_revert_pins.py` | both |

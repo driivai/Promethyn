@@ -128,16 +128,33 @@ SOFT_LEVER_FILES = (
     "src/prometheus_protocol/benchmarks/grounding_eval.py",
 )
 
-#: Every protected file, across all four guards. Pinned by count in
-#: ``test_hearth_ledger.py`` so shrinking a guard's tuple cannot pass unnoticed.
+#: F-12. THE TWO GUARDS THEMSELVES, which were outside the protected set while
+#: guarding everything in it. `security_build.py` is the build guard -- the
+#: module that decides whether a requested security property was applied -- and
+#: `ledger/readers.py` derives the authoritative reader population. A silent
+#: edit to either changes what every other guard's verdict MEANS, and nothing
+#: was watching them.
+#:
+#: The exclusion was recorded as chosen for `sqlite_ledger.py` and `receipts.py`
+#: (G35's limit, still open). It was never chosen for these two; they were
+#: simply never added. Added here.
+SECURITY_GUARD_FILES = (
+    "src/prometheus_protocol/runtime/security_build.py",
+    "src/prometheus_protocol/ledger/readers.py",
+)
+
+#: Every protected file, across all four guards plus the two guard modules.
+#: Pinned by count in ``test_hearth_ledger.py`` so shrinking a guard's tuple
+#: cannot pass unnoticed.
 PROTECTED_FILES = tuple(sorted(
     set(COMPOSITION_FILES)
     | set(EXTENSION_SURFACE_FILES)
     | set(ORCHESTRATION_FILES)
     | set(SOFT_LEVER_FILES)
+    | set(SECURITY_GUARD_FILES)
 ))
 
-EXPECTED_PROTECTED_FILES = 21
+EXPECTED_PROTECTED_FILES = 23
 
 #: SHA-256 of the sanctioned content of each protected file.
 #:
@@ -541,6 +558,14 @@ EXPECTED_PROTECTED_FILES = 21
 #: next edit to the same files: updating a digest below is a fresh decision, and
 #: the reason for it belongs beside it.
 DIGESTS: dict[str, str] = {
+    # F-12: the two guard modules, sanctioned at the content that closes F-1,
+    # F-4, F-5 and F-8. Unlike the rest of this ledger these are NOT frozen at
+    # d0819bb -- they did not exist in the set then -- so their first sanctioned
+    # state is this change.
+    "src/prometheus_protocol/runtime/security_build.py":
+        "9cf8f6db17317a0680c5df9f19755dcdd6e495e4b86212bfc77e157efc579c3a",
+    "src/prometheus_protocol/ledger/readers.py":
+        "3f3768d28ccf46ec6583796ed98f69eaed2ccbcb6f6a94abc0468ac4712c0cda",
     "src/prometheus_protocol/benchmarks/grounding_eval.py":
         "c60d17487aabd916fa79d57f5ddcdf301813186e704a937081d92db191143d01",
     "src/prometheus_protocol/benchmarks/judge_eval.py":

@@ -551,6 +551,55 @@
         "test_a_component_the_traversal_cannot_credit_refuses_the_build"
       ],
       "property": "the six hiding-shape refusals are caused by the component being hidden from the credited walk, not by the guard refusing any graph containing a substrate policy: the SAME defect in a container the walk credits is refused for the property it violates instead, naming allow_unverified_substrate rather than component_not_discovered"
+    },
+    {
+      "module": "tests/conformance/test_security_build.py",
+      "positive": "test_an_external_attestation_signer_earns_the_custody_credit",
+      "negatives": [
+        "test_a_local_attestation_signer_cannot_earn_the_custody_credit"
+      ],
+      "property": "the custody refusal is caused by the signer not being external, not by the requirement refusing every signer: the SAME graph with an external KMS signer reports require_external_signer=applied. Before this control the credit path could be deleted and nothing reddened, because the existing negative refuses on an EMPTY signer list for a different reason"
+    },
+    {
+      "module": "tests/conformance/test_security_build.py",
+      "positive": "test_a_digest_pinned_container_sandbox_earns_the_pin_credit",
+      "negatives": [
+        "test_a_container_sandbox_without_its_pin_cannot_earn_the_credit",
+        "test_a_pin_requirement_with_no_sandbox_at_all_is_refused"
+      ],
+      "property": "a container sandbox that honours the pin earns the credit, so the two refusals are caused by the sandbox not honouring it and by there being no sandbox at all, rather than by require_digest_pin refusing unconditionally"
+    },
+    {
+      "module": "tests/conformance/test_security_build.py",
+      "positive": "test_a_retaining_anchor_earns_the_retention_credit",
+      "negatives": [
+        "test_an_anchor_retaining_for_the_wrong_period_is_refused"
+      ],
+      "property": "an anchor retaining for exactly the configured period earns the credit at a NON-default number of days, so the refusal is caused by the retention disagreeing and not by the row refusing every anchor"
+    },
+    {
+      "module": "tests/conformance/test_security_build.py",
+      "positive": "test_a_role_budget_matching_the_config_earns_the_credit",
+      "negatives": [
+        "test_a_role_budget_disagreeing_with_the_config_is_refused"
+      ],
+      "property": "a swarm whose role budget equals a non-default max_role_calls earns the credit, so the refusal is caused by the budget disagreeing"
+    },
+    {
+      "module": "tests/conformance/test_security_build.py",
+      "positive": "test_a_remote_provider_carrying_the_bound_earns_the_credit",
+      "negatives": [
+        "test_a_remote_provider_disagreeing_with_the_bound_is_refused"
+      ],
+      "property": "a remote provider carrying non-default timeout and response bounds earns both credits, so the refusals are caused by the provider disagreeing and not by remote providers being refused as such"
+    },
+    {
+      "module": "tests/conformance/test_security_build.py",
+      "positive": "test_a_runtime_endpoint_is_revalidated_and_earns_the_credit",
+      "negatives": [
+        "test_an_endpoint_swapped_after_construction_is_still_revalidated"
+      ],
+      "property": "a permitted https endpoint earns the allow_insecure_loopback credit, so the refusal of a loopback endpoint swapped in after construction is caused by the revalidation seeing the LIVE endpoint rather than by the row refusing every endpoint"
     }
   ]
 }

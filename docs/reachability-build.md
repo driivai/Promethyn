@@ -115,8 +115,26 @@ the first implementation contradicted that sentence in code, writing `applied`
 on three unrequested rows. The report vocabulary is now five named constants
 (`applied`, `not_requested`, `default_not_applicable`, `publication_pending`,
 `published`), pinned as an exact membership against the tokens the source
-actually writes. Note also that `default_not_applicable` reports an ABSENT
-domain and an UNREACHED one identically; see the traversal limit above.
+actually writes.
+
+> **CORRECTED 2026-09-17, and the correction enlarges the finding.** This
+> paragraph said `default_not_applicable` reports an ABSENT domain and an
+> UNREACHED one identically. That was true and it understated the case, and the
+> #122 review record understates it the same way — which matters, because that
+> text is now the historical account. `default_not_applicable` requires NO
+> reachable consumer. When a compliant sibling IS present, which is the ordinary
+> case on a real graph, `all()` over the reachable ones is True and an unreached
+> component's row read **`applied`** — the strongest token this report has, the
+> one that says the property was compared against the live components that
+> honour it. Measured on a real `build_orchestrator` graph with one
+> `PromotionGate` planted at `threshold=0.25` against a config value of `0.0`:
+> three container shapes refused and **seven reported `applied`**.
+>
+> Both outcomes were real; which one you got depended on whether a compliant
+> sibling happened to be in the graph. Neither is possible now for an object
+> carrying a compared attribute: non-discovery REFUSES
+> (`component_not_discovered`). `default_not_applicable` retains its original
+> meaning — an absent domain at a default value — for everything else.
 
 | Config property | Applied by / checked on | Other roots or limitations |
 |---|---|---|

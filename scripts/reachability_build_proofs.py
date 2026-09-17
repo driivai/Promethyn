@@ -106,6 +106,32 @@ MUTATIONS = (
     ("external-subclass-substituted-as-absent", BUILD,
      'elif any(base.__module__.startswith("prometheus_protocol.") for base in type(obj).__mro__):',
      "elif False:", "test_external_security_subclass_is_not_an_absent_default_domain"),
+    # ---- F-5: the six credit paths that no proof reached ---------------------
+    # Each was deleted in a MutationWorktree BEFORE its control existed and all
+    # six SURVIVED, `70 passed`. The mechanisms were real; nothing would have
+    # noticed them stopping. Each row now names the control that reddens.
+    ("custody-credit-for-the-supplied-signer-deleted", BUILD,
+     "                signers.append(signer)", "                pass",
+     "test_an_external_attestation_signer_earns_the_custody_credit"),
+    ("digest-pin-credited-without-any-sandbox", BUILD,
+     "            applied = bool(sandboxes)\n            for obj in sandboxes:",
+     "            applied = True\n            for obj in sandboxes:",
+     "test_a_pin_requirement_with_no_sandbox_at_all_is_refused"),
+    ("retention-anchors-never-collected", BUILD,
+     "                    applicable.append(a)", "                    pass",
+     "test_a_retaining_anchor_earns_the_retention_credit"),
+    ("role-budget-credited-without-comparison", BUILD,
+     "            applied = all(obj._budget.limit == value for obj in engines) if engines else None",
+     "            applied = True if engines else None",
+     "test_a_role_budget_disagreeing_with_the_config_is_refused"),
+    ("provider-bounds-credited-without-comparison", BUILD,
+     '            applied = matches(RemoteModelProvider, "timeout_s" if name == "request_timeout_s" else "max_response_bytes", value)',
+     "            applied = True",
+     "test_a_remote_provider_disagreeing_with_the_bound_is_refused"),
+    ("runtime-endpoint-never-revalidated", BUILD,
+     '                validate_endpoint(endpoint, name="runtime endpoint", allow_insecure_loopback=value)',
+     "                pass",
+     "test_an_endpoint_swapped_after_construction_is_still_revalidated"),
 )
 
 
