@@ -2601,6 +2601,18 @@ by hand.
 the bounded table's composition (25 review replies, 3 bodies, 1 comment) plus
 carriers 30 to 37, not incremented.
 
+**CARRIER 38, opening #126 (`4561120456`). 13 of 13.** Opened with a
+one-line placeholder body, read back carrying the footer, rewritten through
+`update_pull_request`. The matrix comment on #125 that carrier 37 records was
+edited rather than followed by a new comment, so #125 closed at 37; this is the
+next pull request's opening, recorded at the push that clears it — which is
+this commit, for the reason carrier 30 first measured: `ci.yml` reads the
+frozen `PR_BODY` on the OPEN event, and its message-hygiene step refuses the
+placeholder's footer on `270238b` until a push re-triggers it with the clean
+body. **Running total 38: 28 review replies, 7 bodies, 3 comments**, recounted
+from the bounded table (25 review replies, 3 bodies, 1 comment) plus carriers
+30 to 38, not incremented.
+
 **THE COUNT IS ACCURATE AS OF THIS COMMIT AND CANNOT BE ACCURATE AFTER IT, which
 is a property of the count and not an oversight.** Reporting this commit's own
 CI means posting a comment, and that comment will carry the footer -- so
