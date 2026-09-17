@@ -3999,3 +3999,51 @@ an unknown field, but the *consumer classes per property*
 new consumer of an existing field is silently uncovered. Draft hole #8's fix
 was to add the second consumer to that list, which is the same shape as the
 hole.
+
+## G44 — a second guard over the same fact silently disarmed two older mutation proofs
+
+**Found by CI on #122's own head, after the review, and it had already turned
+the matrix red on all three Pythons.** Recorded here because the mechanism is
+general and will recur every time this tree adds defence in depth.
+
+**What CI observed.** Run 35169843547 on `4664dad` failed step 32,
+"PHASE-1.2c Checkpoint B seam mutations (must be caught)", on Python 3.10,
+3.11 and 3.12. Steps 33–50 never ran, so the PostgreSQL job, the sandbox
+conformance job, the skip manifest and the full suite were never reached on
+that head. The independent review of `4664dad` reported that it could
+attribute no workflow run to that commit; a run existed and it was red. That
+is a miss in the review, not a later regression.
+
+**The proximate cause** was mechanical: `install_build_guards` replaces every
+public factory function with a `@wraps`-decorated guard, and the shared
+mutation harness took `inspect.getsource` (which follows `__wrapped__`) and
+`__code__` (which does not) from the same name. Recompiling the inner source
+and comparing its free variables to the wrapper's raised `AssertionError` at
+`scripts/fix_b_revert_proofs.py`. `inspect.unwrap` fixes it, and the guard
+still runs because the wrapper calls the function the harness patches.
+
+**The real finding is what that assertion was hiding.** With the harness
+repaired, two older proofs stopped isolating the mechanisms they name:
+
+| proof | observed at `4664dad` | why |
+|---|---|---|
+| `chain-row-comparison-removed` | `1 passed` where a failure was required | the new authoritative reader compares the same record against the same receipt, so removing `_require_chain_binding`'s comparison left the tamper caught elsewhere |
+| `selected-profile-injection-unwired` | 8 call failures against a pinned 9 | the new build guard resolves the profile itself and raised the same "no committed verification profile", so the unknown-profile half passed regardless |
+
+Both were GREEN-for-the-wrong-reason: the proof would have passed whether or
+not the mechanism it names still worked. That is the shape this tree keeps
+finding, arriving this time through a genuinely good addition. Defence in
+depth is not the defect; a single-target mutation left pointing at one of two
+mechanisms is.
+
+**The fix keeps each proof measuring its own mechanism** rather than relaxing
+a pin. The harness now takes optional COMPANION edits, so a row can neuter
+every mechanism carrying the property and isolate the one it names. With them
+both runners return to their original pins — `8 / 9` and `7 / 18`, the same
+numbers base `9141936` reports — so nothing was re-pinned to accommodate the
+change.
+
+**The limit, stated.** Companion edits are hand-written. Nothing derives the
+set of mechanisms that carry a given property, so the next guard added over an
+already-proved fact will disarm its proof the same way, and only a red pin or
+a reviewer will say so. Deriving that set is not attempted here.

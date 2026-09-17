@@ -112,10 +112,10 @@
       }
     },
     "checkpoint_b": {
-      "description": "PHASE-1.2c Checkpoint B execution-descriptor proofs",
+      "description": "PHASE-1.2c Checkpoint B execution-descriptor proofs; the revert-pin module gained test_the_rows_carrying_a_companion_edit_are_pinned when G44's companion edits were introduced (4 -> 5)",
       "counts": {
         "tests.conformance.test_execution_descriptor": 18,
-        "tests.conformance.test_phase_1_2c_checkpoint_b_revert_pins": 4
+        "tests.conformance.test_phase_1_2c_checkpoint_b_revert_pins": 5
       },
       "required": {
         "tests.conformance.test_execution_descriptor": [
@@ -135,7 +135,8 @@
         "tests.conformance.test_phase_1_2c_checkpoint_b_revert_pins": [
           "test_every_mutation_target_and_selection_is_live",
           "test_mutations_cover_every_named_load_bearing_join",
-          "test_shortfall_and_excess_are_both_refused"
+          "test_shortfall_and_excess_are_both_refused",
+          "test_the_rows_carrying_a_companion_edit_are_pinned"
         ]
       }
     },
