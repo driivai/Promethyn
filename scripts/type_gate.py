@@ -103,7 +103,13 @@ RECEIPT = REPO / "type-gate-receipt.json"
 #: ``tests/conformance/test_receipt_classification.py`` and
 #: ``scripts/receipt_classification_proofs.py``. Two files, accounted for by
 #: name, measured after the change rather than predicted before it.
-EXPECTED_CHECKED_FILES = 335
+#:
+#: Observed 336 on 2026-09-17 (was 335): ONE file,
+#: ``tests/conformance/test_proof_selectors_exist.py``, added after a renamed
+#: test left a mutation runner naming a selector that no longer existed and the
+#: three-version matrix went red on all three Pythons. The gate refused the
+#: un-repinned count first, which is the behaviour this pin is for.
+EXPECTED_CHECKED_FILES = 336
 
 _SUCCESS = re.compile(
     r"^Success: no issues found in (\d+) source files?$", re.MULTILINE

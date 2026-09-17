@@ -4044,7 +4044,7 @@ deliberately. So nothing hides there today. Nothing refuses if it ever does.
 **Both halves are passing tests**, so this entry cannot go stale silently:
 `test_security_build.py::test_the_shipped_graph_hides_nothing_from_the_traversal`
 (latency) and
-`::test_an_unreachable_component_reads_as_not_applicable_not_as_a_refusal`
+`::test_a_component_the_traversal_cannot_credit_refuses_the_build` (renamed from `test_an_unreachable_component_reads_as_not_applicable_not_as_a_refusal` when F-1's ruling replaced the limit it pinned)
 (the behaviour, over five container shapes). The second asserts what the guard
 DOES; closing this gap must flip it, which is the intended signal.
 
@@ -4122,6 +4122,25 @@ the end of the sprint, when the survivor is one red line in a long log and the
 change that caused it is twenty edits back. The fix is to name the causes apart
 (`component_not_discovered`, `component_unregistered_carrier`), which restored
 the runner to 28 rows all red with no pin relaxed.
+
+**BROADENED THE SAME DAY, by breaking it.** The rule as first written named
+refusal labels. The next thing that went red in CI was not a label: a test was
+RENAMED, and `receipt_classification_proofs.py` went on naming the old string.
+The string still parsed, still read correctly in review, and selected nothing —
+`RuntimeError: baseline invalid: ...: (no summary)`, on all three Pythons, with
+every row before it caught. The runner refusing was right; a mutation that would
+silently not apply is a proof of nothing presented as a proof of safety.
+
+The general rule is therefore about REFERENCES, not labels: **a mutation runner
+names its proof by a string that no compiler and no import checks, so changing
+anything a runner names — a refusal label, a test name, a source line it
+mutates — requires re-running that runner then.** Which runners name what is
+now DERIVED rather than remembered:
+`tests/conformance/test_proof_selectors_exist.py` reads every selector out of
+every `scripts/*_proofs.py` and every test name out of the tree, and refuses a
+selector that does not exist. Verified against the real defect in a
+MutationWorktree: restoring the stale name reddens
+`test_every_selector_a_runner_names_is_a_test_that_exists[receipt_classification_proofs.py]`.
 
 There is no single doctrine file in this repository — the numbered doctrines are
 referenced across this tracker and `docs/live-state-pinning-design.md` but never
