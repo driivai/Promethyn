@@ -29,12 +29,12 @@
   ],
   "steps": {
     "reachability": {
-      "description": "F1/F2 startup obligations, future-root discovery, F3 authoritative readers, and the unreceipted/tampered classification; observed 130 passing cases before pinning",
+      "description": "F1/F2 startup obligations, future-root discovery, F3 authoritative readers, and the unreceipted/tampered classification; observed 156 passing cases before pinning, re-pinned from 130 across the two defects review reported on #123 and #124 (classification 27 -> 53: 11 are the derived per-reader parametrisation, 6 pin G47's decoder boundary, 5 pin that the guard catches the decoder's exception rather than its ValueError base)",
       "counts": {
         "tests.conformance.test_security_build": 57,
         "tests.conformance.test_security_build_inventory": 13,
         "tests.conformance.test_reachability_readers": 33,
-        "tests.conformance.test_receipt_classification": 27
+        "tests.conformance.test_receipt_classification": 53
       },
       "required": {
         "tests.conformance.test_security_build": [
@@ -108,7 +108,18 @@
           "test_the_receipted_tables_exist_and_are_what_the_snapshot_queries",
           "test_sqlite_reports_the_table_each_guarded_reader_reads",
           "test_the_authorizer_still_reports_after_the_statement_cache_is_warm",
-          "test_a_guarded_read_leaves_the_connection_usable"
+          "test_a_guarded_read_leaves_the_connection_usable",
+          "test_a_malformed_row_does_not_crash_the_chain_verifier",
+          "test_a_malformed_row_makes_the_file_verifier_report_not_verifiable",
+          "test_every_guarded_reader_refuses_an_undecodable_row_in_the_typed_vocabulary",
+          "test_the_undecodable_verdict_is_not_checked_rather_than_clean",
+          "test_a_readable_ledger_still_verifies_and_reads",
+          "test_the_two_decoders_are_split_exactly_as_the_limit_says",
+          "test_a_strictly_decoded_hold_column_refuses_and_is_not_verifiable",
+          "test_a_tolerantly_decoded_execution_column_is_silently_none_and_still_valid",
+          "test_a_bad_argument_on_a_clean_ledger_is_not_reported_as_corruption",
+          "test_the_threshold_readers_still_read_a_clean_ledger",
+          "test_a_non_decoding_fault_is_not_reported_as_couldnt_check"
         ]
       }
     },

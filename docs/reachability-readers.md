@@ -49,6 +49,58 @@ the evidence the receipt exists to be. `verify_chain`, `verify_receipts`, and
 `verify_ledger_file` remain diagnostic APIs: they report their scoped verdicts
 rather than presenting an invalid row as authoritative evidence.
 
+**Corrected again after review on #123: that last sentence was not true of a
+ledger whose JSON would not decode, and it is now.** Reported against
+`sqlite_ledger.py` and reproduced before the change. `verify_chain` borrowed
+`_receipt_source()` for its rows, and that snapshot decodes the JSON columns of
+`pending_actions` and `executions` — two tables the hash walk never looks at. A
+single malformed column in either raised `json.JSONDecodeError` straight out of
+`verify_chain`, `verify_ledger_file` and the CLI audit, past the
+`sqlite3.DatabaseError` handler, which does not catch it. The three entry
+points an auditor reaches for on a corrupted ledger were the three that crashed
+on one. Observed after the fix, on a ledger with `pending_actions.action`
+overwritten with `{not json`:
+
+```text
+verify_chain       -> valid          (the chain itself is intact)
+verify_ledger_file -> not_verifiable  ok=False
+all 11 guarded readers -> ExecutionNotAuthorized reason='ledger_rows_unreadable'
+```
+
+Three separate rulings, because they are three separate facts. The chain walk
+reads `audit_chain` **and nothing else** now, so an unrelated table's corruption
+cannot reach its verdict. `verify_receipts` returns `checked=False` — the
+couldn't-check state, which is never `ok` and reports `NOT_VERIFIABLE`; emitting
+no findings instead would have read downstream as a clean ledger, doctrine #8.
+A guarded read refuses in the closed vocabulary rather than handing back a
+decoder error, under a reason minted for it: `ledger_rows_unreadable` is not
+`chain_did_not_verify`, because the hash walk is not what failed. The reader
+parametrisation is DERIVED from `reader_methods`, not a hand-listed five, so
+"every guarded reader" is a membership rather than a sentence.
+
+**Corrected once more, on #124's review of that fix.** Both handlers catch
+`json.JSONDecodeError`, not its base `ValueError`. Catching the base also
+collected faults that were not decoding: on a clean ledger, a non-numeric
+argument to `executions_below_confidence` or `authoritative_pass_below` — both
+call `float(threshold)` — came back as `ledger_rows_unreadable`, storage
+corruption reported for a caller's error. `docs/OPEN-GAPS.md` G48 carries the
+measurement, and five cases pin it in both directions.
+
+**The limit, measured rather than assumed, because the sentence above is not
+true of every JSON column.** This is the READ path, and only its STRICTLY
+decoded half. `_pending_row` and `_attempt_row` decode with `json.loads`, so a
+malformed column there reaches the guard; `_execution_row` decodes `judgment`
+and `authorization` with `_load_json`, which is best-effort by construction and
+returns `None` on malformed input. Neither of those two is an `OutcomeRecord`
+field, so the receipt does not cover them either, and the corruption is
+invisible on both channels at once — a rewrite presented as an absence.
+Observed: `executions.judgment` overwritten with `{not json` returns `None`
+from `executions()` and `verify_ledger_file` reports `valid`, `ok=True`.
+`docs/OPEN-GAPS.md` G47 carries it with the reason it is not fixed here, and
+two parametrised tests hold the covered and uncovered sides apart so the limit
+is behaviour rather than prose. A malformed column is still a corrupted ledger
+and no repair is offered, exactly as for an unreceipted row.
+
 ## What changed
 
 Before this change, `PendingActionService._compare_now` returned `matched`

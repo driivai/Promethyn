@@ -525,6 +525,24 @@
         "test_a_scalar_projection_cannot_escape_the_unreceipted_refusal"
       ],
       "property": "the three refusals are findings rather than a floor: on a ledger whose rows all have their receipts the same reader returns the row and the verdict is VALID, so 'refused' in the negatives above is caused by the unreceipted or rewritten row and not by the guard refusing everything it is asked"
+    },
+    {
+      "module": "tests/conformance/test_receipt_classification.py",
+      "positive": "test_a_readable_ledger_still_verifies_and_reads",
+      "negatives": [
+        "test_a_malformed_row_makes_the_file_verifier_report_not_verifiable",
+        "test_every_guarded_reader_refuses_an_undecodable_row_in_the_typed_vocabulary",
+        "test_the_undecodable_verdict_is_not_checked_rather_than_clean"
+      ],
+      "property": "the undecodable-ledger refusals are caused by the malformed JSON column and not by the guard refusing every ledger: without the corruption the same verify_chain, the same reader and the same verify_receipts return their ordinary answers and verify_ledger_file is ok"
+    },
+    {
+      "module": "tests/conformance/test_receipt_classification.py",
+      "positive": "test_the_threshold_readers_still_read_a_clean_ledger",
+      "negatives": [
+        "test_a_bad_argument_on_a_clean_ledger_is_not_reported_as_corruption"
+      ],
+      "property": "narrowing the guard to the decoder's own exception did not stop the two threshold readers working: on the same clean ledger a real threshold still returns its rows, so the ValueError the negative observes is the caller's bad argument surfacing as itself rather than the readers refusing everything they are asked"
     }
   ]
 }

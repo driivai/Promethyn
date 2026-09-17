@@ -2352,6 +2352,9 @@ question is answered before diligence rather than during it.
 
 ### THE BOUNDED SET — twenty-nine carriers, ALL twenty-nine read back
 
+(Three more have been observed since, outside this table: carriers 30, 31 and 32
+are recorded in prose below, and the running total is stated there.)
+
 | PR | kind | id |
 |---|---|---|
 | #106 | review reply | `4011093860` |
@@ -2534,6 +2537,39 @@ tree whose body was already correct, and re-running the jobs replays the same
 stale payload. **Only a push re-triggers `ci.yml` with the corrected body.**
 So the footer does not cost one refusal, it costs a matrix run and a commit
 whose only purpose is to move the head — this one.
+
+**CARRIER 31, observed opening #124. 11 of 11.** Identical shape and identical
+cost, one pull request later, which is what a rate of 11 of 11 means in
+practice: the footer is not an occasional slip to be watched for, it is the
+channel's behaviour, and every pull request opened through it pays the same
+matrix run. The only thing this occurrence changes is that the second commit it
+forces was not empty — the proof counts below were held back for it — so the
+cost this time was the matrix run alone.
+
+**CARRIER 32 is a REVIEW REPLY, `4033141749` on #123, and it stands.** The
+answer to the P2 that G45 records. It carries the footer for the same reason
+the bodies do, and unlike them it cannot be cleaned: the channel offers no edit
+for a review comment, only `add_reply_to_pull_request_comment`, so a correction
+would be a second comment beside the first rather than a fix to it. That is the
+asymmetry this entry has claimed since it was written, now observed once more on
+the reply that answers a real finding.
+
+**CARRIERS 33 to 35, all in the same working session**, which is the point
+worth recording rather than the individual ids: a pull-request comment
+(`5708938608`, reporting the matrix -- footer stripped afterwards, so it is a
+carrier that existed rather than one that stands), and two review replies that
+DO stand, `4036299792` on #123 withdrawing an over-wide claim and `4036455730`
+on #124 answering a second reported defect. Three in one session, on three
+different surfaces, none of them avoidable by care: the two that stand are the
+two the channel offers no edit for.
+
+Counting the bounded table's composition (25 review replies, 3 pull-request
+bodies, 1 pull-request comment) plus carriers 30 to 35, the running total is
+**35: 28 review replies, 5 bodies, 2 comments.** Stated with its composition
+because a total alone is the shape G25 refuses, and recounted from the ids
+rather than incremented: the previous total here was carried forward by
+addition once and came out one short, which is what an unrecounted running
+total does.
 
 ---
 
@@ -4062,3 +4098,203 @@ change.
 set of mechanisms that carry a given property, so the next guard added over an
 already-proved fact will disarm its proof the same way, and only a red pin or
 a reviewer will say so. Deriving that set is not attempted here.
+
+## G45 — the three diagnostics an auditor reaches for on a corrupted ledger were the three that crashed on one — CLOSED 2026-09-17 by review of #123
+
+**Reported by independent review of #123's opening head `2d23871`, against
+`src/prometheus_protocol/ledger/sqlite_ledger.py`, and reproduced before any
+fix.** It is a real defect and it was introduced by #122's own reader work.
+
+`verify_chain` took its rows from `_receipt_source()`, the snapshot the receipt
+check uses. That snapshot decodes the JSON columns of `pending_actions` and
+`executions` — two tables the hash walk never looks at — because it has to
+compare those rows against their receipts. A single malformed column in either
+therefore raised `json.JSONDecodeError` out of `verify_chain`. The surrounding
+handler catches `sqlite3.DatabaseError`, which a decoder error is not, so it
+escaped `verify_chain`, `verify_ledger_file` and the CLI audit alike.
+
+The snapshot was borrowed for a reason worth recording: `chained_events()`
+became a guarded reader in #122, so calling it from the chain verifier would
+recurse into a full authoritative read. Chain rows need no decoding, so the
+verifier now reads `audit_chain` directly and nothing else.
+
+Observed before, on a ledger with `pending_actions.action` overwritten with
+`{not json`: `json.decoder.JSONDecodeError` from all three. Observed after:
+
+```text
+verify_chain           -> valid           (the chain itself is intact)
+verify_receipts        -> checked=False, findings=(), ok=False, not_verifiable
+verify_ledger_file     -> not_verifiable  ok=False
+all 11 guarded readers -> ExecutionNotAuthorized reason='ledger_rows_unreadable'
+```
+
+Three separate verdicts because they are three separate facts, and the middle
+one is doctrine #8: a couldn't-check that emitted no findings would have read
+downstream as a clean ledger. `ledger_rows_unreadable` was minted rather than
+reusing `chain_did_not_verify`, because the hash walk is not what failed and a
+refusal naming the wrong cause is the shape this tree keeps finding.
+
+**What the instruments missed, stated.** The reachability corpus had no
+corrupted-storage fixture at all: every ledger it built was one this code had
+written. No mutation could have caught this, because no proof supplied an input
+the mutation would have changed the handling of. Six mutation rows now cover
+the mechanism in both attack classes, and the per-reader parametrisation is
+DERIVED from `reader_methods` rather than hand-listed — the first shape of it
+named five readers, which is exactly the "a name is not a membership" failure
+(G25) in a test written to fix a different one.
+
+**Observed on the fix**, read off runs rather than predicted: reachability
+proofs `156 passed`, zero skips, the classification module re-pinned `27 -> 53`
+of which 11 are the derived per-reader parametrisation, 6 pin G47's boundary
+and 5 pin G48's; receipt-classification
+mutations `33 rows, 33 first-order red, zero survivors` (was 23), `10 of 33`
+still red under second-order assertion deletion; record-revert mutations
+unchanged at `7 / 18`, which matters because their companion edits anchor into
+`_authoritative_read`; type gate `335 files`, unchanged; full suite
+`3010 passed, 23 skipped` against base `81481c7` at `2982 passed, 23 skipped`,
+the +28 being 26 classification cases and two in `test_positive_control_set`,
+which collects one per registered control.
+
+**Not claimed:** that corrupted-storage inputs are now covered generally, or
+even that every JSON column is covered. One column shape, on the read path, and
+only where the projector decodes STRICTLY -- `_execution_row` decodes
+best-effort and swallows the same corruption into `None`. See G47 for that
+boundary, measured and pinned, and G46 for the unreceipted-column family it
+belongs to.
+
+## G46 — an unreceipted column survives tampering with the ledger still `valid` — RECORDED, NOT FIXED HERE
+
+Measured 2026-09-17 while scoping G45, on a ledger with one recorded hold:
+
+| column overwritten | result |
+|---|---|
+| `pending_actions.confidence` = `'not a number'` | `pending_actions()` **returned the row**; `verify_ledger_file` -> `valid` |
+| `pending_actions.id` = NULL | refused by SQLite: `IntegrityError: datatype mismatch` |
+| `pending_actions.created_at` = NULL | refused by SQLite: `NOT NULL constraint failed` |
+| `pending_actions.status` = NULL | refused by SQLite: `NOT NULL constraint failed` |
+
+Three of the four are held by the schema. The fourth is not, and it is the one
+that matters: `confidence` is what `executions_below_confidence` and
+`authoritative_pass_below` threshold on, so editing it changes which rows a
+routing query returns while every verdict stays `valid`.
+
+This is inside the limit `docs/reachability-readers.md` already states — the
+receipt covers the fields of `DecisionRecord` and `OutcomeRecord`, and
+`confidence` is not among them — so it is a gap in the coverage, not a
+contradiction of a claim. It is recorded rather than fixed because widening the
+receipted field set is a change to what is chained, which belongs in its own
+change with its own migration question, not in a review response.
+
+**Not measured:** the other tables' unreceipted columns, and whether any other
+unreceipted column feeds a routing or threshold decision.
+
+## G47 — a malformed execution column is normalised to `None` and nothing says so — RECORDED, NOT FIXED HERE
+
+**Found by probing the boundary of G45's own fix rather than by trusting it**,
+which is the only reason it is here: the claim "a malformed JSON column
+refuses" was about to be written without checking whether it was true of every
+JSON column. It is not.
+
+The two receipted tables do not decode alike. Derived from the projectors'
+source by `test_the_two_decoders_are_split_exactly_as_the_limit_says`:
+
+| projector | column | decoder |
+|---|---|---|
+| `_pending_row` | `action`, `judgment`, `authorization` | `json.loads` — strict |
+| `_attempt_row` | `skills_used`, `evidence` | `json.loads` — strict |
+| `_execution_row` | `judgment`, `authorization` | `_load_json` — best-effort |
+
+`_load_json` says what it is in its own docstring: "returns ``None`` on empty
+or malformed input". Measured end to end, on a ledger holding one hold and one
+execution, each column overwritten with `{not json`:
+
+```text
+pending_actions.action         reader -> refused 'ledger_rows_unreadable'   file -> not_verifiable
+pending_actions.judgment       reader -> refused 'ledger_rows_unreadable'   file -> not_verifiable
+pending_actions.authorization  reader -> refused 'ledger_rows_unreadable'   file -> not_verifiable
+audit_chain.payload            verify_chain -> not_verifiable               file -> not_verifiable
+executions.judgment            reader -> RETURNED None                      file -> valid ok=True
+executions.authorization       reader -> RETURNED None                      file -> valid ok=True
+```
+
+**Both channels miss it at once,** which is what makes it worth an entry rather
+than a footnote. The read path turns the corruption into `None`, which every
+caller reads as "this row had no judgment" — a rewrite presented as an absence,
+doctrine #8 on a path G45 does not touch. And the receipt does not catch it
+either: neither column is a field of `OutcomeRecord`, so the chained outcome
+receipt never compares them. Same family as G46, one table over.
+
+**Why it is not fixed here.** Making `_execution_row` strict would refuse every
+read of any ledger that ever legitimately held a non-JSON string in those
+columns. Every writer in the tree today serialises with `json.dumps`
+(`sqlite_ledger.py` lines 711-712 and 939-942), so no current writer can
+produce one — but whether a HISTORICAL writer did is unmeasured, and refusing a
+pre-upgrade shape on an unmeasured assumption is exactly what made F-3 wrong
+three weeks ago. The archaeology belongs in its own change, with the same
+provenance discipline `test_the_fixture_is_the_pre_receipt_shape` applies.
+
+**Pinned as behaviour, not prose.** Two parametrised tests hold the covered and
+uncovered sides apart, and the decoder split is derived from source rather than
+listed. The day someone makes the decode strict, the limit test reddens and has
+to be withdrawn deliberately — with the history question answered — instead of
+the surrounding claim quietly becoming true.
+
+**Not measured:** whether any shipped ledger contains such a row; the same
+question for `promotions` and `workflow_steps`, whose projectors decode nothing
+and so are outside this table entirely.
+
+## G48 — the fix for G45 caught the decoder's BASE class and relabelled unrelated faults — CLOSED 2026-09-17 by review of #124
+
+**Reported by independent review of #124 against `9a0019b`, the commit that
+closed G45, and reproduced before any change.** Recorded rather than quietly
+fixed because the shape is the one this tree keeps finding, and this time it
+arrived inside the fix written to stop it.
+
+`_authoritative_read` wrapped the reader call and the snapshot in
+`except ValueError`. `json.JSONDecodeError` IS a `ValueError`, so the guard did
+catch every corruption it was written for — and also every unrelated
+`ValueError` the reader itself raised. `executions_below_confidence` and
+`authoritative_pass_below` both call `float(threshold)`. Observed on a
+PERFECTLY CLEAN ledger, `verify_chain() == valid`, nothing corrupt anywhere:
+
+```text
+executions_below_confidence("not a number")  -> ExecutionNotAuthorized reason='ledger_rows_unreadable'
+authoritative_pass_below("not a number")     -> ExecutionNotAuthorized reason='ledger_rows_unreadable'
+```
+
+A caller's bad argument, reported as storage corruption, sending the caller
+down the corruption path. After narrowing both handlers to the decoder's own
+exception:
+
+```text
+executions_below_confidence("not a number")  -> ValueError (its own)
+authoritative_pass_below("not a number")     -> ValueError (its own)
+executions_below_confidence(0.5)             -> []            (positive control)
+pending_actions() on a malformed column      -> refused 'ledger_rows_unreadable'
+verify_ledger_file on the same               -> not_verifiable
+```
+
+**Why the base class was chosen in the first place, stated.** The comment at
+that handler argued `ValueError` was the NARROW choice — narrow against
+`except Exception`, which would have turned a real defect in the projection
+into a polite refusal. That reasoning was right about the direction and wrong
+about the floor: the decoder raises an exception of its own, and nothing else
+raises it, so there was a narrower option the comment did not consider.
+"Narrower than the obviously wrong one" is not the same as narrow.
+
+**The same widening was present in `verify_receipts`** and is narrowed with it.
+There it would turn an undiagnosed fault into `checked=False` — the
+couldn't-check verdict awarded for something nobody checked, doctrine #8
+wearing the fix's clothes.
+
+**Pinned in both directions.** Five cases: the two threshold readers refusing
+to relabel a bad argument (asserting the raised error is NOT an
+`ExecutionNotAuthorized`, since that class IS a `ValueError` and a bare
+`pytest.raises(ValueError)` would pass on the defect itself), the two positive
+controls that they still read a clean ledger, and one for `verify_receipts`.
+Two mutation rows widen each handler back to `ValueError` and must redden.
+
+**Not covered, measured rather than assumed:** a NULL JSON column would raise
+`TypeError`, not `JSONDecodeError`, and is not caught. It is unreachable
+through the schema — every JSON column on the hold is `NOT NULL`, and SQLite
+refuses the UPDATE with `IntegrityError: NOT NULL constraint failed`.

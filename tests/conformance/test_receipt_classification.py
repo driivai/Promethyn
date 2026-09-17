@@ -38,6 +38,7 @@ import pytest
 
 from prometheus_protocol.core.config import Config
 from prometheus_protocol.ledger import receipts as receipts_module
+from prometheus_protocol.ledger.audit_chain import NOT_VERIFIABLE
 from prometheus_protocol.ledger.receipts import (
     EXECUTION_TABLE,
     HOLD_TABLE,
@@ -572,3 +573,348 @@ def test_a_guarded_read_leaves_the_connection_usable(tmp_path):
     assert len(ledger.executions()) == 1      # and a second guarded read
     assert ledger.verify_chain().ok           # and an unguarded diagnostic
     ledger.close()
+
+
+# ---------------------------------------------------------------------------
+# A corrupted ledger must be DIAGNOSABLE, not a crash (reported on #123)
+# ---------------------------------------------------------------------------
+
+
+def _corrupt_a_json_column(ledger: SqliteLedger) -> None:
+    """One row's JSON column is no longer JSON — a corrupted or tampered file."""
+
+    ledger.record_pending_action(
+        subject_id="s", risk_class="low", reason="r", verdict="pass",
+        confidence=0.9, action={"kind": "noop"}, judgment={"verdict": "pass"},
+        created_at="2026-09-16T00:00:00Z",
+    )
+    ledger._conn.execute(f"UPDATE {HOLD_TABLE} SET action = ?", ("{not json",))
+    ledger._conn.commit()
+
+
+def test_a_malformed_row_does_not_crash_the_chain_verifier(tmp_path):
+    """The verdict is the product. ``verify_chain`` walks ``audit_chain`` and
+    nothing else, so a malformed column in an unrelated table cannot reach it.
+
+    Before the fix this raised ``json.JSONDecodeError`` out of ``verify_chain``:
+    the snapshot it borrowed decoded ``pending_actions`` and ``executions`` too,
+    and the surrounding ``sqlite3.DatabaseError`` handler does not catch that.
+    """
+
+    ledger = SqliteLedger(tmp_path / "corrupt.db")
+    _corrupt_a_json_column(ledger)
+    assert ledger.verify_chain().status == "valid"
+    ledger.close()
+
+
+def test_a_malformed_row_makes_the_file_verifier_report_not_verifiable(tmp_path):
+    """``verify_ledger_file`` is the documented programmatic entry point and the
+    one the CLI audit uses. On a ledger it cannot read it must say so."""
+
+    from prometheus_protocol.ledger.sqlite_ledger import verify_ledger_file
+
+    ledger = SqliteLedger(tmp_path / "corrupt.db")
+    _corrupt_a_json_column(ledger)
+    ledger.close()
+    verdict = verify_ledger_file(tmp_path / "corrupt.db")
+    assert verdict.status == NOT_VERIFIABLE
+    assert verdict.ok is False, "couldn't-read has never been ok and is not now"
+
+
+def _reader_names() -> list[str]:
+    """EVERY guarded reader, derived, because "every" is a membership.
+
+    A hand-listed five was the first shape of this parametrisation and it was
+    wrong on its own terms: it named readers rather than enumerating them, so a
+    reader added later would have been covered by the sentence and not by the
+    proof. ``reader_methods`` is the same derivation the authorizer-scope pin
+    above uses, so the two cannot disagree about what a reader is.
+    """
+
+    from prometheus_protocol.ledger.readers import reader_methods
+
+    return sorted(reader_methods(SqliteLedger))
+
+
+@pytest.mark.parametrize("reader", _reader_names())
+def test_every_guarded_reader_refuses_an_undecodable_row_in_the_typed_vocabulary(
+    tmp_path, reader
+):
+    """Not a raw decoder error. The guard exists to refuse in a closed
+    vocabulary, and both decoding points are covered — the reader's own
+    projection and the snapshot, which decodes all three tables whatever the
+    reader touched, so a reader of an unrelated table refuses too."""
+
+    arguments = {"pending_id": 1, "threshold": 0.5, "workflow_id": "w"}
+    ledger = SqliteLedger(tmp_path / "corrupt.db")
+    _corrupt_a_json_column(ledger)
+    descriptor = inspect.getattr_static(SqliteLedger, reader)
+    function = descriptor.fget if isinstance(descriptor, property) else descriptor
+    inner = getattr(function, "__wrapped__", function)
+    assert inner is not function, f"{reader} is not wrapped by the read guard"
+    supplied = {
+        parameter: arguments[parameter]
+        for parameter, spec in inspect.signature(inner).parameters.items()
+        if parameter != "self" and spec.default is inspect.Parameter.empty
+    }
+    with pytest.raises(ExecutionNotAuthorized) as refused:
+        getattr(ledger, reader)(**supplied)
+    assert refused.value.reason == "ledger_rows_unreadable"
+    assert refused.value.reason in EXECUTION_REFUSAL_REASONS
+    ledger.close()
+
+
+def test_the_undecodable_verdict_is_not_checked_rather_than_clean(tmp_path):
+    """``checked=False`` is the couldn't-check state, and it is never ``ok``.
+    Reporting no findings would read downstream as a clean ledger."""
+
+    ledger = SqliteLedger(tmp_path / "corrupt.db")
+    _corrupt_a_json_column(ledger)
+    verification = verify_receipts(ledger)
+    assert verification.checked is False
+    assert verification.findings == ()
+    assert verification.ok is False, "no findings is not the same as clean"
+    assert verification.status == NOT_VERIFIABLE
+    ledger.close()
+
+
+def test_a_readable_ledger_still_verifies_and_reads(tmp_path):
+    """The positive control for this section: without the corruption the same
+    calls return their ordinary answers, so the refusals above are caused by the
+    malformed column and not by the guard refusing everything."""
+
+    from prometheus_protocol.ledger.sqlite_ledger import verify_ledger_file
+
+    ledger = SqliteLedger(tmp_path / "clean.db")
+    ledger.record_pending_action(
+        subject_id="s", risk_class="low", reason="r", verdict="pass",
+        confidence=0.9, action={"kind": "noop"}, judgment={"verdict": "pass"},
+        created_at="2026-09-16T00:00:00Z",
+    )
+    assert ledger.verify_chain().status == "valid"
+    assert len(ledger.pending_actions()) == 1
+    assert verify_receipts(ledger).checked is True
+    ledger.close()
+    assert verify_ledger_file(tmp_path / "clean.db").ok is True
+
+
+# ---------------------------------------------------------------------------
+# 8. the boundary of the section above, measured rather than assumed
+# ---------------------------------------------------------------------------
+#
+# THE CLAIM "a malformed JSON column refuses" IS NOT TRUE OF EVERY JSON COLUMN,
+# and saying it without this section would be the shape this tree keeps finding.
+# The two receipted tables do not decode alike:
+#
+#     pending_actions.action/.judgment/.authorization  json.loads   -> refuses
+#     executions.judgment/.authorization               _load_json   -> None
+#
+# ``_load_json`` is best-effort by construction — its own docstring says so —
+# so a malformed column there is normalised into ``None``, which every caller
+# reads as "this row had no judgment". Neither column is a field of
+# ``OutcomeRecord``, so the receipt does not cover them either: the corruption
+# is invisible on both channels at once. Recorded as docs/OPEN-GAPS.md G47 and
+# NOT fixed here, because making the decode strict would refuse every read of
+# any ledger that ever legitimately held a non-JSON string in those columns,
+# and whether one exists is a history question of exactly the kind that made
+# F-3 wrong. That measurement belongs in its own change.
+
+
+def _decode_sites(projector: str) -> dict[str, str]:
+    """``{column: 'strict'|'tolerant'}``, read off the projector's own source.
+
+    DERIVED, not hand-listed: a projector that switches a column from one
+    decoder to the other reddens the pin below rather than quietly moving the
+    boundary this section states.
+    """
+
+    import textwrap
+
+    source = textwrap.dedent(inspect.getsource(getattr(SqliteLedger, projector)))
+    sites: dict[str, str] = {}
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Call):
+            continue
+        function = node.value.func
+        decoder = None
+        if isinstance(function, ast.Attribute) and function.attr == "loads":
+            decoder = "strict"
+        elif isinstance(function, ast.Name) and function.id == "_load_json":
+            decoder = "tolerant"
+        if decoder is None:
+            continue
+        for target in node.targets:
+            if not isinstance(target, ast.Subscript):
+                continue
+            index = target.slice
+            if not isinstance(index, ast.Constant):
+                continue
+            # Statement form, not a ternary: `ast.Constant.value` is every
+            # literal type, and the repository's type gate refuses an
+            # `isinstance` in expression position on a union.
+            column = index.value
+            if not isinstance(column, str):
+                continue
+            sites[column] = decoder
+    return sites
+
+
+def test_the_two_decoders_are_split_exactly_as_the_limit_says():
+    """Exact, per projector. A count would not distinguish these."""
+
+    assert _decode_sites("_pending_row") == {
+        "action": "strict", "judgment": "strict", "authorization": "strict",
+    }
+    assert _decode_sites("_execution_row") == {
+        "judgment": "tolerant", "authorization": "tolerant",
+    }
+    assert _decode_sites("_attempt_row") == {
+        "skills_used": "strict", "evidence": "strict",
+    }
+
+
+def _seeded(path: Path) -> SqliteLedger:
+    ledger = SqliteLedger(path)
+    ledger.record_pending_action(
+        subject_id="s", risk_class="low", reason="r", verdict="pass",
+        confidence=0.9, action={"kind": "noop"}, judgment={"verdict": "pass"},
+        created_at="2026-09-16T00:00:00Z",
+    )
+    ledger.record_execution(
+        subject_id="s", source="human", executed=True, refused=False,
+        sandbox_name="namespace", exit_status=0, detail="d",
+        created_at="2026-09-16T00:00:01Z", judgment={"verdict": "pass"},
+        authorization={"record_version": 2, "requirements": ["a"]},
+    )
+    return ledger
+
+
+@pytest.mark.parametrize("column", ["action", "judgment", "authorization"])
+def test_a_strictly_decoded_hold_column_refuses_and_is_not_verifiable(tmp_path, column):
+    """The covered side, on all three of the hold's JSON columns rather than
+    the one the reproduction happened to use."""
+
+    from prometheus_protocol.ledger.sqlite_ledger import verify_ledger_file
+
+    ledger = _seeded(tmp_path / "strict.db")
+    ledger._conn.execute(f"UPDATE {HOLD_TABLE} SET {column} = ?", ("{not json",))
+    ledger._conn.commit()
+    with pytest.raises(ExecutionNotAuthorized) as refused:
+        ledger.pending_actions()
+    assert refused.value.reason == "ledger_rows_unreadable"
+    ledger.close()
+    assert verify_ledger_file(tmp_path / "strict.db").status == NOT_VERIFIABLE
+
+
+@pytest.mark.parametrize("column", ["judgment", "authorization"])
+def test_a_tolerantly_decoded_execution_column_is_silently_none_and_still_valid(
+    tmp_path, column
+):
+    """THE LIMIT, pinned as behaviour so it cannot rot into prose (G47).
+
+    This is not the desired behaviour. It is the CURRENT behaviour, and pinning
+    it means the day someone makes the decode strict this test reddens and the
+    limit has to be withdrawn deliberately, with the history question answered,
+    rather than the section above quietly becoming true.
+    """
+
+    from prometheus_protocol.ledger.sqlite_ledger import verify_ledger_file
+
+    ledger = _seeded(tmp_path / "tolerant.db")
+    ledger._conn.execute(f"UPDATE {EXECUTION_TABLE} SET {column} = ?", ("{not json",))
+    ledger._conn.commit()
+    rows = ledger.executions()
+    assert rows[0][column] is None, "the malformed column reads as an absent one"
+    ledger.close()
+    verdict = verify_ledger_file(tmp_path / "tolerant.db")
+    assert verdict.status == "valid" and verdict.ok is True, (
+        "measured: neither column is an OutcomeRecord field, so the receipt "
+        "does not cover them and the corruption is invisible on both channels"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 9. the guard catches the DECODER's error, not every ValueError
+# ---------------------------------------------------------------------------
+#
+# Reported on #124 against the commit that fixed the crash above, and
+# reproduced before this section existed. `_authoritative_read` caught
+# `ValueError` around the reader call, and `json.JSONDecodeError` is a
+# `ValueError` -- so the handler also collected faults that had nothing to do
+# with decoding. The two threshold readers call `float(threshold)`, so on a
+# PERFECTLY CLEAN ledger a non-numeric argument came back as
+# `ExecutionNotAuthorized(reason='ledger_rows_unreadable')`: storage corruption
+# reported for a bad argument, sending the caller down the corruption path.
+#
+# It is the same refusal-names-the-wrong-cause shape the fix above was written
+# about, introduced by that fix. Both handlers now catch the decoder's own
+# exception, which nothing else raises.
+#
+# A NULL column would raise `TypeError` rather than `JSONDecodeError` and is
+# NOT covered here -- measured unreachable instead: every JSON column on the
+# hold is NOT NULL, and SQLite refuses the UPDATE with
+# `IntegrityError: NOT NULL constraint failed`.
+
+THRESHOLD_READERS = ("executions_below_confidence", "authoritative_pass_below")
+
+
+@pytest.mark.parametrize("reader", THRESHOLD_READERS)
+def test_a_bad_argument_on_a_clean_ledger_is_not_reported_as_corruption(tmp_path, reader):
+    """The ledger is clean. Nothing about this is a storage fault."""
+
+    ledger = SqliteLedger(tmp_path / "clean.db")
+    ledger.record_pending_action(
+        subject_id="s", risk_class="low", reason="r", verdict="pass",
+        confidence=0.9, action={"kind": "noop"}, judgment={"verdict": "pass"},
+        created_at="2026-09-16T00:00:00Z",
+    )
+    assert ledger.verify_chain().status == "valid", "precondition: nothing is corrupt"
+    with pytest.raises(ValueError) as raised:
+        getattr(ledger, reader)("not a number")
+    # ExecutionNotAuthorized IS a ValueError, so `pytest.raises(ValueError)`
+    # alone would pass on exactly the defect this pins. The assertion is that
+    # the argument fault surfaces as ITSELF.
+    assert not isinstance(raised.value, ExecutionNotAuthorized), (
+        "a non-numeric threshold is a caller's error, not evidence that the "
+        "stored rows could not be decoded"
+    )
+    ledger.close()
+
+
+@pytest.mark.parametrize("reader", THRESHOLD_READERS)
+def test_the_threshold_readers_still_read_a_clean_ledger(tmp_path, reader):
+    """The positive control: the narrowing did not stop them working."""
+
+    ledger = SqliteLedger(tmp_path / "clean.db")
+    ledger.record_pending_action(
+        subject_id="s", risk_class="low", reason="r", verdict="pass",
+        confidence=0.9, action={"kind": "noop"}, judgment={"verdict": "pass"},
+        created_at="2026-09-16T00:00:00Z",
+    )
+    assert getattr(ledger, reader)(0.5) == []
+    ledger.close()
+
+
+def test_a_non_decoding_fault_is_not_reported_as_couldnt_check():
+    """The same narrowing in ``verify_receipts``, pinned the same way.
+
+    A snapshot source that fails for a reason other than decoding must not come
+    back as ``checked=False``: that is the couldn't-check verdict, and reporting
+    it for a fault nobody diagnosed is doctrine #8 wearing the fix's clothes.
+    """
+
+    from typing import cast
+
+    from prometheus_protocol.core.interfaces import Ledger
+
+    class FailsForAnotherReason:
+        def _receipt_source(self) -> "FailsForAnotherReason":
+            return self
+
+        def chained_events(self) -> list[dict]:
+            raise ValueError("this is not a decoding fault")
+
+    with pytest.raises(ValueError) as raised:
+        verify_receipts(cast(Ledger, FailsForAnotherReason()))
+    assert "not a decoding fault" in str(raised.value)
+    assert not isinstance(raised.value, ExecutionNotAuthorized)

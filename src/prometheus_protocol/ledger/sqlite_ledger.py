@@ -331,6 +331,8 @@ class SqliteLedger(Ledger):
         # Read the returned values, the tables SQLite says the read touched,
         # and their authority, in one snapshot. Checking first and re-reading
         # afterwards would introduce a new race.
+        from prometheus_protocol.policy.execution import ExecutionNotAuthorized
+
         self._conn.execute("SAVEPOINT authoritative_read")
         touched: set[str] = set()
 
@@ -358,10 +360,32 @@ class SqliteLedger(Ledger):
                 # permissive default on every version by the same route.
                 self._conn.set_authorizer(_ALLOW_ALL)
             snapshot = self._receipt_source()
+        except json.JSONDecodeError as exc:
+            # BOTH decoding points, because either can hit a malformed JSON
+            # column in a corrupted or tampered ledger: the reader decodes the
+            # rows it projects, and the snapshot decodes all three tables
+            # whatever the reader touched. A guarded read that exists to refuse
+            # in a typed vocabulary must not hand back a raw decoder error.
+            #
+            # THE DECODER'S OWN EXCEPTION, NOT ITS BASE `ValueError`. Reported
+            # on #124 and reproduced: `executions_below_confidence` and
+            # `authoritative_pass_below` call `float(threshold)`, so on a
+            # PERFECTLY CLEAN ledger a non-numeric argument raised `ValueError`
+            # inside the reader and this handler relabelled it "the stored rows
+            # could not be decoded" -- storage corruption reported for a bad
+            # argument, and callers sent down the corruption path. That is the
+            # refusal-names-the-wrong-cause shape this module keeps finding,
+            # introduced here by the commit that fixed the previous one. Any
+            # future reader that legitimately raises `ValueError` had the same
+            # problem. `JSONDecodeError` is raised by the decoder and nothing
+            # else, so it cannot collect an unrelated fault.
+            raise ExecutionNotAuthorized(
+                "authoritative ledger read refused: the stored rows could not "
+                "be decoded",
+                reason="ledger_rows_unreadable",
+            ) from exc
         finally:
             self._conn.execute("RELEASE SAVEPOINT authoritative_read")
-        from prometheus_protocol.policy.execution import ExecutionNotAuthorized
-
         expected = None
         if self._tip_anchor is not None:
             try:
@@ -377,6 +401,15 @@ class SqliteLedger(Ledger):
                 "authoritative ledger read refused: chain did not verify",
                 reason="chain_did_not_verify",
             )
+        # ``verify_receipts`` is handed the SNAPSHOT, whose ``_receipt_source``
+        # returns itself and whose ``chained_events`` returns a stored list, so
+        # its couldn't-decode branch cannot be entered from here: measured,
+        # ``checked`` is True even for a snapshot built entirely of malformed
+        # strings. Guarding on it again below would be an unreachable branch
+        # reading as protection that never fires. The undecodable case is
+        # refused ABOVE instead, where the decoding actually happens -- the
+        # reader's own projection and ``_receipt_source`` -- and it is refused
+        # before this line is reached.
         receipts = verify_receipts(snapshot)
         # A REWRITE CONDEMNS THE LEDGER. A row that disagrees with its receipt,
         # or a receipt whose row is gone, is not a local fact: it says this
@@ -1286,7 +1319,24 @@ class SqliteLedger(Ledger):
                     f"the configured tip anchor could not be read: {exc}",
                 )
         try:
-            rows = self._receipt_source().chained_events()
+            # READ THE TABLE THIS VERIFIES, AND NOTHING ELSE. This used to go
+            # through ``_receipt_source()``, which also decodes the JSON columns
+            # of ``pending_actions`` and ``executions`` -- rows this walk does
+            # not look at. A malformed column in one of those raised
+            # ``json.JSONDecodeError`` straight out of the verifier, which the
+            # ``sqlite3.DatabaseError`` handler below does not catch, so
+            # ``verify_chain``, ``verify_ledger_file`` and the CLI audit
+            # CRASHED on exactly the corrupted ledger they exist to diagnose
+            # instead of returning NOT_VERIFIABLE. Reported on #123 and
+            # reproduced before this change.
+            #
+            # ``chained_events()`` itself is a guarded reader now, and calling
+            # it from this diagnostic would recurse into a full authoritative
+            # read -- which is why the snapshot was borrowed in the first place.
+            # The chain rows need no decoding, so read them directly.
+            rows = [dict(row) for row in self._conn.execute(
+                "SELECT * FROM audit_chain ORDER BY id"
+            ).fetchall()]
         except sqlite3.DatabaseError as exc:
             return ChainVerification(
                 NOT_VERIFIABLE,
