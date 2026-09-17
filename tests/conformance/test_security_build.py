@@ -16,6 +16,8 @@ from prometheus_protocol.sandbox.namespace import NamespaceSandbox
 from prometheus_protocol.chokepoint.signer import LocalHmacSigner
 from prometheus_protocol.runtime.security_build import (
     APPLIED,
+    COMPONENT_NOT_DISCOVERED,
+    COMPONENT_UNREGISTERED_CARRIER,
     DEFAULT_NOT_APPLICABLE,
     NOT_REQUESTED,
     REPORT_TOKENS,
@@ -571,15 +573,38 @@ def test_the_shipped_graph_hides_nothing_from_the_traversal(build_config, root):
     assert missed == {"prometheus_protocol.core.config.Config"}
 
 
-@pytest.mark.parametrize("container", ["set", "frozenset", "dict_key", "namespace", "closure"])
-def test_an_unreachable_component_reads_as_not_applicable_not_as_a_refusal(build_config, container):
-    """Half two: OPEN IN PRINCIPLE, and this is the limit's whole point.
+class _Slotted:
+    """A component held behind ``__slots__``, which has no ``__dict__``."""
 
-    The SAME live defect — a substrate policy permitting what the Config
-    forbids — is refused when the traversal reaches it and reported
-    ``default_not_applicable`` when it does not. This test asserts the
-    behaviour the guard HAS, so the limit in ``_objects`` is measured rather
-    than asserted, and so the fix filed as G43 has a test that must flip.
+    __slots__ = ("policy",)
+
+    def __init__(self, policy: object) -> None:
+        self.policy = policy
+
+
+#: Every container shape measured to hide a component from the credited walk.
+#: Three of them (list, tuple, dict value) ARE credited and are the positive
+#: control below; these seven were not, and each is now a refusal.
+_HIDING_CONTAINERS = ["set", "frozenset", "dict_key", "namespace", "generator", "slots"]
+
+
+@pytest.mark.parametrize("container", _HIDING_CONTAINERS)
+def test_a_component_the_traversal_cannot_credit_refuses_the_build(build_config, container):
+    """THE RULING, replacing the limit this test used to pin.
+
+    It previously asserted ``DEFAULT_NOT_APPLICABLE`` and said in its own
+    docstring that the fix filed as G43 would have to flip it. This is that
+    flip. A guard that cannot see a component does not know the property is
+    inapplicable, and reporting couldn't-verify as verified-clean is the class
+    of defect this guard exists to end.
+
+    MEASURED, AND WORSE THAN THE LIMIT DESCRIBED. The old behaviour was not
+    always ``default_not_applicable``. That token needs NO reachable consumer;
+    when a compliant sibling is present — the ordinary case on a real graph —
+    ``all()`` over the reachable ones is True and the row read ``applied``,
+    the strongest token the report has. Both were observed: this fixture
+    produces the former, and a ``PromotionGate`` planted on a
+    ``build_orchestrator`` graph produced the latter.
     """
 
     import types
@@ -590,20 +615,568 @@ def test_an_unreachable_component_reads_as_not_applicable_not_as_a_refusal(build
     defect = SubstratePolicy(require_verified=False, allow_unverified=True)
     assert build_config.allow_unverified_substrate is False
 
-    reachable = factory.build_execution_controller(build_config)
-    reachable.probe_attribute = defect
-    with pytest.raises(BuildRefused) as caught:
-        validate_build(build_config, reachable)
-    assert caught.value.property_name == "allow_unverified_substrate"
-
     hidden = factory.build_execution_controller(build_config)
     hidden.probe_attribute = {
         "set": lambda: {defect},
         "frozenset": lambda: frozenset({defect}),
         "dict_key": lambda: {defect: 1},
         "namespace": lambda: types.SimpleNamespace(policy=defect),
-        "closure": lambda: (lambda: defect),
+        "generator": lambda: (item for item in [defect]),
+        "slots": lambda: _Slotted(defect),
     }[container]()
-    assert validate_build(build_config, hidden)["allow_unverified_substrate"] == (
-        DEFAULT_NOT_APPLICABLE
-    ), "the limit named in _objects has changed; update the docstring and G43"
+    with pytest.raises(BuildRefused) as caught:
+        validate_build(build_config, hidden)
+    assert caught.value.property_name == COMPONENT_NOT_DISCOVERED, (
+        "the refusal must name non-discovery specifically. Sharing one "
+        "'component' label with the external-subclass refusal was measured to "
+        "disarm that refusal's own mutation proof (G44's shape)."
+    )
+    assert "SubstratePolicy" in str(caught.value)
+
+
+def test_the_same_defect_in_a_credited_container_is_refused_on_its_merits(build_config):
+    """The paired positive control for the seven refusals above.
+
+    The SAME defect in a container the walk credits is refused for the PROPERTY
+    it violates rather than for being unreachable — so the refusals above are
+    caused by the hiding and not by the guard refusing every graph that has a
+    substrate policy in it.
+    """
+
+    from prometheus_protocol.chokepoint.substrate import SubstratePolicy
+    from prometheus_protocol.runtime.security_build import validate_build
+
+    defect = SubstratePolicy(require_verified=False, allow_unverified=True)
+    reachable = factory.build_execution_controller(build_config)
+    reachable.probe_attribute = defect
+    with pytest.raises(BuildRefused) as caught:
+        validate_build(build_config, reachable)
+    assert caught.value.property_name == "allow_unverified_substrate"
+
+
+# ---------------------------------------------------------------------------
+# F-1 / F-4: the two scopes, and what each is allowed to claim
+# ---------------------------------------------------------------------------
+
+
+def test_the_discovery_scope_is_derived_from_the_interpreter_not_hand_listed():
+    """The whole point of the second scope is that it is not a second list.
+
+    A hand-written second tuple of container shapes would have the same blind
+    spot as ``_WALKED_CONTAINERS`` and the same maintainer, so the comparison
+    between them would prove nothing. ``gc.get_referents`` is the collector's
+    own account of what an object references.
+    """
+
+    import ast
+    import textwrap
+
+    from prometheus_protocol.runtime import security_build
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(security_build._discovered)))
+    calls = {
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+    assert "get_referents" in calls, (
+        "the discovery scope must come from the interpreter; a second hand-written "
+        "container list is the first list with extra steps"
+    )
+    # Over the CODE, not the source text: the docstring names
+    # ``_WALKED_CONTAINERS`` to explain why it is not used, and a substring
+    # search cannot tell an explanation from a dependency.
+    referenced = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+    assert "_WALKED_CONTAINERS" not in referenced, (
+        "the discovery scope must not be derived from the credited scope's own "
+        "container tuple, or the two cannot disagree"
+    )
+
+
+@pytest.mark.parametrize(
+    "root", ["execution_controller", "workflow_runtime", "orchestrator", "swarm"]
+)
+def test_no_shipped_root_hides_a_component_from_the_credited_walk(build_config, root):
+    """The refusal is LATENT: every shipped root's two scopes agree exactly.
+
+    Exact, not a floor. If a future component moves into a set or behind slots,
+    this reddens and the build refuses — which is the intended consequence, not
+    a regression to tolerate.
+    """
+
+    from prometheus_protocol.runtime.security_build import _discovered, _objects
+
+    if root == "swarm":
+        runtime = factory.build_swarm_runtime(build_config, provider=MockProvider())
+    else:
+        runtime = getattr(factory, "build_" + root)(build_config)
+    credited = {id(obj) for obj in _objects(runtime)}
+    hidden = {
+        f"{type(obj).__module__}.{type(obj).__name__}"
+        for obj in _discovered(runtime)
+        if id(obj) not in credited
+    }
+    assert hidden == set()
+
+
+def test_an_unregistered_carrier_of_a_compared_attribute_refuses(build_config):
+    """F-4 made fail-closed: a NEW consumer of an EXISTING field must register.
+
+    The hand-list cannot be derived — which class honours a field is semantic —
+    so instead an object carrying an attribute a property is compared on, that
+    is not a registered carrier of it, refuses the build.
+    """
+
+    from prometheus_protocol.execution.pending import PendingActionService
+    from prometheus_protocol.runtime.security_build import _objects, validate_build
+
+    # A PACKAGE-OWNED object that grows a second consumer's attribute. A class
+    # defined in this test module would not be credited at all — the walk
+    # already declines foreign objects — so it could not exercise this rule.
+    runtime = factory.build_execution_controller(build_config)
+    services = [obj for obj in _objects(runtime) if isinstance(obj, PendingActionService)]
+    assert services, "fixture precondition: the controller graph has a pending service"
+    services[0].threshold = 0.99
+
+    with pytest.raises(BuildRefused) as caught:
+        validate_build(build_config, runtime)
+    assert caught.value.property_name == COMPONENT_UNREGISTERED_CARRIER
+    assert "threshold" in str(caught.value)
+    assert "PendingActionService" in str(caught.value)
+
+
+def test_every_registered_carrier_is_a_class_and_the_map_is_exact():
+    """Membership, not a count, and no string names.
+
+    A carrier map keyed on ``"module.ClassName"`` would be F-7's defect —
+    a name pin on a writable attribute — inside the fix for F-4.
+    """
+
+    from prometheus_protocol.runtime.security_build import security_attribute_carriers
+
+    carriers = security_attribute_carriers()
+    assert set(carriers) == {
+        "isolating", "require_digest_pin", "tip_anchor", "signer", "require_verified",
+        "allow_unverified", "has_policy_supplier", "_policy_supplier", "_supplier",
+        "threshold", "_escalate_below", "escalate_below", "_ttl_seconds", "_budget",
+        "timeout_s", "memory_mb", "cpu_seconds", "max_processes", "wall_time_s",
+        "memory_bytes", "cpu_time_s", "max_response_bytes", "api_base", "url",
+    }
+    for attribute, permitted in carriers.items():
+        assert isinstance(permitted, tuple) and permitted, attribute
+        for entry in permitted:
+            assert isinstance(entry, type), f"{attribute} carries a non-class entry"
+    assert "name" not in carriers, (
+        "`name` is not distinctive enough to key on — core.models.Tier carries it "
+        "in the shipped swarm graph. The gap is docs/OPEN-GAPS.md G50."
+    )
+
+
+@pytest.mark.parametrize("residual", ["lazy", "getattr", "module_global", "foreign_closure"])
+def test_the_named_residuals_of_the_discovery_scope_are_real(build_config, residual):
+    """Doctrine #5: the stated limit is a PASSING TEST, not a paragraph.
+
+    Each of these is a place a component can exist that neither scope sees.
+    They are named in ``_discovered``'s docstring and in G49. If one of them
+    stops being true, this reddens and the docstring is wrong.
+    """
+
+    from prometheus_protocol.chokepoint.substrate import SubstratePolicy
+    from prometheus_protocol.runtime.security_build import _discovered
+
+    defect = SubstratePolicy(require_verified=False, allow_unverified=True)
+    runtime = factory.build_execution_controller(build_config)
+
+    if residual == "lazy":
+        # Nothing holds it yet; it is built on first use, after the guard ran.
+        class BuildsOnUse:
+            def make(self) -> object:
+                return SubstratePolicy(require_verified=False, allow_unverified=True)
+
+        runtime.probe_attribute = BuildsOnUse()
+    elif residual == "getattr":
+        class Dynamic:
+            def __getattr__(self, name: str) -> object:
+                return defect
+
+        runtime.probe_attribute = Dynamic()
+    elif residual == "foreign_closure":
+        # A closure THIS MODULE wrote, not the package. `_discovered` follows
+        # only the package's own closures: a callback the caller injected is
+        # not a composition the package made, and whatever it captured is the
+        # caller's business. Measured — following every closure cell instead
+        # failed 4 chokepoint tests and errored 71 more on an in-memory audit
+        # medium reached through a test-supplied executor.
+        runtime.probe_attribute = lambda: defect
+    else:
+        # Reachable from the module, never from the root.
+        globals()["_module_level_defect"] = defect
+        runtime.probe_attribute = None
+
+    found = {id(obj) for obj in _discovered(runtime)}
+    assert id(defect) not in found, (
+        f"the {residual} residual is no longer real; _discovered's docstring and "
+        "docs/OPEN-GAPS.md G49 both claim it is"
+    )
+
+
+# ---------------------------------------------------------------------------
+# F-5: the six credit paths that no proof reached
+# ---------------------------------------------------------------------------
+#
+# MEASURED BEFORE THESE EXISTED. Each of the six was deleted in a
+# MutationWorktree and this module re-run: all six SURVIVED, `70 passed`. The
+# mechanisms were real -- verified on unmutated code -- but nothing would have
+# noticed them stopping, which is the shape doctrine #4 is about. A credit path
+# with only a negative control is the half that cannot tell "refused because
+# the property failed" from "refused for some other reason".
+#
+# `require_external_signer` is the clearest case: its existing negative,
+# test_unused_signer_argument_cannot_satisfy_custody_requirement, stays green
+# when the credit is deleted, because an EMPTY signer list refuses for a
+# different reason. The positive below supplies the signer that is the only
+# member of that list, so deleting the append empties it and reddens.
+
+
+def _external_signer():
+    from prometheus_protocol.chokepoint.kms_model import MemoryKms
+    from prometheus_protocol.chokepoint.signer import KmsSigner
+
+    kms = MemoryKms()
+    kms.create_key("approval-key")
+    kms.grant_sign("approval-key", "runner")
+    signer = KmsSigner(kms, key_id="approval-key")
+    assert signer.external is True, "fixture precondition"
+    return signer
+
+
+def test_an_external_attestation_signer_earns_the_custody_credit(build_config, tmp_path):
+    """The positive control for the credit at ``signers.append(signer)``.
+
+    The graph holds no ApprovalAuthority, so the supplied signer is the ONLY
+    member of ``signers``. Delete the append and the list is empty, the row
+    stops being ``applied``, and this reddens -- which the existing negative
+    control cannot do.
+    """
+
+    config = replace(build_config, require_external_signer=True,
+                     config_attestation_target=f"worm://{tmp_path}/attest")
+    runtime = factory.build_orchestrator(config, attestation_signer=_external_signer())
+    assert runtime._security_build_report["require_external_signer"] == APPLIED
+
+
+def test_a_local_attestation_signer_cannot_earn_the_custody_credit(build_config, tmp_path):
+    """NEGATIVE, paired: the same path with a signer that is not external."""
+
+    config = replace(build_config, require_external_signer=True,
+                     config_attestation_target=f"worm://{tmp_path}/attest")
+    with pytest.raises(BuildRefused) as caught:
+        factory.build_orchestrator(config, attestation_signer=LocalHmacSigner(b"s" * 32))
+    assert caught.value.property_name == "require_external_signer"
+
+
+def test_a_digest_pinned_container_sandbox_earns_the_pin_credit(build_config):
+    """The positive control for ``applied = bool(sandboxes)`` under require_digest_pin."""
+
+    config = replace(build_config, sandbox="container", require_digest_pin=True)
+    runtime = factory.build_orchestrator(config)
+    assert runtime._security_build_report["require_digest_pin"] == APPLIED
+
+
+def test_a_container_sandbox_without_its_pin_cannot_earn_the_credit(build_config):
+    """NEGATIVE, paired -- and NOT the combination Config already refuses.
+
+    Measured while writing this: ``require_digest_pin=True`` with
+    ``sandbox='namespace'`` never reaches the build guard at all. Config refuses
+    it at load with ``ConfigError`` at ``core/config.py:456``
+    (``reason='digest_pin_unhonourable'``), so a negative built that way would
+    pin Config's validator and not this credit path. The situation the GUARD
+    guards is a container sandbox that is present and does not honour the pin.
+    """
+
+    config = replace(build_config, sandbox="container", require_digest_pin=True)
+    runtime = factory.build_orchestrator(config)
+    from prometheus_protocol.runtime.security_build import validate_build
+    from prometheus_protocol.sandbox.container import ContainerSandbox
+
+    for obj in _nodes(runtime):
+        if isinstance(obj, ContainerSandbox):
+            obj.require_digest_pin = False
+    with pytest.raises(BuildRefused) as caught:
+        validate_build(config, runtime)
+    assert caught.value.property_name == "require_digest_pin"
+
+
+def test_a_pin_requirement_with_no_sandbox_at_all_is_refused(tmp_path):
+    """The half of ``applied = bool(sandboxes)`` the two tests above cannot see,
+    and the ONLY root it is reachable from.
+
+    MEASURED TWICE. With a container sandbox present, ``bool(sandboxes)`` is
+    already True and mutating it to a bare ``True`` changes nothing -- both the
+    positive and the negative above stayed green. Emptying an ordinary runtime's
+    sandboxes does not reach it either: the ``sandbox`` row is evaluated first
+    and refuses with ``property_name == 'sandbox'``.
+
+    A MIGRATION runtime is the one shape where it is live: ``sandbox`` sets
+    ``applied = None`` when a migration graph has no sandboxes, so the row
+    passes as ``default_not_applicable`` and ``require_digest_pin`` is then the
+    first row that can object. A build that never looked at a sandbox must not
+    report a digest-pinning mechanism as verified.
+    """
+
+    import sys
+
+    from prometheus_protocol.chokepoint import runner
+    from prometheus_protocol.sandbox.base import Sandbox
+
+    def build(settings):
+        return runner.build_migration_runner(
+            runner.MigrationRunnerConfig(
+                target=runner.DbTarget(host="127.0.0.1", port=5432, dbname="fixture",
+                                       user="migrator", password="fixture-not-used"),
+                approval_store_path=tmp_path / "consumed.db",
+                signer=LocalHmacSigner(b"s" * 32),
+                allow_unverified_substrate=sys.platform != "linux",
+            ),
+            settings=settings,
+            audit=SqliteLedger.private(tmp_path / "authorization.db"),
+            env={},
+        )
+
+    # PRECONDITION, established rather than assumed: this graph holds no
+    # sandbox, and with the pin unrequested it builds and reports the row
+    # `not_requested`. So the refusal below is caused by the requirement
+    # meeting an empty sandbox set, not by the graph being unbuildable.
+    # ``sandbox`` stays at its DEFAULT: measured, a non-default sandbox makes
+    # the ``sandbox`` row refuse first and this path is never reached.
+    permitted = build(Config())
+    try:
+        assert not [obj for obj in _nodes(permitted) if isinstance(obj, Sandbox)]
+        assert permitted._security_build_report["require_digest_pin"] == NOT_REQUESTED
+    finally:
+        permitted.close()
+
+    with pytest.raises(BuildRefused) as caught:
+        build(Config(require_digest_pin=True))
+    assert caught.value.property_name == "require_digest_pin"
+
+
+def test_a_retaining_anchor_earns_the_retention_credit(build_config, tmp_path):
+    """The positive control for ``applicable.append(a)``: a NON-default retention,
+    so the row cannot be satisfied by the value happening to equal its default."""
+
+    config = replace(build_config, ledger_path=tmp_path / "r.db",
+                     ledger_anchor=f"worm://{tmp_path}/tips",
+                     ledger_anchor_retention_days=7)
+    runtime = factory.build_orchestrator(config)
+    anchors = [obj.tip_anchor for obj in _nodes(runtime) if getattr(obj, "tip_anchor", None)]
+    assert [a._retain_for_s for a in anchors] == [7 * 86400.0]
+    assert runtime._security_build_report["ledger_anchor_retention_days"] == APPLIED
+
+
+def test_an_anchor_retaining_for_the_wrong_period_is_refused(build_config, tmp_path):
+    """NEGATIVE, paired: the same anchor with its retention altered."""
+
+    from prometheus_protocol.runtime.security_build import validate_build
+
+    config = replace(build_config, ledger_path=tmp_path / "r.db",
+                     ledger_anchor=f"worm://{tmp_path}/tips",
+                     ledger_anchor_retention_days=7)
+    runtime = factory.build_orchestrator(config)
+    for obj in _nodes(runtime):
+        if getattr(obj, "tip_anchor", None) is not None:
+            obj.tip_anchor._retain_for_s = 1.0
+    with pytest.raises(BuildRefused) as caught:
+        validate_build(config, runtime)
+    assert caught.value.property_name == "ledger_anchor_retention_days"
+
+
+def test_a_role_budget_matching_the_config_earns_the_credit(build_config):
+    """The positive control for ``obj._budget.limit == value``, non-default."""
+
+    config = replace(build_config, max_role_calls=5)
+    runtime = factory.build_swarm_runtime(config, provider=MockProvider())
+    assert runtime._security_build_report["max_role_calls"] == APPLIED
+
+
+def test_a_role_budget_disagreeing_with_the_config_is_refused(build_config):
+    """NEGATIVE, paired."""
+
+    from prometheus_protocol.runtime.security_build import validate_build
+
+    config = replace(build_config, max_role_calls=5)
+    runtime = factory.build_swarm_runtime(config, provider=MockProvider())
+    for obj in _nodes(runtime):
+        if hasattr(obj, "_budget"):
+            obj._budget.limit = 999
+    with pytest.raises(BuildRefused) as caught:
+        validate_build(config, runtime)
+    assert caught.value.property_name == "max_role_calls"
+
+
+def _nodes(runtime):
+    from prometheus_protocol.runtime.security_build import _objects
+
+    return _objects(runtime)
+
+
+REMOTE = dict(provider="remote", api_base="https://gw.example.invalid/v1", model="m", api_key="k")
+
+
+@pytest.mark.parametrize(
+    "field,attribute,value",
+    [("request_timeout_s", "timeout_s", 11.0),
+     ("provider_max_response_bytes", "max_response_bytes", 2048)],
+)
+def test_a_remote_provider_carrying_the_bound_earns_the_credit(build_config, field, attribute, value):
+    """The positive control for ``matches(RemoteModelProvider, ...)``, both fields,
+    at non-default values so the credit cannot come from the default."""
+
+    config = replace(build_config, **REMOTE, **{field: value})
+    runtime = factory.build_orchestrator(config)
+    providers = [obj for obj in _nodes(runtime) if type(obj).__name__ == "RemoteModelProvider"]
+    assert providers and [getattr(p, attribute) for p in providers] == [value]
+    assert runtime._security_build_report[field] == APPLIED
+
+
+@pytest.mark.parametrize(
+    "field,attribute", [("request_timeout_s", "timeout_s"),
+                        ("provider_max_response_bytes", "max_response_bytes")],
+)
+def test_a_remote_provider_disagreeing_with_the_bound_is_refused(build_config, field, attribute):
+    """NEGATIVE, paired, for both fields."""
+
+    from prometheus_protocol.runtime.security_build import validate_build
+
+    config = replace(build_config, **REMOTE, **{field: 11.0 if "timeout" in field else 2048})
+    runtime = factory.build_orchestrator(config)
+    for obj in _nodes(runtime):
+        if type(obj).__name__ == "RemoteModelProvider":
+            setattr(obj, attribute, 999999)
+    with pytest.raises(BuildRefused) as caught:
+        validate_build(config, runtime)
+    assert caught.value.property_name == field
+
+
+def test_a_runtime_endpoint_is_revalidated_and_earns_the_credit(build_config):
+    """The positive control for ``validate_endpoint(endpoint, ...)``: the LIVE
+    endpoint is re-checked, not the Config string it came from."""
+
+    config = replace(build_config, **REMOTE)
+    runtime = factory.build_orchestrator(config)
+    assert runtime._security_build_report["allow_insecure_loopback"] == APPLIED
+
+
+def test_an_endpoint_swapped_after_construction_is_still_revalidated(build_config):
+    """NEGATIVE, paired, and the reason the revalidation is not redundant.
+
+    Config-load validation saw the ORIGINAL endpoint. This swaps the live
+    provider's endpoint for a loopback one afterwards, so only the runtime
+    revalidation can catch it.
+    """
+
+    from prometheus_protocol.runtime.security_build import validate_build
+
+    config = replace(build_config, **REMOTE)
+    runtime = factory.build_orchestrator(config)
+    assert config.allow_insecure_loopback is False
+    for obj in _nodes(runtime):
+        if type(obj).__name__ == "RemoteModelProvider":
+            obj.api_base = "http://127.0.0.1:8080/v1"
+    with pytest.raises(Exception) as caught:
+        validate_build(config, runtime)
+    assert not isinstance(caught.value, AssertionError)
+
+
+# ---------------------------------------------------------------------------
+# F-7's shape, inside the fix for F-4 — measured, not assumed away
+# ---------------------------------------------------------------------------
+#
+# THE DISCRIMINATOR IS THE ATTRIBUTE NAME. `security_attribute_carriers` refuses
+# an object that carries `signer` and is not a registered class, whether or not
+# that attribute has anything to do with the property. That is a name-keyed
+# guard, which is the shape F-7 reports on `type(obj).__module__`.
+#
+# WHAT MAKES IT A DIFFERENT RISK, stated rather than glossed. F-7's pin fails
+# OPEN: a foreign class sets `__module__` to a package-looking string -- the
+# module need not even exist -- and escapes the guard. This one fails CLOSED: an
+# unregistered carrier REFUSES THE BUILD. The cost is a false refusal a
+# developer resolves by registering the class, not a missed detection. That is
+# not a reason to call it sound; it is the reason it ships while the population
+# stays underivable (see `security_attribute_carriers`).
+#
+# So the collision set is PINNED here instead, exactly. A new class that grows
+# one of these attribute names reddens this test at review time rather than
+# refusing someone's build at run time.
+
+
+def _package_carrier_collisions() -> set[tuple[str, str]]:
+    """Every class in the package declaring a compared attribute while not
+    being a registered consumer of it."""
+
+    import importlib
+    import pkgutil
+
+    import prometheus_protocol
+    from prometheus_protocol.runtime.security_build import security_attribute_carriers
+
+    carriers = security_attribute_carriers()
+    found: set[tuple[str, str]] = set()
+    for module in pkgutil.walk_packages(prometheus_protocol.__path__, "prometheus_protocol."):
+        try:
+            loaded = importlib.import_module(module.name)
+        except Exception:
+            continue
+        for cls in vars(loaded).values():
+            if not inspect.isclass(cls) or cls.__module__ != module.name:
+                continue
+            for attribute, permitted in carriers.items():
+                declared = (
+                    attribute in getattr(cls, "__annotations__", {})
+                    or attribute in (getattr(cls, "__slots__", ()) or ())
+                    or hasattr(cls, attribute)
+                )
+                if declared and not issubclass(cls, permitted):
+                    found.add((attribute, f"{cls.__module__}.{cls.__name__}"))
+    return found
+
+
+def test_the_carrier_name_collisions_are_pinned_exactly():
+    """Exact, in both directions. A floor would hide a new collision."""
+
+    assert _package_carrier_collisions() == {
+        # Config is excluded from BOTH walks by `isinstance(obj, Config)`, so
+        # these three never reach the rule. They are listed because the sweep
+        # sees them and silence would read as absence.
+        ("api_base", "prometheus_protocol.core.config.Config"),
+        ("escalate_below", "prometheus_protocol.core.config.Config"),
+        ("require_digest_pin", "prometheus_protocol.core.config.Config"),
+        # A resolved attestation posture records the escalation it resolved; it
+        # does not implement the gate that honours it. NAME COINCIDENCE.
+        ("escalate_below", "prometheus_protocol.attestation.posture.ResolvedPosture"),
+        # Four `signer` carriers, none a consumer of `require_external_signer`:
+        # two request records, one in-memory audit model's signer factory, and
+        # the migration runner's config. METADATA CARRIERS.
+        ("signer", "prometheus_protocol.attestation.runtime._SignerRequest"),
+        ("signer", "prometheus_protocol.chokepoint.audit_source_model.MemorySignAudit"),
+        ("signer", "prometheus_protocol.chokepoint.runner.MigrationRunnerConfig"),
+        ("signer", "prometheus_protocol.chokepoint.runner.SignerRequest"),
+    }
+
+
+def test_only_one_collision_is_reached_by_any_graph_the_suite_builds():
+    """The pinned set above is what EXISTS; this is what is REACHED.
+
+    Measured across the whole suite: exactly one of the eight appears in a
+    credited or discovered graph -- `AuthorizationContext`, whose `signer` is a
+    dict of identity metadata -- and it is registered for that reason. The other
+    seven are unreachable today, which is why the guard ships. If one of them
+    starts appearing, the build refuses and this comment is where to look.
+    """
+
+    from prometheus_protocol.chokepoint.authorization_record import AuthorizationContext
+    from prometheus_protocol.runtime.security_build import security_attribute_carriers
+
+    assert AuthorizationContext in security_attribute_carriers()["signer"]
+    assert ("signer", "prometheus_protocol.chokepoint.authorization_record.AuthorizationContext") \
+        not in _package_carrier_collisions(), "a registered carrier is not a collision"

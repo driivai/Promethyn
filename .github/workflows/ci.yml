@@ -224,6 +224,22 @@ jobs:
           python -m pytest -q tests/conformance/test_security_build.py tests/conformance/test_security_build_inventory.py tests/conformance/test_reachability_readers.py tests/conformance/test_receipt_classification.py --junitxml=reachability-proofs.xml
           python scripts/check_proof_composition.py reachability-proofs.xml reachability
 
+      - name: Reachability build reverts (must be caught)
+        # F-9: this runner and the reader one below were the ONLY two of the
+        # seventeen `scripts/*_proofs.py` with neither a step here nor a
+        # `test_*_revert_pins.py` module — so against "new tests run in CI and
+        # never skip", their rows were the one class of instrument nothing
+        # required to keep reddening. Measured when first wired: 28 first-order
+        # rows, every one red. The runner raises on a survivor, so a mutation
+        # that stops being caught fails the build rather than printing.
+        run: python scripts/reachability_build_proofs.py
+
+      - name: Reachability reader reverts (must be caught)
+        # The reader half of F-9. Measured: 5 first-order rows, each with a
+        # second-order assertion-deleted variant, and the runner refuses a
+        # proof population that changed size as well as one that went green.
+        run: python scripts/reachability_reader_proofs.py
+
       - name: Receipt classification reverts (must be caught)
         # Both attack classes on the unreceipted/tampered split, the two read
         # scopes and the report vocabulary. The runner refuses a surviving

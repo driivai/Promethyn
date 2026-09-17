@@ -186,3 +186,40 @@ def test_persisted_observation_obligation_cannot_be_erased_or_borrowed(tmp_path,
     with pytest.raises(ExecutionNotAuthorized) as refusal:
         controller.pending.get(hold.id)
     assert refusal.value.reason == "record_differs_from_chain_entry"
+
+
+def test_an_alternate_ledger_implementation_is_outside_this_derivation():
+    """G51: the limit that lived only in two report sentences, as a test.
+
+    ``docs/reachability-build.md:32-33`` and ``docs/reachability-readers.md:120``
+    both say this boundary is the shipped ``SqliteLedger`` public reader API and
+    not a sandbox against trusted Python. Nothing in the tree re-checked it, so
+    the sentence could go on being true-sounding after it stopped being true.
+
+    The mechanism: ``guard_readers`` is applied through
+    ``SqliteLedger.__init_subclass__``, which an unrelated class never triggers.
+    So a different ``Ledger`` implementation is RECOGNISED as having a reader
+    and is not GUARDED — its reads hand back rows nothing verified.
+
+    This asserts the limit, not an aspiration. If a future change starts
+    guarding alternate implementations, this reddens and both documents have to
+    be corrected rather than quietly becoming right.
+    """
+
+    from prometheus_protocol.ledger.readers import reader_methods
+    from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
+
+    class AlternateLedger:
+        def pending_actions(self) -> list[dict]:
+            return [{"id": 1, "status": "resolved"}]
+
+    assert len(reader_methods(SqliteLedger)) == 11, "the guarded population"
+    assert reader_methods(AlternateLedger) == ("pending_actions",), (
+        "the derivation RECOGNISES the reader on an unrelated implementation"
+    )
+    assert getattr(AlternateLedger.pending_actions, "__wrapped__", None) is None, (
+        "and does not GUARD it: no __init_subclass__ hook ever fired"
+    )
+    assert AlternateLedger().pending_actions() == [{"id": 1, "status": "resolved"}], (
+        "so the read returns rows no receipt or chain check vouched for"
+    )

@@ -129,10 +129,17 @@ MUTATIONS = (
      '        raise BuildRefused("component", "injected anchor has a different destination")',
      SECURITY, "test_injected_anchor_cannot_substitute_another_witness"),
     # ---- 1.4: the traversal limit is MEASURED, not merely written down -------
+    # The proof this row names was RENAMED when F-1's ruling replaced the limit
+    # it pinned. The old name left here selected nothing, the baseline came back
+    # "(no summary)", and the runner refused -- correctly -- on all three
+    # Pythons. Widening the credited containers is still caught: the set-held
+    # component becomes credited, so it is compared and the refusal changes from
+    # `component_not_discovered` to the property's own, which the new proof's
+    # `property_name` assertion rejects.
     ("traversal-silently-widened-to-sets", BUILD,
      "_WALKED_CONTAINERS = (tuple, list, dict)",
      "_WALKED_CONTAINERS = (tuple, list, dict, set, frozenset)",
-     SECURITY, "test_an_unreachable_component_reads_as_not_applicable_not_as_a_refusal"),
+     SECURITY, "test_a_component_the_traversal_cannot_credit_refuses_the_build"),
     ("shipped-graph-hiding-check-substituted-for-itself", SECURITY,
      "        for obj in _exhaustive(runtime)\n        if id(obj) not in reachable",
      "        for obj in _objects(runtime)\n        if id(obj) not in reachable",
