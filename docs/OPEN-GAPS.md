@@ -2601,6 +2601,18 @@ by hand.
 the bounded table's composition (25 review replies, 3 bodies, 1 comment) plus
 carriers 30 to 37, not incremented.
 
+**CARRIER 38, opening #126 (`4561120456`). 13 of 13.** Opened with a
+one-line placeholder body, read back carrying the footer, rewritten through
+`update_pull_request`. The matrix comment on #125 that carrier 37 records was
+edited rather than followed by a new comment, so #125 closed at 37; this is the
+next pull request's opening, recorded at the push that clears it — which is
+this commit, for the reason carrier 30 first measured: `ci.yml` reads the
+frozen `PR_BODY` on the OPEN event, and its message-hygiene step refuses the
+placeholder's footer on `270238b` until a push re-triggers it with the clean
+body. **Running total 38: 28 review replies, 7 bodies, 3 comments**, recounted
+from the bounded table (25 review replies, 3 bodies, 1 comment) plus carriers
+30 to 38, not incremented.
+
 **THE COUNT IS ACCURATE AS OF THIS COMMIT AND CANNOT BE ACCURATE AFTER IT, which
 is a property of the count and not an oversight.** Reporting this commit's own
 CI means posting a comment, and that comment will carry the footer -- so
@@ -4604,3 +4616,234 @@ by a firing bypass probe. Full table:
 | `tests/conformance/test_swarm_invariants.py` | both |
 | `tests/conformance/test_type_gate.py` | PERMITTED set |
 | `tests/conformance/test_type_gate_revert_pins.py` | both |
+
+---
+
+## G53 — counts from a filtered view: the eighth instance, the doctrine, and the sweep
+
+**What happened.** The reader runner's row count entered PR #125's report as
+**5** when the runner had **6** rows. The number came from the runner's log read
+through a case-sensitive filter (`^[a-z0-9-]+:`), which dropped the one row whose
+label begins with a capital — `F3-permissive-none` — and the report's own
+"corrections to the brief" section repeated it. The same 5 sat in a `ci.yml`
+step comment. An error-correcting section propagated the error, and the cause
+was a filter that narrowed its own population before the count was taken.
+
+**The doctrine, now written down** as `docs/DOCTRINE.md` #11 — the first
+doctrine in this repository that exists as text rather than as citations:
+*any count that enters a report, a pin, or a tracker comes from the artifact,
+never from a filtered view of it; where a filter is unavoidable, the count and
+the filter are reported together and the unfiltered total beside them.*
+`tests/conformance/test_doctrine_index.py` keeps that file's index of cited
+numbers equal to the numbers the tree cites, in both directions.
+
+**The prior instances, checked against this tracker rather than accepted.** The
+brief named eight. Traceable here by their wording: the positional sweep (G2),
+the positive-control set (G16), the composition and membership pins (G25, one
+entry for both), the `--history` sizing (G6's table, which already reports
+"reachable" beside "carrying"). Not traceable to an entry by wording, and so
+UNVERIFIED as tracker entries: the positive-control *collector* defect (six
+docstrings that did not self-declare, fixed in flight in #125), the probe that
+returned false GREENs, and the adapter collector. The eighth is this entry.
+"Found by a person probing, never by a guard" holds for every one that is
+traceable; for the three that are not, it is the brief's claim and not this
+tracker's.
+
+### The sweep — population first, then the subset
+
+Every count-producing site in `scripts/`, `tests/support/`, `tests/conformance/`,
+`tests/chokepoint/` and the Python heredocs of every workflow, enumerated from
+the AST (a `len`, `sum`, `Counter` or `.count` call), classified by where the
+number goes — into a PIN (compared with a constant, an ALL-CAPS name or a
+manifest value), a REPORT (a print, an f-string, an assert message), STORED for
+later, or OTHER (indexing, loop bounds) — and by whether a narrower feeds it (a
+comprehension `if`, `startswith`/`endswith`/`lower`/`casefold`/`isidentifier`,
+a regular-expression match, a `glob`, a slice, an `in` test, `filter()`), in
+the counted expression or in the one-level definition of the name counted.
+
+| | count |
+|---|---|
+| **population**: count-producing call sites | **477** |
+| of which PIN / REPORT / STORED / OTHER | 320 / 73 / 43 / 41 |
+| candidates: PIN, REPORT or STORED with a narrower in or feeding the count | **49** |
+| a second shape the call walk cannot see: `x += 1` inside a loop that also filters | **5** |
+| shell count pipelines (`grep -c`, `wc -l`) in workflows | 0 |
+
+Of the 49 candidates, 43 are test-internal assertions where the filter IS the
+property under test — `assert len(hits) == 1` over a comprehension that selects
+the one receipt the test planted — and are not population counts; they are
+listed here by count, with the rule that excluded them, rather than dropped
+silently. The enumerator's own limits, stated: it sees calls and `+= 1`
+counters; it does not see a count produced by an external tool and parsed
+(mypy's "N source files" and pytest's "N collected" are the artifacts
+themselves, and are what the fixes below tie to), nor a count kept in a
+`Counter` updated by index, nor anything in `src/` (which produces no report
+numbers by design and was out of scope by the brief).
+
+### Sites, what each filters, and the measured delta today
+
+| site | what is filtered before counting | filtered vs artifact today | action |
+|---|---|---|---|
+| `scripts/check_hygiene.py:83` | files `read_text` cannot decode are skipped silently, plus the terms file | **435 scanned of 437 candidates**: 1 excluded by design, 1 binary (`site/og.png`) — delta 2 | **FIXED**: reports scanned / candidates / excluded / unreadable and names the unreadable. Whether a binary should be scanned for tokens is a design question, **filed** here. |
+| `tests/conformance/test_ci_collection_pins.py:204` (`_collected`) | lines of `--collect-only` output carrying `::` | 814 `::` lines = 814 summed = **814 pytest collected** — delta 0 | **FIXED**: the sum is tied to pytest's own `N tests collected` line; a line shape the filter cannot see now refuses. |
+| `tests/conformance/test_ci_collection_pins.py:317` | `text.count(literal)` + a regex over the workflow, compared with `>= len(PINNED_STEPS) - 1` | 6 inline + 6 delegated = **12 = 12 pinned steps**; the `- 1` was slack of exactly one — delta 0 | **FIXED**: `==`. A tolerance on a population pin, removed with its measured value beside it. |
+| `.github/workflows/ci.yml`, F11 proofs step | per-module `classname.endswith(module)`; no tie to `len(cases)` | 282 collected ids, **none class-held** — delta 0; the filter drops a test inside a class | **FIXED**: `assert counted == len(cases)`, the tie the other four inline steps already had. |
+| `ci.yml` substrate, attestation, PROD-FIX-1, PROD-FIX-2 steps | same `endswith` filter | tied to the total on the next line; delta 0 | none needed; noted as the reason the F11 step stood out. |
+| `scripts/type_gate_revert_proofs.py:497` | `failed` = `failure` elements only; an `error` or `skipped` element is neither counted nor refused (fix_b and f11 refuse them) | runner re-run with the refusal in place: **19 bypasses caught, 20 guard failures, pinned 19 / 20**, unchanged — delta 0 today | **FIXED**: refuses errors and skips, mirroring `fix_b_revert_proofs.py:279`. |
+| `scripts/reachability_reader_proofs.py` | no row count in its own output; a reader counted labels through a filter | artifact **6** rows (12 runs); published **5** — **delta 1** | **FIXED**: rows hoisted to `mutations()`, `rows: N` printed first. The `ci.yml` comment that carried the 5 corrected. |
+| `scripts/reachability_build_proofs.py`, `scripts/receipt_classification_proofs.py` | same: the count of `FIRST`/`SECOND` lines through a prefix filter | **34** and **33** from the tables; the build log's 184 lines account fully as 34 + 34 + 115 `RED` + 1 — delta 0 | **FIXED**: `rows: N` printed first. |
+| `tests/conformance/test_proof_selectors_exist.py` | the runner population is the glob `scripts/*_proofs.py` | 17 on disk = **17 run by `ci.yml`** — delta 0 (F-9 had found 2 the workflow did not run) | **FIXED**: pinned both ways, disk against workflow, in the same module. |
+| `tests/conformance/test_positive_control_set.py:103` | a test is a positive control if its docstring says the phrase or its name says `positive_control` | the delta between *is* and *says* has no mechanical measurement; six were found by hand in #125 | **filed**: the fix is a marker or decorator, a design choice, not a one-liner. |
+| `tests/conformance/test_type_gate.py:110` | `> 100` over `rglob("*.py")` | **145** today | **filed** under Part 3's floor sweep, not this sprint. |
+| `tests/conformance/test_git_ref_format.py:193-195` | `> 400`, `> 50`, `> 20` over a corpus split by the function under test | **449 / 377 / 72** today | **filed** under Part 3. |
+| `docs/OPEN-GAPS.md` G28, the carrier table | this tracker's own count of 29 was re-derived on 2026-09-17 by a filter (`startswith("| #")` and a backtick) | the artifact — the rows of that table — gives **29**; the section's second table (2 rows) is a different population — delta 0 | none: the table is the artifact. Recorded because the derivation was the doctrine's shape. |
+| `scripts/check_message_hygiene.py --history`, `scripts/mountinfo_diagnostic.py:88`, `tests/support/positional_sweep.py` | filter beside an unfiltered total, or a refusal on the unreadable | compliant | none. |
+
+**Re-derived from the artifact, as the brief asked, old → new:** reader runner
+rows **5 → 6**; build runner rows **34 → 34**; the OPEN-GAPS carrier table
+**29 → 29**; the `ci.yml` reader-step comment **5 → 6**. Hygiene's reported
+number moved from "435 files scanned" to "440 files scanned of 442 candidates"
+on this branch — the difference from 435/437 being the five files this change
+adds, which the old report would have folded into one number.
+
+**What this does not close.** A filter that is the *definition* of a population
+— "a selector is a `test_`-prefixed identifier" — cannot be replaced by the
+artifact, because the artifact does not know what a selector is. The doctrine
+asks that such a filter be stated beside its count, which
+`test_proof_selectors_exist.py` does (63 selectors, 3 of 17 runners, the 14
+others name files by path). The semantic filters above are filed, not fixed.
+
+---
+
+## G54 — the per-version pass counts were unreadable, and nothing compared them (CLOSED by the matrix-agreement guard)
+
+**What was unreadable, measured.** On `67b05e8` the matrix was green — 57 of 57
+steps on each Python, read job by job — and the per-version pass counts were
+not: the job-log tail returned by the API is the wheel build (345 lines back
+and still inside it), and the raw log URL is refused by the reporting
+environment's egress proxy (`403`, connect rejected). The counts were read
+locally instead, on one interpreter. Green said the suite ran on all three; it
+did not say the three ran the same suite.
+
+**The two cited precedents, checked.** `set_authorizer(None)` on 3.10 —
+`src/prometheus_protocol/ledger/sqlite_ledger.py:353-360`: "It took the 3.10
+matrix job to find that; 3.11 and 3.12 were green through all 51 steps." And
+`import tomllib` — this tracker at lines 28 and 172: "passed the gate on all
+three matrix jobs and failed at import on 3.10"; "the 3.10 job importing
+everything is the check that actually catches both". Both were found by the
+matrix, and **both were RED jobs**. Neither is an instance of three green jobs
+with different counts, which is the class nothing was watching: a test that is
+*absent* on one interpreter — defined under a `sys.version_info` guard,
+parametrised from version-dependent data, or dropped by `collect_ignore` —
+passes where it exists and is neither failed nor skipped where it does not.
+The skip manifest pins each version's skip SET against the sanctioned one and
+would not see it. The precedents motivate the matrix; they do not exemplify
+this gap, and the brief's "the count is exactly what would have differed" is
+true of the class and not of either example.
+
+**CLOSED, by an instrument rather than a habit.**
+
+* `scripts/check_matrix_agreement.py` reads one JUnit report per matrix
+  version and compares them as SETS — collected ids and skipped ids, not counts
+  (G25) — and refuses on: a version set that is not exactly the workflow's
+  matrix, read from `ci.yml` (shortfall and excess both); an empty report
+  (doctrine #8), refused before anything is compared; any failure or error; any
+  id one version collected and another did not, naming the id and the version
+  that lacks it; the same over skips. It prints the per-version table
+  (collected / passed / skipped / failed / errors) and writes it to the step
+  summary, so the counts are readable from a short job log without a raw log.
+* `ci.yml`: each matrix job uploads `full-suite.xml` as
+  `full-suite-<version>` with `if-no-files-found: error`; a `matrix-agreement`
+  job with `needs: build` downloads every `full-suite-*` and runs the script.
+  A red build job leaves it skipped, which is a red run either way.
+* `tests/conformance/test_matrix_agreement.py`: 13 tests — one positive control,
+  one refusal per disagreement, the command line both ways on the download
+  layout, the workflow shape (upload name, `if-no-files-found`, the download
+  pattern, the call), the matrix derived from the workflow it is given, and
+  the named limit as a passing test. Membership pinned in
+  `proof_composition.json` under `matrix_agreement`.
+* `scripts/matrix_agreement_proofs.py`: **9 first-order rows in a
+  MutationWorktree, both attack classes, all 9 caught, each by its named
+  proof** — the collected comparison deleted (3 red), the skipped comparison
+  deleted (1), composition substituted by a count (4), every version compared
+  against itself (4), the empty-report refusal deleted (1), the failure and
+  the error refusals deleted (1 each), the version set substituted by a count
+  (1), the matrix hand-listed instead of read (1). Second-order
+  assertion-deletion is deliberately not run here and the runner says why.
+
+**Measured on this tree, with real interpreters.** The full suite was run from
+a clean detached checkout of `03b28a9` on 3.10, 3.11 and 3.12 (all three are
+installed here), one JUnit report each, and the guard was run on the three:
+
+* the COLLECTED sets are identical on all three — **3075 ids each**; today's
+  tree has no version-specific collection, which is now a measured fact and
+  not an assumption;
+* the first 3.10 and 3.12 runs, from virtual environments under `/tmp`, reported
+  **115 failed, 2924 passed, 24 skipped, 12 errors** each against 3.11's
+  **3052 passed, 23 skipped**. The guard refused, naming the 115, the 12 and
+  the one skip 3.11 lacked. The cause is the environment and not the
+  interpreter — identical counts on both versions, and every failure the
+  namespace sandbox reporting itself unavailable, because the sandbox mounts a
+  private `/tmp` and could not see an interpreter that lived there. That is the
+  guard reporting a real difference in the shape it is built to report; the
+  runs were repeated from environments outside `/tmp` and are recorded in the
+  paragraph below.
+* the runs repeated with the SYSTEM interpreters `/usr/bin/python3.10` and
+  `3.12` (which the sandbox can see) and each version's packages on the
+  parent's path: **3.10: 11 failed, 3041 passed, 23 skipped; 3.11: 3052
+  passed, 23 skipped; 3.12: 11 failed, 3041 passed, 23 skipped**. The guard on
+  the three: collected identical (3075), skipped identical (23), and two
+  refusals — `failed: 3.10` and `failed: 3.12`, the same eleven ids on both:
+  `test_config_attestation.py::test_the_digest_is_byte_identical_in_another_process`
+  and ten parametrised cases of `test_platform_contract.py`, every one of
+  which spawns a child with `sys.executable` and a clean environment, and the
+  child reports `ModuleNotFoundError: No module named 'pytest'` — the system
+  3.10 and 3.12 here have no packages installed; only the parent had them on
+  `PYTHONPATH`. An installation difference, not an interpreter difference,
+  measured from the failure text and from the two versions failing the same
+  set. Nothing here produced three runs under identical conditions on all
+  three interpreters; the matrix job on this branch is the first that can,
+  and its table is reported on the pull request when it lands.
+* what IS established about this tree from these runs, without qualification:
+  the three interpreters COLLECT the same 3075 ids and SKIP the same 23; the
+  class G54's guard exists for is absent today.
+
+**The deliberate divergence, as the brief asked — real interpreters, not an
+edited report.** In a throwaway worktree of `03b28a9`, one module was planted
+with a test defined under `if sys.version_info >= (3, 12):` beside one defined
+unconditionally, and run on `/usr/bin/python3.10`, `3.11` and `3.12`:
+
+```text
+3.10: 1 passed          3.11: 1 passed          3.12: 2 passed
+
+| version | collected | passed | skipped | failed | errors |
+| 3.10 | 1 | 1 | 0 | 0 | 0 |
+| 3.11 | 1 | 1 | 0 | 0 | 0 |
+| 3.12 | 2 | 2 | 0 | 0 | 0 |
+matrix agreement FAILED: 2 disagreement(s) between the matrix versions:
+  collected: 3.10 lacks 1 id(s) another version has: ['...test_version_gated_probe::test_exists_only_where_the_interpreter_is_new_enough']
+  collected: 3.11 lacks 1 id(s) another version has: ['...test_version_gated_probe::test_exists_only_where_the_interpreter_is_new_enough']
+exit=1
+```
+
+Three green runs; the guard reddens and names the test and the two versions
+that never collected it. The positive control beside it: the gate replaced by
+`if True:`, the same module on the same three interpreters — `2 passed` on
+each, `matrix agreement passed: 3 versions (3.10, 3.11, 3.12); 2 collected, 0
+skipped, identical sets on every version`, exit 0. The worktree was removed
+afterwards; nothing of the probe is in the tree.
+
+**Named limits.**
+
+* The upload and download are proved only by a matrix run: the tests pin that
+  the steps exist and are shaped correctly; the first run on this branch is
+  what shows a report crossing the artifact store. Stated as a passing test.
+* A `[conditional]` skip may legitimately differ by host. Within one matrix run
+  the three jobs share an image, so a conditional entry differing across
+  versions is refused as a version difference. A runner-pool change that gave
+  the three jobs different hosts would refuse here and say which ids.
+* The guard compares reports that reached it. A job that never uploaded is
+  caught by `if-no-files-found: error` on its own side and by the version-set
+  check on this side; a job that uploaded a report from a different run cannot
+  happen within one workflow run's artifact namespace, and is not claimed
+  against otherwise.

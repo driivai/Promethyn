@@ -495,9 +495,23 @@ def run_config_mutations() -> int:
                     raise AssertionError(f"{name}: FAILED TO RESTORE {rel}")
             cases = list(ET.parse(report).iter("testcase")) if report.exists() else []
             failed = [c for c in cases if c.find("failure") is not None]
-            if result != pytest.ExitCode.TESTS_FAILED or not failed:
+            # `failed` is a FILTERED read of the report: failure elements only.
+            # An error or a skip in the same run is not a failure and would not
+            # be counted, so a bypass that errors the guard instead of failing
+            # it would be under-counted against the pin below and a skipped
+            # guard would count as nothing at all. Refused here, as the other
+            # revert runners already do (fix_b, f11), rather than silently
+            # narrowing the count (doctrine #11, OPEN-GAPS G53).
+            if (
+                result != pytest.ExitCode.TESTS_FAILED
+                or not failed
+                or any(
+                    c.find("error") is not None or c.find("skipped") is not None
+                    for c in cases
+                )
+            ):
                 print(captured.getvalue())
-                raise AssertionError(f"{name}: the guard did NOT catch this bypass")
+                raise AssertionError(f"{name}: the guard did NOT catch this bypass, or errored or skipped instead of failing")
             total += len(failed)
             print(f"CAUGHT {name}: {len(failed)} guard failure(s); {test_file} -k {selection!r}")
     return total

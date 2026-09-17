@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import ast
 import pathlib
+import re
 
 import pytest
 
@@ -71,6 +72,27 @@ def test_the_runner_population_is_not_empty():
     assert sum(len(v) for v in runners.values()) > 20, (
         "this sweep found almost no selectors, which means it stopped seeing "
         "them rather than that they stopped existing"
+    )
+
+
+def test_every_proof_runner_on_disk_is_run_by_the_workflow_and_every_one_the_workflow_runs_exists():
+    """The runner population, both ways round.
+
+    F-9 found two of seventeen ``scripts/*_proofs.py`` that no CI step ran —
+    the class of instrument nothing required to keep reddening. The glob is
+    the convention; the workflow is what runs. Derived from both and compared
+    exactly, so a runner added without a step, or a step naming a runner that
+    was renamed away, is a red line here and not a finding for a later sprint
+    (doctrine #11, OPEN-GAPS G53: measured 17 == 17 when written).
+    """
+
+    workflow = (REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    run_by_workflow = set(re.findall(r"python scripts/(\w+_proofs\.py)", workflow))
+    on_disk = {path.name for path in (REPO / "scripts").glob("*_proofs.py")}
+    assert on_disk, "no proof runners found at all"
+    assert on_disk == run_by_workflow, (
+        f"on disk but not run by ci.yml: {sorted(on_disk - run_by_workflow)}; "
+        f"run by ci.yml but not on disk: {sorted(run_by_workflow - on_disk)}"
     )
 
 

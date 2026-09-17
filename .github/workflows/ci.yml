@@ -162,10 +162,20 @@ jobs:
           # Each of the three files must contribute cases, and the count is
           # printed per file: an empty or partial collection that passed
           # silently is the void-guard shape this gate exists to prevent.
+          counted = 0
           for module in ("test_authorization_record", "test_audit_source", "test_reconciliation"):
               collected = [c for c in cases if c.get("classname", "").endswith(module)]
               assert collected, f"{module} proofs did not execute"
               print(f"F11 {module}: {len(collected)} proofs collected and executed")
+              counted += len(collected)
+          # The per-module counts above come from an endswith() FILTER over the
+          # report. This ties them back to the artifact: a test held in a class
+          # (classname ends in the class, not the module) or a module the filter
+          # mis-names drops out of the per-module count and stays in len(cases),
+          # and the difference is a red line here rather than a quiet shortfall
+          # (doctrine #11, OPEN-GAPS G53). The other pinned steps carry the same
+          # tie as `len(cases) == sum(expected.values())`; this one did not.
+          assert counted == len(cases), (counted, len(cases))
           assert all(case.find(tag) is None for case in cases for tag in ("skipped", "failure", "error")), "F11 proof skipped or failed"
           print(f"F11: {len(cases)} proofs executed; zero skips/failures/errors")
           PY
@@ -235,10 +245,34 @@ jobs:
         run: python scripts/reachability_build_proofs.py
 
       - name: Reachability reader reverts (must be caught)
-        # The reader half of F-9. Measured: 5 first-order rows, each with a
+        # The reader half of F-9. Measured: 6 first-order rows, each with a
         # second-order assertion-deleted variant, and the runner refuses a
         # proof population that changed size as well as one that went green.
+        # (This comment said 5 from 2026-09-17 until G53: the number came from
+        # a log read through a case-sensitive filter that dropped the row
+        # whose label starts with a capital. The runner now prints its own
+        # row count, which is where this number comes from.)
         run: python scripts/reachability_reader_proofs.py
+
+      - name: Matrix agreement proofs (the cross-version guard refuses what it must)
+        # G54's guard, proved here on reports written by the tests: a version
+        # collecting a test the others did not, the same count with different
+        # membership, the same set with a different skip set, a failure, an
+        # empty report, a missing or a stranger version — each refused and
+        # named. The per-version half of the same property — each version's
+        # skip SET against the sanctioned manifest (G7) — is proved beside it.
+        # Membership pinned, so a deleted refusal cannot hide behind an
+        # unchanged count.
+        run: |
+          python -m pytest -q tests/conformance/test_matrix_agreement.py tests/conformance/test_skip_manifest_guard.py --junitxml=matrix-agreement-proofs.xml
+          python scripts/check_proof_composition.py matrix-agreement-proofs.xml matrix_agreement
+
+      - name: Matrix agreement guard reverts (must be caught)
+        # Both attack classes on scripts/check_matrix_agreement.py: each
+        # comparison deleted, a set replaced by a count (twice), every version
+        # compared against itself, and the matrix hand-listed instead of read.
+        # Each row must redden the proof it names; the runner raises otherwise.
+        run: python scripts/matrix_agreement_proofs.py
 
       - name: Receipt classification reverts (must be caught)
         # Both attack classes on the unreceipted/tampered split, the two read
@@ -617,5 +651,56 @@ jobs:
         # host the manifest was written on, and both report 23 (OPEN-GAPS G7).
         run: python scripts/check_skip_manifest.py full-suite.xml
 
+      - name: Upload the full-suite report for the cross-version agreement job
+        # G54. The step above pins each version's skip set against the
+        # manifest; nothing compared the three versions' COLLECTED sets to each
+        # other. Three green jobs can run three different suites — a test
+        # defined under a version guard exists on one interpreter and is
+        # absent, not skipped, on another — and the matrix rollup cannot see
+        # it. The matrix-agreement job below reads all three reports back as
+        # sets of test ids. A missing report refuses the upload rather than
+        # skipping it: an absent artifact would read downstream as a version
+        # that never disagreed (doctrine #8).
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-suite-${{ matrix.python-version }}
+          path: full-suite.xml
+          if-no-files-found: error
+
       - name: Build
         run: python -m build
+
+  matrix-agreement:
+    # THE THREE VERSIONS RAN THE SAME SUITE, OR THIS IS RED. Depends on the
+    # whole matrix, so it runs only when every version's suite completed and
+    # its report was uploaded; a red build job leaves this job skipped, which
+    # is a red run either way. scripts/check_matrix_agreement.py compares the
+    # reports as SETS of collected ids and of skipped ids (OPEN-GAPS G25: a
+    # count is not a composition), refuses on any failure or error, on an
+    # empty report, and on a version set that is not exactly the matrix above
+    # — read from this file, not typed into the script. Its output is the
+    # per-version table, so the counts are readable from this short job log
+    # and the step summary without fetching any raw log; that unreadability
+    # is what G54 records. Reverting any comparison is caught by
+    # scripts/matrix_agreement_proofs.py in the build job.
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install (editable + dev extra)
+        run: python -m pip install -e ".[dev]" -c constraints.txt
+
+      - name: Download every matrix report
+        uses: actions/download-artifact@v4
+        with:
+          pattern: full-suite-*
+          path: matrix-reports
+
+      - name: The three versions ran the same suite (sets, not counts; any difference refuses)
+        run: python scripts/check_matrix_agreement.py --reports-dir matrix-reports

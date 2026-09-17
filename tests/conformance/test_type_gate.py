@@ -704,11 +704,19 @@ def test_the_job_declares_exactly_the_expected_services():
 
 
 def test_the_workflow_defines_exactly_the_expected_jobs():
-    """A second job could carry the required-check name while doing nothing."""
+    """A second job could carry the required-check name while doing nothing.
+
+    Exactly two since 2026-09-17: ``build`` (the matrix) and
+    ``matrix-agreement`` (G54), which depends on the whole matrix and compares
+    the three versions' reports. That the second job is the agreement job and
+    not a decoy — ``needs: build``, downloads every ``full-suite-*`` artifact,
+    runs ``scripts/check_matrix_agreement.py`` — is pinned in
+    ``test_matrix_agreement.py``; this test pins that there is no third.
+    """
 
     jobs = _workflow()["jobs"]
-    assert sorted(jobs) == ["build"], (
-        f"ci.yml defines jobs {sorted(jobs)}; expected exactly ['build']"
+    assert sorted(jobs) == ["build", "matrix-agreement"], (
+        f"ci.yml defines jobs {sorted(jobs)}; expected exactly ['build', 'matrix-agreement']"
     )
 
 
