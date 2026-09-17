@@ -2579,6 +2579,37 @@ carries it on the OPEN event and only this push clears it -- the cost carrier 30
 first measured. **Running total 36: 28 review replies, 6 bodies, 2 comments**,
 recounted rather than incremented.
 
+**CARRIER 37, the three-version matrix comment on #125 (`5715808954`).** Posted
+through the comment channel, read back with the footer present, stripped through
+`update_issue_comment`, read back clean -- so it is a carrier that EXISTED
+rather than one that stands, the same shape as carrier 33 and unlike every
+review reply in the table above. Recorded for the reason the paragraph above
+gives, not because the mechanism changed.
+
+**What no check in this repository would have caught, stated because the
+stripping was a choice and not an enforcement:** `ci.yml` reads
+`github.event.pull_request.title` and `.body` and the branch's commit messages.
+`pr-text-hygiene.yml` reads the title and body on `edited`. Neither reads a pull
+request COMMENT, exactly as neither reads a review reply -- and none of the six
+workflows in `.github/workflows/` triggers on a comment event at all, checked by
+reading every `on:` block rather than the two that seemed likely. The footer on
+`5715808954` was found by reading the comment back, which is a habit, not a
+guard -- which is this entry's standing point and the reason the count is kept
+by hand.
+
+**Running total 37: 28 review replies, 6 bodies, 3 comments.** Recounted from
+the bounded table's composition (25 review replies, 3 bodies, 1 comment) plus
+carriers 30 to 37, not incremented.
+
+**THE COUNT IS ACCURATE AS OF THIS COMMIT AND CANNOT BE ACCURATE AFTER IT, which
+is a property of the count and not an oversight.** Reporting this commit's own
+CI means posting a comment, and that comment will carry the footer -- so
+recording carrier 37 creates carrier 38, and recording 38 would create 39. The
+regress terminates by saying where the line is instead of chasing it: every
+carrier observed up to the commit that carries this paragraph is counted here,
+and any carrier created while reporting it is recorded at the next push. A
+total in this entry therefore means "as of its commit", never "as of now".
+
 ---
 
 ## G29 — re-observation at execution: built for `branch.delete`, opted out by name for the other two
