@@ -3939,3 +3939,63 @@ Second-order, defect restored under each proof: deleted-row minus its
 call-count assertion (+V1+V3) 3 red; re-attributed minus its (+V2) 2 red;
 programmatic verifier minus `not forged.ok` (+V5) 1 red. No proof survives;
 `pytest.raises` and the status assertion carry each half respectively.
+
+## G43 — a component the build guard's traversal cannot reach is reported as `default_not_applicable`, not refused
+
+**Filed by independent review of #122, fixed only in part here.** The Part 1
+remediation states this limit at the mechanism and pins both halves of it; the
+RULING that non-discovery must refuse is Part 2 work and is not done.
+
+`runtime/security_build.py:_objects` descends `_WALKED_CONTAINERS`
+(`tuple`, `list`, `dict`) and `__dict__`, and nothing else. A package-owned
+component held in any other container is not reached, and
+`validate_build` then reports its property `default_not_applicable` whenever
+the Config value is its default — which reads downstream as fine. Every other
+limit this guard states describes something it declines to cover. **This one
+describes something it actively reports as applicable-and-absent when it is
+neither**, which is couldn't-verify reported as verified-clean inside the guard
+built to end that class (doctrine #1).
+
+**Measured.** The same live defect — a `SubstratePolicy(allow_unverified=True)`
+against a Config whose `allow_unverified_substrate` is `False` — attached to a
+real `build_execution_controller`, in ten positions:
+
+| position | observed |
+|---|---|
+| plain attribute | REFUSED `allow_unverified_substrate` |
+| inside a `list` | REFUSED `allow_unverified_substrate` |
+| inside a `set` | **PASSED → `default_not_applicable`** |
+| inside a `frozenset` | **PASSED → `default_not_applicable`** |
+| as a `dict` KEY | **PASSED → `default_not_applicable`** |
+| behind a `SimpleNamespace` | **PASSED → `default_not_applicable`** |
+| behind a lambda closure | **PASSED → `default_not_applicable`** |
+| behind a generator | **PASSED → `default_not_applicable`** |
+| external subclass, honest `__module__` | REFUSED `component` |
+| duck-typed third-party replacement | **PASSED → `default_not_applicable`** |
+
+The external-subclass refusal added in #122 covers MRO-based foreign subclasses
+*that the traversal reaches*. It covers neither an unwalked container nor a
+duck type with no first-party base.
+
+**LATENT IN THE SHIPPED GRAPH, OPEN IN PRINCIPLE.** An exhaustive walk that
+also descends sets, slots, closures and namespaces was run against all four
+runtime roots: the only object `_objects` misses is `Config`, excluded
+deliberately. So nothing hides there today. Nothing refuses if it ever does.
+
+**Both halves are passing tests**, so this entry cannot go stale silently:
+`test_security_build.py::test_the_shipped_graph_hides_nothing_from_the_traversal`
+(latency) and
+`::test_an_unreachable_component_reads_as_not_applicable_not_as_a_refusal`
+(the behaviour, over five container shapes). The second asserts what the guard
+DOES; closing this gap must flip it, which is the intended signal.
+
+**The second half of the same finding, not fixed and not separately numbered:**
+the *field* population is derived from `dataclasses.fields` and fails closed on
+an unknown field, but the *consumer classes per property*
+(`security_build.py:158-255`) are twelve hand-written names. Measured on
+`build_orchestrator` with `gate_threshold=0.9`: the same disagreeing value
+(`threshold=0.0`) is REFUSED when carried by `PromotionGate` and reported
+`applied` when carried by a new first-party type. A new Config field refuses; a
+new consumer of an existing field is silently uncovered. Draft hole #8's fix
+was to add the second consumer to that list, which is the same shape as the
+hole.

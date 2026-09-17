@@ -14,7 +14,14 @@ from prometheus_protocol.provider.mock import MockProvider
 from prometheus_protocol.runtime import factory
 from prometheus_protocol.sandbox.namespace import NamespaceSandbox
 from prometheus_protocol.chokepoint.signer import LocalHmacSigner
-from prometheus_protocol.runtime.security_build import BuildRefused, install_build_guards
+from prometheus_protocol.runtime.security_build import (
+    APPLIED,
+    DEFAULT_NOT_APPLICABLE,
+    NOT_REQUESTED,
+    REPORT_TOKENS,
+    BuildRefused,
+    install_build_guards,
+)
 
 
 @pytest.fixture
@@ -25,19 +32,72 @@ def build_config(tmp_path, monkeypatch):
                   registry_dir=tmp_path / "skills", trust_store_path=tmp_path / "trust.db")
 
 
-def test_f1_required_attestation_reaches_startup(build_config, tmp_path, monkeypatch):
+@pytest.mark.parametrize("failure", ["publisher_raises", "publisher_returns_nothing"])
+def test_f1_required_attestation_reaches_startup(build_config, tmp_path, monkeypatch, failure):
+    """F1: the production root must CALL the startup publisher.
+
+    The first version of this test asserted only ``pytest.raises(ConfigError)``
+    with no ``match``, collected the publisher's calls into a list and never
+    asserted it. ``BuildRefused`` subclasses ``ConfigError``, so ANY refusal
+    for ANY cause satisfied that — and measured, the cause was a different one:
+    ``resolve_attestation_signer`` raised for the missing signer BEFORE
+    ``attest_at_startup`` was reached, leaving the monkeypatch inert and
+    ``calls == []``. The test named for F1 never established F1.
+
+    So: supply the signer, so reaching the publisher is the only way forward;
+    assert the reach; and assert WHICH property the refusal names.
+    ``test_the_signer_refusal_is_a_different_cause_and_says_so`` holds the
+    other branch apart rather than letting it stand in for this one.
+    """
+
     calls = []
 
     def unavailable(*args, **kwargs):
         calls.append(True)
-        raise ConfigError("publication unavailable")
+        if failure == "publisher_raises":
+            raise ConfigError("publication unavailable")
+        return None
 
     monkeypatch.setattr(attestation, "attest_at_startup", unavailable)
     config = replace(build_config, require_config_attestation=True,
                      config_attestation_target=f"worm://{tmp_path}/attest")
-    with pytest.raises(ConfigError):
+    with pytest.raises(ConfigError) as caught:
+        factory.build_execution_controller(
+            config, attestation_signer=LocalHmacSigner(b"s" * 32)
+        )
+
+    assert calls == [True], (
+        "the root refused without ever calling the startup publisher: this "
+        "test cannot tell publication-not-reached from any other refusal"
+    )
+    if failure == "publisher_returns_nothing":
+        assert isinstance(caught.value, BuildRefused)
+        assert caught.value.property_name == "config_attestation_target"
+    else:
+        assert "publication unavailable" in str(caught.value)
+
+
+def test_the_signer_refusal_is_a_different_cause_and_says_so(build_config, tmp_path, monkeypatch):
+    """The branch that used to satisfy the F1 test, held apart from it.
+
+    With no signer the root still refuses — correctly — but the publisher is
+    NOT reached, and the refusal is about custody, not publication. Pinning
+    both facts is what stops this branch standing in for the one above.
+    """
+
+    calls = []
+    monkeypatch.setattr(
+        attestation, "attest_at_startup",
+        lambda *args, **kwargs: calls.append(True),
+    )
+    config = replace(build_config, require_config_attestation=True,
+                     config_attestation_target=f"worm://{tmp_path}/attest")
+    with pytest.raises(ConfigError) as caught:
         factory.build_execution_controller(config)
-    # Missing signer is also a refusal, but must not silently return a controller.
+
+    assert calls == [], "the publisher must not be reached without a signer"
+    assert not isinstance(caught.value, BuildRefused)
+    assert "signer" in str(caught.value)
 
 
 def build_root(name, config, **kwargs):
@@ -81,14 +141,20 @@ def test_f2_workflow_applies_required_anchor(build_config, tmp_path):
 
 @pytest.mark.parametrize("root", ["execution", "swarm"])
 def test_f2_injected_unanchored_ledger_is_refused(build_config, tmp_path, root):
+    """Nine other tests in this module assert ``caught.value.property_name``;
+    this one and F1's were the two that did not, and they are the two carrying
+    the names of the gaps this sprint closed. Measured before adding it, the
+    cause was already ``ledger_anchor`` — under-asserted rather than wrong."""
+
     config = replace(build_config, ledger_path=tmp_path / "audit.db",
                      require_ledger_anchor=True, ledger_anchor=f"worm://{tmp_path}/tips")
     ledger = SqliteLedger(":memory:")
-    with pytest.raises(ConfigError):
+    with pytest.raises(BuildRefused) as caught:
         if root == "execution":
             factory.build_execution_controller(config, ledger=ledger)
         else:
             factory.build_swarm_runtime(config, provider=MockProvider(), ledger=ledger)
+    assert caught.value.property_name == "ledger_anchor"
 
 
 @pytest.mark.parametrize("root", ["execution_controller", "workflow_runtime", "orchestrator", "swarm"])
@@ -342,3 +408,202 @@ def test_external_security_subclass_is_not_an_absent_default_domain(build_config
     with pytest.raises(BuildRefused) as caught:
         validate_build(build_config, runtime)
     assert caught.value.property_name == "component"
+
+
+# ---------------------------------------------------------------------------
+# The report vocabulary: a MEMBERSHIP, exact in both directions (#120's lesson)
+# ---------------------------------------------------------------------------
+
+
+def _report_tokens_in_source() -> set[str]:
+    """Every value assigned into ``report[...]``, read off the module source.
+
+    Two sources, as always: the constants say what the vocabulary IS and this
+    says what the code WRITES. A single hand-maintained list would agree with
+    itself no matter what the code did.
+    """
+
+    import ast
+
+    from prometheus_protocol.runtime import security_build
+
+    tree = ast.parse(Path(security_build.__file__).read_text(encoding="utf-8"))
+    constants = {
+        target.id: node.value.value
+        for node in tree.body
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant)
+        for target in node.targets
+        if isinstance(target, ast.Name) and isinstance(node.value.value, str)
+    }
+
+    def resolve(node):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return {node.value}
+        if isinstance(node, ast.Name) and node.id in constants:
+            return {constants[node.id]}
+        if isinstance(node, ast.IfExp):
+            return resolve(node.body) | resolve(node.orelse)
+        raise AssertionError(f"unresolvable report value at line {node.lineno}")
+
+    written: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if (
+            isinstance(target, ast.Subscript)
+            and isinstance(target.value, ast.Name)
+            and target.value.id == "report"
+        ):
+            written |= resolve(node.value)
+    return written
+
+
+def test_the_report_vocabulary_is_pinned_exactly():
+    """A new token must be named before it can ship, and a named token that
+    stopped being written must be noticed. EXACT — a floor catches neither."""
+
+    assert _report_tokens_in_source() == set(REPORT_TOKENS)
+
+
+def test_a_disabled_requirement_is_not_reported_as_applied(build_config):
+    """F-6. ``docs/reachability-build.md`` states the rule — "a disabled
+    requirement is not evidence its mechanism exists" — and the first
+    implementation wrote APPLIED on these three rows anyway, using the same
+    token as ``verifier_timeout_s``, which WAS compared against live
+    ``SubprocessVerifier``/``Limits`` objects."""
+
+    runtime = factory.build_execution_controller(build_config)
+    report = runtime._security_build_report
+    assert build_config.ledger_anchor is None
+    assert build_config.require_ledger_anchor is False
+    assert build_config.require_digest_pin is False
+    assert report["ledger_anchor"] == NOT_REQUESTED
+    assert report["require_ledger_anchor"] == NOT_REQUESTED
+    assert report["require_digest_pin"] == NOT_REQUESTED
+    # ...while a property that WAS compared against live components still says so.
+    assert report["verifier_timeout_s"] == APPLIED
+
+
+def test_a_requested_anchor_is_still_reported_as_applied(build_config, tmp_path):
+    """The paired positive: APPLIED must still mean what it meant, or the fix
+    above would be indistinguishable from deleting the token."""
+
+    config = replace(build_config, require_ledger_anchor=True,
+                     ledger_anchor=f"worm://{tmp_path}/tips")
+    runtime = factory.build_execution_controller(config)
+    report = runtime._security_build_report
+    assert report["require_ledger_anchor"] == APPLIED
+    assert report["ledger_anchor"] == APPLIED
+
+
+def test_every_reported_token_is_a_member_of_the_vocabulary(build_config, tmp_path):
+    """Across all four roots, on two configurations, nothing outside the set."""
+
+    from prometheus_protocol.provider.mock import MockProvider
+
+    requested = replace(build_config, require_ledger_anchor=True,
+                        ledger_anchor=f"worm://{tmp_path}/tips")
+    seen: set[str] = set()
+    for config in (build_config, requested):
+        for root in ("execution_controller", "workflow_runtime", "orchestrator", "swarm"):
+            if root == "swarm":
+                runtime = factory.build_swarm_runtime(config, provider=MockProvider())
+            else:
+                runtime = getattr(factory, "build_" + root)(config)
+            seen |= set(runtime._security_build_report.values())
+    assert seen and seen <= set(REPORT_TOKENS)
+
+
+# ---------------------------------------------------------------------------
+# The traversal limit, stated where the mechanism is (and both halves pinned)
+# ---------------------------------------------------------------------------
+
+
+def _exhaustive(root):
+    """Descends everything ``_objects`` does NOT: sets, slots, closures, keys."""
+
+    todo, seen, out = [root], set(), []
+    while todo:
+        obj = todo.pop()
+        if id(obj) in seen:
+            continue
+        seen.add(id(obj))
+        if type(obj).__module__.startswith("prometheus_protocol."):
+            out.append(obj)
+        if isinstance(obj, (str, bytes, int, float, bool, type(None), Path)):
+            continue
+        if isinstance(obj, dict):
+            todo.extend(obj.keys())
+            todo.extend(obj.values())
+            continue
+        if isinstance(obj, (list, tuple, set, frozenset)):
+            todo.extend(obj)
+            continue
+        if hasattr(obj, "__self__"):
+            todo.append(obj.__self__)
+        if getattr(obj, "__closure__", None):
+            todo.extend(cell.cell_contents for cell in obj.__closure__)
+        if hasattr(obj, "__dict__"):
+            todo.extend(vars(obj).values())
+        for slot in getattr(type(obj), "__slots__", ()) or ():
+            if hasattr(obj, slot):
+                todo.append(getattr(obj, slot))
+    return out
+
+
+@pytest.mark.parametrize("root", ["execution_controller", "workflow_runtime", "orchestrator"])
+def test_the_shipped_graph_hides_nothing_from_the_traversal(build_config, root):
+    """Half one of the stated limit: LATENT. An exhaustive walk of each shipped
+    root finds exactly one object ``_objects`` misses — ``Config``, excluded
+    deliberately. If a future component moves into a set or behind slots, this
+    reddens and the limit stops being latent."""
+
+    from prometheus_protocol.runtime.security_build import _objects
+
+    runtime = getattr(factory, "build_" + root)(build_config)
+    reachable = {id(obj) for obj in _objects(runtime)}
+    missed = {
+        f"{type(obj).__module__}.{type(obj).__name__}"
+        for obj in _exhaustive(runtime)
+        if id(obj) not in reachable
+    }
+    assert missed == {"prometheus_protocol.core.config.Config"}
+
+
+@pytest.mark.parametrize("container", ["set", "frozenset", "dict_key", "namespace", "closure"])
+def test_an_unreachable_component_reads_as_not_applicable_not_as_a_refusal(build_config, container):
+    """Half two: OPEN IN PRINCIPLE, and this is the limit's whole point.
+
+    The SAME live defect — a substrate policy permitting what the Config
+    forbids — is refused when the traversal reaches it and reported
+    ``default_not_applicable`` when it does not. This test asserts the
+    behaviour the guard HAS, so the limit in ``_objects`` is measured rather
+    than asserted, and so the fix filed as G43 has a test that must flip.
+    """
+
+    import types
+
+    from prometheus_protocol.chokepoint.substrate import SubstratePolicy
+    from prometheus_protocol.runtime.security_build import validate_build
+
+    defect = SubstratePolicy(require_verified=False, allow_unverified=True)
+    assert build_config.allow_unverified_substrate is False
+
+    reachable = factory.build_execution_controller(build_config)
+    reachable.probe_attribute = defect
+    with pytest.raises(BuildRefused) as caught:
+        validate_build(build_config, reachable)
+    assert caught.value.property_name == "allow_unverified_substrate"
+
+    hidden = factory.build_execution_controller(build_config)
+    hidden.probe_attribute = {
+        "set": lambda: {defect},
+        "frozenset": lambda: frozenset({defect}),
+        "dict_key": lambda: {defect: 1},
+        "namespace": lambda: types.SimpleNamespace(policy=defect),
+        "closure": lambda: (lambda: defect),
+    }[container]()
+    assert validate_build(build_config, hidden)["allow_unverified_substrate"] == (
+        DEFAULT_NOT_APPLICABLE
+    ), "the limit named in _objects has changed; update the docstring and G43"
