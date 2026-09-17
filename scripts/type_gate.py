@@ -49,9 +49,12 @@ The receipt is an ACCIDENT AND STALENESS DETECTOR, not a forgery detector.
 Two further properties the receipt carries, both of which have already failed
 in this repository once:
 
-* **The checked-file count is pinned to a floor.** A gate whose scope silently
+* **The checked-file count is pinned exactly.** A gate whose scope silently
   shrank — ``files`` narrowed, a directory moved out from under it — reports
-  ``Success`` over what is left. ``MINIMUM_CHECKED_FILES`` makes that fail.
+  ``Success`` over what is left. A larger population is not silently accepted
+  either: every deliberate change is measured and re-pinned. Count equality is
+  not file-identity equality; the whole-tree config guard carries that separate
+  constraint.
 * **A clean run must actually say so.** Only ``Success: no issues found in N
   source files`` is accepted. mypy exiting zero for some other reason (nothing
   to check, an internal short-circuit) is refused.
@@ -75,16 +78,12 @@ REPO = Path(__file__).resolve().parent.parent
 CONFIG = REPO / "mypy.ini"
 RECEIPT = REPO / "type-gate-receipt.json"
 
-#: The tree's real size at the last deliberate update, and the tolerance below
-#: it. A review pointed out that a floor of 230 against 244 real files let 14
-#: files of scope vanish unnoticed — a floor with that much slack is barely a
-#: floor. The tolerance is now small and explicit.
+#: The tree's observed size at the last deliberate update. Both shortfall and
+#: excess refuse: a tolerance of two previously admitted a narrowed check.
 #:
-#: THE RULE FOR UPDATING IT: when the tree legitimately grows, raise
-#: ``EXPECTED_CHECKED_FILES`` to the new observed count in the same change that
-#: grows it. Never lower it to accommodate a narrowing — a smaller tree passing
-#: is not this tree passing. The tolerance absorbs a file or two in flight; it is
-#: not a budget for removing directories.
+#: THE RULE FOR UPDATING IT: when the tree legitimately changes, measure mypy's
+#: actual population, account for the changed modules, and pin that exact count
+#: in the same change. Never predict a count or lower it to hide a narrowing.
 #:
 #: Observed 316 on 2026-09-15 (was 314): G26 added
 #: ``policy/implementations.py`` and ``tests/conformance/test_implementation_registry.py``.
@@ -97,9 +96,9 @@ RECEIPT = REPO / "type-gate-receipt.json"
 #: Observed 326 on 2026-09-16 (was 322): F13/F14 added ``ledger/receipts.py``
 #: and three proof modules — ``test_chained_decision_and_outcome.py``,
 #: ``test_receipt_derivation.py``, ``test_receipt_substitution.py``.
-EXPECTED_CHECKED_FILES = 326
-CHECKED_FILE_TOLERANCE = 2
-MINIMUM_CHECKED_FILES = EXPECTED_CHECKED_FILES - CHECKED_FILE_TOLERANCE
+#: Observed 333 on 2026-09-16 (was 326): the reachability sprint added two
+#: runtime/reader modules, three conformance modules, and two mutation runners.
+EXPECTED_CHECKED_FILES = 333
 
 _SUCCESS = re.compile(
     r"^Success: no issues found in (\d+) source files?$", re.MULTILINE
@@ -179,11 +178,11 @@ def main() -> int:
         return 1
 
     checked = int(match.group(1))
-    if checked < MINIMUM_CHECKED_FILES:
+    if checked != EXPECTED_CHECKED_FILES:
         print(
-            f"[type-gate] FAILED — only {checked} file(s) checked, floor is "
-            f"{MINIMUM_CHECKED_FILES}. The gate's scope shrank; a smaller tree "
-            "passing is not the same as this tree passing.",
+            f"[type-gate] FAILED — {checked} file(s) checked, exact pin is "
+            f"{EXPECTED_CHECKED_FILES}. Shortfall and excess both refuse; "
+            "measure and account for the changed population before re-pinning.",
             file=sys.stderr,
         )
         return 1

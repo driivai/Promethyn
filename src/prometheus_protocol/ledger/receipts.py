@@ -41,7 +41,7 @@ from __future__ import annotations
 import dataclasses
 import json
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Mapping, Protocol
 
 from prometheus_protocol.core.interfaces import Ledger
 from prometheus_protocol.ledger.audit_chain import (
@@ -88,6 +88,33 @@ EXECUTION_ROW_MISSING = "execution_row_missing"
 
 #: A ledger whose chain verifies but whose rows disagree with it.
 RECEIPTS_INVALID = "receipts_invalid"
+
+
+class ReceiptSource(Protocol):
+    def pending_actions(self, *, status: str | None = None) -> list[dict]: ...
+    def executions(self) -> list[dict]: ...
+    def chained_events(self) -> list[dict]: ...
+
+
+@dataclass(frozen=True)
+class ReceiptSnapshot:
+    """Untrusted diagnostic material, not a verified reader API."""
+
+    holds: list[dict]
+    outcomes: list[dict]
+    events: list[dict]
+
+    def pending_actions(self, *, status: str | None = None) -> list[dict]:
+        return [row for row in self.holds if status is None or row["status"] == status]
+
+    def executions(self) -> list[dict]:
+        return self.outcomes
+
+    def chained_events(self) -> list[dict]:
+        return self.events
+
+    def _receipt_source(self) -> "ReceiptSnapshot":
+        return self
 
 
 def decision_subject(pending_id: int) -> str:
@@ -301,7 +328,7 @@ class ReceiptVerification:
         return "\n".join(lines)
 
 
-def verify_receipts(ledger: Ledger) -> ReceiptVerification:
+def verify_receipts(ledger: Ledger | ReceiptSnapshot) -> ReceiptVerification:
     """Every decided hold and every execution row, against its chained receipt.
 
     Rows are trusted only where the chain vouches for them. A row with no entry
@@ -317,12 +344,24 @@ def verify_receipts(ledger: Ledger) -> ReceiptVerification:
     under rewritten rows — F13 and F14). An auditor wants both.
     """
 
-    events = ledger.chained_events()
+    source = ledger._receipt_source()
+    events = source.chained_events()
     findings: list[ReceiptFinding] = []
 
-    holds = ledger.pending_actions()
+    holds = source.pending_actions()
     for row in holds:
         subject = decision_subject(row["id"])
+        # The persisted observation obligation lives inside this authorization
+        # record. A decision-only check would leave a forged opt-out readable.
+        held = [entry for entry in events if entry.get("event") == HOLD_EVENT and entry.get("subject") == subject]
+        authorization = row.get("authorization")
+        if held:
+            if len(held) != 1:
+                findings.append(ReceiptFinding(subject, "chain_entry_count_wrong"))
+            elif _decoded(held[0].get("payload")) != authorization:
+                findings.append(ReceiptFinding(subject, "record_differs_from_chain_entry"))
+        elif isinstance(authorization, dict) and "record_version" in authorization:
+            findings.append(ReceiptFinding(subject, "chain_entry_count_wrong"))
         projected = project_decision(row)
         chained = latest_entry(events, event=DECISION_EVENT, subject=subject)
         if chained is None:
@@ -336,7 +375,7 @@ def verify_receipts(ledger: Ledger) -> ReceiptVerification:
         if differs:
             findings.append(ReceiptFinding(subject, DECISION_DIFFERS, differs))
 
-    executions = ledger.executions()
+    executions = source.executions()
     for row in executions:
         subject = outcome_subject(row["id"])
         projected = project_outcome(row)

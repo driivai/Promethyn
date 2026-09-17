@@ -281,7 +281,7 @@ def test_relabelling_a_hold_to_the_new_policy_does_not_get_it_approved():
     )
     d.ledger._conn.commit()
     entry = next(
-        e for e in d.ledger.chained_events() if e["subject"] == f"pending:{held.id}"
+        e for e in d.ledger._receipt_source().chained_events() if e["subject"] == f"pending:{held.id}"
     )
     rewrite_entry_and_rehash(d.ledger, seq=entry["seq"], payload=relabelled)
     assert d.ledger.verify_chain().ok

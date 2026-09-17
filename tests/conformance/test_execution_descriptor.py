@@ -443,7 +443,8 @@ def test_human_hold_requires_same_proof_and_revalidates_on_approval_and_retry():
     assert held is not None and spy.calls == []
     controller.approve(held.id, identity="human")
     assert len(spy.calls) == 1
-    # Persisted proof is mandatory; legacy/hollowed rows refuse on reload/retry.
+    # Persisted proof is mandatory. Hollowing a modern row contradicts its
+    # chained record (distinct from an authentic, unreceipted legacy hold).
     ledger._conn.execute(
         "UPDATE pending_actions SET authorization=NULL WHERE id=?", (held.id,)
     )
@@ -451,7 +452,7 @@ def test_human_hold_requires_same_proof_and_revalidates_on_approval_and_retry():
         controller.retry_execution(held.id, identity="human")
 
 
-    assert reverify.value.reason == "reverification_required"
+    assert reverify.value.reason == "record_differs_from_chain_entry"
 def test_human_cannot_hold_a_failure_or_replace_the_validated_action():
     a = action()
     g = gate()

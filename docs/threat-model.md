@@ -1162,10 +1162,20 @@ a review — it is called out at the top of the pull request.
 
 ### 4.6 Signed config digests — which posture is actually running (PIH-4a)
 
+**Limits first.** A published digest attests the posture returned by
+`attestation.runtime.resolve_posture`, not an inventory of every object an
+arbitrary integrator constructed. That resolver constructs sandbox and anchor
+adapters from configuration; it does not inspect the identity of every live
+component injected into a runtime. Its schema also does not contain every
+security setting (the posture omissions tracked separately as F17 remain out
+of this sprint). Startup publication proves neither continuous publication nor
+that a WORM-labelled local directory is physically immutable. Those are
+separate integration and deployment obligations.
+
 The near-term slice of Defense 4, and the same shape as the two witnesses that
 came before it: PIH-1 puts the ledger tip somewhere the ledger-writer cannot
 rewrite, PIH-2 puts the signing key somewhere the host cannot read, and PIH-4a
-puts **the running security posture** somewhere the host cannot silently
+puts **a resolved security-posture record** somewhere the host cannot silently
 change. It is composed from those two seams, not from new machinery: signing
 goes through PIH-2's `ApprovalSigner` port (`KmsSigner` in production, so the
 attestation is sealed by the key that never exists on this host) and publishing
@@ -1173,9 +1183,12 @@ goes to PIH-1's external targets (`ObjectStore` for a WORM mount or
 object-locked bucket, `AppendOnlyLog` for a log run by another party). There is
 no second signing path and no second publishing path.
 
-**What it detects: a silent posture downgrade, by an external witness.** At
-startup — and again whenever the integrator calls it — `attestation/` computes a
-digest of the **resolved** posture, signs it, and publishes it. `prometheus-protocol
+**What it can detect: a change in the recorded posture, by an external witness.**
+When `attest_at_startup` is reached — and again whenever the integrator calls
+the attestor — `attestation/` computes a digest of the **resolved** posture,
+signs it, and publishes it. A target that passes `Config`'s shape validation is
+not evidence that this call occurred or that publication succeeded.
+`prometheus-protocol
 verify-config` then answers one of three things: **ATTESTED** (the signature is
 valid under the pinned public key *and* the digest equals the live resolved
 posture), **MISMATCH** (valid signature, different posture — the
@@ -1183,21 +1196,30 @@ silent-downgrade catch), or **NOT_VERIFIABLE** (invalid signature, unreadable
 record, or a live posture that could not be computed). Couldn't-verify is never
 attested-clean, the same distinction EX-1 draws for verifiers.
 
-**Resolved, never declared.** This is the load-bearing decision and it is the
-Attacker-5 lesson applied to attestation. The digest is taken over what the
-builders actually returned — the live sandbox adapter and its own `isolating`
+**Resolution, not live-object identity.** The digest includes what the
+posture resolver's builders returned — its sandbox adapter and that adapter's `isolating`
 answer, digest pinning as the built adapter reports it, the resolved anchor
 target *class* (so a required anchor that resolved to the non-protecting local
 file is a different posture from a `worm://` one), the signer actually in use
 (local HMAC vs external KMS, and its non-secret key id), the resolved substrate
 policy *and* the classification outcome, the TLS requirement, this attestation's
-own target class, and the numeric caps in force. Had it hashed what `Config`
+own target class, and the numeric caps represented by the schema. Had it hashed only what `Config`
 *says*, an operator whose `sandbox="auto"` silently resolved to a `NullSandbox`
 or to the unsafe runner would publish an unchanged digest and the attestation
 would miss exactly the downgrade it exists to catch. One declared configuration
 resolving three ways produces three digests, and the test that proves it
 (`test_one_declared_config_resolving_weaker_produces_a_different_digest`) shows
 the declared configuration is byte-identical in all three.
+
+The earlier text called these the adapters "actually running" and described
+publication as an unconditional startup property. F1 showed that the production
+factories never called the publication helper. Those claims are withdrawn:
+helper-level tests demonstrated the helper, not its reachability. The
+reachability build guard now checks the covered factories' assembled controls
+and calls the startup publisher before returning a runtime. Its root boundary
+and explicitly unsupported settings are described in
+`docs/reachability-build.md`; it does not turn the independently resolved
+attestation schema into a complete live-object inventory.
 
 **The encoding is pinned.** `sha256(DOMAIN || u64_be(field count) || per field
 lp(name) || lp(tag||value))`, where `lp` length-prefixes, the field count is
@@ -1208,14 +1230,13 @@ void-guard shape. A pinned known-answer vector fixes the whole encoding, so a
 drift in any part of it fails a test rather than changing what an auditor's
 records mean.
 
-**Publish failure is not swallowed.** Under `require_config_attestation` it is
-**fail-closed**: a posture that cannot be attested is refused, because being
-unable to attest a downgrade is itself the signal, and this repository's rule is
-that a requested security property which cannot be honoured is refused rather
-than degraded. Without the requirement it is a loud `ERROR` naming that the
-posture is on no external record, and the runtime continues — attestation is
-then an optional witness, and turning an optional witness's outage into a hard
-availability failure is the worse trade. No background thread does the cadence:
+**Publication at a supported root must complete when a target is requested.**
+Under `require_config_attestation` the publisher itself raises on failure.
+Without that flag, the low-level publisher logs an `ERROR` and returns no
+record; a direct caller may choose to continue. The production build guard is
+stricter: a configured target is a requested mechanism, so an absent successful
+publication refuses the build even when the flag is false. An entirely
+unconfigured witness remains optional. No background thread does the cadence:
 a thread that publishes and swallows what it catches is precisely the shape this
 control exists to prevent, so every failure reaches the caller.
 
@@ -1223,7 +1244,7 @@ control exists to prevent, so every failure reaches the caller.
 product provides.** `ConfigAttestor.attest_if_due()` publishes when the interval
 has elapsed *when it is called*, and nothing in this repository calls it on a
 timer — there is no product-level scheduler. An integrator who never calls it
-gets the startup attestation and nothing more, and the record ages silently. It
+gets at most the startup attestation and nothing more, and the record ages silently. It
 is written this way deliberately (a self-driving thread that swallowed its own
 failures would be the void-guard shape), but "on a cadence" must not be read as
 a property the runtime upholds by itself. Driving `attest_if_due()` — and
@@ -1329,11 +1350,16 @@ variable, and wired to nothing as a field. The audit that named it was right.
 - **High-risk routing is not a Config field.** `build_execution_controller`
   hardcodes `route_high_risk=True`; the most permissive `escalate_below` a
   Config can express (`0.0`) still routes high-risk actions to a human.
-- **The class, as a mechanism.** `Config.SECURITY_FIELDS` declares every
-  security-relevant field. A conformance test parses the source tree and fails
-  if any declared field is read nowhere outside `config.py`; a second fails if a
-  field whose *name* looks like a security flag is not declared. The next dead
-  flag fails CI instead of shipping.
+- **The configuration population is derived; spelling is not enforcement.**
+  Every `Config` field now explicitly classifies whether it is a build-time
+  security obligation in dataclass metadata, and `core.config.SECURITY_FIELDS`
+  is derived from those declarations. The build guard uses the actual config
+  type, including subclasses, and refuses unclassified fields. Existing source
+  spelling checks remain diagnostics only: an attribute appearing in dead code
+  proves no control was reached. The supported production root boundary,
+  component checks and deliberate refusals are in `docs/reachability-build.md`.
+  Misclassifying a future security field as non-security is still a trusted
+  schema error; metadata does not infer the meaning of Python code.
 
 ### 5.3 The sweep — every security setting, and what happens when it cannot be met
 
@@ -1395,8 +1421,10 @@ Asserted by `test_defaults_are_the_hardened_posture` and
 - **`require_config_attestation=False`** (§4.6). Same reason as the anchor and
   the signer, and the same remedy: a development install has no external witness
   to publish a posture digest to, and the local `file://` target is
-  non-protecting by construction. Left off, a failed or absent attestation is a
-  loud `ERROR` saying the running posture is on no external record. Production
+  non-protecting by construction. With no configured target there is no
+  attestation and no publication-error log. The standalone optional publisher
+  logs `ERROR` and returns `None` on failure; covered production roots now
+  refuse that unsuccessful publication even with this flag off. Production
   sets `PROM_REQUIRE_CONFIG_ATTESTATION=1` with a `worm://` or `https://`
   target, which refuses a local-only target, refuses no target at all, and makes
   a failure to publish fail closed.
@@ -1408,10 +1436,10 @@ Asserted by `test_defaults_are_the_hardened_posture` and
   unpinned image, with a warning; one who forgets `require_ledger_anchor` runs
   an unwitnessed ledger, with a warning on every open; one who forgets
   `require_external_signer` signs with a key root can read, with a warning at
-  build; one who forgets `require_config_attestation` runs a posture no external
-  record holds, so a later downgrade of it is not detectable — with an `ERROR`
-  whenever an attestation was attempted and failed, and nothing at all when none
-  was configured.
+  build; one who configures neither an attestation requirement nor a target
+  runs a posture no external record holds, so a later downgrade of it is not
+  detectable. Covered production roots refuse failure of a configured
+  publication; the optional standalone helper still only logs `ERROR`.
 - **The dead-flag mechanism is a SPELLING CHECK, and understating it here was
   itself a false claim.** This paragraph used to say it "proves a field is
   *consumed* somewhere", with a field read only to be logged as the worst case.

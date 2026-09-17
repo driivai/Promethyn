@@ -9,8 +9,9 @@ on one checker we happened to pin", and nothing said so.
 
 This closes that: it reads the floor out of ``pyproject.toml``, installs the
 project's pinned closure into a throwaway venv with ONLY the checker moved to
-the floor, and runs the same config. A diagnostic only the floor reports fails
-the build here, instead of surfacing in somebody else's review.
+the floor, and runs the same gate entry point (including its exact population
+check). A diagnostic only the floor reports fails the build here, instead of
+surfacing in somebody else's review.
 
 The closure matters. An earlier version installed mypy and the type stubs alone,
 so third-party imports degraded to ``Any`` at the floor while being real in the
@@ -236,7 +237,7 @@ def main() -> int:
             return 1
 
         result = subprocess.run(
-            [str(floor_python), "-m", "mypy", "--config-file", str(CONFIG)],
+            [str(floor_python), str(REPO / "scripts" / "type_gate.py")],
             cwd=REPO, capture_output=True, text=True,
         )
 
@@ -244,10 +245,10 @@ def main() -> int:
     sys.stderr.write(result.stderr)
     if result.returncode != 0:
         print(
-            f"[type-gate-floor] FAILED at mypy=={floor}. The tree type-checks on "
-            "the pinned checker but not on the floor of the range this project "
-            "declares it supports. Fix the EXPRESSION, or raise the floor "
-            "deliberately — never to make the diagnostic go away.",
+            f"[type-gate-floor] FAILED at mypy=={floor}. The common type gate "
+            "refused: inspect its diagnostic for type errors or an exact "
+            "population mismatch. Reconcile the reported defect; do not raise "
+            "the checker floor merely to make the diagnostic go away.",
             file=sys.stderr,
         )
         return 1

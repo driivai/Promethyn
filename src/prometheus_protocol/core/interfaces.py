@@ -21,6 +21,7 @@ from prometheus_protocol.core.models import (
 
 if TYPE_CHECKING:  # pragma: no cover - the chain's types, for the port's signatures
     from prometheus_protocol.ledger.audit_chain import ChainTip, ChainVerification
+    from prometheus_protocol.ledger.receipts import ReceiptSource
 
 
 class LearnableTask(Protocol):
@@ -217,6 +218,10 @@ class Ledger(ABC):
     attempt and every promotion is written down, in order, and can be read
     back.
     """
+
+    def _receipt_source(self) -> "ReceiptSource":
+        """Untrusted rows for diagnostics only; never authorization evidence."""
+        return self
 
     @abstractmethod
     def record_attempt(self, attempt: Attempt, *, cycle: int, kind: str) -> int:

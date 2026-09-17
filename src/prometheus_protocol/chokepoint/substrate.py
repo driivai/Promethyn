@@ -76,6 +76,7 @@ from typing import TypeVar
 
 from prometheus_protocol.core.booleans import parse_env_bool, require_bool
 from prometheus_protocol.core.errors import ConfigError
+from prometheus_protocol.runtime.security_build import component_builder
 
 _LOG = logging.getLogger(__name__)
 
@@ -773,6 +774,7 @@ def probe_substrate(path: str | os.PathLike[str]) -> SubstrateReport:
     return classify_path(probed, table)
 
 
+@component_builder
 def resolve_substrate_policy(
     config: object | None = None,
     *,

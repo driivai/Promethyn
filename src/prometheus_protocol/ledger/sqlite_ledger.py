@@ -15,6 +15,7 @@ import sqlite3
 import stat
 from dataclasses import asdict
 from pathlib import Path
+from typing import Any, Callable
 
 from prometheus_protocol.core.errors import StateError
 from prometheus_protocol.core.interfaces import Ledger
@@ -37,13 +38,16 @@ from prometheus_protocol.ledger.receipts import (
     DECISION_EVENT,
     OUTCOME_EVENT,
     LedgerVerification,
+    ReceiptSnapshot,
     decision_subject,
     outcome_subject,
     project_decision,
     project_outcome,
     unverifiable,
     verify_ledger,
+    verify_receipts,
 )
+from prometheus_protocol.ledger.readers import guard_readers, writes_ledger, unverified_diagnostic
 from prometheus_protocol.ledger.tip_anchor import (
     AnchorUnavailable,
     TipAnchor,
@@ -281,10 +285,62 @@ def _judgment_from_evidence(evidence_json: str | None) -> dict | None:
     return judgment
 
 
+@guard_readers
 class SqliteLedger(Ledger):
     """SQLite-backed ledger. Pass ``":memory:"`` for an ephemeral instance."""
 
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        guard_readers(cls)
+
+    def _receipt_source(self) -> ReceiptSnapshot:
+        """Private, untrusted diagnostic snapshot; bypasses public read guards."""
+        holds = self._conn.execute("SELECT * FROM pending_actions ORDER BY id").fetchall()
+        outcomes = self._conn.execute("SELECT * FROM executions ORDER BY id").fetchall()
+        events = self._conn.execute("SELECT * FROM audit_chain ORDER BY id").fetchall()
+        return ReceiptSnapshot(
+            holds=[self._pending_row(row) for row in holds],
+            outcomes=[self._execution_row(row) for row in outcomes],
+            events=[dict(row) for row in events],
+        )
+
+    def _authoritative_read(self, reader: Callable[..., Any], args: tuple, kwargs: dict) -> Any:
+        # Read the returned values and their authority in one SQLite snapshot.
+        # Checking first and re-reading afterwards would introduce a new race.
+        self._conn.execute("SAVEPOINT authoritative_read")
+        try:
+            result = reader(self, *args, **kwargs)
+            snapshot = self._receipt_source()
+        finally:
+            self._conn.execute("RELEASE SAVEPOINT authoritative_read")
+        from prometheus_protocol.policy.execution import ExecutionNotAuthorized
+
+        expected = None
+        if self._tip_anchor is not None:
+            try:
+                expected = anchor_history(self._tip_anchor)
+            except AnchorUnavailable:
+                raise ExecutionNotAuthorized(
+                    "authoritative ledger read refused: external anchor unavailable",
+                    reason="chain_did_not_verify",
+                ) from None
+        chain = verify_rows(snapshot.events, expected_tips=expected)
+        if not chain.ok:
+            raise ExecutionNotAuthorized(
+                "authoritative ledger read refused: chain did not verify",
+                reason="chain_did_not_verify",
+            )
+        receipts = verify_receipts(snapshot)
+        if not receipts.ok:
+            first = receipts.findings[0]
+            raise ExecutionNotAuthorized(
+                f"authoritative ledger read refused: {first.render()}",
+                reason=first.reason,
+            )
+        return result
+
     @classmethod
+    @unverified_diagnostic
     def private(
         cls, path: Path | str, *, tip_anchor: TipAnchor | None = None
     ) -> SqliteLedger:
@@ -309,6 +365,7 @@ class SqliteLedger(Ledger):
         return cls(location, tip_anchor=tip_anchor)
 
     @staticmethod
+    @unverified_diagnostic
     def check_private_path(path: Path, *, require_file: bool = True) -> None:
         if path.is_symlink() or path.parent.is_symlink():
             raise ValueError("private ledger cannot use a symlink")
@@ -392,6 +449,7 @@ class SqliteLedger(Ledger):
         self._conn.commit()
         return added
 
+    @writes_ledger
     def record_attempt(self, attempt: Attempt, *, cycle: int, kind: str) -> int:
         evidence = dict(asdict(attempt.evidence))
         # The pass/total/passed_count columns describe a check that RAN, and are
@@ -455,6 +513,7 @@ class SqliteLedger(Ledger):
         self._conn.commit()
         return _inserted_id(cur)
 
+    @writes_ledger
     def record_promotion(
         self,
         *,
@@ -484,6 +543,7 @@ class SqliteLedger(Ledger):
 
     # -- execution audit ---------------------------------------------------
 
+    @writes_ledger
     def record_pending_action(
         self,
         *,
@@ -520,6 +580,7 @@ class SqliteLedger(Ledger):
         self._conn.commit()
         return _inserted_id(cur)
 
+    @writes_ledger
     def resolve_pending_action(
         self,
         pending_id: int,
@@ -561,6 +622,7 @@ class SqliteLedger(Ledger):
         # ``pending.hold`` append failed.
         self._chain_decision(pending_id, at=decided_at)
 
+    @writes_ledger
     def invalidate_pending_action(
         self, pending_id: int, *, invalidated_at: str, reason: str
     ) -> bool:
@@ -600,6 +662,7 @@ class SqliteLedger(Ledger):
             self._chain_decision(pending_id, at=invalidated_at)
         return changed
 
+    @writes_ledger
     def mark_state_moved(self, pending_id: int, *, at: str, reason: str) -> bool:
         """Make an APPROVED hold terminal; True iff it was approved.
 
@@ -636,6 +699,7 @@ class SqliteLedger(Ledger):
             self._chain_decision(pending_id, at=at)
         return changed
 
+    @writes_ledger
     def claim_pending_execution(self, pending_id: int, claimed_at: str) -> bool:
         """Atomically claim the right to execute a hold; True iff this call won.
 
@@ -653,6 +717,7 @@ class SqliteLedger(Ledger):
         self._conn.commit()
         return cur.rowcount == 1
 
+    @writes_ledger
     def release_pending_execution(self, pending_id: int) -> None:
         """Release a claim taken by :meth:`claim_pending_execution`.
 
@@ -685,6 +750,7 @@ class SqliteLedger(Ledger):
         ).fetchone()
         return self._pending_row(row) if row is not None else None
 
+    @writes_ledger
     def record_execution(
         self,
         *,
@@ -779,6 +845,7 @@ class SqliteLedger(Ledger):
 
     # -- workflow attribution (additive; orchestration layer) --------------
 
+    @writes_ledger
     def record_workflow_step(
         self,
         *,
@@ -892,6 +959,7 @@ class SqliteLedger(Ledger):
 
     # -- backfill ----------------------------------------------------------
 
+    @writes_ledger
     def backfill(self) -> dict:
         """Fill judgment columns for historical rows from their JSON. Idempotent.
 
@@ -963,7 +1031,10 @@ class SqliteLedger(Ledger):
         would be three chances for a column to reach one and miss another.
         """
 
-        row = self.pending_action(pending_id)
+        stored = self._conn.execute(
+            "SELECT * FROM pending_actions WHERE id = ?", (pending_id,)
+        ).fetchone()
+        row = self._pending_row(stored) if stored is not None else None
         if row is None:
             raise StateError(
                 f"pending action {pending_id} vanished before its decision "
@@ -976,6 +1047,7 @@ class SqliteLedger(Ledger):
             created_at=at,
         )
 
+    @writes_ledger
     def record_chained(
         self, *, event: str, subject: str, payload: dict, created_at: str
     ) -> int:
@@ -1050,6 +1122,7 @@ class SqliteLedger(Ledger):
         rows = self._conn.execute("SELECT * FROM audit_chain ORDER BY id").fetchall()
         return [dict(row) for row in rows]
 
+    @unverified_diagnostic
     def chain_tip(self) -> ChainTip | None:
         """The current tip, to be held out-of-band as a truncation anchor."""
 
@@ -1059,11 +1132,13 @@ class SqliteLedger(Ledger):
         return ChainTip(seq=row["seq"], entry_hash=row["entry_hash"]) if row else None
 
     @property
+    @unverified_diagnostic
     def tip_anchor(self) -> TipAnchor | None:
         """The configured anchor target, if any — for the CLI and auditors."""
 
         return self._tip_anchor
 
+    @unverified_diagnostic
     def verify_chain(
         self,
         *,
@@ -1098,7 +1173,7 @@ class SqliteLedger(Ledger):
                     f"the configured tip anchor could not be read: {exc}",
                 )
         try:
-            rows = self.chained_events()
+            rows = self._receipt_source().chained_events()
         except sqlite3.DatabaseError as exc:
             return ChainVerification(
                 NOT_VERIFIABLE,
@@ -1108,6 +1183,7 @@ class SqliteLedger(Ledger):
             )
         return verify_rows(rows, expected_tip=expected_tip, expected_tips=expected_tips)
 
+    @writes_ledger
     def close(self) -> None:
         self._conn.close()
 

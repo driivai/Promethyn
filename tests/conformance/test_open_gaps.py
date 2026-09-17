@@ -373,8 +373,12 @@ def test_G40_the_outcome_event_was_named_OUTSIDE_the_prefix_and_decodes_cleanly(
 
     assert not OUTCOME_EVENT.startswith(("execute", "execution"))
     ledger = SqliteLedger(":memory:")
-    ledger.record_chained(
-        event=OUTCOME_EVENT, subject="execution:1", payload={"executed": True},
+    # A real outcome writer supplies the paired row as well as the event.
+    # An orphan synthetic receipt now correctly fails the reader boundary
+    # before it reaches the decoder whose prefix behavior this test measures.
+    ledger.record_execution(
+        subject_id="fixture", source="fixture", executed=True, refused=False,
+        sandbox_name="fixture", exit_status=0, detail="fixture outcome",
         created_at="2026-09-16T00:00:00+00:00",
     )
     _decode_rows(ledger.chained_events())  # must not raise

@@ -63,6 +63,7 @@ from importlib import import_module
 from pathlib import Path
 from types import ModuleType
 from typing import Protocol
+from prometheus_protocol.runtime.security_build import component_builder, install_build_guards
 
 #: ``flock`` is POSIX-only. Declared as an optional module rather than assigned
 #: ``None`` behind a ``# type: ignore[assignment]``: the annotation states the
@@ -129,6 +130,7 @@ _LOG = logging.getLogger(__name__)
 EXTERNAL_SIGNER_REQUIRED_ENV = "PROM_REQUIRE_EXTERNAL_SIGNER"
 
 
+@component_builder
 def external_signer_required(env: Mapping[str, str] | None = None) -> bool:
     env = os.environ if env is None else env
     return parse_env_bool(
@@ -562,6 +564,7 @@ class AuditSink(Protocol):
     def verify_chain(self) -> object: ...
 
 
+@component_builder
 def execution_id_for(
     *, approval: Approval, artifact: MigrationArtifact, target: MigrationTarget
 ) -> str:
@@ -703,6 +706,7 @@ def _is_lower_hex_digest(value: str) -> bool:
     return len(value) == 64 and all(char in "0123456789abcdef" for char in value)
 
 
+@component_builder
 def postgres_executor(
     sql: str,
     target: DbTarget,
@@ -937,6 +941,7 @@ def postgres_executor(
     )
 
 
+@component_builder
 def postgres_receipt_lookup(
     execution_id: str, artifact_sha256: str, target: DbTarget
 ) -> ReceiptStatus:
@@ -2292,6 +2297,7 @@ class SignerRequest(Protocol):
     def require_external_signer(self) -> bool: ...
 
 
+@component_builder
 def resolve_signer(
     config: SignerRequest,
     *,
@@ -2458,3 +2464,6 @@ def build_migration_runner(
     except Exception:
         consumed.close()
         raise
+
+
+install_build_guards(globals())
