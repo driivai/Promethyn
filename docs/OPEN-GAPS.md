@@ -1193,16 +1193,17 @@ dead store left under `if False:` — now reddens
 `test_security_posture.py` still reports `26 passed`, unchanged from the
 original probe.
 
-**One thing the measurement corrected, and I had it the other way round first.**
-The enforcing consumer for `require_ledger_anchor` and `require_config_attestation`
-is the coherence block in `core/config.py`, not the runtime builder: a `Config`
-carrying the requirement with no anchor — or with a `file://` one — cannot be
-constructed at all. The runtime read in `runtime/factory.py` is therefore
-*unreachable from any loadable Config*, and its only reachable driver is the
-environment variable. That is why the spelling check could not see the
-enforcement at all: its collector skips `config.py` by design. Each of those two
-fields has two proofs here, one per site, kept separate so a mutation that
-removes only one is distinguishable from a mutation that removes both.
+**Correction to that measurement (reachability F1/F2).** The coherence block in
+`core/config.py` refuses a required witness whose target is absent or `file://`.
+It does **not** establish successful publication or that the assembled ledger
+has the configured anchor. A loadable Config with a valid WORM-shaped target
+still reaches the runtime, so the earlier statement that the runtime check was
+"unreachable from any loadable Config" was false. F1 built a runtime without
+calling the attestation publisher; F2 built one with an unanchored injected
+ledger. The original per-field proofs tested configuration shape and helper
+behavior, not these assembly paths. The new build guard and permanent
+reachability regressions are described in `docs/reachability-build.md`; they
+are additional evidence, not a reinterpretation of the old green tests.
 
 ### Second-order probe on all 14
 
@@ -1254,8 +1255,8 @@ authorized, refused, or executed.
 | `require_external_signer` | `chokepoint/runner.py:499` refuses a non-external signer |
 | `require_verified_substrate` | `chokepoint/runner.py:511`, `substrate.py:792` refuses an unverified substrate |
 | `allow_unverified_substrate` | same pair — it LOWERS the bar, which is why it is here |
-| `require_config_attestation` | `attestation/runtime.py:82` refuses at startup |
-| `config_attestation_target` | `attestation/runtime.py:83` `if not …:` refuses when attestation is required |
+| `require_config_attestation` | `attestation/runtime.py::attestation_target_for` refuses an absent/non-external target **when called**; `attest_at_startup` additionally signs/publishes. The old table's unconditional "refuses at startup" claim was false because production builders did not reach it (F1). The reachability guard now makes the covered assembly paths call it or refuse. |
+| `config_attestation_target` | `core/config.py::Config.__post_init__` checks shape; `attestation/runtime.py::attestation_target_for` checks the target when reached. Shape validation is not publication. |
 | `verification_profile` | `runtime/factory.py:273` selects the profile, so it selects which requirements must be satisfied |
 
 **NOT OUTCOME-AFFECTING — 2.** Neutralizing changes what is recorded or how much

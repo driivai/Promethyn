@@ -28,6 +28,59 @@
     "keeps the pin while deleting or moving it breaks it."
   ],
   "steps": {
+    "reachability": {
+      "description": "F1/F2 startup obligations, future-root discovery, and F3 authoritative readers; observed 89 passing cases before pinning",
+      "counts": {
+        "tests.conformance.test_security_build": 43,
+        "tests.conformance.test_security_build_inventory": 13,
+        "tests.conformance.test_reachability_readers": 33
+      },
+      "required": {
+        "tests.conformance.test_security_build": [
+          "test_f1_required_attestation_reaches_startup",
+          "test_startup_publication_failure_never_returns_runtime",
+          "test_startup_positive_publishes_and_retains_attestor",
+          "test_f2_workflow_applies_required_anchor",
+          "test_f2_injected_unanchored_ledger_is_refused",
+          "test_required_anchor_positive_is_real_runtime_anchor",
+          "test_future_config_field_cannot_escape_derivation",
+          "test_new_root_with_alias_and_indirect_none_is_still_guarded",
+          "test_all_factory_roots_classified_without_name_allowlist",
+          "test_default_value_is_not_permission_to_discard_a_bound",
+          "test_injected_anchor_cannot_substitute_another_witness",
+          "test_configured_optional_publication_failure_is_not_credited",
+          "test_migration_startup_publication_is_required_and_uses_its_signer",
+          "test_default_escalation_cannot_be_relabelled_not_applicable",
+          "test_config_in_new_root_default_argument_is_not_discarded",
+          "test_runner_without_settings_does_not_drop_environment_anchor_requirement",
+          "test_variadic_root_cannot_hide_requested_config",
+          "test_unused_signer_argument_cannot_satisfy_custody_requirement",
+          "test_nested_root_cannot_discard_a_different_security_contract",
+          "test_nested_root_with_the_same_contract_is_validated_and_published_once",
+          "test_build_checks_policy_at_both_bank_and_execution_authorizer",
+          "test_external_security_subclass_is_not_an_absent_default_domain"
+        ],
+        "tests.conformance.test_security_build_inventory": [
+          "test_every_config_bearing_public_assembly_is_classified_across_the_package",
+          "test_renamed_config_parameter_and_type_aliases_are_discovered",
+          "test_unannotated_config_or_settings_parameter_still_requires_classification",
+          "test_another_function_cannot_substitute_the_config_alias_binding",
+          "test_new_module_with_aliased_constructor_cannot_omit_guard_installation",
+          "test_new_module_with_aliased_constructor_is_classified_when_guard_installed",
+          "test_component_annotation_cannot_hide_an_aliased_runtime_return"
+        ],
+        "tests.conformance.test_reachability_readers": [
+          "test_F3_observed_hold_reopened_without_registry_records_unavailable_and_refuses",
+          "test_F3_observed_hold_with_working_registry_approves_and_executes",
+          "test_every_derived_public_reader_refuses_non_authoritative_outcomes",
+          "test_future_aliased_reader_is_guarded_without_registration",
+          "test_unannotated_future_public_reader_is_not_silently_unclassified",
+          "test_unsupported_public_descriptor_or_callable_is_refused",
+          "test_new_scalar_readers_cannot_escape_the_default_guard",
+          "test_persisted_observation_obligation_cannot_be_erased_or_borrowed"
+        ]
+      }
+    },
     "checkpoint_b": {
       "description": "PHASE-1.2c Checkpoint B execution-descriptor proofs",
       "counts": {

@@ -17,6 +17,9 @@ from prometheus_protocol.core.booleans import parse_env_bool
 from prometheus_protocol.core.errors import ConfigError
 from prometheus_protocol.core.bounds import Bound, is_unbounded, resolve_bound
 from prometheus_protocol.core.config import PROVIDER_REMOTE, Config
+from prometheus_protocol.runtime.security_build import (
+    component_builder, install_build_guards, validate_ledger,
+)
 from prometheus_protocol.core.interfaces import Ledger, Provider, Verifier
 from prometheus_protocol.execution.controller import ExecutionController
 from prometheus_protocol.execution.executor import SandboxExecutor
@@ -48,6 +51,7 @@ from prometheus_protocol.verifier.store import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover
+    from prometheus_protocol.chokepoint.signer import ApprovalSigner
     from prometheus_protocol.policy.profile import VerificationPolicy
     from prometheus_protocol.policy.reobservation import ReObservation, StateObserver
     from prometheus_protocol.tools.git import GitTool
@@ -55,6 +59,7 @@ if TYPE_CHECKING:  # pragma: no cover
 _LOG = logging.getLogger(__name__)
 
 
+@component_builder
 def build_provider(
     config: Config, solution_book: SolutionBook | None = None
 ) -> Provider:
@@ -88,6 +93,7 @@ def _judge_shares_actor_model(config: Config) -> bool:
     return not config.judge_model or config.judge_model == _actor_model(config)
 
 
+@component_builder
 def build_judge_provider(
     config: Config, solution_book: SolutionBook | None = None
 ) -> Provider:
@@ -142,6 +148,7 @@ def build_judge_provider(
     return build_provider(config, solution_book)
 
 
+@component_builder
 def build_sandbox_for(config: Config, *, env=None) -> Sandbox:
     """The sandbox this configuration requests — honoured, or refused.
 
@@ -174,6 +181,7 @@ def build_sandbox_for(config: Config, *, env=None) -> Sandbox:
 LEDGER_ANCHOR_REQUIRED_ENV = "PROM_REQUIRE_LEDGER_ANCHOR"
 
 
+@component_builder
 def ledger_anchor_required(env: Mapping[str, str] | None = None) -> bool:
     env = os.environ if env is None else env
     return parse_env_bool(
@@ -181,6 +189,7 @@ def ledger_anchor_required(env: Mapping[str, str] | None = None) -> bool:
     )
 
 
+@component_builder
 def build_tip_anchor_for(config: Config, *, env: Mapping[str, str] | None = None) -> TipAnchor | None:
     """The anchor target ``config`` names, or ``None`` when unanchored.
 
@@ -222,6 +231,7 @@ def build_tip_anchor_for(config: Config, *, env: Mapping[str, str] | None = None
     )
 
 
+@component_builder
 def build_ledger(
     config: Config,
     *,
@@ -230,7 +240,10 @@ def build_ledger(
 ) -> SqliteLedger:
     """The production ledger, opened with the configured anchor.
 
-    Every builder in this module and every CLI command gets its ledger here, so
+    Default ledgers in this module are built here; injected ledgers are checked
+    against requested anchoring by the production build guard. Arbitrary direct
+    constructors and third-party builders are not covered by this statement.
+    For ledgers built here,
     continuous anchoring is a property of the production path rather than an
     option a caller remembers: each audit-chain append writes the tip to the
     target, each verify consults the target's whole history. An unanchored
@@ -258,6 +271,7 @@ def build_ledger(
     return SqliteLedger(location, tip_anchor=anchor)
 
 
+@component_builder
 def build_verification_policy(config: Config | None = None) -> "VerificationPolicy":
     """The policy VALUE this configuration selects (PHASE-1.2a, R1).
 
@@ -282,6 +296,7 @@ def build_orchestrator(
     *,
     solution_book: SolutionBook | None = None,
     memory: MemoryTier | None = None,
+    attestation_signer: ApprovalSigner | None = None,
 ) -> Orchestrator:
     config = config or Config()
     # Policy selection is part of supported construction even though this
@@ -310,7 +325,8 @@ def build_orchestrator(
     else:
         trust_store = SqliteTrustStore(config.trust_store_path)
     bank = VerifierBank(
-        trust_store, policy_supplier=lambda: build_verification_policy(config)
+        trust_store, escalate_below=config.escalate_below,
+        policy_supplier=lambda: build_verification_policy(config)
     )
     bank.register(verifier.verifier_id, verifier.tier)
     _LOG.info(
@@ -353,6 +369,7 @@ def build_swarm_runtime(
     provider: Provider,
     ledger=None,
     memory: MemoryTier | None = None,
+    attestation_signer: ApprovalSigner | None = None,
 ) -> SwarmRuntime:
     """Wire a swarm runtime: model-backed roles, the bank/gate/firewall, a no-op
     executor, and a HARD code verifier that runs the Skeptic's executable cases.
@@ -364,6 +381,8 @@ def build_swarm_runtime(
     """
 
     config = config or Config()
+    ledger = ledger if ledger is not None else build_ledger(config)
+    validate_ledger(config, ledger)
     # Declared at the seam both branches satisfy: inferring the type from the
     # first branch made the second an "incompatible assignment" for code that
     # was always correct.
@@ -389,8 +408,9 @@ def build_swarm_runtime(
             provider=provider, max_role_calls=config.max_role_calls
         ),
         debate=DebateLayer(),
-        bank=VerifierBank(trust_store, policy_supplier=supplier),
+        bank=VerifierBank(trust_store, escalate_below=config.escalate_below, policy_supplier=supplier),
         gate=ActionGate(
+            escalate_below=config.escalate_below,
             authorizer=ExecutionAuthorizer(supplier), target_canonical="sandbox://swarm"
         ),
         executor=RecordingExecutor(),
@@ -408,6 +428,7 @@ def build_swarm_runtime(
 GIT_TARGET_PREFIX = "git://"
 
 
+@component_builder
 def build_reobservation(
     *,
     target_canonical: str,
@@ -542,6 +563,7 @@ def build_execution_controller(
     config: Config | None = None, *, ledger: Ledger | None = None,
     target_canonical: str = "sandbox://execution",
     base_branch: str | None = None,
+    attestation_signer: ApprovalSigner | None = None,
 ) -> ExecutionController:
     """Wire the live-execution path: routing gate -> human hold -> sandbox executor.
 
@@ -553,6 +575,8 @@ def build_execution_controller(
     """
 
     config = config or Config()
+    ledger = ledger if ledger is not None else build_ledger(config)
+    validate_ledger(config, ledger)
     # NOT resolved here. A bound is carried to the adapter that builds the
     # command and resolved there, because the three substrates do not agree on
     # what a zero means: the container runtime reads it through a 16 MiB floor
@@ -598,7 +622,8 @@ def build_execution_controller(
 
 
 def build_workflow_runtime(
-    config: Config | None = None, *, ledger: SqliteLedger | None = None
+    config: Config | None = None, *, ledger: SqliteLedger | None = None,
+    attestation_signer: ApprovalSigner | None = None,
 ):
     """Build workflow assessment and execution with one selected-policy supplier."""
 
@@ -607,13 +632,14 @@ def build_workflow_runtime(
 
     config = config or Config()
     selected = build_verification_policy(config)
-    shared_ledger = ledger if ledger is not None else SqliteLedger(config.ledger_path)
+    shared_ledger = ledger if ledger is not None else build_ledger(config)
     target = "sandbox://workflow"
     controller = build_execution_controller(
         config, ledger=shared_ledger, target_canonical=target
     )
     return WorkflowRuntime(
         bank=VerifierBank(
+            escalate_below=config.escalate_below,
             policy_supplier=lambda: build_verification_policy(config)
         ),
         gateway=ActionGateway(controller.submit),
@@ -621,3 +647,7 @@ def build_workflow_runtime(
         policy=selected,
         target_canonical=target,
     )
+
+
+# Every public root is discovered, including new roots with aliased constructors.
+install_build_guards(globals())
