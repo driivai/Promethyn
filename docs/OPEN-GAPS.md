@@ -2571,6 +2571,14 @@ rather than incremented: the previous total here was carried forward by
 addition once and came out one short, which is what an unrecounted running
 total does.
 
+**CARRIER 36, opening #125. 12 of 12.** The rate has not moved and there is
+nothing new to say about the mechanism; it is recorded because a rate claimed
+without its next observation decays into a remembered number. Stripped via
+`update_pull_request` as usual, which means `ci.yml`'s frozen `PR_BODY` still
+carries it on the OPEN event and only this push clears it -- the cost carrier 30
+first measured. **Running total 36: 28 review replies, 6 bodies, 2 comments**,
+recounted rather than incremented.
+
 ---
 
 ## G29 — re-observation at execution: built for `branch.delete`, opted out by name for the other two
