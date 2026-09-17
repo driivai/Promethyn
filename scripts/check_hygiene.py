@@ -72,13 +72,24 @@ def main() -> int:
     terms_rel = TERMS_FILE.relative_to(REPO_ROOT).as_posix()
 
     hits: list[tuple[str, str]] = []
+    candidates = candidate_files()
     scanned = 0
-    for path in candidate_files():
+    # Counted beside `scanned`, not dropped: a file this check cannot read is a
+    # file it did not scan, and "435 files scanned" alone reads as the whole
+    # population when it is the readable part of it (doctrine #11, OPEN-GAPS
+    # G53 — measured: 437 candidates, 1 excluded by design, 1 binary). Whether
+    # a binary should be scanned for tokens is a separate question; that it
+    # was not is now said.
+    unreadable: list[str] = []
+    excluded = 0
+    for path in candidates:
         rel = path.relative_to(REPO_ROOT).as_posix()
         if rel == terms_rel:
+            excluded += 1
             continue
         text = read_text(path)
         if text is None:
+            unreadable.append(rel)
             continue
         scanned += 1
         lowered = text.lower()
@@ -93,9 +104,13 @@ def main() -> int:
         return 1
 
     print(
-        f"repository hygiene check passed: {scanned} files scanned, "
+        f"repository hygiene check passed: {scanned} files scanned of "
+        f"{len(candidates)} candidates ({excluded} excluded by design, "
+        f"{len(unreadable)} unreadable or binary), "
         f"{len(terms)} terms, no banned tokens found"
     )
+    for rel in unreadable:
+        print(f"  not scanned (unreadable or binary): {rel}")
     return 0
 
 

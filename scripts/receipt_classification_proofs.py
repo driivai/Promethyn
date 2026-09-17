@@ -245,6 +245,9 @@ def without_asserts(text: str) -> str:
 
 def main() -> None:
     os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+    # Printed from the table (doctrine #11, OPEN-GAPS G53): the row count a
+    # report quotes comes from here, not from counting lines of this log.
+    print(f"rows: {len(MUTATIONS)} first-order, {2 * len(MUTATIONS)} runs including the second-order variants", flush=True)
     survivors: list[str] = []
     for second_order in (False, True):
         for name, path, before, after, module, selector in MUTATIONS:

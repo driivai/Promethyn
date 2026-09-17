@@ -600,6 +600,20 @@
         "test_an_endpoint_swapped_after_construction_is_still_revalidated"
       ],
       "property": "a permitted https endpoint earns the allow_insecure_loopback credit, so the refusal of a loopback endpoint swapped in after construction is caused by the revalidation seeing the LIVE endpoint rather than by the row refusing every endpoint"
+    },
+    {
+      "module": "tests/conformance/test_matrix_agreement.py",
+      "positive": "test_three_faithful_reports_agree_and_the_table_carries_each_count",
+      "negatives": [
+        "test_a_test_collected_on_one_version_only_is_refused_naming_the_test_and_the_versions_that_lack_it",
+        "test_the_same_count_with_different_membership_is_refused",
+        "test_the_same_collected_set_with_a_different_skip_set_is_refused",
+        "test_a_failure_or_an_error_on_any_version_is_refused",
+        "test_an_empty_report_is_refused_before_anything_is_compared",
+        "test_a_missing_version_and_an_extra_version_are_both_refused",
+        "test_a_report_from_a_version_the_matrix_does_not_run_is_refused_even_when_the_count_of_versions_matches"
+      ],
+      "property": "three faithful reports for exactly the workflow's matrix are accepted and the table carries the reports' own counts, so each refusal beside it -- a version-specific collection, the same count with different membership, a differing skip set, a failure, an empty report, a missing or a stranger version -- is caused by the disagreement it names and not by a guard that refuses everything (G54)"
     }
   ]
 }

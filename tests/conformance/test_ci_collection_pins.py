@@ -74,6 +74,7 @@ PINNED_STEPS = (
     "PHASE-1.2c authorization record and pinned-hold proofs",
     "The composed squash message is refused before the merge writes it",
     "Linux opened-store and lock mount integration (must run, zero skips)",
+    "Matrix agreement proofs (the cross-version guard refuses what it must)",
 )
 
 _TEST_PATH = re.compile(r"tests/[\w./-]+\.py")
@@ -204,6 +205,17 @@ def _collected(paths: tuple[str, ...]) -> dict[str, int]:
             counts[path] += 1
     empty = [path for path, count in counts.items() if count == 0]
     assert not empty, f"no tests collected from {empty}; the pin would be read against nothing"
+    # The per-file counts above are a FILTERED read of pytest's output — lines
+    # carrying "::" whose path is one asked for. pytest's own summary is the
+    # artifact; the two must agree, or a line shape this filter does not see
+    # has silently narrowed the population it pins (doctrine #11, OPEN-GAPS
+    # G53). Measured at the time of writing: 814 == 814.
+    summary = re.search(r"(\d+) tests? collected", proc.stdout)
+    assert summary is not None, f"pytest printed no collection summary:\n{proc.stdout[-2000:]}"
+    assert sum(counts.values()) == int(summary.group(1)), (
+        f"the '::' lines sum to {sum(counts.values())} but pytest collected "
+        f"{summary.group(1)}; the filter narrowed the population"
+    )
     return counts
 
 
@@ -315,7 +327,11 @@ def test_the_named_limit_this_guard_does_NOT_see_skips_failures_or_errors(pins):
     # assertion, when they moved it.
     inline = text.count('for t in ("skipped", "failure", "error")')
     delegated = len(_COMPOSITION_CALL.findall(text))
-    assert inline + delegated >= len(PINNED_STEPS) - 1, (inline, delegated)
+    # Exact, not `>= len - 1`: the slack was a tolerance on a population pin,
+    # and today's values are 6 + 6 == 12 pinned steps with nothing to excuse
+    # (doctrine #11, OPEN-GAPS G53). A step counted in both shapes would push
+    # this above the pin, which is also a finding.
+    assert inline + delegated == len(PINNED_STEPS), (inline, delegated, len(PINNED_STEPS))
     # And the delegated half really does refuse those states, rather than being
     # counted on trust: the checker's source says so.
     checker = (REPO / "scripts" / "check_proof_composition.py").read_text(encoding="utf-8")

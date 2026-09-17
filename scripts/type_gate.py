@@ -109,7 +109,11 @@ RECEIPT = REPO / "type-gate-receipt.json"
 #: test left a mutation runner naming a selector that no longer existed and the
 #: three-version matrix went red on all three Pythons. The gate refused the
 #: un-repinned count first, which is the behaviour this pin is for.
-EXPECTED_CHECKED_FILES = 336
+#: 336 -> 340 on 2026-09-17 (G53/G54): scripts/check_matrix_agreement.py,
+#: scripts/matrix_agreement_proofs.py, tests/conformance/test_matrix_agreement.py
+#: and tests/conformance/test_doctrine_index.py. Observed by running the gate
+#: against the un-repinned value first, which refused at 340.
+EXPECTED_CHECKED_FILES = 340
 
 _SUCCESS = re.compile(
     r"^Success: no issues found in (\d+) source files?$", re.MULTILINE

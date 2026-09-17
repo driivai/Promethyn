@@ -149,6 +149,10 @@ def without_asserts(text: str) -> str:
 
 def main() -> None:
     os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+    # Printed from the table so a report reads the row count off this line
+    # rather than counting FIRST/SECOND lines through a filter (doctrine #11,
+    # OPEN-GAPS G53).
+    print(f"rows: {len(MUTATIONS)} first-order, {2 * len(MUTATIONS)} runs including the second-order variants", flush=True)
     for second_order in (False, True):
         for name, path, before, after, selector in MUTATIONS:
             # Fresh worktree for EACH row: neither stale pyc nor another

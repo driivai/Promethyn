@@ -23,11 +23,14 @@ class WithoutAssertions(ast.NodeTransformer):
         return ast.copy_location(ast.Pass(), node)
 
 
-def run() -> int:
+def mutations() -> tuple[tuple[str, str, str, str], ...]:
+    """The rows, as a function so the one row that reads the live reader
+    population is built against this tree's package at call time."""
+
     from prometheus_protocol.ledger.readers import reader_methods
     from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
 
-    mutations = (
+    return (
         ("F3-permissive-none", PENDING, "        if pinned is None:\n", "        if self._reobservation is None or pinned is None:\n"),
         ("reader-guard-deleted", READERS, "    for name in reader_methods(cls):\n", "    for name in ():\n"),
         ("reader-context-substituted", SQLITE, "            snapshot = self._receipt_source()\n", "            snapshot = ReceiptSnapshot([], [], [])\n"),
@@ -39,6 +42,16 @@ def run() -> int:
          '        descriptor = inspect.getattr_static(cls, name)\n',
          '        descriptor = inspect.getattr_static(cls, "chain_tip" if name == "outcome" else name)\n'),
     )
+
+
+def run() -> int:
+    rows = mutations()
+    # The count comes from the table, printed by the runner, so a report never
+    # has to count labels in this log through a filter. A case-sensitive
+    # filter did exactly that on 2026-09-17 and published 5 (doctrine #11,
+    # OPEN-GAPS G53). Every row runs twice: as written, and with the proof
+    # module's assertions deleted.
+    print(f"rows: {len(rows)} first-order, {2 * len(rows)} runs including the assertions-deleted variants")
     with MutationWorktree(include_dirty=True) as tree:
         reds, summary = tree.pytest([TESTS])
         print(f"baseline: {summary}")
@@ -46,7 +59,7 @@ def run() -> int:
         if reds or clean is None:
             raise RuntimeError("baseline did not pass; no mutation evidence collected")
         baseline_count = int(clean.group(1))
-        for label, path, old, new in mutations:
+        for label, path, old, new in rows:
             for stripped in (False, True):
                 tree.revert()
                 tree.apply(path, old, new)

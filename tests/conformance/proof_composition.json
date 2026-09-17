@@ -293,6 +293,34 @@
           "test_the_runner_is_pinned_and_every_target_still_exists"
         ]
       }
+    },
+    "matrix_agreement": {
+      "description": "Cross-version agreement proofs (G54 beside G7): the guard that compares the three versions' collected and skipped SETS, driven on reports the tests write, and the per-version skip-manifest guard beside it. Membership pinned so a deleted refusal cannot hide behind an unchanged count. Observed at introduction (2026-09-17): 13 + 7.",
+      "counts": {
+        "tests.conformance.test_matrix_agreement": 13,
+        "tests.conformance.test_skip_manifest_guard": 7
+      },
+      "required": {
+        "tests.conformance.test_matrix_agreement": [
+          "test_three_faithful_reports_agree_and_the_table_carries_each_count",
+          "test_a_test_collected_on_one_version_only_is_refused_naming_the_test_and_the_versions_that_lack_it",
+          "test_the_same_count_with_different_membership_is_refused",
+          "test_the_same_collected_set_with_a_different_skip_set_is_refused",
+          "test_a_failure_or_an_error_on_any_version_is_refused",
+          "test_an_empty_report_is_refused_before_anything_is_compared",
+          "test_a_missing_version_and_an_extra_version_are_both_refused",
+          "test_a_report_from_a_version_the_matrix_does_not_run_is_refused_even_when_the_count_of_versions_matches",
+          "test_the_version_list_is_derived_from_the_workflow_it_is_given",
+          "test_main_refuses_with_exit_1_and_passes_with_exit_0_on_real_files",
+          "test_the_workflow_uploads_every_matrix_report_and_a_job_downloads_them_all_for_this_guard"
+        ],
+        "tests.conformance.test_skip_manifest_guard": [
+          "test_both_recorded_host_compositions_are_accepted",
+          "test_an_unsanctioned_skip_is_still_refused",
+          "test_a_REQUIRED_entry_that_ran_is_still_refused",
+          "test_a_conditional_entry_whose_proof_does_not_resolve_is_refused"
+        ]
+      }
     }
   },
   "_left_as_counts_only": {
