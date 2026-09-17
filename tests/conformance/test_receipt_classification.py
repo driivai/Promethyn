@@ -831,3 +831,90 @@ def test_a_tolerantly_decoded_execution_column_is_silently_none_and_still_valid(
         "measured: neither column is an OutcomeRecord field, so the receipt "
         "does not cover them and the corruption is invisible on both channels"
     )
+
+
+# ---------------------------------------------------------------------------
+# 9. the guard catches the DECODER's error, not every ValueError
+# ---------------------------------------------------------------------------
+#
+# Reported on #124 against the commit that fixed the crash above, and
+# reproduced before this section existed. `_authoritative_read` caught
+# `ValueError` around the reader call, and `json.JSONDecodeError` is a
+# `ValueError` -- so the handler also collected faults that had nothing to do
+# with decoding. The two threshold readers call `float(threshold)`, so on a
+# PERFECTLY CLEAN ledger a non-numeric argument came back as
+# `ExecutionNotAuthorized(reason='ledger_rows_unreadable')`: storage corruption
+# reported for a bad argument, sending the caller down the corruption path.
+#
+# It is the same refusal-names-the-wrong-cause shape the fix above was written
+# about, introduced by that fix. Both handlers now catch the decoder's own
+# exception, which nothing else raises.
+#
+# A NULL column would raise `TypeError` rather than `JSONDecodeError` and is
+# NOT covered here -- measured unreachable instead: every JSON column on the
+# hold is NOT NULL, and SQLite refuses the UPDATE with
+# `IntegrityError: NOT NULL constraint failed`.
+
+THRESHOLD_READERS = ("executions_below_confidence", "authoritative_pass_below")
+
+
+@pytest.mark.parametrize("reader", THRESHOLD_READERS)
+def test_a_bad_argument_on_a_clean_ledger_is_not_reported_as_corruption(tmp_path, reader):
+    """The ledger is clean. Nothing about this is a storage fault."""
+
+    ledger = SqliteLedger(tmp_path / "clean.db")
+    ledger.record_pending_action(
+        subject_id="s", risk_class="low", reason="r", verdict="pass",
+        confidence=0.9, action={"kind": "noop"}, judgment={"verdict": "pass"},
+        created_at="2026-09-16T00:00:00Z",
+    )
+    assert ledger.verify_chain().status == "valid", "precondition: nothing is corrupt"
+    with pytest.raises(ValueError) as raised:
+        getattr(ledger, reader)("not a number")
+    # ExecutionNotAuthorized IS a ValueError, so `pytest.raises(ValueError)`
+    # alone would pass on exactly the defect this pins. The assertion is that
+    # the argument fault surfaces as ITSELF.
+    assert not isinstance(raised.value, ExecutionNotAuthorized), (
+        "a non-numeric threshold is a caller's error, not evidence that the "
+        "stored rows could not be decoded"
+    )
+    ledger.close()
+
+
+@pytest.mark.parametrize("reader", THRESHOLD_READERS)
+def test_the_threshold_readers_still_read_a_clean_ledger(tmp_path, reader):
+    """The positive control: the narrowing did not stop them working."""
+
+    ledger = SqliteLedger(tmp_path / "clean.db")
+    ledger.record_pending_action(
+        subject_id="s", risk_class="low", reason="r", verdict="pass",
+        confidence=0.9, action={"kind": "noop"}, judgment={"verdict": "pass"},
+        created_at="2026-09-16T00:00:00Z",
+    )
+    assert getattr(ledger, reader)(0.5) == []
+    ledger.close()
+
+
+def test_a_non_decoding_fault_is_not_reported_as_couldnt_check():
+    """The same narrowing in ``verify_receipts``, pinned the same way.
+
+    A snapshot source that fails for a reason other than decoding must not come
+    back as ``checked=False``: that is the couldn't-check verdict, and reporting
+    it for a fault nobody diagnosed is doctrine #8 wearing the fix's clothes.
+    """
+
+    from typing import cast
+
+    from prometheus_protocol.core.interfaces import Ledger
+
+    class FailsForAnotherReason:
+        def _receipt_source(self) -> "FailsForAnotherReason":
+            return self
+
+        def chained_events(self) -> list[dict]:
+            raise ValueError("this is not a decoding fault")
+
+    with pytest.raises(ValueError) as raised:
+        verify_receipts(cast(Ledger, FailsForAnotherReason()))
+    assert "not a decoding fault" in str(raised.value)
+    assert not isinstance(raised.value, ExecutionNotAuthorized)

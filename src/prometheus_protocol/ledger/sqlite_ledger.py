@@ -360,15 +360,25 @@ class SqliteLedger(Ledger):
                 # permissive default on every version by the same route.
                 self._conn.set_authorizer(_ALLOW_ALL)
             snapshot = self._receipt_source()
-        except ValueError as exc:
+        except json.JSONDecodeError as exc:
             # BOTH decoding points, because either can hit a malformed JSON
             # column in a corrupted or tampered ledger: the reader decodes the
             # rows it projects, and the snapshot decodes all three tables
             # whatever the reader touched. A guarded read that exists to refuse
             # in a typed vocabulary must not hand back a raw decoder error.
-            # `json.JSONDecodeError` IS a `ValueError`; the narrow base is
-            # deliberate, so a real defect still surfaces as itself rather than
-            # as a polite refusal.
+            #
+            # THE DECODER'S OWN EXCEPTION, NOT ITS BASE `ValueError`. Reported
+            # on #124 and reproduced: `executions_below_confidence` and
+            # `authoritative_pass_below` call `float(threshold)`, so on a
+            # PERFECTLY CLEAN ledger a non-numeric argument raised `ValueError`
+            # inside the reader and this handler relabelled it "the stored rows
+            # could not be decoded" -- storage corruption reported for a bad
+            # argument, and callers sent down the corruption path. That is the
+            # refusal-names-the-wrong-cause shape this module keeps finding,
+            # introduced here by the commit that fixed the previous one. Any
+            # future reader that legitimately raises `ValueError` had the same
+            # problem. `JSONDecodeError` is raised by the decoder and nothing
+            # else, so it cannot collect an unrelated fault.
             raise ExecutionNotAuthorized(
                 "authoritative ledger read refused: the stored rows could not "
                 "be decoded",

@@ -78,6 +78,14 @@ decoder error, under a reason minted for it: `ledger_rows_unreadable` is not
 parametrisation is DERIVED from `reader_methods`, not a hand-listed five, so
 "every guarded reader" is a membership rather than a sentence.
 
+**Corrected once more, on #124's review of that fix.** Both handlers catch
+`json.JSONDecodeError`, not its base `ValueError`. Catching the base also
+collected faults that were not decoding: on a clean ledger, a non-numeric
+argument to `executions_below_confidence` or `authoritative_pass_below` — both
+call `float(threshold)` — came back as `ledger_rows_unreadable`, storage
+corruption reported for a caller's error. `docs/OPEN-GAPS.md` G48 carries the
+measurement, and five cases pin it in both directions.
+
 **The limit, measured rather than assumed, because the sentence above is not
 true of every JSON column.** This is the READ path, and only its STRICTLY
 decoded half. `_pending_row` and `_attempt_row` decode with `json.loads`, so a

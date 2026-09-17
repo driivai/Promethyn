@@ -204,6 +204,23 @@ MUTATIONS = (
      '        record["judgment"] = json.loads(record["judgment"])',
      '        record["judgment"] = _load_json(record["judgment"])',
      CLASSIFICATION, "test_a_strictly_decoded_hold_column_refuses_and_is_not_verifiable"),
+    # ---- the handler catches the decoder, not its base class ----------------
+    # CROSS-CONTEXT, and this is the defect review reported on #124: the
+    # decoder's exception widened to its BASE. `json.JSONDecodeError` IS a
+    # `ValueError`, so the guard still catches every corruption it was written
+    # for and every "does it refuse" probe stays green -- while quietly
+    # collecting faults that are not decoding at all. On a clean ledger a
+    # non-numeric threshold argument comes back as storage corruption.
+    ("decode-guard-widened-to-every-value-error", LEDGER,
+     "        except json.JSONDecodeError as exc:",
+     "        except ValueError as exc:",
+     CLASSIFICATION, "test_a_bad_argument_on_a_clean_ledger_is_not_reported_as_corruption"),
+    # The same widening on the verdict side, where it turns an undiagnosed
+    # fault into the couldn't-check state instead of a typed refusal.
+    ("couldnt-check-widened-to-every-value-error", RECEIPTS,
+     "    except json.JSONDecodeError:",
+     "    except ValueError:",
+     CLASSIFICATION, "test_a_non_decoding_fault_is_not_reported_as_couldnt_check"),
 )
 
 

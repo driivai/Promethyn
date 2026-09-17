@@ -4129,15 +4129,15 @@ named five readers, which is exactly the "a name is not a membership" failure
 (G25) in a test written to fix a different one.
 
 **Observed on the fix**, read off runs rather than predicted: reachability
-proofs `151 passed`, zero skips, the classification module re-pinned `27 -> 48`
-of which 11 are the derived per-reader parametrisation and 6 pin G47's
-boundary; receipt-classification
-mutations `29 rows, 29 first-order red, zero survivors` (was 23), `7 of 29`
+proofs `156 passed`, zero skips, the classification module re-pinned `27 -> 53`
+of which 11 are the derived per-reader parametrisation, 6 pin G47's boundary
+and 5 pin G48's; receipt-classification
+mutations `33 rows, 33 first-order red, zero survivors` (was 23), `10 of 33`
 still red under second-order assertion deletion; record-revert mutations
 unchanged at `7 / 18`, which matters because their companion edits anchor into
 `_authoritative_read`; type gate `335 files`, unchanged; full suite
-`2998 passed, 23 skipped` against base `81481c7` at `2982 passed, 23 skipped`,
-the +16 being 15 classification cases and one case in `test_positive_control_set`,
+`3010 passed, 23 skipped` against base `81481c7` at `2982 passed, 23 skipped`,
+the +28 being 26 classification cases and two in `test_positive_control_set`,
 which collects one per registered control.
 
 **Not claimed:** that corrupted-storage inputs are now covered generally, or
@@ -4227,3 +4227,59 @@ the surrounding claim quietly becoming true.
 **Not measured:** whether any shipped ledger contains such a row; the same
 question for `promotions` and `workflow_steps`, whose projectors decode nothing
 and so are outside this table entirely.
+
+## G48 — the fix for G45 caught the decoder's BASE class and relabelled unrelated faults — CLOSED 2026-09-17 by review of #124
+
+**Reported by independent review of #124 against `9a0019b`, the commit that
+closed G45, and reproduced before any change.** Recorded rather than quietly
+fixed because the shape is the one this tree keeps finding, and this time it
+arrived inside the fix written to stop it.
+
+`_authoritative_read` wrapped the reader call and the snapshot in
+`except ValueError`. `json.JSONDecodeError` IS a `ValueError`, so the guard did
+catch every corruption it was written for — and also every unrelated
+`ValueError` the reader itself raised. `executions_below_confidence` and
+`authoritative_pass_below` both call `float(threshold)`. Observed on a
+PERFECTLY CLEAN ledger, `verify_chain() == valid`, nothing corrupt anywhere:
+
+```text
+executions_below_confidence("not a number")  -> ExecutionNotAuthorized reason='ledger_rows_unreadable'
+authoritative_pass_below("not a number")     -> ExecutionNotAuthorized reason='ledger_rows_unreadable'
+```
+
+A caller's bad argument, reported as storage corruption, sending the caller
+down the corruption path. After narrowing both handlers to the decoder's own
+exception:
+
+```text
+executions_below_confidence("not a number")  -> ValueError (its own)
+authoritative_pass_below("not a number")     -> ValueError (its own)
+executions_below_confidence(0.5)             -> []            (positive control)
+pending_actions() on a malformed column      -> refused 'ledger_rows_unreadable'
+verify_ledger_file on the same               -> not_verifiable
+```
+
+**Why the base class was chosen in the first place, stated.** The comment at
+that handler argued `ValueError` was the NARROW choice — narrow against
+`except Exception`, which would have turned a real defect in the projection
+into a polite refusal. That reasoning was right about the direction and wrong
+about the floor: the decoder raises an exception of its own, and nothing else
+raises it, so there was a narrower option the comment did not consider.
+"Narrower than the obviously wrong one" is not the same as narrow.
+
+**The same widening was present in `verify_receipts`** and is narrowed with it.
+There it would turn an undiagnosed fault into `checked=False` — the
+couldn't-check verdict awarded for something nobody checked, doctrine #8
+wearing the fix's clothes.
+
+**Pinned in both directions.** Five cases: the two threshold readers refusing
+to relabel a bad argument (asserting the raised error is NOT an
+`ExecutionNotAuthorized`, since that class IS a `ValueError` and a bare
+`pytest.raises(ValueError)` would pass on the defect itself), the two positive
+controls that they still read a clean ledger, and one for `verify_receipts`.
+Two mutation rows widen each handler back to `ValueError` and must redden.
+
+**Not covered, measured rather than assumed:** a NULL JSON column would raise
+`TypeError`, not `JSONDecodeError`, and is not caught. It is unreachable
+through the schema — every JSON column on the hold is `NOT NULL`, and SQLite
+refuses the UPDATE with `IntegrityError: NOT NULL constraint failed`.
