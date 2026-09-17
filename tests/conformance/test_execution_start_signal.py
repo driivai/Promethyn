@@ -636,6 +636,15 @@ def test_the_execution_record_has_NO_typed_reason_field():
 _AUTHORIZATION_REFUSAL_REASONS = frozenset({
     # integrity of a pinned record against its chain entry
     "chain_did_not_verify",
+    # the stored rows could not be DECODED at all -- a malformed JSON column in
+    # a corrupted or tampered ledger. Added on #123 after review found that
+    # `verify_chain` and `verify_ledger_file` CRASHED with a raw
+    # `json.JSONDecodeError` on such a ledger instead of returning the
+    # documented NOT_VERIFIABLE, and the guarded readers handed the same raw
+    # error back in place of a typed refusal. Distinct from the chain's own
+    # reason above: this is evidence that cannot be read into a shape the hash
+    # walk could check.
+    "ledger_rows_unreadable",
     "chain_entry_count_wrong",
     "record_differs_from_chain_entry",
     "reverification_required",
@@ -696,7 +705,7 @@ def test_the_authorization_vocabulary_names_no_harness_fault():
     # The count is asserted too, and it is NOT the property — membership is.
     # It is here because G35 quotes a number, and a quoted number that nothing
     # checks is how "nineteen" was written for a set of seventeen.
-    assert len(EXECUTION_REFUSAL_REASONS) == 23
+    assert len(EXECUTION_REFUSAL_REASONS) == 24
     assert "descriptor_absent" in EXECUTION_REFUSAL_REASONS
 
 

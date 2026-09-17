@@ -4062,3 +4062,76 @@ change.
 set of mechanisms that carry a given property, so the next guard added over an
 already-proved fact will disarm its proof the same way, and only a red pin or
 a reviewer will say so. Deriving that set is not attempted here.
+
+## G45 — the three diagnostics an auditor reaches for on a corrupted ledger were the three that crashed on one — CLOSED 2026-09-17 by review of #123
+
+**Reported by independent review of #123's opening head `2d23871`, against
+`src/prometheus_protocol/ledger/sqlite_ledger.py`, and reproduced before any
+fix.** It is a real defect and it was introduced by #122's own reader work.
+
+`verify_chain` took its rows from `_receipt_source()`, the snapshot the receipt
+check uses. That snapshot decodes the JSON columns of `pending_actions` and
+`executions` — two tables the hash walk never looks at — because it has to
+compare those rows against their receipts. A single malformed column in either
+therefore raised `json.JSONDecodeError` out of `verify_chain`. The surrounding
+handler catches `sqlite3.DatabaseError`, which a decoder error is not, so it
+escaped `verify_chain`, `verify_ledger_file` and the CLI audit alike.
+
+The snapshot was borrowed for a reason worth recording: `chained_events()`
+became a guarded reader in #122, so calling it from the chain verifier would
+recurse into a full authoritative read. Chain rows need no decoding, so the
+verifier now reads `audit_chain` directly and nothing else.
+
+Observed before, on a ledger with `pending_actions.action` overwritten with
+`{not json`: `json.decoder.JSONDecodeError` from all three. Observed after:
+
+```text
+verify_chain           -> valid           (the chain itself is intact)
+verify_receipts        -> checked=False, findings=(), ok=False, not_verifiable
+verify_ledger_file     -> not_verifiable  ok=False
+all 11 guarded readers -> ExecutionNotAuthorized reason='ledger_rows_unreadable'
+```
+
+Three separate verdicts because they are three separate facts, and the middle
+one is doctrine #8: a couldn't-check that emitted no findings would have read
+downstream as a clean ledger. `ledger_rows_unreadable` was minted rather than
+reusing `chain_did_not_verify`, because the hash walk is not what failed and a
+refusal naming the wrong cause is the shape this tree keeps finding.
+
+**What the instruments missed, stated.** The reachability corpus had no
+corrupted-storage fixture at all: every ledger it built was one this code had
+written. No mutation could have caught this, because no proof supplied an input
+the mutation would have changed the handling of. Six mutation rows now cover
+the mechanism in both attack classes, and the per-reader parametrisation is
+DERIVED from `reader_methods` rather than hand-listed — the first shape of it
+named five readers, which is exactly the "a name is not a membership" failure
+(G25) in a test written to fix a different one.
+
+**Not claimed:** that corrupted-storage inputs are now covered generally. One
+column shape, in three tables, on the read path. See G46.
+
+## G46 — an unreceipted column survives tampering with the ledger still `valid` — RECORDED, NOT FIXED HERE
+
+Measured 2026-09-17 while scoping G45, on a ledger with one recorded hold:
+
+| column overwritten | result |
+|---|---|
+| `pending_actions.confidence` = `'not a number'` | `pending_actions()` **returned the row**; `verify_ledger_file` -> `valid` |
+| `pending_actions.id` = NULL | refused by SQLite: `IntegrityError: datatype mismatch` |
+| `pending_actions.created_at` = NULL | refused by SQLite: `NOT NULL constraint failed` |
+| `pending_actions.status` = NULL | refused by SQLite: `NOT NULL constraint failed` |
+
+Three of the four are held by the schema. The fourth is not, and it is the one
+that matters: `confidence` is what `executions_below_confidence` and
+`authoritative_pass_below` threshold on, so editing it changes which rows a
+routing query returns while every verdict stays `valid`.
+
+This is inside the limit `docs/reachability-readers.md` already states — the
+receipt covers the fields of `DecisionRecord` and `OutcomeRecord`, and
+`confidence` is not among them — so it is a gap in the coverage, not a
+contradiction of a claim. It is recorded rather than fixed because widening the
+receipted field set is a change to what is chained, which belongs in its own
+change with its own migration question, not in a review response.
+
+**Not measured:** the other tables' unreceipted columns, and whether any other
+unreceipted column feeds a routing or threshold decision.

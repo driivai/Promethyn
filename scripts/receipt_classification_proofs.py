@@ -26,6 +26,7 @@ from mutation_worktree import MutationWorktree
 LEDGER = "src/prometheus_protocol/ledger/sqlite_ledger.py"
 RECEIPTS = "src/prometheus_protocol/ledger/receipts.py"
 BUILD = "src/prometheus_protocol/runtime/security_build.py"
+POLICY = "src/prometheus_protocol/policy/execution.py"
 CLASSIFICATION = "tests/conformance/test_receipt_classification.py"
 SECURITY = "tests/conformance/test_security_build.py"
 
@@ -136,6 +137,55 @@ MUTATIONS = (
      "        for obj in _exhaustive(runtime)\n        if id(obj) not in reachable",
      "        for obj in _objects(runtime)\n        if id(obj) not in reachable",
      SECURITY, "test_the_shipped_graph_hides_nothing_from_the_traversal"),
+    # ---- the undecodable ledger, reported on #123 ---------------------------
+    # DELETION: the chain verifier reads the two tables it does not verify
+    # again, so a malformed column in either raises out of the diagnostic that
+    # exists to diagnose it. This IS the reported defect, restored.
+    ("chain-verifier-borrows-the-decoding-snapshot-again", LEDGER,
+     '            rows = [dict(row) for row in self._conn.execute(\n'
+     '                "SELECT * FROM audit_chain ORDER BY id"\n'
+     '            ).fetchall()]',
+     "            rows = self._receipt_source().events",
+     CLASSIFICATION, "test_a_malformed_row_does_not_crash_the_chain_verifier"),
+    # DELETION: the couldn't-check verdict removed, so the decoder error is
+    # what `verify_ledger_file` and the CLI audit hand their caller.
+    ("couldnt-decode-verdict-deleted", RECEIPTS,
+     "        return ReceiptVerification(0, 0, (), checked=False)",
+     "        raise",
+     CLASSIFICATION, "test_a_malformed_row_makes_the_file_verifier_report_not_verifiable"),
+    # CROSS-CONTEXT: the right shape (a verification carrying no findings) with
+    # the WRONG flag -- couldn't-check presented as a completed check. Nothing
+    # crashes and no finding is emitted, which is doctrine #8 exactly: an empty
+    # instrument reading downstream as a pass.
+    ("couldnt-decode-reported-as-a-completed-check", RECEIPTS,
+     "        return ReceiptVerification(0, 0, (), checked=False)",
+     "        return ReceiptVerification(0, 0, (), checked=True)",
+     CLASSIFICATION, "test_the_undecodable_verdict_is_not_checked_rather_than_clean"),
+    # DELETION: the guarded read hands back its decoder error instead of a
+    # refusal in the closed vocabulary. A caller catching the typed refusal
+    # catches nothing.
+    ("undecodable-read-hands-back-its-decoder-error", LEDGER,
+     '            raise ExecutionNotAuthorized(\n'
+     '                "authoritative ledger read refused: the stored rows could not "\n'
+     '                "be decoded",\n'
+     '                reason="ledger_rows_unreadable",\n'
+     '            ) from exc',
+     "            raise",
+     CLASSIFICATION, "test_every_guarded_reader_refuses_an_undecodable_row_in_the_typed_vocabulary"),
+    # CROSS-CONTEXT: a real typed refusal naming the WRONG cause -- the chain's
+    # reason for a fault that is not the chain's. It passes every "does it
+    # refuse" probe and tells the operator to go and look at the hash walk.
+    ("undecodable-refusal-cause-substituted", LEDGER,
+     '                reason="ledger_rows_unreadable",',
+     '                reason="chain_did_not_verify",',
+     CLASSIFICATION, "test_every_guarded_reader_refuses_an_undecodable_row_in_the_typed_vocabulary"),
+    # CROSS-CONTEXT on the closed set itself, keeping its SIZE: G25, a count is
+    # not a composition. A membership pin catches this; a `len(...) == 24`
+    # pin does not.
+    ("refusal-reason-renamed-keeping-the-count", POLICY,
+     '    "ledger_rows_unreadable",        # a JSON column would not decode at all',
+     '    "ledger_chain_unreadable",       # a JSON column would not decode at all',
+     CLASSIFICATION, "test_every_guarded_reader_refuses_an_undecodable_row_in_the_typed_vocabulary"),
 )
 
 

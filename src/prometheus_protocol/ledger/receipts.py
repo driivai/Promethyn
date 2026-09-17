@@ -469,8 +469,17 @@ def verify_receipts(ledger: Ledger | ReceiptSnapshot) -> ReceiptVerification:
     under rewritten rows — F13 and F14). An auditor wants both.
     """
 
-    source = ledger._receipt_source()
-    events = source.chained_events()
+    try:
+        source = ledger._receipt_source()
+        events = source.chained_events()
+    except ValueError:
+        # A malformed JSON column in a corrupted or tampered ledger cannot be
+        # decoded into rows to compare. That is the couldn't-check state, not a
+        # crash and not a clean verdict: `checked=False` is never `ok`, and
+        # `status` reports NOT_VERIFIABLE. `json.JSONDecodeError` is a
+        # `ValueError`, so it is covered by name here rather than by importing
+        # the decoder's own exception into this module.
+        return ReceiptVerification(0, 0, (), checked=False)
     findings: list[ReceiptFinding] = []
 
     holds = source.pending_actions()

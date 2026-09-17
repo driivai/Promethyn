@@ -49,6 +49,38 @@ the evidence the receipt exists to be. `verify_chain`, `verify_receipts`, and
 `verify_ledger_file` remain diagnostic APIs: they report their scoped verdicts
 rather than presenting an invalid row as authoritative evidence.
 
+**Corrected again after review on #123: that last sentence was not true of a
+ledger whose JSON would not decode, and it is now.** Reported against
+`sqlite_ledger.py` and reproduced before the change. `verify_chain` borrowed
+`_receipt_source()` for its rows, and that snapshot decodes the JSON columns of
+`pending_actions` and `executions` — two tables the hash walk never looks at. A
+single malformed column in either raised `json.JSONDecodeError` straight out of
+`verify_chain`, `verify_ledger_file` and the CLI audit, past the
+`sqlite3.DatabaseError` handler, which does not catch it. The three entry
+points an auditor reaches for on a corrupted ledger were the three that crashed
+on one. Observed after the fix, on a ledger with `pending_actions.action`
+overwritten with `{not json`:
+
+```text
+verify_chain       -> valid          (the chain itself is intact)
+verify_ledger_file -> not_verifiable  ok=False
+all 11 guarded readers -> ExecutionNotAuthorized reason='ledger_rows_unreadable'
+```
+
+Three separate rulings, because they are three separate facts. The chain walk
+reads `audit_chain` **and nothing else** now, so an unrelated table's corruption
+cannot reach its verdict. `verify_receipts` returns `checked=False` — the
+couldn't-check state, which is never `ok` and reports `NOT_VERIFIABLE`; emitting
+no findings instead would have read downstream as a clean ledger, doctrine #8.
+A guarded read refuses in the closed vocabulary rather than handing back a
+decoder error, under a reason minted for it: `ledger_rows_unreadable` is not
+`chain_did_not_verify`, because the hash walk is not what failed. The reader
+parametrisation is DERIVED from `reader_methods`, not a hand-listed five, so
+"every guarded reader" is a membership rather than a sentence.
+
+The limit: this is the READ path. A malformed column is still a corrupted
+ledger and no repair is offered, exactly as for an unreceipted row.
+
 ## What changed
 
 Before this change, `PendingActionService._compare_now` returned `matched`

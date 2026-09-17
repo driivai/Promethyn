@@ -54,6 +54,13 @@ from prometheus_protocol.policy.snapshot import (
 EXECUTION_REFUSAL_REASONS: frozenset[str] = frozenset({
     # -- integrity of a pinned record against its tamper-evident chain entry --
     "chain_did_not_verify",          # the ledger chain itself failed to verify
+    # The stored rows could not be DECODED at all -- a malformed JSON column in
+    # a corrupted or tampered ledger. Distinct from `chain_did_not_verify`,
+    # which is about the hash walk: here the evidence cannot even be read into
+    # a shape the walk could check. Minted rather than reusing the chain's
+    # reason, because a refusal that names the wrong cause is the shape this
+    # tree keeps finding.
+    "ledger_rows_unreadable",        # a JSON column would not decode at all
     "reverification_required",       # a legacy/pre-record hold; no trusted descriptor
     "chain_entry_count_wrong",       # zero, or more than one, matching entries
     "record_differs_from_chain_entry",  # the row was altered after it was written
