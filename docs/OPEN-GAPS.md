@@ -2535,6 +2535,14 @@ stale payload. **Only a push re-triggers `ci.yml` with the corrected body.**
 So the footer does not cost one refusal, it costs a matrix run and a commit
 whose only purpose is to move the head — this one.
 
+**CARRIER 31, observed opening #124. 11 of 11.** Identical shape and identical
+cost, one pull request later, which is what a rate of 11 of 11 means in
+practice: the footer is not an occasional slip to be watched for, it is the
+channel's behaviour, and every pull request opened through it pays the same
+matrix run. The only thing this occurrence changes is that the second commit it
+forces was not empty — the proof counts below were held back for it — so the
+cost this time was the matrix run alone.
+
 ---
 
 ## G29 — re-observation at execution: built for `branch.delete`, opted out by name for the other two
@@ -4106,6 +4114,17 @@ the mechanism in both attack classes, and the per-reader parametrisation is
 DERIVED from `reader_methods` rather than hand-listed — the first shape of it
 named five readers, which is exactly the "a name is not a membership" failure
 (G25) in a test written to fix a different one.
+
+**Observed on the fix**, read off runs rather than predicted: reachability
+proofs `145 passed`, zero skips, the classification module re-pinned `27 -> 42`
+of which 11 are the derived per-reader parametrisation; receipt-classification
+mutations `29 rows, 29 first-order red, zero survivors` (was 23), `7 of 29`
+still red under second-order assertion deletion; record-revert mutations
+unchanged at `7 / 18`, which matters because their companion edits anchor into
+`_authoritative_read`; type gate `335 files`, unchanged; full suite
+`2998 passed, 23 skipped` against base `81481c7` at `2982 passed, 23 skipped`,
+the +16 being 15 classification cases and one case in `test_positive_control_set`,
+which collects one per registered control.
 
 **Not claimed:** that corrupted-storage inputs are now covered generally. One
 column shape, in three tables, on the read path. See G46.
