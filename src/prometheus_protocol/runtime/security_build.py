@@ -25,6 +25,49 @@ class BuildRefused(ConfigError):
         super().__init__(f"security build refused: {property_name}: {detail}")
 
 
+#: THE REPORT VOCABULARY. Every value ``validate_build`` can write into its
+#: report, as named constants, because the difference between two of them is
+#: the difference between a checked mechanism and an unchecked one.
+#:
+#: APPLIED means: this property was requested, and it was compared against the
+#: live components that honour it. It is the only token that says a mechanism
+#: was checked.
+#:
+#: NOT_REQUESTED means: the operator asked for nothing, so there was nothing to
+#: check and nothing was checked. A disabled requirement is not evidence that
+#: its mechanism exists — ``docs/reachability-build.md`` states that rule, and
+#: the first implementation contradicted it by writing APPLIED on three rows
+#: (``ledger_anchor=None``, ``require_ledger_anchor=False``,
+#: ``require_digest_pin=False``). A consumer reading APPLIED for an absent
+#: anchor was reading the opposite of the truth.
+#:
+#: DEFAULT_NOT_APPLICABLE means: the domain this property governs is absent
+#: from the returned graph and the value is the default. See the traversal
+#: limit named in ``_objects``: absence here is not distinguished from a
+#: component the traversal could not reach.
+#:
+#: PUBLICATION_PENDING / PUBLISHED are the two attestation rows' states, held
+#: back until every other property validates and then resolved.
+#:
+#: ``test_security_build.py`` reads this module's source and pins the set of
+#: tokens actually written into the report equal to ``REPORT_TOKENS``, exactly
+#: — so a new token cannot arrive unnamed and a named one cannot fall out of
+#: use unnoticed. The membership lesson from #120: a count is not a
+#: composition, and a floor would have caught neither direction.
+APPLIED = "applied"
+NOT_REQUESTED = "not_requested"
+DEFAULT_NOT_APPLICABLE = "default_not_applicable"
+PUBLICATION_PENDING = "publication_pending"
+PUBLISHED = "published"
+
+REPORT_TOKENS = frozenset({
+    APPLIED,
+    NOT_REQUESTED,
+    DEFAULT_NOT_APPLICABLE,
+    PUBLICATION_PENDING,
+    PUBLISHED,
+})
+
 _BUILDING: ContextVar[Config | None] = ContextVar("security_building", default=None)
 
 
@@ -43,11 +86,35 @@ def security_fields(config: Config) -> tuple[str, ...]:
     return tuple(item.name for item in declared if item.metadata.get("security", False))
 
 
+#: The container shapes this traversal descends. Named, because what is NOT in
+#: this tuple is the guard's largest stated limit and a reader should be able
+#: to find the boundary at the mechanism rather than in a report.
+_WALKED_CONTAINERS = (tuple, list, dict)
+
+
 def _objects(root: object) -> list[Any]:
     """Live instances, including a gateway's bound controller; never Config values.
 
     Only package-owned objects are traversed. Arbitrary injected implementations
     are opaque, not credited with a property because an attribute says so.
+
+    THE LIMIT, AND IT IS NOT THE ONE THE OTHER LIMITS DESCRIBE. This walk
+    descends ``_WALKED_CONTAINERS`` and ``__dict__`` and nothing else. A
+    package-owned component held in a ``set``, a ``frozenset``, a ``dict`` KEY,
+    a ``SimpleNamespace``, a closure cell, a generator, a ``__slots__`` object
+    or any other container is NOT REACHED — and a component that is not
+    reached is reported by ``validate_build`` as ``DEFAULT_NOT_APPLICABLE``
+    whenever the Config value is its default, which reads downstream as fine.
+
+    Every other limit this guard states describes something it declines to
+    cover. This one describes something it actively reports as applicable-
+    and-absent when it is neither. Measured on the four runtime roots: an
+    exhaustive walk that also descends sets, slots, closures and namespaces
+    finds exactly one object this one misses, ``Config``, which is excluded
+    deliberately — so the gap is latent in the shipped graph and open in
+    principle. ``test_security_build.py`` pins both halves of that sentence.
+    Making non-discovery REFUSE is filed rather than done here; see
+    ``docs/OPEN-GAPS.md`` G43.
     """
     todo = [root]
     seen: set[int] = set()
@@ -59,7 +126,7 @@ def _objects(root: object) -> list[Any]:
         seen.add(id(obj))
         if inspect.ismethod(obj):
             todo.append(obj.__self__)
-        elif isinstance(obj, (tuple, list, dict)):
+        elif isinstance(obj, _WALKED_CONTAINERS):
             if isinstance(obj, dict):
                 todo.extend(obj.values())
             else:
@@ -167,20 +234,29 @@ def validate_build(config: Config, runtime: object, *, signer: Any = None) -> di
             if migration and not sandboxes:
                 applied = None
         elif name == "require_digest_pin":
-            applied = True
-            if value:
-                applied = bool(sandboxes)
-                for obj in sandboxes:
-                    if isinstance(obj, ContainerSandbox):
-                        applied = applied and obj.require_digest_pin
-                    else:
-                        applied = False
+            if not value:
+                # Nothing was asked for, so nothing was checked. Saying APPLIED
+                # here claimed a digest-pinning mechanism had been verified on
+                # a build that never looked at one.
+                report[name] = NOT_REQUESTED
+                continue
+            applied = bool(sandboxes)
+            for obj in sandboxes:
+                if isinstance(obj, ContainerSandbox):
+                    applied = applied and obj.require_digest_pin
+                else:
+                    applied = False
         elif name in {"ledger_anchor", "require_ledger_anchor"}:
-            if value:
-                if not ledgers:
-                    raise BuildRefused(name, "no supported ledger in returned runtime")
-                for ledger in ledgers:
-                    validate_ledger(config, ledger)
+            if not value:
+                # An unconfigured witness and an unrequested requirement are
+                # both "nothing was asked for". Neither is evidence that the
+                # anchoring mechanism reached a ledger.
+                report[name] = NOT_REQUESTED
+                continue
+            if not ledgers:
+                raise BuildRefused(name, "no supported ledger in returned runtime")
+            for ledger in ledgers:
+                validate_ledger(config, ledger)
             applied = True
         elif name == "ledger_anchor_retention_days":
             anchors = [ledger.tip_anchor for ledger in ledgers if ledger.tip_anchor is not None]
@@ -191,7 +267,7 @@ def validate_build(config: Config, runtime: object, *, signer: Any = None) -> di
             applied = all(a._retain_for_s == value * 86400 for a in applicable) if applicable else None
         elif name in {"config_attestation_target", "require_config_attestation"}:
             # Publication happens only after all other applications validate.
-            report[name] = "publication_pending" if value else "not_requested"
+            report[name] = PUBLICATION_PENDING if value else NOT_REQUESTED
             continue
         elif name == "require_external_signer":
             signers = [authority.signer for authority in instances(ApprovalAuthority)]
@@ -254,9 +330,9 @@ def validate_build(config: Config, runtime: object, *, signer: Any = None) -> di
         else:
             raise BuildRefused(name, "no application validator for this Config security field")
         if applied is True:
-            report[name] = "applied"
+            report[name] = APPLIED
         elif applied is None and value == defaults[name]:
-            report[name] = "default_not_applicable"
+            report[name] = DEFAULT_NOT_APPLICABLE
         else:
             raise BuildRefused(name, "requested property is absent or disagrees with live components")
     return report
@@ -351,7 +427,7 @@ def guarded_root(function: Callable[..., Any]) -> Callable[..., Any]:
                         raise BuildRefused("config_attestation_target", "startup publication did not complete")
                     setattr(retained, "config_attestor", attestor)
                     for name in ("config_attestation_target", "require_config_attestation"):
-                        report[name] = "published"
+                        report[name] = PUBLISHED
                 setattr(retained, "_security_build_report", report)
             return result
         except Exception:

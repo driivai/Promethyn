@@ -98,7 +98,12 @@ RECEIPT = REPO / "type-gate-receipt.json"
 #: ``test_receipt_derivation.py``, ``test_receipt_substitution.py``.
 #: Observed 333 on 2026-09-16 (was 326): the reachability sprint added two
 #: runtime/reader modules, three conformance modules, and two mutation runners.
-EXPECTED_CHECKED_FILES = 333
+#:
+#: Observed 335 on 2026-09-17 (was 333): the #122 Part 1 remediation added
+#: ``tests/conformance/test_receipt_classification.py`` and
+#: ``scripts/receipt_classification_proofs.py``. Two files, accounted for by
+#: name, measured after the change rather than predicted before it.
+EXPECTED_CHECKED_FILES = 335
 
 _SUCCESS = re.compile(
     r"^Success: no issues found in (\d+) source files?$", re.MULTILINE

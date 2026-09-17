@@ -19,9 +19,33 @@ coverage.
 
 Every guarded read checks the whole snapshot. This costs a full receipt/hash
 walk, plus anchor-history I/O when configured; it is intentionally not a
-constant-time read or a cache. Corruption of one protected row can refuse an
-otherwise unrelated read. Legacy execution rows without receipts also refuse
-authoritative reading. `verify_chain`, `verify_receipts`, and
+constant-time read or a cache. A finding that a row DISAGREES with its receipt, or
+that a receipt has no row, still refuses every read of the ledger: that says
+the database was edited underneath the chain, which is not a local fact.
+
+**Corrected after review: a row the chain never saw is a different fact, and
+refusing construction over one was wrong.** An unreceipted row — no receipt at
+all — cannot be evidence, but it is not proof of a rewrite, and it is exactly
+what every row written before `ledger/receipts.py` existed looks like. It now
+refuses only a read that could hand it back: the tables SQLite reports the read
+actually touched, intersected with the row ids the result exposes. A result
+that is not built of row mappings cannot demonstrate which rows it came from
+and is treated as if it returned every row of the tables it read, so a scalar
+projection still refuses. Measured on a pre-receipt database written by
+`d2cba9c`: before, `executions()`, `pending_actions()` and
+`build_execution_controller` all refused; after, the first still refuses and
+the other two proceed. The auditor's verdict is unchanged — `ok` is still
+`valid` only — but it now reports `receipts_not_verifiable` rather than
+`receipts_invalid`, because those are different findings. See
+`docs/OPEN-GAPS.md` G43's neighbourhood and
+`tests/conformance/test_receipt_classification.py`.
+
+**The residual, stated rather than left to be found.** A deployment whose
+database carries pre-receipt execution rows can construct and run, and any read
+that would return one of those rows refuses — execution retry among them. That
+is fail-closed and deliberate; it is not a migration. No backfill is offered
+and none should be: writing a receipt for a row the chain never saw would forge
+the evidence the receipt exists to be. `verify_chain`, `verify_receipts`, and
 `verify_ledger_file` remain diagnostic APIs: they report their scoped verdicts
 rather than presenting an invalid row as authoritative evidence.
 

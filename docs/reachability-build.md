@@ -110,7 +110,13 @@ Roots: **O** orchestrator, **S** swarm, **E** execution controller, **W** workfl
 execution controller. An unsupported non-default tuning refuses rather than
 claiming application. Defaults on genuinely absent domains are reported as
 `default_not_applicable`; an existing component disagreeing with a default
-refuses too. A disabled requirement is not evidence its mechanism exists.
+refuses too. A disabled requirement is not evidence its mechanism exists — and
+the first implementation contradicted that sentence in code, writing `applied`
+on three unrequested rows. The report vocabulary is now five named constants
+(`applied`, `not_requested`, `default_not_applicable`, `publication_pending`,
+`published`), pinned as an exact membership against the tokens the source
+actually writes. Note also that `default_not_applicable` reports an ABSENT
+domain and an UNREACHED one identically; see the traversal limit above.
 
 | Config property | Applied by / checked on | Other roots or limitations |
 |---|---|---|

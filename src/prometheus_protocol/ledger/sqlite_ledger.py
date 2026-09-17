@@ -15,7 +15,7 @@ import sqlite3
 import stat
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from prometheus_protocol.core.errors import StateError
 from prometheus_protocol.core.interfaces import Ledger
@@ -36,9 +36,13 @@ from prometheus_protocol.ledger.audit_chain import (
 )
 from prometheus_protocol.ledger.receipts import (
     DECISION_EVENT,
+    EXECUTION_TABLE,
+    HOLD_TABLE,
     OUTCOME_EVENT,
     LedgerVerification,
+    ReceiptFinding,
     ReceiptSnapshot,
+    ReceiptVerification,
     decision_subject,
     outcome_subject,
     project_decision,
@@ -294,9 +298,14 @@ class SqliteLedger(Ledger):
         guard_readers(cls)
 
     def _receipt_source(self) -> ReceiptSnapshot:
-        """Private, untrusted diagnostic snapshot; bypasses public read guards."""
-        holds = self._conn.execute("SELECT * FROM pending_actions ORDER BY id").fetchall()
-        outcomes = self._conn.execute("SELECT * FROM executions ORDER BY id").fetchall()
+        """Private, untrusted diagnostic snapshot; bypasses public read guards.
+
+        The two receipted tables are named from ``ledger.receipts``, the same
+        constants the findings carry, so the query and the finding that scopes
+        it cannot drift apart.
+        """
+        holds = self._conn.execute(f"SELECT * FROM {HOLD_TABLE} ORDER BY id").fetchall()
+        outcomes = self._conn.execute(f"SELECT * FROM {EXECUTION_TABLE} ORDER BY id").fetchall()
         events = self._conn.execute("SELECT * FROM audit_chain ORDER BY id").fetchall()
         return ReceiptSnapshot(
             holds=[self._pending_row(row) for row in holds],
@@ -305,11 +314,27 @@ class SqliteLedger(Ledger):
         )
 
     def _authoritative_read(self, reader: Callable[..., Any], args: tuple, kwargs: dict) -> Any:
-        # Read the returned values and their authority in one SQLite snapshot.
-        # Checking first and re-reading afterwards would introduce a new race.
+        # Read the returned values, the tables SQLite says the read touched,
+        # and their authority, in one snapshot. Checking first and re-reading
+        # afterwards would introduce a new race.
         self._conn.execute("SAVEPOINT authoritative_read")
+        touched: set[str] = set()
+
+        def observe(action: int, first: str | None, second: str | None,
+                    database: str | None, trigger: str | None) -> int:
+            # SQLite's own account of what was read. Not a table name parsed
+            # out of SQL, and not a reader-name -> table list: either would be
+            # a second population to keep in step with the first.
+            if action == sqlite3.SQLITE_READ and first:
+                touched.add(first)
+            return sqlite3.SQLITE_OK
+
         try:
-            result = reader(self, *args, **kwargs)
+            self._conn.set_authorizer(observe)
+            try:
+                result = reader(self, *args, **kwargs)
+            finally:
+                self._conn.set_authorizer(None)
             snapshot = self._receipt_source()
         finally:
             self._conn.execute("RELEASE SAVEPOINT authoritative_read")
@@ -331,13 +356,79 @@ class SqliteLedger(Ledger):
                 reason="chain_did_not_verify",
             )
         receipts = verify_receipts(snapshot)
-        if not receipts.ok:
-            first = receipts.findings[0]
+        # A REWRITE CONDEMNS THE LEDGER. A row that disagrees with its receipt,
+        # or a receipt whose row is gone, is not a local fact: it says this
+        # database has been edited underneath the chain, so no read of it is
+        # authoritative. Unchanged from the first implementation.
+        if receipts.tampered:
+            first_finding = receipts.tampered[0]
             raise ExecutionNotAuthorized(
-                f"authoritative ledger read refused: {first.render()}",
-                reason=first.reason,
+                f"authoritative ledger read refused: {first_finding.render()}",
+                reason=first_finding.reason,
+            )
+        # AN UNRECEIPTED ROW CONDEMNS THAT ROW. It is not evidence and this
+        # read must not hand it back — but it is not proof of a rewrite, so it
+        # must not refuse a read that does not return it. Construction sweeps
+        # the pending table; a pre-receipt execution row is nothing to do with
+        # it and used to stop every runtime root from opening at all (F-3).
+        reached = self._unreceipted_reached(receipts, touched, result)
+        if reached is not None:
+            raise ExecutionNotAuthorized(
+                f"authoritative ledger read refused: {reached.render()}",
+                reason=reached.reason,
             )
         return result
+
+    @staticmethod
+    def _exposed_row_ids(value: Any) -> set[int] | None:
+        """The row ids a result hands back, or None when it cannot be enumerated.
+
+        None is the fail-closed answer, not an empty one. A scalar projection
+        (``-> bool``, ``-> str``) is as authoritative as a row and says nothing
+        about which rows it came from, so it is treated as if it returned every
+        row of the tables it read. Only a result built out of row mappings —
+        each carrying its ``id`` — can demonstrate which rows it exposes.
+        """
+
+        if value is None:
+            return set()
+        if isinstance(value, Mapping):
+            identifier = value.get("id")
+            # Statement form, not a ternary: the type gate refuses an
+            # expression-position isinstance, and a row mapping without an
+            # integer id is the unenumerable case rather than an empty one.
+            if isinstance(identifier, int):
+                return {identifier}
+            return None
+        if isinstance(value, (list, tuple)):
+            exposed: set[int] = set()
+            for item in value:
+                inner = SqliteLedger._exposed_row_ids(item)
+                if inner is None:
+                    return None
+                exposed |= inner
+            return exposed
+        return None
+
+    @staticmethod
+    def _unreceipted_reached(
+        receipts: ReceiptVerification, touched: set[str], result: Any
+    ) -> ReceiptFinding | None:
+        """The first unreceipted row this read could have handed back, if any."""
+
+        unreceipted = receipts.unreceipted_rows
+        if not unreceipted:
+            return None
+        exposed = SqliteLedger._exposed_row_ids(result)
+        for finding in receipts.unreceipted:
+            ids = unreceipted.get(finding.table, frozenset())
+            # An empty `touched` means the authorizer observed nothing, so the
+            # read's reach is unknown — which is not the same as empty.
+            if touched and finding.table not in touched:
+                continue
+            if exposed is None or (ids & exposed):
+                return finding
+        return None
 
     @classmethod
     @unverified_diagnostic

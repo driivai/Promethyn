@@ -29,11 +29,12 @@
   ],
   "steps": {
     "reachability": {
-      "description": "F1/F2 startup obligations, future-root discovery, and F3 authoritative readers; observed 89 passing cases before pinning",
+      "description": "F1/F2 startup obligations, future-root discovery, F3 authoritative readers, and the unreceipted/tampered classification; observed 129 passing cases before pinning",
       "counts": {
-        "tests.conformance.test_security_build": 43,
+        "tests.conformance.test_security_build": 57,
         "tests.conformance.test_security_build_inventory": 13,
-        "tests.conformance.test_reachability_readers": 33
+        "tests.conformance.test_reachability_readers": 33,
+        "tests.conformance.test_receipt_classification": 26
       },
       "required": {
         "tests.conformance.test_security_build": [
@@ -58,7 +59,14 @@
           "test_nested_root_cannot_discard_a_different_security_contract",
           "test_nested_root_with_the_same_contract_is_validated_and_published_once",
           "test_build_checks_policy_at_both_bank_and_execution_authorizer",
-          "test_external_security_subclass_is_not_an_absent_default_domain"
+          "test_external_security_subclass_is_not_an_absent_default_domain",
+          "test_the_signer_refusal_is_a_different_cause_and_says_so",
+          "test_the_report_vocabulary_is_pinned_exactly",
+          "test_a_disabled_requirement_is_not_reported_as_applied",
+          "test_a_requested_anchor_is_still_reported_as_applied",
+          "test_every_reported_token_is_a_member_of_the_vocabulary",
+          "test_the_shipped_graph_hides_nothing_from_the_traversal",
+          "test_an_unreachable_component_reads_as_not_applicable_not_as_a_refusal"
         ],
         "tests.conformance.test_security_build_inventory": [
           "test_every_config_bearing_public_assembly_is_classified_across_the_package",
@@ -78,6 +86,28 @@
           "test_unsupported_public_descriptor_or_callable_is_refused",
           "test_new_scalar_readers_cannot_escape_the_default_guard",
           "test_persisted_observation_obligation_cannot_be_erased_or_borrowed"
+        ],
+        "tests.conformance.test_receipt_classification": [
+          "test_the_fixture_is_the_pre_receipt_shape",
+          "test_a_pre_receipt_row_does_not_stop_a_runtime_root_from_opening",
+          "test_only_the_sweeping_roots_could_have_regressed",
+          "test_a_pre_receipt_row_is_still_refused_as_evidence",
+          "test_a_read_that_cannot_return_the_row_proceeds",
+          "test_a_receipted_row_still_reads_alongside_an_unreceipted_one",
+          "test_a_projection_over_an_unrelated_table_still_reads",
+          "test_a_rewritten_row_still_refuses_every_read",
+          "test_a_scalar_projection_cannot_escape_the_unreceipted_refusal",
+          "test_an_unobservable_read_fails_closed",
+          "test_a_row_id_in_one_table_does_not_condemn_the_same_id_in_another",
+          "test_the_verdict_distinguishes_unreceipted_from_rewritten",
+          "test_a_clean_ledger_is_valid_and_ok",
+          "test_every_reason_the_module_emits_is_classified_exactly",
+          "test_the_two_classifications_partition_the_population",
+          "test_every_finding_reason_is_in_the_closed_refusal_set",
+          "test_an_unclassified_finding_is_reported_as_a_rewrite_not_ignored",
+          "test_the_receipted_tables_exist_and_are_what_the_snapshot_queries",
+          "test_sqlite_reports_the_table_each_guarded_reader_reads",
+          "test_the_authorizer_still_reports_after_the_statement_cache_is_warm"
         ]
       }
     },

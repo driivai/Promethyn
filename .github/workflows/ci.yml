@@ -221,8 +221,14 @@ jobs:
         # Measured per-module collection and critical (module, test-name)
         # membership, with paired positives; shortfall, excess and skips refuse.
         run: |
-          python -m pytest -q tests/conformance/test_security_build.py tests/conformance/test_security_build_inventory.py tests/conformance/test_reachability_readers.py --junitxml=reachability-proofs.xml
+          python -m pytest -q tests/conformance/test_security_build.py tests/conformance/test_security_build_inventory.py tests/conformance/test_reachability_readers.py tests/conformance/test_receipt_classification.py --junitxml=reachability-proofs.xml
           python scripts/check_proof_composition.py reachability-proofs.xml reachability
+
+      - name: Receipt classification reverts (must be caught)
+        # Both attack classes on the unreceipted/tampered split, the two read
+        # scopes and the report vocabulary. The runner refuses a surviving
+        # first-order mutation and prints its second-order survivors.
+        run: python scripts/receipt_classification_proofs.py
 
       - name: PROD-FIX-1 proofs (approval expiry, attestation chronology, hostname taxonomy)
         # F7's phase table, P-1's equal-time and rollback cases, and P-2's
