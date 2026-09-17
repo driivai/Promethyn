@@ -2352,6 +2352,9 @@ question is answered before diligence rather than during it.
 
 ### THE BOUNDED SET — twenty-nine carriers, ALL twenty-nine read back
 
+(Three more have been observed since, outside this table: carriers 30, 31 and 32
+are recorded in prose below, and the running total is stated there.)
+
 | PR | kind | id |
 |---|---|---|
 | #106 | review reply | `4011093860` |
@@ -2542,6 +2545,16 @@ channel's behaviour, and every pull request opened through it pays the same
 matrix run. The only thing this occurrence changes is that the second commit it
 forces was not empty — the proof counts below were held back for it — so the
 cost this time was the matrix run alone.
+
+**CARRIER 32 is a REVIEW REPLY, `4033141749` on #123, and it stands.** The
+answer to the P2 that G45 records. It carries the footer for the same reason
+the bodies do, and unlike them it cannot be cleaned: the channel offers no edit
+for a review comment, only `add_reply_to_pull_request_comment`, so a correction
+would be a second comment beside the first rather than a fix to it. That is the
+asymmetry this entry has claimed since it was written, now observed once more on
+the reply that answers a real finding. Counting the bounded table's composition
+(25 review replies, 3 pull-request bodies, 1 pull-request comment) plus carriers
+30 to 32, the running total is **32: 26 review replies, 5 bodies, 1 comment.**
 
 ---
 
