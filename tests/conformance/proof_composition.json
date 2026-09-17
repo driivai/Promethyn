@@ -29,12 +29,12 @@
   ],
   "steps": {
     "reachability": {
-      "description": "F1/F2 startup obligations, future-root discovery, F3 authoritative readers, and the unreceipted/tampered classification; observed 129 passing cases before pinning",
+      "description": "F1/F2 startup obligations, future-root discovery, F3 authoritative readers, and the unreceipted/tampered classification; observed 130 passing cases before pinning",
       "counts": {
         "tests.conformance.test_security_build": 57,
         "tests.conformance.test_security_build_inventory": 13,
         "tests.conformance.test_reachability_readers": 33,
-        "tests.conformance.test_receipt_classification": 26
+        "tests.conformance.test_receipt_classification": 27
       },
       "required": {
         "tests.conformance.test_security_build": [
@@ -107,7 +107,8 @@
           "test_an_unclassified_finding_is_reported_as_a_rewrite_not_ignored",
           "test_the_receipted_tables_exist_and_are_what_the_snapshot_queries",
           "test_sqlite_reports_the_table_each_guarded_reader_reads",
-          "test_the_authorizer_still_reports_after_the_statement_cache_is_warm"
+          "test_the_authorizer_still_reports_after_the_statement_cache_is_warm",
+          "test_a_guarded_read_leaves_the_connection_usable"
         ]
       }
     },

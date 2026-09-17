@@ -548,3 +548,27 @@ def test_the_authorizer_still_reports_after_the_statement_cache_is_warm(tmp_path
         ledger._conn.set_authorizer(None)
     assert seen == {EXECUTION_TABLE}
     ledger.close()
+
+
+def test_a_guarded_read_leaves_the_connection_usable(tmp_path):
+    """Clearing the authorizer must not deny everything afterwards.
+
+    Measured across this repository's three supported interpreters:
+    ``set_authorizer(None)`` removes the callback on 3.11 and 3.12 and, on
+    3.10, installs one returning ``None`` — which SQLite reads as DENY, so the
+    next statement raises ``sqlite3.DatabaseError: not authorized``. The 3.10
+    matrix job caught it while 3.11 and 3.12 were green through all 51 steps,
+    which is the whole reason the matrix has three versions. This runs on all
+    three.
+    """
+
+    ledger = SqliteLedger(tmp_path / "usable.db")
+    assert ledger.executions() == []          # a guarded read installs and clears
+    ledger.record_execution(                  # a WRITE on the same connection
+        subject_id="s", source="human", executed=True, refused=False,
+        sandbox_name="namespace", exit_status=0, detail="after the guarded read",
+        created_at="2026-09-16T00:00:00Z",
+    )
+    assert len(ledger.executions()) == 1      # and a second guarded read
+    assert ledger.verify_chain().ok           # and an unguarded diagnostic
+    ledger.close()

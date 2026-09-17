@@ -180,6 +180,20 @@ CREATE TABLE IF NOT EXISTS audit_chain (
 """
 
 
+def _ALLOW_ALL(
+    action: int, first: str | None, second: str | None,
+    database: str | None, trigger: str | None,
+) -> int:
+    """The permissive default, installed to CLEAR an authorizer.
+
+    Python 3.10's ``set_authorizer(None)`` does not remove the callback; it
+    leaves one returning ``None``, which SQLite reads as DENY. Clearing by
+    installing this instead behaves identically on 3.10, 3.11 and 3.12.
+    """
+
+    return sqlite3.SQLITE_OK
+
+
 def _inserted_id(cur: sqlite3.Cursor) -> int:
     """The row id sqlite just assigned, or a refusal.
 
@@ -334,7 +348,15 @@ class SqliteLedger(Ledger):
             try:
                 result = reader(self, *args, **kwargs)
             finally:
-                self._conn.set_authorizer(None)
+                # NEVER ``set_authorizer(None)``. Measured on this repository's
+                # three supported interpreters: 3.11 and 3.12 remove the
+                # authorizer, and 3.10 installs a callback that returns None —
+                # which SQLite reads as DENY, so the very next statement on this
+                # connection raises ``sqlite3.DatabaseError: not authorized``.
+                # It took the 3.10 matrix job to find that; 3.11 and 3.12 were
+                # green through all 51 steps. ``_ALLOW_ALL`` restores the
+                # permissive default on every version by the same route.
+                self._conn.set_authorizer(_ALLOW_ALL)
             snapshot = self._receipt_source()
         finally:
             self._conn.execute("RELEASE SAVEPOINT authoritative_read")
