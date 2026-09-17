@@ -129,9 +129,12 @@ class Case:
     def run(self, *, advance=True, **overrides):
         if advance and self.clock.now_ns() < 5000 * NS:
             self.clock.advance(5000 * NS - self.clock.now_ns())
+        checkpoint = overrides.get("checkpoint")
+        if checkpoint is None:
+            checkpoint = self.checkpoint()
         inputs = {
             "ledger_path": self.path / "audit.db",
-            "checkpoint": self.checkpoint(),
+            "checkpoint": checkpoint,
             "anchor": self.anchor,
             "source": self.model.reader(),
             "scope": self.scope,
@@ -436,6 +439,10 @@ def test_local_hmac_never_clean_external_result(case):
 
 def test_disk_tamper_chain_verified_before_typed_decode(case, monkeypatch):
     case.issue()
+    # Independent checkpoint precedes the attack. A public ledger reader now
+    # refuses damaged evidence; the reconciler still must diagnose the raw
+    # disk against this previously observed authority without typed decoding.
+    checkpoint = case.checkpoint()
     from prometheus_protocol.chokepoint import reconcile_gate
 
     decoded = []
@@ -446,7 +453,7 @@ def test_disk_tamper_chain_verified_before_typed_decode(case, monkeypatch):
         db.execute(
             "UPDATE audit_chain SET payload=payload || ' ' WHERE event='authorization_decision'"
         )
-    report = case.run().to_dict()
+    report = case.run(checkpoint=checkpoint).to_dict()
     assert not decoded
     assert report["gate_verification"]["integrity_failure"]
     assert report["gate_verification"]["chain"] == "broken"

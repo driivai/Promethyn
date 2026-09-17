@@ -34,14 +34,35 @@ def test_mutation_plan_and_observed_failure_count_are_pinned(runner):
     assert len({name for name, *_ in plan}) == len(plan)
 
 
+#: Rows whose property is carried by more than one mechanism (G44).
+PINNED_COMPANION_ROWS = {"selected-profile-injection-unwired"}
+
+
 def test_every_mutation_target_and_selection_is_live(runner):
-    for name, function, edits, test_file, selection in runner.mutations():
+    for row in runner.mutations():
+        name, function, edits, test_file, selection = row[:5]
+        companions = row[5] if len(row) > 5 else ()
         assert (REPO / test_file).is_file(), name
         assert selection.strip(), name
-        source = textwrap.dedent(inspect.getsource(function))
+        source = textwrap.dedent(inspect.getsource(inspect.unwrap(function)))
         for old, replacement in edits:
             assert old in source, f"{name}: mutation target disappeared"
             assert old != replacement, f"{name}: mutation is a no-op"
+        for companion, old, replacement in companions:
+            companion_source = textwrap.dedent(inspect.getsource(inspect.unwrap(companion)))
+            assert old in companion_source, f"{name}: companion target disappeared"
+            assert old != replacement, f"{name}: companion mutation is a no-op"
+
+
+def test_the_rows_carrying_a_companion_edit_are_pinned(runner):
+    """A companion edit neuters a SECOND mechanism so the named one is isolated.
+    Which rows need one is a claim about how many mechanisms carry each
+    property, so it is pinned by name: adding one silently would hide that a
+    proof had stopped isolating its mechanism (G44), and dropping one would put
+    the proof back to passing for the wrong reason."""
+
+    carrying = {row[0] for row in runner.mutations() if len(row) > 5 and row[5]}
+    assert carrying == PINNED_COMPANION_ROWS
 
 
 def test_shortfall_and_excess_are_both_refused(runner):

@@ -39,6 +39,7 @@ from prometheus_protocol.chokepoint.substrate import (
 from prometheus_protocol.core.anchor_spec import parse_anchor_spec
 from prometheus_protocol.core.booleans import parse_env_bool
 from prometheus_protocol.core.config import Config
+from prometheus_protocol.runtime.security_build import component_builder
 from prometheus_protocol.core.errors import ConfigError
 from prometheus_protocol.core.secrets import Secret, secret_or_none
 from prometheus_protocol.runtime.factory import (
@@ -68,6 +69,7 @@ def config_attestation_required(env: Mapping[str, str] | None = None) -> bool:
     )
 
 
+@component_builder
 def attestation_target_for(
     config: Config, *, env: Mapping[str, str] | None = None
 ) -> AttestationTarget | None:
@@ -143,6 +145,7 @@ class _SignerRequest:
         object.__setattr__(self, "signing_key", secret_or_none(self.signing_key))
 
 
+@component_builder
 def resolve_attestation_signer(
     config: Config,
     *,
@@ -178,6 +181,7 @@ def resolve_attestation_signer(
     )
 
 
+@component_builder
 def resolve_posture(
     config: Config,
     *,
@@ -254,6 +258,7 @@ def resolve_posture(
     )
 
 
+@component_builder
 def attest_at_startup(
     config: Config,
     *,
@@ -284,6 +289,7 @@ def attest_at_startup(
     return attestor
 
 
+@component_builder
 def build_config_attestor(
     config: Config,
     *,

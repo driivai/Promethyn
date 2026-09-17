@@ -41,7 +41,7 @@ from __future__ import annotations
 import dataclasses
 import json
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Mapping, Protocol
 
 from prometheus_protocol.core.interfaces import Ledger
 from prometheus_protocol.ledger.audit_chain import (
@@ -86,8 +86,95 @@ OUTCOME_ENTRY_MISSING = "outcome_entry_missing"
 OUTCOME_DIFFERS = "outcome_differs_from_chain_entry"
 EXECUTION_ROW_MISSING = "execution_row_missing"
 
+#: The hold's own authorization record against its ``pending.hold`` entry.
+#: Spelled here rather than inline so every reason this module can emit is a
+#: named constant that the classification below has to place.
+RECORD_DIFFERS = "record_differs_from_chain_entry"
+CHAIN_ENTRY_COUNT_WRONG = "chain_entry_count_wrong"
+
 #: A ledger whose chain verifies but whose rows disagree with it.
 RECEIPTS_INVALID = "receipts_invalid"
+
+#: A ledger whose chain verifies and whose rows do not disagree with it, but
+#: which carries rows the chain never saw. Distinct from ``RECEIPTS_INVALID``
+#: because it is a distinct fact — and never ``ok``, exactly like the chain's
+#: own ``NOT_VERIFIABLE``.
+RECEIPTS_NOT_VERIFIABLE = "receipts_not_verifiable"
+
+#: The two tables that carry receipted rows. ONE spelling each, shared by the
+#: snapshot query in ``sqlite_ledger._receipt_source``, by the findings below,
+#: and by the read guard that decides which reads a finding reaches. A second
+#: spelling is how a table name and the finding that names it drift apart.
+HOLD_TABLE = "pending_actions"
+EXECUTION_TABLE = "executions"
+
+#: THE CLASSIFICATION, and it is the whole of F-3's answer.
+#:
+#: These two sets say which kind of fact a finding is. They are NOT
+#: interchangeable and the difference is the one doctrine #1 draws everywhere
+#: else in this tree: **could not verify is not the same as verified bad.**
+#:
+#: UNRECEIPTED — the chain never saw this row. That is what an adversary who
+#: can write rows but not the chain leaves behind. It is ALSO exactly what
+#: every row written before ``ledger/receipts.py`` existed looks like, and the
+#: two are not distinguishable from the row alone. So the row can never be
+#: evidence — but its presence is not proof that anything was rewritten, and
+#: it must not condemn a read that does not return it.
+#:
+#: TAMPERED — a receipt exists and disagrees with its row, or a receipt exists
+#: whose row is gone. Nothing legitimate produces that. It condemns the whole
+#: ledger, and every read of it.
+#:
+#: Measured, on ``d2cba9c`` (the commit before this module existed): that
+#: ledger's ``record_execution`` wrote an ``executions`` row and appended
+#: nothing to the chain, leaving ``verify_chain -> valid`` and
+#: ``verify_receipts -> outcome_entry_missing``. Before this classification,
+#: opening that file refused ``executions()``, ``pending_actions()`` AND
+#: ``factory.build_execution_controller`` alike.
+UNRECEIPTED_REASONS = frozenset({DECISION_ENTRY_MISSING, OUTCOME_ENTRY_MISSING})
+TAMPERED_REASONS = frozenset({
+    DECISION_DIFFERS,
+    OUTCOME_DIFFERS,
+    HOLD_ROW_MISSING,
+    EXECUTION_ROW_MISSING,
+    RECORD_DIFFERS,
+    CHAIN_ENTRY_COUNT_WRONG,
+})
+
+#: Every reason a ``ReceiptFinding`` can carry, as the union of the two sides.
+#: ``test_receipt_classification.py`` reads this module's source and pins that
+#: the set of reasons actually passed to ``ReceiptFinding(...)`` equals this
+#: exactly — so a new finding cannot arrive unclassified, and a classified
+#: reason cannot stop being emitted without the pin noticing. Exact, not a
+#: floor: a count would not have caught either direction.
+RECEIPT_FINDING_REASONS = UNRECEIPTED_REASONS | TAMPERED_REASONS
+
+
+class ReceiptSource(Protocol):
+    def pending_actions(self, *, status: str | None = None) -> list[dict]: ...
+    def executions(self) -> list[dict]: ...
+    def chained_events(self) -> list[dict]: ...
+
+
+@dataclass(frozen=True)
+class ReceiptSnapshot:
+    """Untrusted diagnostic material, not a verified reader API."""
+
+    holds: list[dict]
+    outcomes: list[dict]
+    events: list[dict]
+
+    def pending_actions(self, *, status: str | None = None) -> list[dict]:
+        return [row for row in self.holds if status is None or row["status"] == status]
+
+    def executions(self) -> list[dict]:
+        return self.outcomes
+
+    def chained_events(self) -> list[dict]:
+        return self.events
+
+    def _receipt_source(self) -> "ReceiptSnapshot":
+        return self
 
 
 def decision_subject(pending_id: int) -> str:
@@ -260,11 +347,23 @@ def differing_fields(projected: dict[str, Any], chained: Mapping[str, Any]) -> t
 
 @dataclass(frozen=True)
 class ReceiptFinding:
-    """One row whose receipt does not hold, and why."""
+    """One row whose receipt does not hold, and why.
+
+    ``table`` is supplied where the finding is made, by the walk that already
+    knows which table it is reading — not re-derived afterwards from the
+    subject's prefix, which would be a second mapping to keep in step.
+    """
 
     subject: str
     reason: str
     fields: tuple[str, ...] = ()
+    table: str = ""
+
+    @property
+    def unreceipted(self) -> bool:
+        """The chain never saw this row. Not evidence; not proof of a rewrite."""
+
+        return self.reason in UNRECEIPTED_REASONS
 
     def render(self) -> str:
         where = f" on {', '.join(self.fields)}" if self.fields else ""
@@ -285,8 +384,51 @@ class ReceiptVerification:
     checked: bool = True
 
     @property
+    def tampered(self) -> tuple[ReceiptFinding, ...]:
+        """Findings that condemn the ledger: a rewrite, or a receipt with no row."""
+
+        return tuple(f for f in self.findings if not f.unreceipted)
+
+    @property
+    def unreceipted(self) -> tuple[ReceiptFinding, ...]:
+        """Findings that condemn a ROW: the chain never saw it."""
+
+        return tuple(f for f in self.findings if f.unreceipted)
+
+    @property
+    def unreceipted_rows(self) -> dict[str, frozenset[int]]:
+        """The row ids no receipt vouches for, by table."""
+
+        by_table: dict[str, set[int]] = {}
+        for finding in self.unreceipted:
+            row_id = subject_row_id(finding.subject)
+            if finding.table and row_id is not None:
+                by_table.setdefault(finding.table, set()).add(row_id)
+        return {table: frozenset(ids) for table, ids in by_table.items()}
+
+    @property
+    def status(self) -> str:
+        """VALID / INVALID / NOT_VERIFIABLE, the same three the chain reports.
+
+        NOT_VERIFIABLE is the couldn't-check state in both directions: the
+        chain could not be read at all, or rows exist that the chain never
+        saw. INVALID is reserved for a disagreement, which is a different fact.
+        """
+
+        if not self.checked:
+            return NOT_VERIFIABLE
+        if self.tampered:
+            return RECEIPTS_INVALID
+        if self.unreceipted:
+            return RECEIPTS_NOT_VERIFIABLE
+        return VALID
+
+    @property
     def ok(self) -> bool:
-        return self.checked and not self.findings
+        """Unchanged: VALID only. NOT_VERIFIABLE has never been ok and is not
+        now — an auditor's verdict does not soften because the cause is age."""
+
+        return self.status == VALID
 
     def render(self) -> str:
         if not self.checked:
@@ -296,12 +438,22 @@ class ReceiptVerification:
                 f"receipts valid ({self.holds_checked} holds, "
                 f"{self.executions_checked} executions match their chained entries)"
             )
-        lines = [f"receipts INVALID: {len(self.findings)} row(s) disagree with the chain"]
-        lines.extend("  " + finding.render() for finding in self.findings)
+        lines: list[str] = []
+        if self.tampered:
+            lines.append(
+                f"receipts INVALID: {len(self.tampered)} row(s) disagree with the chain"
+            )
+            lines.extend("  " + finding.render() for finding in self.tampered)
+        if self.unreceipted:
+            lines.append(
+                f"receipts NOT VERIFIABLE: {len(self.unreceipted)} row(s) the chain "
+                f"never saw — not evidence, and not proof of a rewrite"
+            )
+            lines.extend("  " + finding.render() for finding in self.unreceipted)
         return "\n".join(lines)
 
 
-def verify_receipts(ledger: Ledger) -> ReceiptVerification:
+def verify_receipts(ledger: Ledger | ReceiptSnapshot) -> ReceiptVerification:
     """Every decided hold and every execution row, against its chained receipt.
 
     Rows are trusted only where the chain vouches for them. A row with no entry
@@ -317,12 +469,24 @@ def verify_receipts(ledger: Ledger) -> ReceiptVerification:
     under rewritten rows — F13 and F14). An auditor wants both.
     """
 
-    events = ledger.chained_events()
+    source = ledger._receipt_source()
+    events = source.chained_events()
     findings: list[ReceiptFinding] = []
 
-    holds = ledger.pending_actions()
+    holds = source.pending_actions()
     for row in holds:
         subject = decision_subject(row["id"])
+        # The persisted observation obligation lives inside this authorization
+        # record. A decision-only check would leave a forged opt-out readable.
+        held = [entry for entry in events if entry.get("event") == HOLD_EVENT and entry.get("subject") == subject]
+        authorization = row.get("authorization")
+        if held:
+            if len(held) != 1:
+                findings.append(ReceiptFinding(subject, CHAIN_ENTRY_COUNT_WRONG, table=HOLD_TABLE))
+            elif _decoded(held[0].get("payload")) != authorization:
+                findings.append(ReceiptFinding(subject, RECORD_DIFFERS, table=HOLD_TABLE))
+        elif isinstance(authorization, dict) and "record_version" in authorization:
+            findings.append(ReceiptFinding(subject, CHAIN_ENTRY_COUNT_WRONG, table=HOLD_TABLE))
         projected = project_decision(row)
         chained = latest_entry(events, event=DECISION_EVENT, subject=subject)
         if chained is None:
@@ -330,23 +494,23 @@ def verify_receipts(ledger: Ledger) -> ReceiptVerification:
             # hold's own ``pending.hold`` entry is its genesis. Anything else
             # claims a decision the chain never saw.
             if row.get("status") != "pending":
-                findings.append(ReceiptFinding(subject, DECISION_ENTRY_MISSING))
+                findings.append(ReceiptFinding(subject, DECISION_ENTRY_MISSING, table=HOLD_TABLE))
             continue
         differs = differing_fields(projected, chained)
         if differs:
-            findings.append(ReceiptFinding(subject, DECISION_DIFFERS, differs))
+            findings.append(ReceiptFinding(subject, DECISION_DIFFERS, differs, table=HOLD_TABLE))
 
-    executions = ledger.executions()
+    executions = source.executions()
     for row in executions:
         subject = outcome_subject(row["id"])
         projected = project_outcome(row)
         chained = latest_entry(events, event=OUTCOME_EVENT, subject=subject)
         if chained is None:
-            findings.append(ReceiptFinding(subject, OUTCOME_ENTRY_MISSING))
+            findings.append(ReceiptFinding(subject, OUTCOME_ENTRY_MISSING, table=EXECUTION_TABLE))
             continue
         differs = differing_fields(projected, chained)
         if differs:
-            findings.append(ReceiptFinding(subject, OUTCOME_DIFFERS, differs))
+            findings.append(ReceiptFinding(subject, OUTCOME_DIFFERS, differs, table=EXECUTION_TABLE))
 
     # THE INVERSE WALK: every receipt must have its row. The two walks above
     # project ROWS, so a row that has been DELETED is invisible to them and its
@@ -372,11 +536,11 @@ def verify_receipts(ledger: Ledger) -> ReceiptVerification:
         if event in (HOLD_EVENT, DECISION_EVENT) and chained_subject.startswith("pending:"):
             if row_id not in hold_ids:
                 orphaned.add(chained_subject)
-                findings.append(ReceiptFinding(chained_subject, HOLD_ROW_MISSING))
+                findings.append(ReceiptFinding(chained_subject, HOLD_ROW_MISSING, table=HOLD_TABLE))
         elif event == OUTCOME_EVENT and chained_subject.startswith("execution:"):
             if row_id not in execution_ids:
                 orphaned.add(chained_subject)
-                findings.append(ReceiptFinding(chained_subject, EXECUTION_ROW_MISSING))
+                findings.append(ReceiptFinding(chained_subject, EXECUTION_ROW_MISSING, table=EXECUTION_TABLE))
 
     return ReceiptVerification(
         holds_checked=len(holds),
@@ -398,8 +562,12 @@ class LedgerVerification:
 
     The chain verdict's fields are proxied so every existing consumer of a
     ``ChainVerification`` — ``.status``, ``.broken_index``, ``.detail``,
-    ``.length``, ``.render()`` — keeps working, and ``status`` gains one value:
-    ``receipts_invalid``, for a chain that verifies over rows that do not.
+    ``.length``, ``.render()`` — keeps working, and ``status`` gains two
+    values: ``receipts_invalid``, for a chain that verifies over rows that
+    disagree with it, and ``receipts_not_verifiable``, for one that verifies
+    over rows it never saw. Neither is ``ok``; they are reported apart because
+    a rewrite and an unreceipted row are different facts and an auditor acts
+    on them differently.
     """
 
     chain: ChainVerification
@@ -413,7 +581,7 @@ class LedgerVerification:
     def status(self) -> str:
         if not self.chain.ok:
             return self.chain.status
-        return VALID if self.receipts.ok else RECEIPTS_INVALID
+        return self.receipts.status
 
     @property
     def length(self) -> int:

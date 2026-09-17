@@ -11,6 +11,7 @@ the set is complete.
 
 from prometheus_protocol.execution.controller import ExecutionController
 from prometheus_protocol.execution.pending import PendingActionService
+from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
 from prometheus_protocol.verifier.bank import VerifierBank
 
 import fix_b_revert_proofs as harness
@@ -39,6 +40,16 @@ def enforce_expected(caught: int, failures: int) -> None:
         )
 
 
+#: Rows whose property is carried by MORE THAN ONE mechanism, so the mutation
+#: must neuter the others to isolate the one it names (docs/OPEN-GAPS.md G44).
+#: Pinned by name because "how many mechanisms carry this fact" is a claim: a
+#: companion added silently would hide that a proof had stopped isolating its
+#: mechanism, and one dropped silently would put the proof back to passing for
+#: the wrong reason. This runner has no pin module, so the pin lives here and
+#: is enforced in main() before anything executes.
+PINNED_COMPANION_ROWS = {"chain-row-comparison-removed", "chain-verification-removed"}
+
+
 def mutations():
     # FOUR spaces where the file shows eight: the runner reads inspect.getsource
     # of a METHOD and dedents it.
@@ -49,6 +60,20 @@ def mutations():
             [("    if stored != pending.record:", "    if False:")],
             RECORD,
             "altered_pinned_requirement_set",
+            # COMPANION EDIT, and the reason it exists. #122 added a second,
+            # independent guard over the same fact: the authoritative reader
+            # compares the stored authorization record against its
+            # ``pending.hold`` receipt and refuses. Measured at ``4664dad``:
+            # with only the comparison below removed the proof reported
+            # "1 passed", because the reader caught the tamper instead — so the
+            # mutation no longer isolated the mechanism it names and the proof
+            # would have passed whether or not that mechanism worked. Neutering
+            # both makes it red again. This does not withdraw the second guard;
+            # it keeps this proof measuring its own.
+            # The anchor is at the method body's own indent: the harness reads
+            # the source through textwrap.dedent, exactly as the row above does.
+            [(SqliteLedger._authoritative_read,
+              "    if receipts.tampered:", "    if False:")],
         ),
         (
             "chain-verification-removed",
@@ -56,6 +81,11 @@ def mutations():
             [("    if not verification.ok:", "    if False:")],
             RECORD,
             "altered_chain_entry",
+            # Same reason as the row above: the authoritative reader verifies
+            # the chain too, so removing only this check leaves the tamper
+            # caught elsewhere and the proof green for the wrong reason.
+            [(SqliteLedger._authoritative_read,
+              "    if not chain.ok:", "    if False:")],
         ),
         (
             # 1a's RULING, mutated rather than argued. The two above disable the
@@ -142,6 +172,13 @@ def mutations():
 
 
 def main() -> int:
+    carrying = {row[0] for row in mutations() if len(row) > 5 and row[5]}
+    if carrying != PINNED_COMPANION_ROWS:
+        raise AssertionError(
+            f"companion-edit rows drifted: {sorted(carrying)} observed, "
+            f"{sorted(PINNED_COMPANION_ROWS)} pinned; shortfall and excess are "
+            "both refused"
+        )
     harness.EXPECTED_REVERTS = EXPECTED_REVERTS
     harness.EXPECTED_CALL_FAILURES = EXPECTED_CALL_FAILURES
     harness.enforce_expected = enforce_expected

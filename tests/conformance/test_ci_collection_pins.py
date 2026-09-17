@@ -64,6 +64,7 @@ _COMPOSITION_MANIFEST = json.loads(
 PINNED_STEPS = (
     "Opened substrate proofs (exact collection, zero skips)",
     "Config attestation proofs (exact collection, zero skips)",
+    "Reachability proofs (requested posture and authoritative readers)",
     "PROD-FIX-1 proofs (approval expiry, attestation chronology, hostname taxonomy)",
     "PROD-FIX-2 proofs (F8 — no secret reaches a public string)",
     "PHASE-1.2a proofs (requirement coverage enforced before fusion)",

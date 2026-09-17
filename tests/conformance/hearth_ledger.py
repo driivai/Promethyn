@@ -528,6 +528,15 @@ EXPECTED_PROTECTED_FILES = 21
 #: ``started_ok``, mirroring ``SandboxResult``, and each refusal states both
 #: facts truthfully.
 #:
+#: * **REACHABILITY F1/F2/F3** — ``execution/pending.py`` now records an
+#:   unavailable observation before refusing a persisted observation obligation
+#:   that the current registry cannot satisfy, including a missing registry.
+#:   ``core/interfaces.py`` supplies the raw receipt-source seam for diagnostics
+#:   while guarded SQLite readers consult authoritative chained records.
+#:   ``gate/authorization.py`` corrects its unavailable outcome documentation
+#:   and emitted reason: the controller halts without an approvable human hold.
+#:   These are deliberate content changes, not a permanent exemption for paths.
+#:
 #: Those sprints are why these bytes are what they are. They do NOT license the
 #: next edit to the same files: updating a digest below is a fresh decision, and
 #: the reason for it belongs beside it.
@@ -537,7 +546,7 @@ DIGESTS: dict[str, str] = {
     "src/prometheus_protocol/benchmarks/judge_eval.py":
         "25430b5645aff6f655cfaccf33edd9e1cea3e5b4d0c62ef7f23183d9da9f3866",
     "src/prometheus_protocol/core/interfaces.py":
-        "952878f8af9175089531c9a8777f1c2ff169d7a00327a1dc746d099e967a5b5a",
+        "90bc623d7739638de84e25ed1430a1504f66f8788d16ba9304436d92141bc039",
     "src/prometheus_protocol/core/models.py":
         "96fe20410439abdb87fd9a34becdffab032fd106a5fa70f80271527a79df5910",
     "src/prometheus_protocol/execution/controller.py":
@@ -545,11 +554,11 @@ DIGESTS: dict[str, str] = {
     "src/prometheus_protocol/execution/executor.py":
         "4ab23cc2c96ba2ff17115126c6786bc1600ddad1109f9dabb814c97622bb0508",
     "src/prometheus_protocol/execution/pending.py":
-        "c28810b8653eb35c00b3713f4c5a01f0caf860964d646a7fcaed3e38c2311c9c",
+        "eb4f2af5dd7999b4ed7504b8a52831af9522494fce3a5d88580bbd5224b4536a",
     "src/prometheus_protocol/forge/miner.py":
         "b0e2a53440df5b38a1031cc9648e19b3f9df20081ee34d4e035beda2b6973a29",
     "src/prometheus_protocol/gate/authorization.py":
-        "3d4a648aeae1267ebdc52acc647d75044e87f8c41a14eb197d781985d70de52e",
+        "cf1636871b21aa7c7669fa049f4818b2404bfb133465c128c2f75ebfb6d227e2",
     "src/prometheus_protocol/gate/promotion.py":
         "8b37e56a52706f66fe7c22fd51c8d10fa95a3ba2d07cae76068c5b85b7c628fa",
     "src/prometheus_protocol/orchestration/gateway.py":

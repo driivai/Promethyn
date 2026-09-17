@@ -15,6 +15,7 @@ import sqlite3
 import stat
 from dataclasses import asdict
 from pathlib import Path
+from typing import Any, Callable, Mapping
 
 from prometheus_protocol.core.errors import StateError
 from prometheus_protocol.core.interfaces import Ledger
@@ -35,15 +36,22 @@ from prometheus_protocol.ledger.audit_chain import (
 )
 from prometheus_protocol.ledger.receipts import (
     DECISION_EVENT,
+    EXECUTION_TABLE,
+    HOLD_TABLE,
     OUTCOME_EVENT,
     LedgerVerification,
+    ReceiptFinding,
+    ReceiptSnapshot,
+    ReceiptVerification,
     decision_subject,
     outcome_subject,
     project_decision,
     project_outcome,
     unverifiable,
     verify_ledger,
+    verify_receipts,
 )
+from prometheus_protocol.ledger.readers import guard_readers, writes_ledger, unverified_diagnostic
 from prometheus_protocol.ledger.tip_anchor import (
     AnchorUnavailable,
     TipAnchor,
@@ -172,6 +180,20 @@ CREATE TABLE IF NOT EXISTS audit_chain (
 """
 
 
+def _ALLOW_ALL(
+    action: int, first: str | None, second: str | None,
+    database: str | None, trigger: str | None,
+) -> int:
+    """The permissive default, installed to CLEAR an authorizer.
+
+    Python 3.10's ``set_authorizer(None)`` does not remove the callback; it
+    leaves one returning ``None``, which SQLite reads as DENY. Clearing by
+    installing this instead behaves identically on 3.10, 3.11 and 3.12.
+    """
+
+    return sqlite3.SQLITE_OK
+
+
 def _inserted_id(cur: sqlite3.Cursor) -> int:
     """The row id sqlite just assigned, or a refusal.
 
@@ -281,10 +303,157 @@ def _judgment_from_evidence(evidence_json: str | None) -> dict | None:
     return judgment
 
 
+@guard_readers
 class SqliteLedger(Ledger):
     """SQLite-backed ledger. Pass ``":memory:"`` for an ephemeral instance."""
 
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        guard_readers(cls)
+
+    def _receipt_source(self) -> ReceiptSnapshot:
+        """Private, untrusted diagnostic snapshot; bypasses public read guards.
+
+        The two receipted tables are named from ``ledger.receipts``, the same
+        constants the findings carry, so the query and the finding that scopes
+        it cannot drift apart.
+        """
+        holds = self._conn.execute(f"SELECT * FROM {HOLD_TABLE} ORDER BY id").fetchall()
+        outcomes = self._conn.execute(f"SELECT * FROM {EXECUTION_TABLE} ORDER BY id").fetchall()
+        events = self._conn.execute("SELECT * FROM audit_chain ORDER BY id").fetchall()
+        return ReceiptSnapshot(
+            holds=[self._pending_row(row) for row in holds],
+            outcomes=[self._execution_row(row) for row in outcomes],
+            events=[dict(row) for row in events],
+        )
+
+    def _authoritative_read(self, reader: Callable[..., Any], args: tuple, kwargs: dict) -> Any:
+        # Read the returned values, the tables SQLite says the read touched,
+        # and their authority, in one snapshot. Checking first and re-reading
+        # afterwards would introduce a new race.
+        self._conn.execute("SAVEPOINT authoritative_read")
+        touched: set[str] = set()
+
+        def observe(action: int, first: str | None, second: str | None,
+                    database: str | None, trigger: str | None) -> int:
+            # SQLite's own account of what was read. Not a table name parsed
+            # out of SQL, and not a reader-name -> table list: either would be
+            # a second population to keep in step with the first.
+            if action == sqlite3.SQLITE_READ and first:
+                touched.add(first)
+            return sqlite3.SQLITE_OK
+
+        try:
+            self._conn.set_authorizer(observe)
+            try:
+                result = reader(self, *args, **kwargs)
+            finally:
+                # NEVER ``set_authorizer(None)``. Measured on this repository's
+                # three supported interpreters: 3.11 and 3.12 remove the
+                # authorizer, and 3.10 installs a callback that returns None —
+                # which SQLite reads as DENY, so the very next statement on this
+                # connection raises ``sqlite3.DatabaseError: not authorized``.
+                # It took the 3.10 matrix job to find that; 3.11 and 3.12 were
+                # green through all 51 steps. ``_ALLOW_ALL`` restores the
+                # permissive default on every version by the same route.
+                self._conn.set_authorizer(_ALLOW_ALL)
+            snapshot = self._receipt_source()
+        finally:
+            self._conn.execute("RELEASE SAVEPOINT authoritative_read")
+        from prometheus_protocol.policy.execution import ExecutionNotAuthorized
+
+        expected = None
+        if self._tip_anchor is not None:
+            try:
+                expected = anchor_history(self._tip_anchor)
+            except AnchorUnavailable:
+                raise ExecutionNotAuthorized(
+                    "authoritative ledger read refused: external anchor unavailable",
+                    reason="chain_did_not_verify",
+                ) from None
+        chain = verify_rows(snapshot.events, expected_tips=expected)
+        if not chain.ok:
+            raise ExecutionNotAuthorized(
+                "authoritative ledger read refused: chain did not verify",
+                reason="chain_did_not_verify",
+            )
+        receipts = verify_receipts(snapshot)
+        # A REWRITE CONDEMNS THE LEDGER. A row that disagrees with its receipt,
+        # or a receipt whose row is gone, is not a local fact: it says this
+        # database has been edited underneath the chain, so no read of it is
+        # authoritative. Unchanged from the first implementation.
+        if receipts.tampered:
+            first_finding = receipts.tampered[0]
+            raise ExecutionNotAuthorized(
+                f"authoritative ledger read refused: {first_finding.render()}",
+                reason=first_finding.reason,
+            )
+        # AN UNRECEIPTED ROW CONDEMNS THAT ROW. It is not evidence and this
+        # read must not hand it back — but it is not proof of a rewrite, so it
+        # must not refuse a read that does not return it. Construction sweeps
+        # the pending table; a pre-receipt execution row is nothing to do with
+        # it and used to stop every runtime root from opening at all (F-3).
+        reached = self._unreceipted_reached(receipts, touched, result)
+        if reached is not None:
+            raise ExecutionNotAuthorized(
+                f"authoritative ledger read refused: {reached.render()}",
+                reason=reached.reason,
+            )
+        return result
+
+    @staticmethod
+    def _exposed_row_ids(value: Any) -> set[int] | None:
+        """The row ids a result hands back, or None when it cannot be enumerated.
+
+        None is the fail-closed answer, not an empty one. A scalar projection
+        (``-> bool``, ``-> str``) is as authoritative as a row and says nothing
+        about which rows it came from, so it is treated as if it returned every
+        row of the tables it read. Only a result built out of row mappings —
+        each carrying its ``id`` — can demonstrate which rows it exposes.
+        """
+
+        if value is None:
+            return set()
+        if isinstance(value, Mapping):
+            identifier = value.get("id")
+            # Statement form, not a ternary: the type gate refuses an
+            # expression-position isinstance, and a row mapping without an
+            # integer id is the unenumerable case rather than an empty one.
+            if isinstance(identifier, int):
+                return {identifier}
+            return None
+        if isinstance(value, (list, tuple)):
+            exposed: set[int] = set()
+            for item in value:
+                inner = SqliteLedger._exposed_row_ids(item)
+                if inner is None:
+                    return None
+                exposed |= inner
+            return exposed
+        return None
+
+    @staticmethod
+    def _unreceipted_reached(
+        receipts: ReceiptVerification, touched: set[str], result: Any
+    ) -> ReceiptFinding | None:
+        """The first unreceipted row this read could have handed back, if any."""
+
+        unreceipted = receipts.unreceipted_rows
+        if not unreceipted:
+            return None
+        exposed = SqliteLedger._exposed_row_ids(result)
+        for finding in receipts.unreceipted:
+            ids = unreceipted.get(finding.table, frozenset())
+            # An empty `touched` means the authorizer observed nothing, so the
+            # read's reach is unknown — which is not the same as empty.
+            if touched and finding.table not in touched:
+                continue
+            if exposed is None or (ids & exposed):
+                return finding
+        return None
+
     @classmethod
+    @unverified_diagnostic
     def private(
         cls, path: Path | str, *, tip_anchor: TipAnchor | None = None
     ) -> SqliteLedger:
@@ -309,6 +478,7 @@ class SqliteLedger(Ledger):
         return cls(location, tip_anchor=tip_anchor)
 
     @staticmethod
+    @unverified_diagnostic
     def check_private_path(path: Path, *, require_file: bool = True) -> None:
         if path.is_symlink() or path.parent.is_symlink():
             raise ValueError("private ledger cannot use a symlink")
@@ -392,6 +562,7 @@ class SqliteLedger(Ledger):
         self._conn.commit()
         return added
 
+    @writes_ledger
     def record_attempt(self, attempt: Attempt, *, cycle: int, kind: str) -> int:
         evidence = dict(asdict(attempt.evidence))
         # The pass/total/passed_count columns describe a check that RAN, and are
@@ -455,6 +626,7 @@ class SqliteLedger(Ledger):
         self._conn.commit()
         return _inserted_id(cur)
 
+    @writes_ledger
     def record_promotion(
         self,
         *,
@@ -484,6 +656,7 @@ class SqliteLedger(Ledger):
 
     # -- execution audit ---------------------------------------------------
 
+    @writes_ledger
     def record_pending_action(
         self,
         *,
@@ -520,6 +693,7 @@ class SqliteLedger(Ledger):
         self._conn.commit()
         return _inserted_id(cur)
 
+    @writes_ledger
     def resolve_pending_action(
         self,
         pending_id: int,
@@ -561,6 +735,7 @@ class SqliteLedger(Ledger):
         # ``pending.hold`` append failed.
         self._chain_decision(pending_id, at=decided_at)
 
+    @writes_ledger
     def invalidate_pending_action(
         self, pending_id: int, *, invalidated_at: str, reason: str
     ) -> bool:
@@ -600,6 +775,7 @@ class SqliteLedger(Ledger):
             self._chain_decision(pending_id, at=invalidated_at)
         return changed
 
+    @writes_ledger
     def mark_state_moved(self, pending_id: int, *, at: str, reason: str) -> bool:
         """Make an APPROVED hold terminal; True iff it was approved.
 
@@ -636,6 +812,7 @@ class SqliteLedger(Ledger):
             self._chain_decision(pending_id, at=at)
         return changed
 
+    @writes_ledger
     def claim_pending_execution(self, pending_id: int, claimed_at: str) -> bool:
         """Atomically claim the right to execute a hold; True iff this call won.
 
@@ -653,6 +830,7 @@ class SqliteLedger(Ledger):
         self._conn.commit()
         return cur.rowcount == 1
 
+    @writes_ledger
     def release_pending_execution(self, pending_id: int) -> None:
         """Release a claim taken by :meth:`claim_pending_execution`.
 
@@ -685,6 +863,7 @@ class SqliteLedger(Ledger):
         ).fetchone()
         return self._pending_row(row) if row is not None else None
 
+    @writes_ledger
     def record_execution(
         self,
         *,
@@ -779,6 +958,7 @@ class SqliteLedger(Ledger):
 
     # -- workflow attribution (additive; orchestration layer) --------------
 
+    @writes_ledger
     def record_workflow_step(
         self,
         *,
@@ -892,6 +1072,7 @@ class SqliteLedger(Ledger):
 
     # -- backfill ----------------------------------------------------------
 
+    @writes_ledger
     def backfill(self) -> dict:
         """Fill judgment columns for historical rows from their JSON. Idempotent.
 
@@ -963,7 +1144,10 @@ class SqliteLedger(Ledger):
         would be three chances for a column to reach one and miss another.
         """
 
-        row = self.pending_action(pending_id)
+        stored = self._conn.execute(
+            "SELECT * FROM pending_actions WHERE id = ?", (pending_id,)
+        ).fetchone()
+        row = self._pending_row(stored) if stored is not None else None
         if row is None:
             raise StateError(
                 f"pending action {pending_id} vanished before its decision "
@@ -976,6 +1160,7 @@ class SqliteLedger(Ledger):
             created_at=at,
         )
 
+    @writes_ledger
     def record_chained(
         self, *, event: str, subject: str, payload: dict, created_at: str
     ) -> int:
@@ -1050,6 +1235,7 @@ class SqliteLedger(Ledger):
         rows = self._conn.execute("SELECT * FROM audit_chain ORDER BY id").fetchall()
         return [dict(row) for row in rows]
 
+    @unverified_diagnostic
     def chain_tip(self) -> ChainTip | None:
         """The current tip, to be held out-of-band as a truncation anchor."""
 
@@ -1059,11 +1245,13 @@ class SqliteLedger(Ledger):
         return ChainTip(seq=row["seq"], entry_hash=row["entry_hash"]) if row else None
 
     @property
+    @unverified_diagnostic
     def tip_anchor(self) -> TipAnchor | None:
         """The configured anchor target, if any — for the CLI and auditors."""
 
         return self._tip_anchor
 
+    @unverified_diagnostic
     def verify_chain(
         self,
         *,
@@ -1098,7 +1286,7 @@ class SqliteLedger(Ledger):
                     f"the configured tip anchor could not be read: {exc}",
                 )
         try:
-            rows = self.chained_events()
+            rows = self._receipt_source().chained_events()
         except sqlite3.DatabaseError as exc:
             return ChainVerification(
                 NOT_VERIFIABLE,
@@ -1108,6 +1296,7 @@ class SqliteLedger(Ledger):
             )
         return verify_rows(rows, expected_tip=expected_tip, expected_tips=expected_tips)
 
+    @writes_ledger
     def close(self) -> None:
         self._conn.close()
 

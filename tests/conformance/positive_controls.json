@@ -8,8 +8,8 @@
     "",
     "Each entry pairs a positive control with at least one negative it stands beside,",
     "and states the property the pair establishes together. test_positive_control_set.py",
-    "asserts every entry resolves to a real collected test, and — the half that keeps",
-    "this honest — that every self-declared positive control in the tree is registered",
+    "asserts every entry resolves to a real collected test, and \u2014 the half that keeps",
+    "this honest \u2014 that every self-declared positive control in the tree is registered",
     "here, so the set cannot fall behind the code."
   ],
   "controls": [
@@ -237,7 +237,7 @@
         "test_a_bare_zero_is_refused_at_config_load",
         "test_an_unrecognised_spelling_of_unbounded_is_refused"
       ],
-      "property": "a bare zero is refused at load while the NAMED unbounded posture still loads and still widens — without this the refusal is equally consistent with unbounded having been removed outright (OPEN-GAPS G21)"
+      "property": "a bare zero is refused at load while the NAMED unbounded posture still loads and still widens \u2014 without this the refusal is equally consistent with unbounded having been removed outright (OPEN-GAPS G21)"
     },
     {
       "module": "tests/conformance/test_security_field_behaviour.py",
@@ -246,7 +246,7 @@
         "test_every_outcome_affecting_field_has_a_proof_that_exists",
         "test_the_partition_covers_every_declared_security_field_exactly_once"
       ],
-      "property": "the collector that maps fields to their proofs can say no — an instrument returning an empty set would make the coverage guard vacuous for every field at once (doctrine #8, OPEN-GAPS G17)"
+      "property": "the collector that maps fields to their proofs can say no \u2014 an instrument returning an empty set would make the coverage guard vacuous for every field at once (doctrine #8, OPEN-GAPS G17)"
     },
     {
       "module": "tests/conformance/test_sandbox_unbounded_reaches_the_command.py",
@@ -254,7 +254,7 @@
       "negatives": [
         "test_container_omits_the_memory_flags_entirely_when_unbounded"
       ],
-      "property": "the container adapter omits --memory under UNBOUNDED while still emitting the exact cap it was given — without the positive, the absence is equally consistent with an adapter that never caps memory at all (PR #106 P1)"
+      "property": "the container adapter omits --memory under UNBOUNDED while still emitting the exact cap it was given \u2014 without the positive, the absence is equally consistent with an adapter that never caps memory at all (PR #106 P1)"
     },
     {
       "module": "tests/conformance/test_sandbox_unbounded_reaches_the_command.py",
@@ -278,7 +278,7 @@
       "negatives": [
         "test_every_concrete_adapter_is_answered_for_here"
       ],
-      "property": "the adapter collector can say no — an empty set would make the class-level ratchet vacuous for every adapter at once (doctrine #8)"
+      "property": "the adapter collector can say no \u2014 an empty set would make the class-level ratchet vacuous for every adapter at once (doctrine #8)"
     },
     {
       "module": "tests/conformance/test_sandbox_unbounded_reaches_the_command.py",
@@ -286,7 +286,7 @@
       "negatives": [
         "test_no_adapter_turns_an_unbounded_bound_into_a_finite_number"
       ],
-      "property": "the class-level sweep for a finite number derived from an unbounded cap looks in the right place — the same assertions on a BOUNDED Limits must find those numbers"
+      "property": "the class-level sweep for a finite number derived from an unbounded cap looks in the right place \u2014 the same assertions on a BOUNDED Limits must find those numbers"
     },
     {
       "module": "tests/conformance/test_sandbox_unbounded_reaches_the_command.py",
@@ -303,7 +303,7 @@
         "test_the_sweep_refuses_a_module_it_cannot_import",
         "test_the_sweep_refuses_a_file_it_cannot_parse"
       ],
-      "property": "the positional sweep refuses a narrowed population and does NOT refuse a healthy tree — without the positive, both refusals are consistent with an instrument that refuses everything and is merely useless rather than dishonest"
+      "property": "the positional sweep refuses a narrowed population and does NOT refuse a healthy tree \u2014 without the positive, both refusals are consistent with an instrument that refuses everything and is merely useless rather than dishonest"
     },
     {
       "module": "tests/conformance/test_proof_composition.py",
@@ -369,7 +369,7 @@
       "negatives": [
         "test_a_hold_pinned_by_an_observing_root_is_REFUSED_by_a_root_that_is_not"
       ],
-      "property": "a registry that does not observe the pinned class refuses the approval, while a registry that does observe it still approves — the refusal is about the mismatch, not about the hold"
+      "property": "a registry that does not observe the pinned class refuses the approval, while a registry that does observe it still approves \u2014 the refusal is about the mismatch, not about the hold"
     },
     {
       "module": "tests/conformance/test_reobservation_branch_delete.py",
@@ -395,7 +395,7 @@
       "negatives": [
         "test_a_supplied_service_that_would_discard_the_registry_is_REFUSED"
       ],
-      "property": "a deployment that wires no re-observation is untouched by the discard refusal — nothing was requested, so nothing was discarded"
+      "property": "a deployment that wires no re-observation is untouched by the discard refusal \u2014 nothing was requested, so nothing was discarded"
     },
     {
       "module": "tests/conformance/test_reobservation_branch_delete.py",
@@ -412,7 +412,7 @@
       "negatives": [
         "test_a_receipt_written_before_the_upgrade_is_still_restated"
       ],
-      "property": "a receipt found under the pre-upgrade subject is marked as an attribution, and one found under the current subject is not — so the marker distinguishes the two rather than appearing on both"
+      "property": "a receipt found under the pre-upgrade subject is marked as an attribution, and one found under the current subject is not \u2014 so the marker distinguishes the two rather than appearing on both"
     },
     {
       "module": "tests/conformance/test_reobservation_branch_delete.py",
@@ -421,7 +421,7 @@
         "test_a_base_branch_this_tool_will_not_read_is_refused_at_composition",
         "test_a_SUPPLIED_reader_carrying_an_unusable_base_is_refused_too"
       ],
-      "property": "the composition-time validator refuses bases the tool would not read without refusing the ones it would — so the refusal is about usability, not about naming a base at all"
+      "property": "the composition-time validator refuses bases the tool would not read without refusing the ones it would \u2014 so the refusal is about usability, not about naming a base at all"
     },
     {
       "module": "tests/conformance/test_execution_start_signal.py",
@@ -430,7 +430,7 @@
         "test_a_setup_timeout_is_NOT_recorded_as_a_successful_execution",
         "test_a_candidate_that_ran_and_then_timed_out_is_still_an_execution"
       ],
-      "property": "the executor refuses a candidate that never started without refusing one that did — including one the wall clock killed after it started, whose side effects really happened"
+      "property": "the executor refuses a candidate that never started without refusing one that did \u2014 including one the wall clock killed after it started, whose side effects really happened"
     },
     {
       "module": "tests/conformance/test_execution_start_signal.py",
@@ -439,7 +439,7 @@
         "test_a_git_read_after_a_setup_timeout_answers_NOTHING",
         "test_the_branch_delete_executor_does_not_claim_a_delete_that_never_ran"
       ],
-      "property": "the git reads and the branch-delete executor refuse a command that never ran without refusing one that did — so the merge proof is still produced when git actually executes"
+      "property": "the git reads and the branch-delete executor refuse a command that never ran without refusing one that did \u2014 so the merge proof is still produced when git actually executes"
     },
     {
       "module": "tests/conformance/test_git_ref_format.py",
@@ -448,7 +448,7 @@
         "test_a_name_git_rejects_is_refused_by_the_predicate",
         "test_the_predicate_never_accepts_what_git_rejects"
       ],
-      "property": "the branch-name predicate refuses every name git refuses without refusing the names git takes — so tightening it did not simply stop accepting anything"
+      "property": "the branch-name predicate refuses every name git refuses without refusing the names git takes \u2014 so tightening it did not simply stop accepting anything"
     },
     {
       "module": "tests/conformance/test_git_ref_format.py",
@@ -459,7 +459,7 @@
         "test_the_delete_executor_refuses_a_name_the_predicate_refuses",
         "test_every_reported_shape_is_refused_by_the_READS_too"
       ],
-      "property": "the reads refuse every name the tool's own predicate refuses without refusing the names it accepts — so routing classify, rev and the delete executor through is_usable_branch_name closed the second definition rather than stopping the reads from working"
+      "property": "the reads refuse every name the tool's own predicate refuses without refusing the names it accepts \u2014 so routing classify, rev and the delete executor through is_usable_branch_name closed the second definition rather than stopping the reads from working"
     },
     {
       "module": "tests/conformance/test_git_ref_format.py",
@@ -467,7 +467,7 @@
       "negatives": [
         "test_no_read_spells_the_rule_a_second_time"
       ],
-      "property": "the AST allowlist pinning _BRANCH_RE to one function is reaching the source it scans — an allowlist that found nothing to look at would pass for the same reason a clean one does (doctrine #8)"
+      "property": "the AST allowlist pinning _BRANCH_RE to one function is reaching the source it scans \u2014 an allowlist that found nothing to look at would pass for the same reason a clean one does (doctrine #8)"
     },
     {
       "module": "tests/conformance/test_open_gaps.py",
@@ -477,7 +477,7 @@
         "test_G38_the_newline_reaches_the_RENDERED_message_not_just_the_field",
         "test_G38_the_sibling_regex_swept_alongside_it_is_NOT_the_same_shape"
       ],
-      "property": "the tls_reason guard still refuses everything outside the symbolic alphabet while G38 holds it at exactly one trailing newline — without it, a pin that records a gap is indistinguishable from a guard that has stopped refusing anything at all"
+      "property": "the tls_reason guard still refuses everything outside the symbolic alphabet while G38 holds it at exactly one trailing newline \u2014 without it, a pin that records a gap is indistinguishable from a guard that has stopped refusing anything at all"
     },
     {
       "module": "tests/conformance/test_chained_decision_and_outcome.py",
@@ -487,7 +487,7 @@
         "test_F13_a_decision_altered_AFTER_a_genuine_approval_is_refused_at_retry",
         "test_F13_a_decided_hold_reset_to_pending_cannot_be_approved_again"
       ],
-      "property": "a real human decision is chained, matches its row, and retry still executes once — so the decision binding refuses forged and altered decisions without refusing genuine ones"
+      "property": "a real human decision is chained, matches its row, and retry still executes once \u2014 so the decision binding refuses forged and altered decisions without refusing genuine ones"
     },
     {
       "module": "tests/conformance/test_chained_decision_and_outcome.py",
@@ -497,7 +497,7 @@
         "test_F14_a_flipped_outcome_plus_a_released_claim_does_NOT_execute_twice",
         "test_the_audit_cli_exits_2_when_a_row_disagrees_with_its_receipt"
       ],
-      "property": "a real execution's outcome is chained with executed, detail and the structural start signals, and the row matches it — so the receipt verifier flags rewritten rows without flagging honest ones"
+      "property": "a real execution's outcome is chained with executed, detail and the structural start signals, and the row matches it \u2014 so the receipt verifier flags rewritten rows without flagging honest ones"
     },
     {
       "module": "tests/conformance/test_receipt_derivation.py",
@@ -506,7 +506,7 @@
         "test_each_decision_field_mutated_alone_is_detected",
         "test_each_outcome_field_mutated_alone_is_detected"
       ],
-      "property": "every writer exercised on an honest ledger verifies clean — so the per-field detection parametrised over the derived record is not a verifier that flags everything"
+      "property": "every writer exercised on an honest ledger verifies clean \u2014 so the per-field detection parametrised over the derived record is not a verifier that flags everything"
     },
     {
       "module": "tests/conformance/test_open_gaps.py",
@@ -514,7 +514,17 @@
       "negatives": [
         "test_G40_the_reconcile_gate_prefix_match_trips_on_the_observation_event"
       ],
-      "property": "the reconcile gate's prefix match really does trip on execution.observation (the named G40 limit) while G39's outcome.execution, named outside the prefix, decodes cleanly — so the limit is a measurement and the event name is a decision, not luck"
+      "property": "the reconcile gate's prefix match really does trip on execution.observation (the named G40 limit) while G39's outcome.execution, named outside the prefix, decodes cleanly \u2014 so the limit is a measurement and the event name is a decision, not luck"
+    },
+    {
+      "module": "tests/conformance/test_receipt_classification.py",
+      "positive": "test_a_clean_ledger_is_valid_and_ok",
+      "negatives": [
+        "test_a_pre_receipt_row_is_still_refused_as_evidence",
+        "test_a_rewritten_row_still_refuses_every_read",
+        "test_a_scalar_projection_cannot_escape_the_unreceipted_refusal"
+      ],
+      "property": "the three refusals are findings rather than a floor: on a ledger whose rows all have their receipts the same reader returns the row and the verdict is VALID, so 'refused' in the negatives above is caused by the unreceipted or rewritten row and not by the guard refusing everything it is asked"
     }
   ]
 }

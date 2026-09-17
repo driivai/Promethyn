@@ -28,11 +28,95 @@
     "keeps the pin while deleting or moving it breaks it."
   ],
   "steps": {
+    "reachability": {
+      "description": "F1/F2 startup obligations, future-root discovery, F3 authoritative readers, and the unreceipted/tampered classification; observed 130 passing cases before pinning",
+      "counts": {
+        "tests.conformance.test_security_build": 57,
+        "tests.conformance.test_security_build_inventory": 13,
+        "tests.conformance.test_reachability_readers": 33,
+        "tests.conformance.test_receipt_classification": 27
+      },
+      "required": {
+        "tests.conformance.test_security_build": [
+          "test_f1_required_attestation_reaches_startup",
+          "test_startup_publication_failure_never_returns_runtime",
+          "test_startup_positive_publishes_and_retains_attestor",
+          "test_f2_workflow_applies_required_anchor",
+          "test_f2_injected_unanchored_ledger_is_refused",
+          "test_required_anchor_positive_is_real_runtime_anchor",
+          "test_future_config_field_cannot_escape_derivation",
+          "test_new_root_with_alias_and_indirect_none_is_still_guarded",
+          "test_all_factory_roots_classified_without_name_allowlist",
+          "test_default_value_is_not_permission_to_discard_a_bound",
+          "test_injected_anchor_cannot_substitute_another_witness",
+          "test_configured_optional_publication_failure_is_not_credited",
+          "test_migration_startup_publication_is_required_and_uses_its_signer",
+          "test_default_escalation_cannot_be_relabelled_not_applicable",
+          "test_config_in_new_root_default_argument_is_not_discarded",
+          "test_runner_without_settings_does_not_drop_environment_anchor_requirement",
+          "test_variadic_root_cannot_hide_requested_config",
+          "test_unused_signer_argument_cannot_satisfy_custody_requirement",
+          "test_nested_root_cannot_discard_a_different_security_contract",
+          "test_nested_root_with_the_same_contract_is_validated_and_published_once",
+          "test_build_checks_policy_at_both_bank_and_execution_authorizer",
+          "test_external_security_subclass_is_not_an_absent_default_domain",
+          "test_the_signer_refusal_is_a_different_cause_and_says_so",
+          "test_the_report_vocabulary_is_pinned_exactly",
+          "test_a_disabled_requirement_is_not_reported_as_applied",
+          "test_a_requested_anchor_is_still_reported_as_applied",
+          "test_every_reported_token_is_a_member_of_the_vocabulary",
+          "test_the_shipped_graph_hides_nothing_from_the_traversal",
+          "test_an_unreachable_component_reads_as_not_applicable_not_as_a_refusal"
+        ],
+        "tests.conformance.test_security_build_inventory": [
+          "test_every_config_bearing_public_assembly_is_classified_across_the_package",
+          "test_renamed_config_parameter_and_type_aliases_are_discovered",
+          "test_unannotated_config_or_settings_parameter_still_requires_classification",
+          "test_another_function_cannot_substitute_the_config_alias_binding",
+          "test_new_module_with_aliased_constructor_cannot_omit_guard_installation",
+          "test_new_module_with_aliased_constructor_is_classified_when_guard_installed",
+          "test_component_annotation_cannot_hide_an_aliased_runtime_return"
+        ],
+        "tests.conformance.test_reachability_readers": [
+          "test_F3_observed_hold_reopened_without_registry_records_unavailable_and_refuses",
+          "test_F3_observed_hold_with_working_registry_approves_and_executes",
+          "test_every_derived_public_reader_refuses_non_authoritative_outcomes",
+          "test_future_aliased_reader_is_guarded_without_registration",
+          "test_unannotated_future_public_reader_is_not_silently_unclassified",
+          "test_unsupported_public_descriptor_or_callable_is_refused",
+          "test_new_scalar_readers_cannot_escape_the_default_guard",
+          "test_persisted_observation_obligation_cannot_be_erased_or_borrowed"
+        ],
+        "tests.conformance.test_receipt_classification": [
+          "test_the_fixture_is_the_pre_receipt_shape",
+          "test_a_pre_receipt_row_does_not_stop_a_runtime_root_from_opening",
+          "test_only_the_sweeping_roots_could_have_regressed",
+          "test_a_pre_receipt_row_is_still_refused_as_evidence",
+          "test_a_read_that_cannot_return_the_row_proceeds",
+          "test_a_receipted_row_still_reads_alongside_an_unreceipted_one",
+          "test_a_projection_over_an_unrelated_table_still_reads",
+          "test_a_rewritten_row_still_refuses_every_read",
+          "test_a_scalar_projection_cannot_escape_the_unreceipted_refusal",
+          "test_an_unobservable_read_fails_closed",
+          "test_a_row_id_in_one_table_does_not_condemn_the_same_id_in_another",
+          "test_the_verdict_distinguishes_unreceipted_from_rewritten",
+          "test_a_clean_ledger_is_valid_and_ok",
+          "test_every_reason_the_module_emits_is_classified_exactly",
+          "test_the_two_classifications_partition_the_population",
+          "test_every_finding_reason_is_in_the_closed_refusal_set",
+          "test_an_unclassified_finding_is_reported_as_a_rewrite_not_ignored",
+          "test_the_receipted_tables_exist_and_are_what_the_snapshot_queries",
+          "test_sqlite_reports_the_table_each_guarded_reader_reads",
+          "test_the_authorizer_still_reports_after_the_statement_cache_is_warm",
+          "test_a_guarded_read_leaves_the_connection_usable"
+        ]
+      }
+    },
     "checkpoint_b": {
-      "description": "PHASE-1.2c Checkpoint B execution-descriptor proofs",
+      "description": "PHASE-1.2c Checkpoint B execution-descriptor proofs; the revert-pin module gained test_the_rows_carrying_a_companion_edit_are_pinned when G44's companion edits were introduced (4 -> 5)",
       "counts": {
         "tests.conformance.test_execution_descriptor": 18,
-        "tests.conformance.test_phase_1_2c_checkpoint_b_revert_pins": 4
+        "tests.conformance.test_phase_1_2c_checkpoint_b_revert_pins": 5
       },
       "required": {
         "tests.conformance.test_execution_descriptor": [
@@ -52,7 +136,8 @@
         "tests.conformance.test_phase_1_2c_checkpoint_b_revert_pins": [
           "test_every_mutation_target_and_selection_is_live",
           "test_mutations_cover_every_named_load_bearing_join",
-          "test_shortfall_and_excess_are_both_refused"
+          "test_shortfall_and_excess_are_both_refused",
+          "test_the_rows_carrying_a_companion_edit_are_pinned"
         ]
       }
     },

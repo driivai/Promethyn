@@ -2,6 +2,8 @@
   "test_type_gate": [
     "test_a_planted_union_defect_still_fails_the_gate",
     "test_a_separate_mandatory_step_requires_the_gate_to_have_executed",
+    "test_checker_floor_uses_the_same_population_gate[0]",
+    "test_checker_floor_uses_the_same_population_gate[1]",
     "test_every_sanctioned_expression_test_is_still_present",
     "test_mypy_checks_the_whole_source_tree_not_a_file_list",
     "test_mypy_ini_has_no_per_module_sections",
@@ -17,7 +19,6 @@
     "test_the_build_job_itself_is_unconditional",
     "test_the_checked_tree_really_is_every_module_in_the_package",
     "test_the_config_carries_exactly_the_allowed_keys_and_values",
-    "test_the_gate_runner_refuses_a_run_that_checked_too_few_files",
     "test_the_gate_runs_in_every_matrix_job_on_every_supported_python",
     "test_the_gate_step_command_is_exactly_the_gate_and_nothing_else",
     "test_the_gate_step_is_unconditional_and_runs_the_gate_command",
@@ -27,7 +28,18 @@
     "test_the_receipt_is_not_committed_to_the_repository",
     "test_the_source_tree_type_checks_clean_right_now",
     "test_the_workflow_answers_to_exactly_the_permitted_triggers",
-    "test_the_workflow_defines_exactly_the_expected_jobs"
+    "test_the_workflow_defines_exactly_the_expected_jobs",
+    "test_type_gate_requires_an_explicit_clean_summary",
+    "test_type_gate_requires_exact_checked_population[-1]",
+    "test_type_gate_requires_exact_checked_population[-2]",
+    "test_type_gate_requires_exact_checked_population[0]",
+    "test_type_gate_requires_exact_checked_population[1]",
+    "test_type_gate_requires_exact_checked_population[2]",
+    "test_type_receipt_requires_exact_checked_population[-1]",
+    "test_type_receipt_requires_exact_checked_population[-2]",
+    "test_type_receipt_requires_exact_checked_population[0]",
+    "test_type_receipt_requires_exact_checked_population[1]",
+    "test_type_receipt_requires_exact_checked_population[2]"
   ],
   "test_type_gate_revert_pins": [
     "test_a_shortfall_or_an_excess_fails_the_runner",

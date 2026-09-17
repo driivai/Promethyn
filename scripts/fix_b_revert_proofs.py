@@ -180,7 +180,32 @@ def main() -> int:
         )
     total = 0
     with tempfile.TemporaryDirectory(prefix="prom-fix-b-reverts-") as directory:
-        for name, function, edits, test_file, selection in plan:
+        for row in plan:
+            # A row may carry a sixth element: EXTRA (function, old, new) edits
+            # applied alongside the named one. A mutation isolates the mechanism
+            # it names only while that mechanism is the ONLY one carrying the
+            # property. When a later sprint adds a second guard over the same
+            # fact, a single-target mutation stops reddening and the proof then
+            # passes whether or not the mechanism it names still works — the
+            # "green means untested" trap, arriving through defence in depth.
+            # Measured on `4664dad`: `chain-row-comparison-removed` reported
+            # "1 passed" because the reader-side receipt check caught the same
+            # tamper; neutering both made the proof red again.
+            name, target, edits, test_file, selection = row[:5]
+            extra = row[5] if len(row) > 5 else ()
+            # MUTATE THE FUNCTION WHOSE SOURCE WAS READ. A production root may
+            # now be wrapped — `runtime/security_build.install_build_guards`
+            # replaces every public factory function with a `@wraps`-decorated
+            # guard — and `inspect.getsource` follows `__wrapped__` while
+            # `__code__` does not. Recompiling the inner source and swapping it
+            # onto the WRAPPER compared two different functions, and the
+            # free-variable assertion below caught exactly that: measured on
+            # `4664dad`, `selected-profile-injection-unwired` raised
+            # `AssertionError` at this line on all three Pythons while base
+            # `9141936` reported "8 reverts caught". Unwrapping restores the
+            # invariant the assertion exists to state; the guard still runs,
+            # because the wrapper calls the function this patches.
+            function = inspect.unwrap(target)
             original = function.__code__
             source = textwrap.dedent(inspect.getsource(function))
             for old, new in edits:
@@ -206,6 +231,29 @@ def main() -> int:
             )
             mutated = namespace[function.__name__]
             assert original.co_freevars == mutated.__code__.co_freevars
+            companions = []
+            for companion_target, old_text, new_text in extra:
+                companion = inspect.unwrap(companion_target)
+                companion_source = textwrap.dedent(inspect.getsource(companion))
+                if old_text not in companion_source:
+                    raise AssertionError(
+                        f"{name}: companion revert target disappeared: {old_text!r}"
+                    )
+                companion_tree = ast.parse(companion_source.replace(old_text, new_text))
+                companion_definition = companion_tree.body[0]
+                if not isinstance(companion_definition, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    raise AssertionError(f"{name}: companion source is not a def")
+                companion_definition.decorator_list = []
+                companion_namespace: dict = {}
+                exec(  # noqa: S102 - reviewed test-only in-memory mutations
+                    compile(companion_tree, f"<FIX-B-revert:{name}:companion>", "exec"),
+                    companion.__globals__,
+                    companion_namespace,
+                )
+                companion_code = companion_namespace[companion.__name__].__code__
+                assert companion.__code__.co_freevars == companion_code.co_freevars
+                companions.append((companion, companion.__code__))
+                companion.__code__ = companion_code
             report = Path(directory) / f"{name}.xml"
             captured = io.StringIO()
             try:
@@ -220,6 +268,8 @@ def main() -> int:
                     )
             finally:
                 function.__code__ = original
+                for companion, companion_original in companions:
+                    companion.__code__ = companion_original
             cases = list(ET.parse(report).iter("testcase")) if report.exists() else []
             failed = [c for c in cases if c.find("failure") is not None]
             if (

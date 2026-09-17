@@ -9,7 +9,7 @@ generic endpoint settings.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Mapping
 
@@ -132,7 +132,12 @@ SECRET_FIELDS = (
     "config_attestation_token",
 )
 
-#: Every Config field that expresses a security requirement or a security bound.
+#: Each Config field explicitly declares whether it expresses a build-time
+#: security requirement or bound in its dataclass metadata. ``security=False``
+#: means no independent build obligation, NOT that the value is nonsensitive:
+#: credentials remain protected by ``SECRET_FIELDS`` and the Secret wrapper.
+#: The public ``SECURITY_FIELDS`` tuple below the class is DERIVED from those
+#: declarations; there is no second hand-maintained population to drift.
 #:
 #: A field listed here must be CONSUMED by the code that honours it, and two
 #: separate instruments say so — deliberately, because for a long time only the
@@ -152,34 +157,11 @@ SECRET_FIELDS = (
 #:    ``ledger_anchor_retention_days`` and ``max_role_calls`` — are covered by
 #:    (1) alone and are recorded as such rather than implied to be covered.
 #:
-#: A third test fails if a field whose NAME looks like a security flag
-#: (``require_*``, ``allow_*``, ``enforce_*``, ``deny_*``, ``strict*``) is added
-#: without being listed here, so the list ratchets both ways: it cannot silently
-#: miss a flag, and a flag cannot silently do nothing.
-SECURITY_FIELDS = (
-    "sandbox",
-    "require_digest_pin",
-    "allow_insecure_loopback",
-    "escalate_below",
-    "gate_threshold",
-    "pending_ttl_seconds",
-    "verifier_timeout_s",
-    "verifier_memory_mb",
-    "verifier_cpu_seconds",
-    "verifier_max_processes",
-    "request_timeout_s",
-    "provider_max_response_bytes",
-    "max_role_calls",
-    "ledger_anchor",
-    "ledger_anchor_retention_days",
-    "require_ledger_anchor",
-    "require_external_signer",
-    "require_verified_substrate",
-    "allow_unverified_substrate",
-    "config_attestation_target",
-    "require_config_attestation",
-    "verification_profile",
-)
+#: A third test checks security-shaped names against the derived set. The
+#: runtime build guard additionally rejects a field without a classification,
+#: including an unfamiliar field on a Config subclass. Classification is a
+#: trusted schema decision; these declarations cannot infer whether a future
+#: author incorrectly calls a security-sensitive setting non-security.
 
 
 #: Every boolean field, validated as an actual ``bool`` at load: a string,
@@ -236,9 +218,9 @@ def _as_bound(value: str | None, default: int) -> Bound:
 class Config:
     """Resolved configuration for a runtime instance."""
 
-    provider: str = PROVIDER_MOCK
-    api_base: str | None = None
-    model: str | None = None
+    provider: str = field(default=PROVIDER_MOCK, metadata={"security": False})
+    api_base: str | None = field(default=None, metadata={"security": False})
+    model: str | None = field(default=None, metadata={"security": False})
     #: The actor provider's bearer credential. A ``Secret``, not a ``str``:
     #: see ``core/secrets.py``. ``repr=False`` would govern one rendering path
     #: out of five, and ``asdict``/``vars`` ignore it entirely.
@@ -250,7 +232,7 @@ class Config:
     #: every call site. What is guaranteed is that the value STORED is a
     #: ``Secret`` — the annotation names the accepted input, the invariant
     #: is enforced after it.
-    api_key: Secret | str | None = None
+    api_key: Secret | str | None = field(default=None, metadata={"security": False})
 
     # Soft model-judge advisor. Off by default: it issues model calls and the
     # offline default provider cannot meaningfully judge. ``judge_model``, when
@@ -260,75 +242,75 @@ class Config:
     # logs a one-line correlated-grader notice. ``judge_api_base`` /
     # ``judge_api_key`` optionally point the judge at a different gateway (a
     # fully independent grading endpoint); unset, they inherit the actor's.
-    enable_model_judge: bool = False
-    judge_model: str | None = None
-    judge_api_base: str | None = None
-    judge_api_key: Secret | str | None = None
+    enable_model_judge: bool = field(default=False, metadata={"security": False})
+    judge_model: str | None = field(default=None, metadata={"security": False})
+    judge_api_base: str | None = field(default=None, metadata={"security": False})
+    judge_api_key: Secret | str | None = field(default=None, metadata={"security": False})
     # Judge sampling temperature. Default 0.0 keeps the judge deterministic
     # (unchanged behaviour). It exists so the self-consistency / repeated-
     # sampling calibration lever can draw genuinely varied samples: at
     # temperature 0 repeated calls are identical and majority-of-k is a no-op.
     # Only the judge's `assess` path reads this; the actor/proposer path stays
     # deterministic regardless.
-    judge_temperature: float = 0.0
+    judge_temperature: float = field(default=0.0, metadata={"security": False})
 
-    registry_dir: Path = Path(".prometheus/skills")
-    ledger_path: Path = Path(".prometheus/ledger.db")
-    trust_store_path: Path = Path(".prometheus/trust.db")
+    registry_dir: Path = field(default=Path(".prometheus/skills"), metadata={"security": False})
+    ledger_path: Path = field(default=Path(".prometheus/ledger.db"), metadata={"security": False})
+    trust_store_path: Path = field(default=Path(".prometheus/trust.db"), metadata={"security": False})
 
-    verifier_timeout_s: float = 5.0
+    verifier_timeout_s: float = field(default=5.0, metadata={"security": True})
     #: A positive bound, or ``UNBOUNDED`` — see ``NAMEABLY_UNBOUNDED_FIELDS``.
     #: The annotation names the ACCEPTED input; what is STORED is the canonical
     #: form, an ``int`` or the literal ``"unbounded"``. Use ``resolve_bound`` to
     #: get the integer the limit APIs take.
-    verifier_memory_mb: Bound = 256
-    verifier_cpu_seconds: Bound = 5
-    verifier_max_processes: Bound = 64
+    verifier_memory_mb: Bound = field(default=256, metadata={"security": True})
+    verifier_cpu_seconds: Bound = field(default=5, metadata={"security": True})
+    verifier_max_processes: Bound = field(default=64, metadata={"security": True})
 
     # Sandbox adapter for executing untrusted candidate code: "auto" (pick the
     # best available isolating adapter), "namespace", "container", or "unsafe"
     # (the unsafe direct runner, which additionally requires
     # PROM_ALLOW_UNSAFE_EXEC=1). Default is an isolating adapter.
-    sandbox: str = "auto"
+    sandbox: str = field(default="auto", metadata={"security": True})
 
     # Container image provenance. When set, the container adapter REFUSES to run
     # an image referenced by a bare tag — only a digest-pinned image
     # (``…@sha256:…``) is allowed, so a tag cannot be silently repointed after it
     # was vetted. Off by default for dev convenience; the recommended production
     # posture. A bare tag is always logged as a supply-chain risk regardless.
-    require_digest_pin: bool = False
+    require_digest_pin: bool = field(default=False, metadata={"security": True})
 
-    gate_threshold: float = 0.0
-    retrieval_k: int = 5
+    gate_threshold: float = field(default=0.0, metadata={"security": True})
+    retrieval_k: int = field(default=5, metadata={"security": False})
 
     # Action-authorization human-routing. When the action gate is run in
     # routing mode, an authoritative PASS whose confidence is below
     # ``escalate_below`` (or any high-risk action) is not auto-executed: it
     # halts as a pending action for a human to approve or reject. Mirrors the
     # verifier bank's escalate_below default.
-    escalate_below: float = 0.75
+    escalate_below: float = field(default=0.75, metadata={"security": True})
 
     # How long a pending (human-hold) action stays approvable before it lapses.
     # A `sweep` transitions holds older than this to EXPIRED, and approval
     # re-checks it at decision time; an expired hold can never execute. Default
     # is 24h; set to 0 to disable expiry (holds live until decided).
-    pending_ttl_seconds: int = 86_400
+    pending_ttl_seconds: int = field(default=86_400, metadata={"security": True})
 
     # Swarm cost control: the maximum number of role/provider generation calls a
     # single swarm task may make. Modest by default so a run cannot make
     # unbounded provider calls; raise it for wider role panels.
-    max_role_calls: int = 16
+    max_role_calls: int = field(default=16, metadata={"security": True})
 
-    request_timeout_s: float = 30.0
+    request_timeout_s: float = field(default=30.0, metadata={"security": True})
 
     # Transport hardening (threat model §4). A remote endpoint must be https://;
     # plaintext is allowed only to a loopback host and only with this opt-out,
     # which logs a warning at construction. There is no opt-out for a remote
     # plaintext endpoint: a credential sent there crosses the network in clear.
-    allow_insecure_loopback: bool = False
+    allow_insecure_loopback: bool = field(default=False, metadata={"security": True})
     # Ceiling on a provider response body. A response that exceeds it is refused
     # outright — never truncated and parsed as if complete.
-    provider_max_response_bytes: int = 4 * 1024 * 1024
+    provider_max_response_bytes: int = field(default=4 * 1024 * 1024, metadata={"security": True})
 
     # Ledger tip anchoring (threat model §3; docs/ledger-integrity.md). Where the
     # audit chain's tip is written after every append, so a rewrite of the chain
@@ -338,17 +320,17 @@ class Config:
     # (one immutable record per tip on a write-once mount) or https://host/path
     # (a remote append-only log run by another party). Unset means unanchored,
     # which the runtime warns about on every file-backed ledger it opens.
-    ledger_anchor: str | None = None
+    ledger_anchor: str | None = field(default=None, metadata={"security": True})
     # Bearer credential for the https:// log. A ``Secret``: it cannot render
     # through repr, str, an f-string, asdict, vars or json.
-    ledger_anchor_token: Secret | str | None = None
+    ledger_anchor_token: Secret | str | None = field(default=None, metadata={"security": False})
     # Retention requested per record on an object-lock medium. The window is
     # exactly the period over which a rewrite stays detectable; ten years.
-    ledger_anchor_retention_days: int = 3650
+    ledger_anchor_retention_days: int = field(default=3650, metadata={"security": True})
     # Production gate: refuse to build a ledger without an append-only external
     # anchor. Off by default so development and in-memory ledgers work; the
     # production posture sets PROM_REQUIRE_LEDGER_ANCHOR=1 (§5.4).
-    require_ledger_anchor: bool = False
+    require_ledger_anchor: bool = field(default=False, metadata={"security": True})
 
     # Approval key custody (threat model §2.6; docs/key-custody.md). When set,
     # the chokepoint refuses to build with a local HMAC key — a key root on the
@@ -356,7 +338,7 @@ class Config:
     # KMS / HSM whose private key never exists on the host, and which logs
     # every Sign). Off by default: a development install has no KMS to point
     # at; the production posture sets PROM_REQUIRE_EXTERNAL_SIGNER=1 (§5.4).
-    require_external_signer: bool = False
+    require_external_signer: bool = field(default=False, metadata={"security": True})
 
     # Approval-store substrate (threat model §2, F3; docs/chokepoint-threat-
     # model.md "Recovery follow-up"). The chokepoint's cross-process execution
@@ -369,8 +351,8 @@ class Config:
     # filesystem by other means; ``require_verified_substrate`` withdraws the
     # opt-out — the production posture, PROM_REQUIRE_VERIFIED_SUBSTRATE=1. Both
     # are the OR of their sources (Config, environment, the runner config).
-    require_verified_substrate: bool = False
-    allow_unverified_substrate: bool = False
+    require_verified_substrate: bool = field(default=False, metadata={"security": True})
+    allow_unverified_substrate: bool = field(default=False, metadata={"security": True})
 
     # Signed config attestation (threat model §4, PIH-4a). Where the digest of
     # the RESOLVED security posture is signed (with the approval signer) and
@@ -380,14 +362,14 @@ class Config:
     # log run by another party), or file:///path — a single local file, which is
     # NON-PROTECTING because whoever changes the configuration rewrites it in
     # the same breath, and which the requirement refuses.
-    config_attestation_target: str | None = None
+    config_attestation_target: str | None = field(default=None, metadata={"security": True})
     # Bearer credential for the https:// target. A ``Secret``: it cannot render
     # through repr, str, an f-string, asdict, vars or json.
-    config_attestation_token: Secret | str | None = None
+    config_attestation_token: Secret | str | None = field(default=None, metadata={"security": False})
     # Production gate: refuse to run a posture that is not on an external
     # record. Off by default — a development install has no external witness to
     # publish to, exactly as with require_ledger_anchor (§5.4).
-    require_config_attestation: bool = False
+    require_config_attestation: bool = field(default=False, metadata={"security": True})
     # PHASE-1.2a — which committed verification profile decides what must be
     # verified before an action is authorized. A SECURITY field: it selects the
     # requirement set every authorization is measured against, so naming a
@@ -399,7 +381,7 @@ class Config:
     # for this version and wrong for the product. A customer-supplied,
     # digest-pinned policy is a later supplier of the same value; nothing
     # downstream reaches for the profile table directly.
-    verification_profile: str = "baseline"
+    verification_profile: str = field(default="baseline", metadata={"security": True})
 
     def __post_init__(self) -> None:
         """Reject non-finite, out-of-range and wrong-signed numeric settings.
@@ -605,3 +587,12 @@ class Config:
             config_attestation_token=secret_or_none(env.get("PROM_CONFIG_ATTESTATION_TOKEN")),
             require_config_attestation=_env_bool(env, "PROM_REQUIRE_CONFIG_ATTESTATION"),
         )
+
+
+#: Security obligations, in Config declaration order. Runtime guards must use
+#: ``fields(type(config))`` rather than this base-class snapshot when accepting
+#: subclasses, so newly declared fields participate without editing a list.
+SECURITY_FIELDS = tuple(
+    declared.name for declared in fields(Config)
+    if declared.metadata.get("security") is True
+)

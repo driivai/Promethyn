@@ -368,6 +368,9 @@ class TestThePositiveControl:
         )
         assert outcome.outcome != OUTCOME_APPROVE
         assert executor.executed == []
+        assert "halted without an approvable hold" in outcome.decision.reason
+        assert "routed to a human" not in outcome.decision.reason
+        assert controller.list_pending() == []
 
 
 def _migration_artifact():
