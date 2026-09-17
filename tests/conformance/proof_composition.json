@@ -29,9 +29,9 @@
   ],
   "steps": {
     "reachability": {
-      "description": "F1/F2 startup obligations, future-root discovery, F3 authoritative readers, and the unreceipted/tampered classification; observed 156 passing cases before pinning, re-pinned from 130 across the two defects review reported on #123 and #124 (classification 27 -> 53: 11 are the derived per-reader parametrisation, 6 pin G47's decoder boundary, 5 pin that the guard catches the decoder's exception rather than its ValueError base)",
+      "description": "F1/F2 startup obligations, future-root discovery, F3 authoritative readers, the unreceipted/tampered classification, and the two component scopes; observed 169 passing cases before pinning, re-pinned from 156 when F-1's ruling made non-discovery a refusal (security_build 57 -> 70)",
       "counts": {
-        "tests.conformance.test_security_build": 57,
+        "tests.conformance.test_security_build": 70,
         "tests.conformance.test_security_build_inventory": 13,
         "tests.conformance.test_reachability_readers": 33,
         "tests.conformance.test_receipt_classification": 53
@@ -66,7 +66,13 @@
           "test_a_requested_anchor_is_still_reported_as_applied",
           "test_every_reported_token_is_a_member_of_the_vocabulary",
           "test_the_shipped_graph_hides_nothing_from_the_traversal",
-          "test_an_unreachable_component_reads_as_not_applicable_not_as_a_refusal"
+          "test_a_component_the_traversal_cannot_credit_refuses_the_build",
+          "test_the_same_defect_in_a_credited_container_is_refused_on_its_merits",
+          "test_the_discovery_scope_is_derived_from_the_interpreter_not_hand_listed",
+          "test_no_shipped_root_hides_a_component_from_the_credited_walk",
+          "test_an_unregistered_carrier_of_a_compared_attribute_refuses",
+          "test_every_registered_carrier_is_a_class_and_the_map_is_exact",
+          "test_the_named_residuals_of_the_discovery_scope_are_real"
         ],
         "tests.conformance.test_security_build_inventory": [
           "test_every_config_bearing_public_assembly_is_classified_across_the_package",

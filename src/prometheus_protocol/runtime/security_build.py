@@ -7,8 +7,10 @@ this is a composition contract, not a boundary against an in-process attacker.
 """
 from __future__ import annotations
 
+import gc
 import inspect
 import os
+import types
 from contextvars import ContextVar
 from dataclasses import fields, replace
 from functools import wraps
@@ -68,6 +70,19 @@ REPORT_TOKENS = frozenset({
     PUBLISHED,
 })
 
+#: THE THREE COMPONENT-LEVEL REFUSALS, named apart rather than sharing one
+#: label. They are different findings and a proof that cannot tell them apart
+#: stops isolating its own mechanism the moment a second one is added --
+#: measured here, not predicted: with all three sharing ``"component"``, the
+#: ``external-subclass-refusal-deleted`` mutation SURVIVED, because deleting
+#: that refusal left components behind the foreign object undiscovered and the
+#: discovery rule refused in its place. The proof went green while the
+#: mechanism it names was gone. That is G44's shape, and naming the causes is
+#: what keeps each proof pointed at one of them.
+COMPONENT_EXTERNAL_SUBCLASS = "component"
+COMPONENT_NOT_DISCOVERED = "component_not_discovered"
+COMPONENT_UNREGISTERED_CARRIER = "component_unregistered_carrier"
+
 _BUILDING: ContextVar[Config | None] = ContextVar("security_building", default=None)
 
 
@@ -98,23 +113,31 @@ def _objects(root: object) -> list[Any]:
     Only package-owned objects are traversed. Arbitrary injected implementations
     are opaque, not credited with a property because an attribute says so.
 
-    THE LIMIT, AND IT IS NOT THE ONE THE OTHER LIMITS DESCRIBE. This walk
-    descends ``_WALKED_CONTAINERS`` and ``__dict__`` and nothing else. A
-    package-owned component held in a ``set``, a ``frozenset``, a ``dict`` KEY,
-    a ``SimpleNamespace``, a closure cell, a generator, a ``__slots__`` object
-    or any other container is NOT REACHED — and a component that is not
-    reached is reported by ``validate_build`` as ``DEFAULT_NOT_APPLICABLE``
-    whenever the Config value is its default, which reads downstream as fine.
+    THE CREDITED POPULATION, WHICH IS NARROWER THAN THE DISCOVERED ONE ON
+    PURPOSE. This walk descends ``_WALKED_CONTAINERS`` and ``__dict__`` and
+    nothing else, because those are the shapes in which holding an object means
+    "this runtime is composed of it". An object captured in a closure or used
+    as a dict KEY is reachable but not obviously a component, and crediting it
+    would let an incidental reference satisfy a security property.
 
-    Every other limit this guard states describes something it declines to
-    cover. This one describes something it actively reports as applicable-
-    and-absent when it is neither. Measured on the four runtime roots: an
-    exhaustive walk that also descends sets, slots, closures and namespaces
-    finds exactly one object this one misses, ``Config``, which is excluded
-    deliberately — so the gap is latent in the shipped graph and open in
-    principle. ``test_security_build.py`` pins both halves of that sentence.
-    Making non-discovery REFUSE is filed rather than done here; see
-    ``docs/OPEN-GAPS.md`` G43.
+    Narrow crediting used to mean SILENT non-discovery: a component in a
+    ``set``, a ``frozenset``, a ``dict`` key, a ``SimpleNamespace``, a closure
+    cell, a generator or a ``__slots__`` object was not reached, and the row it
+    should have contradicted was reported clean. Measured before the fix, with
+    one live defect planted in each shape on a real ``build_orchestrator``
+    graph: three shapes refused and SEVEN reported ``applied`` -- not
+    ``default_not_applicable``, because a legitimate consumer was also present
+    and ``all()`` over the reachable ones was True. ``applied`` is the strongest
+    token this report has; it says the property was compared against the live
+    components that honour it.
+
+    That is now impossible for any object that could bear on a property:
+    ``_discovered`` below is a SECOND, WIDER scope, and ``validate_build``
+    refuses when it finds an object carrying a compared attribute that this
+    walk did not credit. Non-discovery is a refusal, not a clean row. The two
+    scopes are derived independently and neither is trusted alone -- the same
+    shape as the ledger read guard, which takes its table scope from SQLite's
+    own authorizer rather than from parsed SQL.
     """
     todo = [root]
     seen: set[int] = set()
@@ -140,6 +163,99 @@ def _objects(root: object) -> list[Any]:
             # Its overridden behavior is not established by reflected fields.
             raise BuildRefused("component", "unsupported external subclass in security runtime")
     return result
+
+
+#: Shapes ``_discovered`` will not look inside. A class, a module and a builtin
+#: are not components of a runtime; following them reaches the whole package and
+#: says nothing about what this graph is composed of. A plain function is opaque
+#: for the same reason -- its ``__globals__`` IS the module namespace -- but its
+#: CLOSURE CELLS are followed, because a component captured in a closure is a
+#: component of this graph and was measured to be invisible to both walks
+#: without that one step.
+_DISCOVERY_OPAQUE = (type, types.ModuleType, types.BuiltinFunctionType)
+
+
+def _discovered(root: object) -> list[Any]:
+    """Every package-owned instance the INTERPRETER can reach from ``root``.
+
+    THE SECOND SCOPE. ``_objects`` decides what may satisfy a property;
+    this decides what the guard is allowed to claim it has seen. Where they
+    disagree, ``validate_build`` refuses, because a component the guard cannot
+    reach is one whose compliance it does not know.
+
+    ``gc.get_referents`` is the interpreter's own account of what an object
+    references. It is not a second hand-written list of container shapes to
+    keep in step with ``_WALKED_CONTAINERS`` -- that would be two populations
+    with one maintainer and the same blind spot. It sees sets, frozensets, dict
+    KEYS, ``__slots__``, generator frames and cells because the garbage
+    collector must.
+
+    Measured on the four shipped runtime roots: 208 objects visited in 0.1 ms
+    from ``build_orchestrator``, and the gap against ``_objects`` is EMPTY on
+    all four. So the refusal is latent in the shipped graph and fires only on a
+    composition that hides something a property is compared on.
+
+    WHAT IT STILL CANNOT SEE, named rather than left to be found. A total
+    traversal of arbitrary Python objects is not achievable, and these are the
+    residuals, each a place where a component could exist and neither scope
+    would know:
+
+    * an object that does not exist yet -- built lazily on first use, after
+      this guard has run;
+    * an object reachable only through ``__getattr__`` or a property, which
+      this walk will not invoke because invoking arbitrary code during a
+      security check is a worse bargain than the gap it closes;
+    * an object captured by a closure the CALLER wrote. Only this package's own
+      closures are followed, because a callback the caller injected is not a
+      composition the package made. Measured: following every closure cell
+      failed 4 chokepoint tests and errored 71 more on an in-memory audit
+      medium held behind a test-supplied executor;
+    * an object held only by a C extension that does not implement
+      ``tp_traverse``, which the collector cannot see either;
+    * an object reachable only from module globals, not from the root at all.
+
+    ``test_security_build.py`` pins four of those shapes behaviourally and the
+    emptiness of the gap on every shipped root; ``docs/OPEN-GAPS.md`` G49 holds
+    the residual.
+    """
+
+    seen: set[int] = {id(root)}
+    todo: list[Any] = [root]
+    found: list[Any] = []
+    while todo:
+        obj = todo.pop()
+        if isinstance(obj, _DISCOVERY_OPAQUE) or isinstance(obj, Config):
+            continue
+        if isinstance(obj, types.FunctionType):
+            # ONLY THE PACKAGE'S OWN CLOSURES. A closure this package wrote
+            # that captures a component is a composition the package made; a
+            # callback the CALLER injected is not, and whatever it captured is
+            # the caller's business. Measured: following every closure cell
+            # refused 71 chokepoint tests outright, because their runtimes hold
+            # a test-supplied executor lambda and the objects behind it are not
+            # components of the runtime at all. `_objects` declines closure
+            # captures for exactly this reason, and a discovery scope that used
+            # a different notion of "component" would refuse ordinary builds.
+            if not obj.__module__.startswith("prometheus_protocol."):
+                continue
+            for cell in obj.__closure__ or ():
+                try:
+                    captured = cell.cell_contents
+                except ValueError:
+                    # An empty cell: a recursive closure not yet bound. There is
+                    # no object to inspect, which is not the same as one hidden.
+                    continue
+                if id(captured) not in seen:
+                    seen.add(id(captured))
+                    todo.append(captured)
+            continue
+        if type(obj).__module__.startswith("prometheus_protocol."):
+            found.append(obj)
+        for referent in gc.get_referents(obj):
+            if id(referent) not in seen:
+                seen.add(id(referent))
+                todo.append(referent)
+    return found
 
 
 @component_builder
@@ -172,6 +288,93 @@ def validate_ledger(config: Config, ledger: object) -> None:
         raise BuildRefused("ledger_anchor", "injected anchor has a different destination")
 
 
+def security_attribute_carriers() -> dict[str, tuple[type, ...]]:
+    """Attribute name -> the ONLY classes permitted to carry it, fail-closed.
+
+    F-4: the consumer classes in ``validate_build`` are hand-written, so a NEW
+    consumer of an EXISTING field is silently uncovered while its row still
+    reads ``applied``. The fix a draft of that finding proposed was to add the
+    second consumer to the list, which is the same hand-list one entry longer.
+
+    WHY THE POPULATION IS NOT DERIVED, stated rather than left implied. Which
+    class honours a Config field is a SEMANTIC fact -- "this object is the one
+    that implements this policy" -- and nothing in the type system records it.
+    The obvious derivation, keying on the attribute a property is compared on,
+    does not work on its own: measured in the shipped graph, ``timeout_s`` is
+    carried by ``SubprocessVerifier``, ``RemoteModelProvider`` and
+    ``HttpAppendOnlyLog`` for three DIFFERENT Config fields, so the attribute
+    name alone cannot tell a consumer from a coincidence.
+
+    So the hand-list is kept and made to FAIL CLOSED instead. Any credited
+    object carrying one of these attribute names that is not one of its
+    permitted classes refuses the build. A new consumer of an existing field
+    now has to be registered here to ship, rather than being covered by a
+    sentence and not by the guard.
+
+    THE RESIDUAL, measured: ``name`` is deliberately absent. ``sandbox``
+    compares ``obj.name``, but ``name`` is carried by
+    ``prometheus_protocol.core.models.Tier`` in the shipped swarm graph and by
+    much else besides, so keying on it would refuse a correct build. An
+    attribute distinctive enough to key on is the precondition for this rule,
+    and ``name`` does not meet it. ``docs/OPEN-GAPS.md`` G50 holds that gap.
+    """
+
+    from prometheus_protocol.chokepoint.approval import ApprovalAuthority
+    from prometheus_protocol.chokepoint.authorization_record import AuthorizationContext
+    from prometheus_protocol.chokepoint.substrate import SubstratePolicy
+    from prometheus_protocol.execution.pending import PendingActionService
+    from prometheus_protocol.gate.authorization import ActionGate
+    from prometheus_protocol.gate.promotion import PromotionGate
+    from prometheus_protocol.ledger.anchor_http import HttpAppendOnlyLog
+    from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
+    from prometheus_protocol.policy.execution import ExecutionAuthorizer
+    from prometheus_protocol.provider.remote import RemoteModelProvider
+    from prometheus_protocol.sandbox.base import Limits, Sandbox
+    from prometheus_protocol.sandbox.container import ContainerSandbox
+    from prometheus_protocol.swarm.synthesis import RoleSynthesisEngine, _BudgetedProvider
+    from prometheus_protocol.verifier.bank import VerifierBank
+    from prometheus_protocol.verifier.runner import SubprocessVerifier
+
+    return {
+        "isolating": (Sandbox,),
+        "require_digest_pin": (ContainerSandbox,),
+        "tip_anchor": (SqliteLedger,),
+        # Two known carriers, one of them not a consumer. Measured across the
+        # whole suite, `signer` is the ONLY attribute in this map carried by a
+        # class that does not implement the property, and
+        # `AuthorizationContext.signer` is a dict of identity metadata rather
+        # than a signer object with `.external`. It is registered so a correct
+        # build is not refused, and registered EXPLICITLY rather than by
+        # dropping `signer` from the map, so a genuinely new signer-carrying
+        # consumer still refuses until someone looks at it.
+        "signer": (ApprovalAuthority, AuthorizationContext),
+        "require_verified": (SubstratePolicy,),
+        "allow_unverified": (SubstratePolicy,),
+        "has_policy_supplier": (VerifierBank,),
+        "_policy_supplier": (VerifierBank,),
+        "_supplier": (ExecutionAuthorizer,),
+        "threshold": (PromotionGate,),
+        "_escalate_below": (ActionGate,),
+        "escalate_below": (VerifierBank,),
+        "_ttl_seconds": (PendingActionService,),
+        # Two carriers, one object: measured, ``_BudgetedProvider`` holds the
+        # SAME budget instance as the engine that wraps it, so it is a shared
+        # reference rather than a second consumer. Registered because it
+        # carries the attribute, not because it is independently checked.
+        "_budget": (RoleSynthesisEngine, _BudgetedProvider),
+        "timeout_s": (SubprocessVerifier, RemoteModelProvider, HttpAppendOnlyLog),
+        "memory_mb": (SubprocessVerifier,),
+        "cpu_seconds": (SubprocessVerifier,),
+        "max_processes": (SubprocessVerifier, Limits),
+        "wall_time_s": (Limits,),
+        "memory_bytes": (Limits,),
+        "cpu_time_s": (Limits,),
+        "max_response_bytes": (RemoteModelProvider,),
+        "api_base": (RemoteModelProvider,),
+        "url": (HttpAppendOnlyLog,),
+    }
+
+
 @component_builder
 def validate_build(config: Config, runtime: object, *, signer: Any = None) -> dict[str, str]:
     """Every schema-derived property gets applied/default-unrequested/refused.
@@ -199,6 +402,44 @@ def validate_build(config: Config, runtime: object, *, signer: Any = None) -> di
 
     names = security_fields(config)
     nodes = _objects(runtime)
+    # NON-DISCOVERY REFUSES, SCOPED TO OBJECTS THAT COULD BEAR ON A PROPERTY.
+    #
+    # The ruling is that a guard which cannot see a component does not know the
+    # property is inapplicable. The words that matter are "the property": an
+    # object carrying none of the attributes any property is compared on cannot
+    # change any row, and refusing over it is not fail-closed, it is broken.
+    #
+    # Measured, not reasoned: refusing on EVERY uncredited package-owned object
+    # failed 4 tests and errored 71 more, on `_Medium` and
+    # `ModelAuditAdministrator` -- an in-memory audit medium reached through a
+    # closure this package legitimately wrote, carrying no security attribute
+    # at all. Scoped to the carrier map, the same run is clean and a planted
+    # component that DOES carry one still refuses in all seven hiding shapes.
+    #
+    # So both component refusals key on the same fact -- this object could
+    # satisfy or contradict a property -- and differ only in which way it is
+    # wrong: unreachable, or reachable and unregistered.
+    carriers = security_attribute_carriers()
+    credited = {id(obj) for obj in nodes}
+    for obj in _discovered(runtime):
+        for attribute, permitted in carriers.items():
+            if not hasattr(obj, attribute):
+                continue
+            if id(obj) not in credited:
+                raise BuildRefused(
+                    COMPONENT_NOT_DISCOVERED,
+                    f"{type(obj).__module__}.{type(obj).__name__} carries "
+                    f"{attribute!r} and is reachable from the returned runtime, but "
+                    "it is not held in a traversed container, so whether it honours "
+                    "that property cannot be established",
+                )
+            if not isinstance(obj, permitted):
+                raise BuildRefused(
+                    COMPONENT_UNREGISTERED_CARRIER,
+                    f"{type(obj).__module__}.{type(obj).__name__} carries {attribute!r}, "
+                    "which a security property is compared on, but it is not a "
+                    "registered consumer of that property",
+                )
     report: dict[str, str] = {}
     defaults = {item.name: item.default for item in fields(config)}
 

@@ -543,6 +543,14 @@
         "test_a_bad_argument_on_a_clean_ledger_is_not_reported_as_corruption"
       ],
       "property": "narrowing the guard to the decoder's own exception did not stop the two threshold readers working: on the same clean ledger a real threshold still returns its rows, so the ValueError the negative observes is the caller's bad argument surfacing as itself rather than the readers refusing everything they are asked"
+    },
+    {
+      "module": "tests/conformance/test_security_build.py",
+      "positive": "test_the_same_defect_in_a_credited_container_is_refused_on_its_merits",
+      "negatives": [
+        "test_a_component_the_traversal_cannot_credit_refuses_the_build"
+      ],
+      "property": "the six hiding-shape refusals are caused by the component being hidden from the credited walk, not by the guard refusing any graph containing a substrate policy: the SAME defect in a container the walk credits is refused for the property it violates instead, naming allow_unverified_substrate rather than component_not_discovered"
     }
   ]
 }

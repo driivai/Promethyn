@@ -16,6 +16,8 @@ from prometheus_protocol.sandbox.namespace import NamespaceSandbox
 from prometheus_protocol.chokepoint.signer import LocalHmacSigner
 from prometheus_protocol.runtime.security_build import (
     APPLIED,
+    COMPONENT_NOT_DISCOVERED,
+    COMPONENT_UNREGISTERED_CARRIER,
     DEFAULT_NOT_APPLICABLE,
     NOT_REQUESTED,
     REPORT_TOKENS,
@@ -571,15 +573,38 @@ def test_the_shipped_graph_hides_nothing_from_the_traversal(build_config, root):
     assert missed == {"prometheus_protocol.core.config.Config"}
 
 
-@pytest.mark.parametrize("container", ["set", "frozenset", "dict_key", "namespace", "closure"])
-def test_an_unreachable_component_reads_as_not_applicable_not_as_a_refusal(build_config, container):
-    """Half two: OPEN IN PRINCIPLE, and this is the limit's whole point.
+class _Slotted:
+    """A component held behind ``__slots__``, which has no ``__dict__``."""
 
-    The SAME live defect — a substrate policy permitting what the Config
-    forbids — is refused when the traversal reaches it and reported
-    ``default_not_applicable`` when it does not. This test asserts the
-    behaviour the guard HAS, so the limit in ``_objects`` is measured rather
-    than asserted, and so the fix filed as G43 has a test that must flip.
+    __slots__ = ("policy",)
+
+    def __init__(self, policy: object) -> None:
+        self.policy = policy
+
+
+#: Every container shape measured to hide a component from the credited walk.
+#: Three of them (list, tuple, dict value) ARE credited and are the positive
+#: control below; these seven were not, and each is now a refusal.
+_HIDING_CONTAINERS = ["set", "frozenset", "dict_key", "namespace", "generator", "slots"]
+
+
+@pytest.mark.parametrize("container", _HIDING_CONTAINERS)
+def test_a_component_the_traversal_cannot_credit_refuses_the_build(build_config, container):
+    """THE RULING, replacing the limit this test used to pin.
+
+    It previously asserted ``DEFAULT_NOT_APPLICABLE`` and said in its own
+    docstring that the fix filed as G43 would have to flip it. This is that
+    flip. A guard that cannot see a component does not know the property is
+    inapplicable, and reporting couldn't-verify as verified-clean is the class
+    of defect this guard exists to end.
+
+    MEASURED, AND WORSE THAN THE LIMIT DESCRIBED. The old behaviour was not
+    always ``default_not_applicable``. That token needs NO reachable consumer;
+    when a compliant sibling is present — the ordinary case on a real graph —
+    ``all()`` over the reachable ones is True and the row read ``applied``,
+    the strongest token the report has. Both were observed: this fixture
+    produces the former, and a ``PromotionGate`` planted on a
+    ``build_orchestrator`` graph produced the latter.
     """
 
     import types
@@ -590,20 +615,206 @@ def test_an_unreachable_component_reads_as_not_applicable_not_as_a_refusal(build
     defect = SubstratePolicy(require_verified=False, allow_unverified=True)
     assert build_config.allow_unverified_substrate is False
 
-    reachable = factory.build_execution_controller(build_config)
-    reachable.probe_attribute = defect
-    with pytest.raises(BuildRefused) as caught:
-        validate_build(build_config, reachable)
-    assert caught.value.property_name == "allow_unverified_substrate"
-
     hidden = factory.build_execution_controller(build_config)
     hidden.probe_attribute = {
         "set": lambda: {defect},
         "frozenset": lambda: frozenset({defect}),
         "dict_key": lambda: {defect: 1},
         "namespace": lambda: types.SimpleNamespace(policy=defect),
-        "closure": lambda: (lambda: defect),
+        "generator": lambda: (item for item in [defect]),
+        "slots": lambda: _Slotted(defect),
     }[container]()
-    assert validate_build(build_config, hidden)["allow_unverified_substrate"] == (
-        DEFAULT_NOT_APPLICABLE
-    ), "the limit named in _objects has changed; update the docstring and G43"
+    with pytest.raises(BuildRefused) as caught:
+        validate_build(build_config, hidden)
+    assert caught.value.property_name == COMPONENT_NOT_DISCOVERED, (
+        "the refusal must name non-discovery specifically. Sharing one "
+        "'component' label with the external-subclass refusal was measured to "
+        "disarm that refusal's own mutation proof (G44's shape)."
+    )
+    assert "SubstratePolicy" in str(caught.value)
+
+
+def test_the_same_defect_in_a_credited_container_is_refused_on_its_merits(build_config):
+    """The paired positive control for the seven refusals above.
+
+    The SAME defect in a container the walk credits is refused for the PROPERTY
+    it violates rather than for being unreachable — so the refusals above are
+    caused by the hiding and not by the guard refusing every graph that has a
+    substrate policy in it.
+    """
+
+    from prometheus_protocol.chokepoint.substrate import SubstratePolicy
+    from prometheus_protocol.runtime.security_build import validate_build
+
+    defect = SubstratePolicy(require_verified=False, allow_unverified=True)
+    reachable = factory.build_execution_controller(build_config)
+    reachable.probe_attribute = defect
+    with pytest.raises(BuildRefused) as caught:
+        validate_build(build_config, reachable)
+    assert caught.value.property_name == "allow_unverified_substrate"
+
+
+# ---------------------------------------------------------------------------
+# F-1 / F-4: the two scopes, and what each is allowed to claim
+# ---------------------------------------------------------------------------
+
+
+def test_the_discovery_scope_is_derived_from_the_interpreter_not_hand_listed():
+    """The whole point of the second scope is that it is not a second list.
+
+    A hand-written second tuple of container shapes would have the same blind
+    spot as ``_WALKED_CONTAINERS`` and the same maintainer, so the comparison
+    between them would prove nothing. ``gc.get_referents`` is the collector's
+    own account of what an object references.
+    """
+
+    import ast
+    import textwrap
+
+    from prometheus_protocol.runtime import security_build
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(security_build._discovered)))
+    calls = {
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+    assert "get_referents" in calls, (
+        "the discovery scope must come from the interpreter; a second hand-written "
+        "container list is the first list with extra steps"
+    )
+    # Over the CODE, not the source text: the docstring names
+    # ``_WALKED_CONTAINERS`` to explain why it is not used, and a substring
+    # search cannot tell an explanation from a dependency.
+    referenced = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+    assert "_WALKED_CONTAINERS" not in referenced, (
+        "the discovery scope must not be derived from the credited scope's own "
+        "container tuple, or the two cannot disagree"
+    )
+
+
+@pytest.mark.parametrize(
+    "root", ["execution_controller", "workflow_runtime", "orchestrator", "swarm"]
+)
+def test_no_shipped_root_hides_a_component_from_the_credited_walk(build_config, root):
+    """The refusal is LATENT: every shipped root's two scopes agree exactly.
+
+    Exact, not a floor. If a future component moves into a set or behind slots,
+    this reddens and the build refuses — which is the intended consequence, not
+    a regression to tolerate.
+    """
+
+    from prometheus_protocol.runtime.security_build import _discovered, _objects
+
+    if root == "swarm":
+        runtime = factory.build_swarm_runtime(build_config, provider=MockProvider())
+    else:
+        runtime = getattr(factory, "build_" + root)(build_config)
+    credited = {id(obj) for obj in _objects(runtime)}
+    hidden = {
+        f"{type(obj).__module__}.{type(obj).__name__}"
+        for obj in _discovered(runtime)
+        if id(obj) not in credited
+    }
+    assert hidden == set()
+
+
+def test_an_unregistered_carrier_of_a_compared_attribute_refuses(build_config):
+    """F-4 made fail-closed: a NEW consumer of an EXISTING field must register.
+
+    The hand-list cannot be derived — which class honours a field is semantic —
+    so instead an object carrying an attribute a property is compared on, that
+    is not a registered carrier of it, refuses the build.
+    """
+
+    from prometheus_protocol.execution.pending import PendingActionService
+    from prometheus_protocol.runtime.security_build import _objects, validate_build
+
+    # A PACKAGE-OWNED object that grows a second consumer's attribute. A class
+    # defined in this test module would not be credited at all — the walk
+    # already declines foreign objects — so it could not exercise this rule.
+    runtime = factory.build_execution_controller(build_config)
+    services = [obj for obj in _objects(runtime) if isinstance(obj, PendingActionService)]
+    assert services, "fixture precondition: the controller graph has a pending service"
+    services[0].threshold = 0.99
+
+    with pytest.raises(BuildRefused) as caught:
+        validate_build(build_config, runtime)
+    assert caught.value.property_name == COMPONENT_UNREGISTERED_CARRIER
+    assert "threshold" in str(caught.value)
+    assert "PendingActionService" in str(caught.value)
+
+
+def test_every_registered_carrier_is_a_class_and_the_map_is_exact():
+    """Membership, not a count, and no string names.
+
+    A carrier map keyed on ``"module.ClassName"`` would be F-7's defect —
+    a name pin on a writable attribute — inside the fix for F-4.
+    """
+
+    from prometheus_protocol.runtime.security_build import security_attribute_carriers
+
+    carriers = security_attribute_carriers()
+    assert set(carriers) == {
+        "isolating", "require_digest_pin", "tip_anchor", "signer", "require_verified",
+        "allow_unverified", "has_policy_supplier", "_policy_supplier", "_supplier",
+        "threshold", "_escalate_below", "escalate_below", "_ttl_seconds", "_budget",
+        "timeout_s", "memory_mb", "cpu_seconds", "max_processes", "wall_time_s",
+        "memory_bytes", "cpu_time_s", "max_response_bytes", "api_base", "url",
+    }
+    for attribute, permitted in carriers.items():
+        assert isinstance(permitted, tuple) and permitted, attribute
+        for entry in permitted:
+            assert isinstance(entry, type), f"{attribute} carries a non-class entry"
+    assert "name" not in carriers, (
+        "`name` is not distinctive enough to key on — core.models.Tier carries it "
+        "in the shipped swarm graph. The gap is docs/OPEN-GAPS.md G50."
+    )
+
+
+@pytest.mark.parametrize("residual", ["lazy", "getattr", "module_global", "foreign_closure"])
+def test_the_named_residuals_of_the_discovery_scope_are_real(build_config, residual):
+    """Doctrine #5: the stated limit is a PASSING TEST, not a paragraph.
+
+    Each of these is a place a component can exist that neither scope sees.
+    They are named in ``_discovered``'s docstring and in G49. If one of them
+    stops being true, this reddens and the docstring is wrong.
+    """
+
+    from prometheus_protocol.chokepoint.substrate import SubstratePolicy
+    from prometheus_protocol.runtime.security_build import _discovered
+
+    defect = SubstratePolicy(require_verified=False, allow_unverified=True)
+    runtime = factory.build_execution_controller(build_config)
+
+    if residual == "lazy":
+        # Nothing holds it yet; it is built on first use, after the guard ran.
+        class BuildsOnUse:
+            def make(self) -> object:
+                return SubstratePolicy(require_verified=False, allow_unverified=True)
+
+        runtime.probe_attribute = BuildsOnUse()
+    elif residual == "getattr":
+        class Dynamic:
+            def __getattr__(self, name: str) -> object:
+                return defect
+
+        runtime.probe_attribute = Dynamic()
+    elif residual == "foreign_closure":
+        # A closure THIS MODULE wrote, not the package. `_discovered` follows
+        # only the package's own closures: a callback the caller injected is
+        # not a composition the package made, and whatever it captured is the
+        # caller's business. Measured — following every closure cell instead
+        # failed 4 chokepoint tests and errored 71 more on an in-memory audit
+        # medium reached through a test-supplied executor.
+        runtime.probe_attribute = lambda: defect
+    else:
+        # Reachable from the module, never from the root.
+        globals()["_module_level_defect"] = defect
+        runtime.probe_attribute = None
+
+    found = {id(obj) for obj in _discovered(runtime)}
+    assert id(defect) not in found, (
+        f"the {residual} residual is no longer real; _discovered's docstring and "
+        "docs/OPEN-GAPS.md G49 both claim it is"
+    )
