@@ -2552,9 +2552,24 @@ the bodies do, and unlike them it cannot be cleaned: the channel offers no edit
 for a review comment, only `add_reply_to_pull_request_comment`, so a correction
 would be a second comment beside the first rather than a fix to it. That is the
 asymmetry this entry has claimed since it was written, now observed once more on
-the reply that answers a real finding. Counting the bounded table's composition
-(25 review replies, 3 pull-request bodies, 1 pull-request comment) plus carriers
-30 to 32, the running total is **32: 26 review replies, 5 bodies, 1 comment.**
+the reply that answers a real finding.
+
+**CARRIERS 33 to 35, all in the same working session**, which is the point
+worth recording rather than the individual ids: a pull-request comment
+(`5708938608`, reporting the matrix -- footer stripped afterwards, so it is a
+carrier that existed rather than one that stands), and two review replies that
+DO stand, `4036299792` on #123 withdrawing an over-wide claim and `4036455730`
+on #124 answering a second reported defect. Three in one session, on three
+different surfaces, none of them avoidable by care: the two that stand are the
+two the channel offers no edit for.
+
+Counting the bounded table's composition (25 review replies, 3 pull-request
+bodies, 1 pull-request comment) plus carriers 30 to 35, the running total is
+**35: 28 review replies, 5 bodies, 2 comments.** Stated with its composition
+because a total alone is the shape G25 refuses, and recounted from the ids
+rather than incremented: the previous total here was carried forward by
+addition once and came out one short, which is what an unrecounted running
+total does.
 
 ---
 
