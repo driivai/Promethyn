@@ -35,6 +35,7 @@ from __future__ import annotations
 import ast
 import configparser
 import contextlib
+import json
 import pathlib
 import re
 import subprocess
@@ -229,11 +230,6 @@ def read_a_verdict_off_the_union(outcome: Evidence | Unavailable) -> str:
 """
 
 
-#: The REAL CI entry point. CI runs ``python scripts/type_gate.py``; it is that
-#: script — not a bare mypy invocation — that decides whether the build passes.
-GATE_ENTRY_POINT = REPO / "scripts" / "type_gate.py"
-
-
 def _run_gate(cwd: pathlib.Path) -> subprocess.CompletedProcess:
     """Run the gate THROUGH the real CI entry point.
 
@@ -251,7 +247,7 @@ def _run_gate(cwd: pathlib.Path) -> subprocess.CompletedProcess:
     """
 
     return subprocess.run(
-        [sys.executable, str(GATE_ENTRY_POINT)],
+        [sys.executable, str(cwd / "scripts" / "type_gate.py")],
         capture_output=True, text=True, cwd=cwd,
     )
 
@@ -274,15 +270,19 @@ def _run_mypy_directly(
 
 @contextlib.contextmanager
 def _planted_defect():
-    """Put the defect inside the gate's scope, and always take it out again."""
+    """Plant only in the mutation harness's disposable checkout, never in the
+    primary tree. Carry dirty edits so this measures the work being reviewed."""
 
-    path = REPO / CHECKED_TREE / "_planted_union_defect.py"
-    assert not path.exists(), f"{path} already exists; refusing to clobber it"
-    path.write_text(_PLANTED_DEFECT, encoding="utf-8")
+    sys.path.insert(0, str(REPO / "scripts"))
     try:
-        yield path
+        from mutation_worktree import MutationWorktree
     finally:
-        path.unlink(missing_ok=True)
+        sys.path.remove(str(REPO / "scripts"))
+    with MutationWorktree(include_dirty=True) as tree:
+        path = tree.path / CHECKED_TREE / "_planted_union_defect.py"
+        assert not path.exists(), f"{path} already exists; refusing to clobber it"
+        path.write_text(_PLANTED_DEFECT, encoding="utf-8")
+        yield path
 
 
 def test_a_planted_union_defect_still_fails_the_gate():
@@ -307,11 +307,11 @@ def test_a_planted_union_defect_still_fails_the_gate():
     """
 
     with _planted_defect() as path:
-        result = _run_gate(REPO)
+        result = _run_gate(path.parents[2])
 
     assert result.returncode != 0, (
         "the type gate reported success with a real union-attr defect planted in "
-        f"{path.relative_to(REPO)}. The config has been weakened by SOME means — "
+        f"{path}. The config has been weakened by SOME means — "
         "compare mypy.ini against _ALLOWED_CONFIG.\n"
         + result.stdout + result.stderr
     )
@@ -323,10 +323,16 @@ def test_a_planted_union_defect_still_fails_the_gate():
 
 
 def test_the_planted_defect_is_removed_afterwards():
-    """The probe above must not leave a file behind: a stray defect in the tree
-    would turn every later gate run red for the wrong reason."""
+    """The probe never plants in the primary tree, including while it runs;
+    the disposable copy is removed on exit."""
 
-    assert not (REPO / CHECKED_TREE / "_planted_union_defect.py").exists()
+    primary = REPO / CHECKED_TREE / "_planted_union_defect.py"
+    assert not primary.exists()
+    with _planted_defect() as path:
+        assert path != primary
+        assert path.exists()
+        assert not primary.exists()
+    assert not path.exists()
 
 
 def test_the_behavioural_proof_catches_a_config_the_denylist_missed():
@@ -343,18 +349,19 @@ def test_the_behavioural_proof_catches_a_config_the_denylist_missed():
     # mypy resolves a relative ``files`` against the CONFIG's directory, so the
     # copy carries absolute paths; everything else is byte-identical plus the
     # review's one added line.
-    weakened = MYPY_INI.read_text(encoding="utf-8").replace(
-        f"files = {CHECKED_TREE}", f"files = {REPO / CHECKED_TREE}"
-    ) + "\ndisable_error_code = union-attr\n"
-    with tempfile.TemporaryDirectory(prefix="prom-gate-bypass-") as tmp:
-        config = pathlib.Path(tmp) / "mypy-bypassed.ini"
-        config.write_text(weakened, encoding="utf-8")
-        with _planted_defect():
+    with _planted_defect() as path:
+        probe_repo = path.parents[2]
+        weakened = (probe_repo / "mypy.ini").read_text(encoding="utf-8").replace(
+            f"files = {CHECKED_TREE}", f"files = {probe_repo / CHECKED_TREE}"
+        ) + "\ndisable_error_code = union-attr\n"
+        with tempfile.TemporaryDirectory(prefix="prom-gate-bypass-") as tmp:
+            config = pathlib.Path(tmp) / "mypy-bypassed.ini"
+            config.write_text(weakened, encoding="utf-8")
             # The bypassed CONFIG cannot go through the entry point (which pins
             # mypy.ini), so this arm uses the independent direct-mypy layer; the
             # honest arm goes through the real entry point, as the proof does.
-            bypassed = _run_mypy_directly(config, REPO)
-            honest = _run_gate(REPO)
+            bypassed = _run_mypy_directly(config, probe_repo)
+            honest = _run_gate(probe_repo)
 
     assert bypassed.returncode == 0, (
         "the review's bypass no longer turns the gate green — if mypy changed, "
@@ -813,22 +820,118 @@ def test_the_receipt_is_not_committed_to_the_repository():
     )
 
 
-def test_the_gate_runner_refuses_a_run_that_checked_too_few_files():
-    """The receipt's file-count floor: a gate whose scope silently shrank
-    reports Success over whatever is left."""
+def _type_gate_modules():
+    """Import the two actual CI entry points, not a model of their comparison."""
 
     sys.path.insert(0, str(REPO / "scripts"))
     try:
+        import check_type_gate_receipt
         import type_gate
     finally:
         sys.path.remove(str(REPO / "scripts"))
 
-    assert type_gate.MINIMUM_CHECKED_FILES >= 120
-    # The success line the runner insists on: mypy exiting 0 for any other
-    # reason (nothing to check at all) is refused rather than accepted.
+    return type_gate, check_type_gate_receipt
+
+
+@pytest.mark.parametrize("offset", [-2, -1, 0, 1, 2])
+def test_type_gate_requires_exact_checked_population(monkeypatch, tmp_path, capsys, offset):
+    """F10: both a shortfall and an excess refuse; only the exact pin writes
+    a receipt. The old test only inspected the regex and floor constant, so it
+    never exercised the comparison in the real CI entry point."""
+
+    type_gate, _ = _type_gate_modules()
+    checked = type_gate.EXPECTED_CHECKED_FILES + offset
+    receipt = tmp_path / "type-gate-receipt.json"
+    monkeypatch.setattr(type_gate, "RECEIPT", receipt)
+
+    def report(argv, **kwargs):
+        output = (
+            "mypy test-version\n" if "--version" in argv else
+            f"Success: no issues found in {checked} source files\n"
+        )
+        return subprocess.CompletedProcess(argv, 0, output, "")
+
+    monkeypatch.setattr(type_gate.subprocess, "run", report)
+    result = type_gate.main()
+    output = capsys.readouterr()
+    assert result == (0 if offset == 0 else 1), (
+        f"checked={checked}, exact={type_gate.EXPECTED_CHECKED_FILES}, exit={result}"
+    )
+    assert receipt.exists() is (offset == 0)
+    if offset == 0:
+        assert json.loads(receipt.read_text())["checked_files"] == checked
+    else:
+        assert (
+            f"{checked} file(s) checked, exact pin is {type_gate.EXPECTED_CHECKED_FILES}"
+            in output.err
+        )
+
+
+@pytest.mark.parametrize("offset", [-2, -1, 0, 1, 2])
+def test_type_receipt_requires_exact_checked_population(monkeypatch, tmp_path, capsys, offset):
+    """The mandatory downstream receipt check must not re-admit a count the
+    runner itself refuses. This is an independent entry point."""
+
+    type_gate, receipt_checker = _type_gate_modules()
+    checked = type_gate.EXPECTED_CHECKED_FILES + offset
+    receipt = tmp_path / "type-gate-receipt.json"
+    receipt.write_text(json.dumps({
+        "mypy": "mypy test-version",
+        "python": "test-interpreter",
+        "checked_files": checked,
+        "config_sha256": type_gate.config_digest(),
+        "run": type_gate.run_identity(),
+    }))
+    monkeypatch.setattr(receipt_checker, "RECEIPT", receipt)
+    result = receipt_checker.main()
+    output = capsys.readouterr()
+    assert result == (0 if offset == 0 else 1), (
+        f"checked={checked}, exact={type_gate.EXPECTED_CHECKED_FILES}, exit={result}"
+    )
+    if offset == 0:
+        assert f"checked {checked} files against mypy.ini" in output.out
+    else:
+        assert (
+            f"{checked} file(s) checked, exact pin is {type_gate.EXPECTED_CHECKED_FILES}"
+            in output.err
+        )
+
+
+def test_type_gate_requires_an_explicit_clean_summary():
+    type_gate, _ = _type_gate_modules()
     assert type_gate._SUCCESS.search("Success: no issues found in 127 source files")
     assert type_gate._SUCCESS.search("Success: no issues found in 0 source files")
     assert not type_gate._SUCCESS.search("Success: no issues found")
+
+
+@pytest.mark.parametrize("gate_exit", [0, 1])
+def test_checker_floor_uses_the_same_population_gate(monkeypatch, tmp_path, gate_exit):
+    """The supported-checker job must not bypass the exact population check
+    by invoking bare mypy. Its caller must also propagate a refusal."""
+
+    sys.path.insert(0, str(REPO / "scripts"))
+    try:
+        import type_gate_floor
+    finally:
+        sys.path.remove(str(REPO / "scripts"))
+
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        is_gate = argv[-1] == str(REPO / "scripts" / "type_gate.py")
+        return subprocess.CompletedProcess(argv, gate_exit if is_gate else 0, "", "")
+
+    monkeypatch.setattr(type_gate_floor, "declared_floor", lambda: "1.11.0")
+    monkeypatch.setattr(type_gate_floor, "floor_constraints", lambda floor, into: tmp_path / "constraints")
+    monkeypatch.setattr(type_gate_floor, "_pinned_environment", lambda path, constraints, label: path / "bin" / "python")
+    monkeypatch.setattr(type_gate_floor, "_environment", lambda python: {"installed": {}, "checker_owned": []})
+    monkeypatch.setattr(type_gate_floor.subprocess, "run", fake_run)
+    result = type_gate_floor.main()
+    gates = [argv for argv in calls if argv[-1] == str(REPO / "scripts" / "type_gate.py")]
+    assert len(gates) == 1, calls
+    assert [argv[0].endswith("/floor/bin/python") for argv in gates] == [True], gates
+    assert result == gate_exit
 
 
 # --------------------------------------------------------------------------

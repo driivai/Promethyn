@@ -1193,16 +1193,17 @@ dead store left under `if False:` — now reddens
 `test_security_posture.py` still reports `26 passed`, unchanged from the
 original probe.
 
-**One thing the measurement corrected, and I had it the other way round first.**
-The enforcing consumer for `require_ledger_anchor` and `require_config_attestation`
-is the coherence block in `core/config.py`, not the runtime builder: a `Config`
-carrying the requirement with no anchor — or with a `file://` one — cannot be
-constructed at all. The runtime read in `runtime/factory.py` is therefore
-*unreachable from any loadable Config*, and its only reachable driver is the
-environment variable. That is why the spelling check could not see the
-enforcement at all: its collector skips `config.py` by design. Each of those two
-fields has two proofs here, one per site, kept separate so a mutation that
-removes only one is distinguishable from a mutation that removes both.
+**Correction to that measurement (reachability F1/F2).** The coherence block in
+`core/config.py` refuses a required witness whose target is absent or `file://`.
+It does **not** establish successful publication or that the assembled ledger
+has the configured anchor. A loadable Config with a valid WORM-shaped target
+still reaches the runtime, so the earlier statement that the runtime check was
+"unreachable from any loadable Config" was false. F1 built a runtime without
+calling the attestation publisher; F2 built one with an unanchored injected
+ledger. The original per-field proofs tested configuration shape and helper
+behavior, not these assembly paths. The new build guard and permanent
+reachability regressions are described in `docs/reachability-build.md`; they
+are additional evidence, not a reinterpretation of the old green tests.
 
 ### Second-order probe on all 14
 
@@ -1254,8 +1255,8 @@ authorized, refused, or executed.
 | `require_external_signer` | `chokepoint/runner.py:499` refuses a non-external signer |
 | `require_verified_substrate` | `chokepoint/runner.py:511`, `substrate.py:792` refuses an unverified substrate |
 | `allow_unverified_substrate` | same pair — it LOWERS the bar, which is why it is here |
-| `require_config_attestation` | `attestation/runtime.py:82` refuses at startup |
-| `config_attestation_target` | `attestation/runtime.py:83` `if not …:` refuses when attestation is required |
+| `require_config_attestation` | `attestation/runtime.py::attestation_target_for` refuses an absent/non-external target **when called**; `attest_at_startup` additionally signs/publishes. The old table's unconditional "refuses at startup" claim was false because production builders did not reach it (F1). The reachability guard now makes the covered assembly paths call it or refuse. |
+| `config_attestation_target` | `core/config.py::Config.__post_init__` checks shape; `attestation/runtime.py::attestation_target_for` checks the target when reached. Shape validation is not publication. |
 | `verification_profile` | `runtime/factory.py:273` selects the profile, so it selects which requirements must be satisfied |
 
 **NOT OUTCOME-AFFECTING — 2.** Neutralizing changes what is recorded or how much
@@ -3938,3 +3939,111 @@ Second-order, defect restored under each proof: deleted-row minus its
 call-count assertion (+V1+V3) 3 red; re-attributed minus its (+V2) 2 red;
 programmatic verifier minus `not forged.ok` (+V5) 1 red. No proof survives;
 `pytest.raises` and the status assertion carry each half respectively.
+
+## G43 — a component the build guard's traversal cannot reach is reported as `default_not_applicable`, not refused
+
+**Filed by independent review of #122, fixed only in part here.** The Part 1
+remediation states this limit at the mechanism and pins both halves of it; the
+RULING that non-discovery must refuse is Part 2 work and is not done.
+
+`runtime/security_build.py:_objects` descends `_WALKED_CONTAINERS`
+(`tuple`, `list`, `dict`) and `__dict__`, and nothing else. A package-owned
+component held in any other container is not reached, and
+`validate_build` then reports its property `default_not_applicable` whenever
+the Config value is its default — which reads downstream as fine. Every other
+limit this guard states describes something it declines to cover. **This one
+describes something it actively reports as applicable-and-absent when it is
+neither**, which is couldn't-verify reported as verified-clean inside the guard
+built to end that class (doctrine #1).
+
+**Measured.** The same live defect — a `SubstratePolicy(allow_unverified=True)`
+against a Config whose `allow_unverified_substrate` is `False` — attached to a
+real `build_execution_controller`, in ten positions:
+
+| position | observed |
+|---|---|
+| plain attribute | REFUSED `allow_unverified_substrate` |
+| inside a `list` | REFUSED `allow_unverified_substrate` |
+| inside a `set` | **PASSED → `default_not_applicable`** |
+| inside a `frozenset` | **PASSED → `default_not_applicable`** |
+| as a `dict` KEY | **PASSED → `default_not_applicable`** |
+| behind a `SimpleNamespace` | **PASSED → `default_not_applicable`** |
+| behind a lambda closure | **PASSED → `default_not_applicable`** |
+| behind a generator | **PASSED → `default_not_applicable`** |
+| external subclass, honest `__module__` | REFUSED `component` |
+| duck-typed third-party replacement | **PASSED → `default_not_applicable`** |
+
+The external-subclass refusal added in #122 covers MRO-based foreign subclasses
+*that the traversal reaches*. It covers neither an unwalked container nor a
+duck type with no first-party base.
+
+**LATENT IN THE SHIPPED GRAPH, OPEN IN PRINCIPLE.** An exhaustive walk that
+also descends sets, slots, closures and namespaces was run against all four
+runtime roots: the only object `_objects` misses is `Config`, excluded
+deliberately. So nothing hides there today. Nothing refuses if it ever does.
+
+**Both halves are passing tests**, so this entry cannot go stale silently:
+`test_security_build.py::test_the_shipped_graph_hides_nothing_from_the_traversal`
+(latency) and
+`::test_an_unreachable_component_reads_as_not_applicable_not_as_a_refusal`
+(the behaviour, over five container shapes). The second asserts what the guard
+DOES; closing this gap must flip it, which is the intended signal.
+
+**The second half of the same finding, not fixed and not separately numbered:**
+the *field* population is derived from `dataclasses.fields` and fails closed on
+an unknown field, but the *consumer classes per property*
+(`security_build.py:158-255`) are twelve hand-written names. Measured on
+`build_orchestrator` with `gate_threshold=0.9`: the same disagreeing value
+(`threshold=0.0`) is REFUSED when carried by `PromotionGate` and reported
+`applied` when carried by a new first-party type. A new Config field refuses; a
+new consumer of an existing field is silently uncovered. Draft hole #8's fix
+was to add the second consumer to that list, which is the same shape as the
+hole.
+
+## G44 — a second guard over the same fact silently disarmed two older mutation proofs
+
+**Found by CI on #122's own head, after the review, and it had already turned
+the matrix red on all three Pythons.** Recorded here because the mechanism is
+general and will recur every time this tree adds defence in depth.
+
+**What CI observed.** Run 35169843547 on `4664dad` failed step 32,
+"PHASE-1.2c Checkpoint B seam mutations (must be caught)", on Python 3.10,
+3.11 and 3.12. Steps 33–50 never ran, so the PostgreSQL job, the sandbox
+conformance job, the skip manifest and the full suite were never reached on
+that head. The independent review of `4664dad` reported that it could
+attribute no workflow run to that commit; a run existed and it was red. That
+is a miss in the review, not a later regression.
+
+**The proximate cause** was mechanical: `install_build_guards` replaces every
+public factory function with a `@wraps`-decorated guard, and the shared
+mutation harness took `inspect.getsource` (which follows `__wrapped__`) and
+`__code__` (which does not) from the same name. Recompiling the inner source
+and comparing its free variables to the wrapper's raised `AssertionError` at
+`scripts/fix_b_revert_proofs.py`. `inspect.unwrap` fixes it, and the guard
+still runs because the wrapper calls the function the harness patches.
+
+**The real finding is what that assertion was hiding.** With the harness
+repaired, two older proofs stopped isolating the mechanisms they name:
+
+| proof | observed at `4664dad` | why |
+|---|---|---|
+| `chain-row-comparison-removed` | `1 passed` where a failure was required | the new authoritative reader compares the same record against the same receipt, so removing `_require_chain_binding`'s comparison left the tamper caught elsewhere |
+| `selected-profile-injection-unwired` | 8 call failures against a pinned 9 | the new build guard resolves the profile itself and raised the same "no committed verification profile", so the unknown-profile half passed regardless |
+
+Both were GREEN-for-the-wrong-reason: the proof would have passed whether or
+not the mechanism it names still worked. That is the shape this tree keeps
+finding, arriving this time through a genuinely good addition. Defence in
+depth is not the defect; a single-target mutation left pointing at one of two
+mechanisms is.
+
+**The fix keeps each proof measuring its own mechanism** rather than relaxing
+a pin. The harness now takes optional COMPANION edits, so a row can neuter
+every mechanism carrying the property and isolate the one it names. With them
+both runners return to their original pins — `8 / 9` and `7 / 18`, the same
+numbers base `9141936` reports — so nothing was re-pinned to accommodate the
+change.
+
+**The limit, stated.** Companion edits are hand-written. Nothing derives the
+set of mechanisms that carry a given property, so the next guard added over an
+already-proved fact will disarm its proof the same way, and only a red pin or
+a reviewer will say so. Deriving that set is not attempted here.

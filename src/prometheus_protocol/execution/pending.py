@@ -99,6 +99,7 @@ from prometheus_protocol.policy.reobservation import (
     StateMoved,
     StateUnobservable,
     StateUnreadable,
+    Unreadable,
     legacy_observation_subject,
     compare,
     observation_record,
@@ -752,7 +753,7 @@ class PendingActionService:
 
         record = pending.record or {}
         pinned = pinned_reading_of(record)
-        if self._reobservation is None or pinned is None:
+        if pinned is None:
             return OUTCOME_MATCHED, None
         pinned_digest, pinned_aspects = pinned
         action_class = str(record.get("action_class", ""))
@@ -766,27 +767,28 @@ class PendingActionService:
         # would execute on evidence the record claims was re-checked, which is
         # the degradation doctrine #2 forbids. Measured: before this branch
         # existed the same path raised a bare KeyError out of ``approve``.
-        if not self._reobservation.covers(action_class):
-            raise StateUnobservable(
-                f"hold #{pending.id} was pinned to the live state of "
-                f"{target_canonical!r}, but this service does not observe "
-                f"{action_class!r}"
-                + (
-                    f" ({self._reobservation.opt_out_reason(action_class)})"
-                    if self._reobservation.opt_out_reason(action_class)
-                    else ""
-                )
-                + ". The comparison its record commits it to cannot be made "
-                "here, so it is refused rather than approved unchecked",
-                reason="target_state_registry_mismatch",
+        if self._reobservation is None or not self._reobservation.covers(action_class):
+            # The persisted record establishes the obligation, not today's
+            # registry. Absence is a failed reading, not a successful comparison.
+            # Use the ordinary recording path below so refusal has a chained
+            # receipt, including on public construction/reload with None.
+            observation = Observation(
+                moment=moment,
+                observed_at=at,
+                unavailable=Unreadable(
+                    reason="registry_unavailable",
+                    detail="the current registry cannot observe the persisted hold's action class",
+                    aspects_unread=pinned_aspects,
+                ),
             )
-        observation = self._reobservation.observe(
-            action_class=action_class,
-            target_canonical=target_canonical,
-            action=pending.action,
-            moment=moment,
-            at=at,
-        )
+        else:
+            observation = self._reobservation.observe(
+                action_class=action_class,
+                target_canonical=target_canonical,
+                action=pending.action,
+                moment=moment,
+                at=at,
+            )
         outcome = compare(
             pinned_digest=pinned_digest,
             pinned_aspects=pinned_aspects,
@@ -814,6 +816,13 @@ class PendingActionService:
             payload=entry,
             created_at=at,
         )
+        if self._reobservation is not None and not self._reobservation.covers(action_class):
+            raise StateUnobservable(
+                f"hold #{pending.id}: its persisted observation cannot be repeated "
+                f"by this registry ({self._reobservation.opt_out_reason(action_class)}); "
+                "an unavailable observation was recorded before refusal",
+                reason="target_state_registry_mismatch",
+            )
         return outcome, entry
 
     def _refuse_outcome(

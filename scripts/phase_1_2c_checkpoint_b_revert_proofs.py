@@ -9,6 +9,7 @@ mutation set is complete and is not an external integrity anchor.
 from prometheus_protocol.execution.pending import PendingActionService
 from prometheus_protocol.policy.execution import ExecutionAuthorizer
 from prometheus_protocol.runtime.factory import build_execution_controller
+from prometheus_protocol.runtime.security_build import validate_build
 from prometheus_protocol.verifier.bank import VerifierBank
 
 import fix_b_revert_proofs as harness
@@ -172,6 +173,15 @@ def mutations():
             ],
             TEST,
             "unknown_selected_profile or nonbaseline_profile_is_injected",
+            # COMPANION EDIT. #122's build guard resolves the profile itself, so
+            # with only the injection unwired the guard raised the same
+            # "no committed verification profile" the unmutated path raised and
+            # the unknown-profile half of this selection passed regardless.
+            # Measured at `4664dad`: 8 call failures against a pinned 9.
+            # Neutering the guard's own resolution isolates the injection again.
+            [(validate_build,
+              "            selected = load_profile(value)",
+              '            selected = load_profile("baseline")')],
         ),
     ]
 

@@ -19,7 +19,9 @@ def rewrite_entry_and_rehash(ledger: SqliteLedger, *, seq: int, payload: dict) -
     """Replace entry ``seq``'s payload and recompute its hash and every later
     entry's ``prev_hash``/``entry_hash``, so ``verify_chain()`` reads VALID."""
 
-    rows = sorted(ledger.chained_events(), key=lambda row: row["seq"])
+    # This fixture models an adversary with raw database access; ordinary
+    # readers now refuse precisely the inconsistent intermediate state here.
+    rows = sorted(ledger._receipt_source().chained_events(), key=lambda row: row["seq"])
     prev_hash: str | None = None
     for row in rows:
         if row["seq"] < seq:

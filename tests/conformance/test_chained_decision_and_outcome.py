@@ -142,7 +142,8 @@ def test_F14_a_flipped_outcome_row_is_DETECTED_against_its_chained_counterpart(t
     assert not verdict.ok
     mismatched = [f for f in verdict.findings if f.reason == "outcome_differs_from_chain_entry"]
     assert len(mismatched) == 1, verdict.render()
-    assert mismatched[0].subject == f"execution:{ledger.executions_for_pending(held.id)[0]['id']}"
+    raw = ledger._receipt_source().executions()
+    assert mismatched[0].subject == f"execution:{raw[0]['id']}"
     assert "executed" in mismatched[0].fields and "detail" in mismatched[0].fields
 
 
@@ -336,9 +337,10 @@ def test_F13_a_decided_hold_reset_to_pending_cannot_be_approved_again(tmp_path):
     assert spy.calls == []
     # Nothing was written: the row is still the forged 'pending', and the
     # chain still ends at the genuine rejection.
-    assert ledger.pending_action(held.id)["status"] == "pending"
+    raw = ledger._receipt_source()
+    assert raw.pending_actions()[0]["status"] == "pending"
     from prometheus_protocol.ledger.receipts import DECISION_EVENT
-    last = [e for e in ledger.chained_events() if e["event"] == DECISION_EVENT][-1]
+    last = [e for e in raw.chained_events() if e["event"] == DECISION_EVENT][-1]
     assert json.loads(last["payload"])["status"] == "rejected"
 
 

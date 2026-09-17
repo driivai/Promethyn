@@ -17,7 +17,8 @@ accepted it. It refuses:
 * a REPLAYED one — in CI the recorded run identity must match this run's, so a
   receipt restored from a cache, carried over from another run, or committed to
   the tree is refused even if the config is unchanged;
-* one that names NO checker, or too few files.
+* one that names NO checker, or a checked-file count different from the exact
+  population pin (whether too few or too many).
 
 It does NOT refuse a receipt written by someone who can edit the workflow or the
 gate script: every value available to the gate step is available to a forging
@@ -37,7 +38,7 @@ from pathlib import Path
 
 from type_gate import (
     CONFIG,
-    MINIMUM_CHECKED_FILES,
+    EXPECTED_CHECKED_FILES,
     RECEIPT,
     config_digest,
     run_identity,
@@ -88,10 +89,10 @@ def main() -> int:
         return 1
 
     checked = receipt.get("checked_files", 0)
-    if not isinstance(checked, int) or checked < MINIMUM_CHECKED_FILES:
+    if type(checked) is not int or checked != EXPECTED_CHECKED_FILES:
         print(
-            f"TYPE-GATE RECEIPT reports {checked} file(s) checked, floor is "
-            f"{MINIMUM_CHECKED_FILES}.",
+            f"TYPE-GATE RECEIPT reports {checked} file(s) checked, exact pin is "
+            f"{EXPECTED_CHECKED_FILES}; shortfall and excess both refuse.",
             file=sys.stderr,
         )
         return 1

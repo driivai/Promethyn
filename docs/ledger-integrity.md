@@ -472,6 +472,18 @@ rewrite of the audit chain from genesis, or its deletion, is undetectable"*); a
 
 ## Threat-model fit
 
+### Authoritative readers (F3 reachability follow-up)
+
+The shipped `SqliteLedger` public reader API now validates a consistent
+snapshot against the chain/anchor and its receipts before returning rows.
+Reader coverage is derived from the public API, with new methods/properties
+guarded by default; it is not a caller-name or constructor-name sweep.
+`verify_chain` remains the explicitly hash-only diagnostic, and receipt
+verification uses private untrusted snapshots so corruption can still be
+reported. See [the reader-boundary report](reachability-readers.md) for the
+exact API population, exceptions, performance cost, compatibility change,
+mutation outputs, and the limits of what this derivation establishes.
+
 For the chokepoint experiment (`docs/chokepoint-threat-model.md`), the relevant
 adversary is a **sandboxed agent**, which by construction cannot reach the runner
 zone where the ledger lives — so the realistic in-file tampering this chain makes

@@ -203,7 +203,7 @@ def hold(ctl, a: ExecutableAction):
 def chain_entry_for(ledger: SqliteLedger, pending_id: int) -> dict:
     entries = [
         e
-        for e in ledger.chained_events()
+        for e in ledger._receipt_source().chained_events()
         if e["event"] == PINNED_HOLD_EVENT and e["subject"] == f"pending:{pending_id}"
     ]
     assert len(entries) == 1, entries
@@ -463,7 +463,7 @@ def test_an_altered_pinned_requirement_set_is_detected_at_approval():
     assert refusal.value.reason == "record_differs_from_chain_entry"
     assert spy.calls == []
     assert ledger.verify_chain().ok
-    assert ctl.pending.get(held.id).status == PendingStatus.PENDING
+    assert ledger._receipt_source().pending_actions()[0]["status"] == PendingStatus.PENDING.value
 
 
 def test_an_altered_chain_entry_breaks_the_chain_and_approval_refuses():
@@ -556,6 +556,9 @@ def test_a_pre_record_blob_is_refused_as_reverification_required():
         "UPDATE pending_actions SET authorization = ? WHERE id = ?",
         (json.dumps(legacy), held.id),
     )
+    # Model a genuine pre-record ledger, not a rewrite contradicted by a
+    # modern pending.hold receipt. That distinct attack is covered above.
+    ledger._conn.execute("DELETE FROM audit_chain")
     ledger._conn.commit()
     assert ctl.pending.get(held.id).record is None
     with pytest.raises(ExecutionNotAuthorized) as reverify:

@@ -34,9 +34,9 @@ from prometheus_protocol.gate.promotion import (
 # could not run, so there is no verdict to authorize on: it NEVER approves
 # (``approved`` stays False, so the wall is unchanged) and it is deliberately
 # neither ``block`` (which would misreport a harness fault as a policy denial)
-# nor ``route`` (which means "a PASS too uncertain to auto-approve"). It routes
-# to a human hold and is recorded distinctly, so an unavailable is forever
-# separable in the ledger from an ordinary denial or a genuine abstention.
+# nor ``route`` (which means "a PASS too uncertain to auto-approve"). The
+# controller records it distinctly and halts WITHOUT an approvable human hold:
+# a person cannot substitute for an authoritative check that did not complete.
 OUTCOME_UNAVAILABLE = "unavailable"
 
 # Minimum confidence required to authorize an action, by risk class. A higher
@@ -54,7 +54,8 @@ class ActionGate:
     The canonical target is mandatory construction context; it cannot be copied
     from the assessment being checked. Routing is opt-in and additive. Without
     routing options, an authoritative PASS at or above the risk floor is
-    approved and everything else is blocked. When
+    approved and other completed judgments are blocked; an unavailable check
+    produces the distinct terminal ``unavailable`` outcome, not a human hold. When
     ``escalate_below`` and/or ``route_high_risk`` are supplied, it additionally
     *routes* — an authoritative PASS that is too uncertain, below the floor, or
     high-risk is neither approved nor blocked but held for a human. Routing never
@@ -136,15 +137,16 @@ class ActionGate:
         judgment = checked.outcome
         if isinstance(judgment, Unavailable):
             # An authoritative verifier could NOT execute: there is no verdict to
-            # authorize on. Never approve; route to a human hold via the distinct
-            # terminal outcome above — never a silent block, and never a pass.
+            # authorize on. The controller records this terminal outcome and
+            # halts without an approvable hold — never a silent block or a pass.
             return GateDecision(
                 approved=False,
                 subject_id=subject_id,
                 judgment=None,
                 reason=(
                     f"unavailable: an authoritative check could not execute "
-                    f"({judgment.reason.value}: {judgment.detail}); routed to a human"
+                    f"({judgment.reason.value}: {judgment.detail}); "
+                    f"halted without an approvable hold"
                 ),
                 outcome=OUTCOME_UNAVAILABLE,
                 action=action,
