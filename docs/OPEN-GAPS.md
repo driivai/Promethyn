@@ -2520,6 +2520,21 @@ are outside the checked surface.
 that could would be reading GitHub, which the suite does not do. The narrowed
 claims are prose, and prose is what this entry can offer.
 
+**CARRIER 30, observed opening #123, and it cost a full red matrix.** The rate
+holds: 10 of 10 pull requests opened through that channel have carried the
+footer. What this occurrence adds is the SECOND-ORDER cost, which the entry had
+not recorded. The footer is appended after the checker runs, so the body is
+clean locally and dirty on GitHub; `update_pull_request` appends nothing and
+removed it, and the `pr-text` workflow — which answers to `edited` — re-ran and
+passed. But `ci.yml`'s own message-hygiene step reads
+`PR_BODY: ${{ github.event.pull_request.body }}`, frozen at the triggering
+event, and that event was the OPEN, whose payload still carries the footer. All
+three matrix jobs therefore failed at step 10 with steps 11-51 skipped, on a
+tree whose body was already correct, and re-running the jobs replays the same
+stale payload. **Only a push re-triggers `ci.yml` with the corrected body.**
+So the footer does not cost one refusal, it costs a matrix run and a commit
+whose only purpose is to move the head — this one.
+
 ---
 
 ## G29 — re-observation at execution: built for `branch.delete`, opted out by name for the other two
