@@ -241,6 +241,10 @@ The corpus was **regenerated under the fixed harness and did not move** — same
   `PROM_REQUIRE_SANDBOX=1 PROM_REQUIRE_LINUX=1`).
 - Type gate **346**. `adversarial/` is outside mypy's scope; the isolation test
   loads the harness by path to keep it that way.
-- Doctrine index re-measured after the new citations: **#4 40 → 41, #8 59 → 61**,
-  the other six unchanged.
+- Doctrine index re-measured from the tree after the new citations:
+  **#4 40 → 42, #8 59 → 63, #11 23 → 24**, the other five unchanged. Each was
+  re-pinned to the value the index test reported against the tree, twice —
+  the first re-pin (#4 41, #8 61) was made before the tracker entries below were
+  written and was itself stale by the time they were, which the same test caught.
+  Recorded because a count corrected quietly is the shape doctrine #11 refuses.
 - Named positive-control registry **77 → 78** entries.

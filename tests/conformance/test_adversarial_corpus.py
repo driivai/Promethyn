@@ -31,6 +31,7 @@ from prometheus_protocol.core.models import (
 from prometheus_protocol.execution.controller import ExecutionController
 from prometheus_protocol.gate.authorization import ActionGate
 from prometheus_protocol.gate.promotion import OUTCOME_APPROVE, OUTCOME_BLOCK, OUTCOME_ROUTE
+from prometheus_protocol.ledger.audit_chain import verify_rows
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
 from prometheus_protocol.policy.coverage import BoundResult
 from prometheus_protocol.policy.execution import ExecutionAuthorizer, ExecutionNotAuthorized
@@ -157,6 +158,44 @@ def test_the_two_findings_are_present_and_pinned():
     # correct work refused because the check was UNAVAILABLE (fail-closed).
     assert by_id["sh-742f38b87c"]["evidence_verdict"] == "unavailable"
     assert by_id["sh-742f38b87c"]["ground_truth_outcome"] == "approve"
+
+
+_CHAINS = sorted((CORPUS.parent / "sessions").glob("*.chain.json"))
+
+
+def test_every_session_ships_a_chain_and_all_of_them_verify():
+    """Each session exports its audit chain so the post-hoc analysis can be
+    checked rather than trusted. Verified here with the project's own auditor,
+    which re-hashes the exact stored payload bytes."""
+    assert _CHAINS, "no chain exports committed: the analysis would have nothing to check"
+    for path in _CHAINS:
+        rows = json.loads(path.read_text())["rows"]
+        assert rows, f"{path.name} exports an empty chain"
+        verdict = verify_rows(rows)
+        assert verdict.ok, f"{path.name}: {verdict.status} {verdict.detail}"
+
+
+@pytest.mark.parametrize("path", _CHAINS, ids=[p.stem for p in _CHAINS])
+def test_a_single_edited_field_breaks_its_chain(path):
+    """The negative that makes the check above mean something: without it, a
+    verifier that returned ok for anything would pass just as quietly. One
+    field of one payload is flipped and the auditor must name the broken link.
+
+    ``analyze.py`` refuses to report at all on a chain that does not verify, so
+    this is the property that stops a hand-edited transcript being reported as
+    a measurement."""
+    rows = json.loads(path.read_text())["rows"]
+    for row in rows:
+        if '"executed":true' in row["payload"]:
+            # canonical JSON: no space after the colon, which is why the edit
+            # has to be written exactly like this to land at all.
+            row["payload"] = row["payload"].replace('"executed":true', '"executed":false', 1)
+            break
+    else:
+        pytest.skip(f"{path.name} records no execution to tamper with")
+    verdict = verify_rows(rows)
+    assert not verdict.ok, "a flipped executed flag was accepted as a valid chain"
+    assert verdict.status == "broken"
 
 
 def test_the_corpus_contains_shapes_the_seam_gets_RIGHT():
