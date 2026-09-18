@@ -539,6 +539,9 @@ class ExecutionController:
                 # ``stdout`` is left empty rather than carrying a diagnostic a
                 # reader could mistake for the program's own.
                 stdout="",
+                # Explicit although it is now the default: this is the one
+                # place the ABSENCE is the point, and a reader here should not
+                # have to go and look up what the default is.
                 stdout_recorded=False,
             )
         raise ExecutionNotAuthorized(

@@ -577,6 +577,10 @@ class GitBranchDeleteExecutor(Executor):
             sandbox_name=self._sandbox.name,
             exit_status=result.exit_status,
             stdout=result.stdout,
+            # The delete ran in the sandbox and this IS its output; the
+            # dry-run and the refusals above leave the flag at its
+            # fail-closed default.
+            stdout_recorded=True,
         )
 
     def _refuse(

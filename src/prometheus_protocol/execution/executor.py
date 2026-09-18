@@ -161,6 +161,9 @@ class SandboxExecutor(Executor):
             sandbox_name=self._sandbox.name,
             exit_status=result.exit_status,
             stdout=result.stdout,
+            # The candidate ran and this IS its output. One of exactly two
+            # sites in the tree that may say so.
+            stdout_recorded=True,
         )
 
     def _refuse(

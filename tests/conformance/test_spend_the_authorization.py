@@ -80,6 +80,28 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 _NOW = "2026-09-18T00:00:00+00:00"
 
 
+class _CapturingSandbox:
+    """An isolating sandbox that really returns candidate output.
+
+    Minimal on purpose: ``SandboxExecutor`` reads ``isolating``, ``name`` and
+    ``run``, and the property under test is what the executor reports about a
+    capture rather than anything about isolation.
+    """
+
+    name = "capturing"
+    isolating = True
+
+    def __init__(self, stdout: str) -> None:
+        self._stdout = stdout
+
+    def run(self, *, argv, workspace, limits=None, stdin: str = ""):
+        from prometheus_protocol.sandbox.base import SandboxResult
+
+        return SandboxResult(
+            started_ok=True, candidate_started=True, exit_status=0, stdout=self._stdout
+        )
+
+
 def _all_subclasses(cls) -> list[type]:
     found: list[type] = []
     for sub in cls.__subclasses__():
@@ -760,12 +782,19 @@ def test_the_claim_is_what_makes_it_atomic_a_second_claimant_loses(tmp_path):
     ledger = anchored(tmp_path, "atomic")
     key = "a" * 64
 
-    assert ledger.claim_authorization(
+    # THE CALLS HAPPEN OUTSIDE THE ASSERTS. A claim performed inside an
+    # ``assert`` vanishes under ``python -O`` and under the assertions-deleted
+    # proof run, so the test would then fail for a reason that has nothing to
+    # do with any mutation. Measured: that is exactly what made the stripped
+    # baseline red and every second-order count meaningless.
+    first = ledger.claim_authorization(
         key, attempt_id="attempt-1", idempotency_key=None, claimed_at=_NOW
-    ) is True
-    assert ledger.claim_authorization(
+    )
+    second = ledger.claim_authorization(
         key, attempt_id="attempt-1", idempotency_key=None, claimed_at=_NOW
-    ) is False, "two claimants both won one authorization"
+    )
+    assert first is True
+    assert second is False, "two claimants both won one authorization"
 
     # THE LOSER WROTE NOTHING. A second chain entry would be a spend that did
     # not happen, and the fold would carry it forever.
@@ -791,9 +820,10 @@ def test_deleting_the_spend_ROW_does_not_restore_the_authority(tmp_path):
 
     ledger._conn.execute("DELETE FROM spent_authorizations WHERE key = ?", (key,))
     ledger._conn.commit()
-    assert ledger._conn.execute(
+    remaining = ledger._conn.execute(
         "SELECT count(*) AS n FROM spent_authorizations"
-    ).fetchone()["n"] == 0, "precondition: the row really is gone"
+    ).fetchone()["n"]
+    assert remaining == 0, "precondition: the row really is gone"
 
     with pytest.raises(ExecutionNotAuthorized) as refused:
         one_action(ctl, a)
@@ -1187,14 +1217,19 @@ def test_the_legitimate_release_and_re_claim_sequence_still_folds(tmp_path):
 
     ledger = anchored(tmp_path, "sequence")
     key = "f" * 64
-    assert ledger.claim_authorization(
+    # Calls outside the asserts, for the reason given in
+    # ``test_the_claim_is_what_makes_it_atomic...``: an assert is not a place
+    # to perform an effect the rest of the test depends on.
+    claimed = ledger.claim_authorization(
         key, attempt_id="a1", idempotency_key=None, claimed_at=_NOW
     )
+    assert claimed
     ledger.release_authorization(key, released_at=_NOW, reason="no sandbox")
     assert ledger.authorization_spend_state(key).status == RELEASED
-    assert ledger.claim_authorization(
+    re_claimed = ledger.claim_authorization(
         key, attempt_id="a1", idempotency_key=None, claimed_at=_NOW
-    ), "a released occurrence must be claimable again, or a refusal bricks it"
+    )
+    assert re_claimed, "a released occurrence must be claimable again, or a refusal bricks it"
     ledger.complete_authorization(key, execution_id=1, completed_at=_NOW)
     assert ledger.authorization_spend_state(key).status == COMPLETED
     assert ledger.verify_chain().ok
@@ -1324,12 +1359,25 @@ def test_a_returned_prior_result_NAMES_the_stdout_it_cannot_have(tmp_path):
     assert _STDOUT_NOT_RECORDED in again.execution.detail
     assert _STDOUT_NOT_RECORDED not in again.execution.stdout
 
-    # THE PAIRED POSITIVE, and the reason the flag is not decoration: a real
-    # execution says its output WAS recorded, even when the program printed
-    # nothing. Without this, ``stdout_recorded is False`` on a retry is equally
-    # consistent with a field that is always False.
-    first = one_action(ctl, fx.action("print('other')"))
-    assert first.execution.stdout_recorded is True
+    # THE PAIRED POSITIVE, and the reason the flag is not decoration: a REAL
+    # executor, one that captured a candidate's output, says so. Without it,
+    # ``stdout_recorded is False`` on a retry would be equally consistent with
+    # a field that is always False.
+    #
+    # Driven through the shipped ``SandboxExecutor`` against a fake isolating
+    # sandbox: the property under test is what the EXECUTOR reports about a
+    # capture, and a real container would make this opt-in and skip.
+    from prometheus_protocol.execution.executor import SandboxExecutor
+
+    ran = SandboxExecutor(sandbox=_CapturingSandbox("hello from the candidate"))
+    result = ran.execute(minted(fx.action(), attempt_id="captured-1"))
+    assert result.executed and not result.refused
+    assert result.stdout == "hello from the candidate"
+    assert result.stdout_recorded is True
+
+    # AND THE FIXTURE SPY, which records nothing, honestly says so — the flag
+    # tracks what was captured, not whether the run succeeded.
+    assert one_action(ctl, fx.action("print('other')")).execution.stdout_recorded is False
 
     # And the limit is REAL rather than a habit: no execution row carries the
     # field, derived from the table rather than asserted about one row.
@@ -1381,9 +1429,10 @@ def test_resetting_the_row_and_RE_CLAIMING_does_not_reopen_the_release(tmp_path)
     # The re-claim still WINS the row — that is the mutex doing its one job on
     # an empty table, and it is not the authority. What it can no longer do is
     # make the chain agree.
-    assert ledger.claim_authorization(
+    re_claim = ledger.claim_authorization(
         key, attempt_id=fx.ATTEMPT, idempotency_key=None, claimed_at=_NOW
-    ) is True
+    )
+    assert re_claim is True
     with pytest.raises(SpendRecordMalformed):
         ledger.authorization_spend_state(key)
 
@@ -1478,3 +1527,74 @@ def test_the_transition_table_covers_every_event_the_fold_folds():
     reachable = {UNSPENT} | {SPENT, COMPLETED, RELEASED}
     for event, allowed in _PERMITTED_FROM.items():
         assert allowed <= reachable, f"{event} permits a state the fold never sets"
+
+
+def test_only_a_site_that_CAPTURES_output_may_claim_it_recorded_it():
+    """The flag's population, DERIVED from every construction in the tree.
+
+    Review of #129, and it is the half I got wrong by reasoning about the
+    wrong population. The field first defaulted to ``True`` because "every
+    executor that sets ``stdout`` sets it from a real run" — a claim about the
+    FIVE sites that pass ``stdout=``, not about the ELEVEN that construct
+    ``ExecutionResult``. The other six are refusals, dry runs and replay
+    refusals where nothing ran, and every one of them inherited the default and
+    told a consumer the empty string was recorded output — recreating exactly
+    the ambiguity the flag was added to remove.
+
+    The default is now ``False``, so forgetting to opt in UNDER-claims instead
+    of asserting something false, and the rule is checked over the whole
+    population rather than the part I happened to look at.
+    """
+
+    sites = []
+    for path in sorted((REPO / "src").rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            if not (isinstance(node.func, ast.Name) and node.func.id == "ExecutionResult"):
+                continue
+            keywords = {k.arg: k.value for k in node.keywords}
+            sites.append((path.relative_to(REPO), node.lineno, keywords))
+
+    assert sites, "no ExecutionResult construction found: an empty sweep is a pass"
+
+    claiming, capturing = [], []
+    for relative, line, keywords in sites:
+        flag = keywords.get("stdout_recorded")
+        claims = isinstance(flag, ast.Constant) and flag.value is True
+        stdout = keywords.get("stdout")
+        # A capture is an expression, not the empty literal every refusal
+        # passes. ``stdout=""`` is "nothing to report", not captured output.
+        captures = stdout is not None and not (
+            isinstance(stdout, ast.Constant) and stdout.value == ""
+        )
+        if claims:
+            claiming.append(f"{relative}:{line}")
+        if captures:
+            capturing.append(f"{relative}:{line}")
+
+    assert claiming == capturing, (
+        "a site claims stdout_recorded=True without capturing output, or "
+        f"captures without claiming: claims {claiming}, captures {capturing}"
+    )
+    assert len(claiming) == 2, (
+        f"exactly two sites in the tree capture a candidate's output; found "
+        f"{len(claiming)}: {claiming}. A third is either a real new executor "
+        "path — say so here — or a refusal that should not be claiming."
+    )
+
+
+def test_the_flag_defaults_to_the_fail_closed_answer():
+    """An unset flag must under-claim, never over-claim.
+
+    If the default were ``True``, a path that forgets to set it asserts the
+    empty string is the program's output. At ``False`` it says only that
+    nothing was recorded, which loses information and states nothing untrue.
+    """
+
+    from prometheus_protocol.swarm.models import ExecutionResult
+
+    field = {f.name: f for f in dataclasses.fields(ExecutionResult)}["stdout_recorded"]
+    assert field.default is False
+    assert ExecutionResult(executed=False, subject_id="s").stdout_recorded is False

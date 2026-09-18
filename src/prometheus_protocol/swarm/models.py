@@ -209,7 +209,17 @@ class ExecutionResult:
     #: thing. The availability is its own fact, exactly as ``started_ok`` and
     #: ``candidate_started`` are two facts and not one.
     #:
-    #: Defaults to ``True`` because every executor that sets ``stdout`` sets it
-    #: from a real run; only the retry path, which reads a row that has no such
-    #: column, sets this ``False``.
-    stdout_recorded: bool = True
+    #: DEFAULTS TO ``False``, which is the fail-closed direction and was the
+    #: second half of this review. The first version defaulted ``True`` on the
+    #: reasoning that "every executor that sets stdout sets it from a real
+    #: run" — and that was a claim about the FIVE sites which pass ``stdout=``,
+    #: not about the ELEVEN which construct this class. Measured: of eleven
+    #: constructions in ``src/``, only two capture a candidate's output; the
+    #: other nine are refusals and dry runs where nothing ran, and every one of
+    #: them inherited the default and told a consumer the empty string was
+    #: recorded output.
+    #:
+    #: An unset flag now says "not recorded", so a path that forgets to opt in
+    #: under-claims rather than asserting something false. The two capturing
+    #: sites opt in explicitly, and a derived test holds them to it.
+    stdout_recorded: bool = False
