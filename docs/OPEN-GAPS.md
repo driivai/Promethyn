@@ -2613,6 +2613,32 @@ body. **Running total 38: 28 review replies, 7 bodies, 3 comments**, recounted
 from the bounded table (25 review replies, 3 bodies, 1 comment) plus carriers
 30 to 38, not incremented.
 
+**CARRIER 39, opening #127 (`afa32de`'s pull request). 14 of 14.** Opened with
+the FULL body — not a placeholder — read back carrying the footer, rewritten
+through `update_pull_request`. Fourteen of fourteen openings, with no exception
+in either direction: a one-line placeholder and a ten-thousand-character body
+are appended to identically.
+
+**A REFINEMENT MEASURED HERE, which narrows what "only a push clears it"
+means.** This repository runs the body check in TWO places, and they behave
+differently:
+
+* the standalone `pr-text` workflow re-ran on the `edited` event and
+  **PASSED** (`35293021482`, 7s) once the footer was stripped;
+* the same check inside each `build` job read `PR_BODY` frozen at the OPEN
+  trigger and **FAILED** on all three Pythons (`35292928221`), in 31–45s,
+  after the type gate (343 files), the receipt check and the repository
+  hygiene check had all passed — so the failure is genuinely the stale
+  payload and nothing else.
+
+So "only a push clears a stale text refusal" is true of the BUILD jobs and not
+of `pr-text`, and a reader seeing one green and one red on the same body is
+looking at that split rather than at a flake. The commit carrying this
+paragraph is the push that clears the build jobs, for the reason carrier 30
+first measured. **Running total 39: 28 review replies, 8 bodies, 3 comments**,
+recounted from the bounded table (25 review replies, 3 bodies, 1 comment) plus
+carriers 30 to 39, not incremented.
+
 **THE COUNT IS ACCURATE AS OF THIS COMMIT AND CANNOT BE ACCURATE AFTER IT, which
 is a property of the count and not an oversight.** Reporting this commit's own
 CI means posting a comment, and that comment will carry the footer -- so
@@ -4847,3 +4873,130 @@ afterwards; nothing of the probe is in the tree.
   check on this side; a job that uploaded a report from a different run cannot
   happen within one workflow run's artifact namespace, and is not claimed
   against otherwise.
+
+---
+
+## G55 — an authorization was not spent when it was used: three paths to an executor, one claim (CLOSED by the occurrence spend)
+
+**The finding, reproduced twice before anything was written.** At `7cc2c4c`,
+submitting the same correctly bound assessment, action and `attempt_id` twice
+through `ExecutionController.submit` called the executor **twice** and wrote
+**two execution rows**, both carrying `attempt-1`. `controller.py:367` said so
+in words: *"The auto-approved path carries no hold (pending_id is None) and
+needs no claim."* Separately, an approved `GateDecision` retained and handed
+straight to a concrete executor's public `execute()` ran **twice**, with no
+gateway involved at all and therefore nothing ledger-side that could have seen
+it.
+
+**The enumeration was three, not two.** The brief asked whether the two found
+were the whole enumeration. They were not. `swarm/runtime.py:290` — a shipped
+path, built by `runtime/factory.py:406` — called `self.executor.execute(...)`
+with no claim of any kind and no hold to claim; because a packet's
+`attempt_id` is derived from the packet and proposal ids, re-running a packet
+re-ran every approved proposal's side effect. The population is now DERIVED
+rather than listed: `test_every_executor_call_site_in_the_tree_is_inside_a_spend_guarded_path`
+sweeps `src/` by AST for `<x>.execute(<y>)`, excludes SQL receivers by name,
+and allows exactly two modules — each of which must itself name
+`claim_authorization`. A fourth path reddens it.
+
+**The ruling: ONE OCCURRENCE, not one action identity.** The unit is the
+descriptor's six fields plus the assessment's `snapshot_digest` — seven, pinned
+against the descriptor's own dataclass rather than hand-listed. Two submissions
+differing in any one are two occurrences and both may run; two agreeing in all
+seven are one, and the second is refused by name. `risk_class` and `subject_id`
+are outside the descriptor and so do not make a second occurrence, which is why
+three tests that had been reusing one `attempt_id` across genuinely different
+attempts had to say what they meant (`test_execution.py`,
+`test_live_execution.py`, and the `GitBranchDeleteExecutor` start-signal test,
+which was handing ONE decision object to two runs).
+
+**Where the spend lives, and what that costs.** The authority is the
+append-only chain: `spend_state` folds `authorization.spend` /
+`authorization.release` / `authorization.outcome` entries for one subject. A
+row exists — `spent_authorizations` — and decides the RACE only, via its
+PRIMARY KEY; nothing asks it whether an authorization is spent. Reset or delete
+the row and the fold still refuses (`test_deleting_the_spend_ROW_does_not_restore_the_authority`);
+delete the chain entry and the anchor catches it
+(`test_removing_the_chain_ENTRY_breaks_verification`). **The cost, stated:** an
+O(entries) chain walk per execution, against a table that only grows.
+
+**No `RECORD_VERSION` bump, and holds already pending are unaffected** —
+measured, not assumed. Widening `receipts.OUTCOME_FIELDS` with the
+authorization key would change the payload every existing outcome entry was
+hashed over, so every pre-existing row would read as
+`outcome_differs_from_chain_entry`. A new additive event changes nothing
+already chained.
+
+**Retry is DECLARED, not inferred.** The spend key is *derived* from the bound
+fields; the idempotency key is *supplied and independent*, opted into on the
+FIRST call. Matching key → the prior result is returned, read through the
+chain's record of which execution row completed the spend, and **no executor is
+called**. No key → `authorization_already_spent`. Wrong key →
+`idempotency_key_mismatch`. Never declared → `authorization_not_retryable`.
+Right key, past the window → `idempotency_key_expired`. Claimed and never
+completed → `execution_outcome_unknown`, refused for every caller including a
+matching key, because that is the one state where whether the side effect
+happened is genuinely unknown.
+
+**A retry cannot change a bound field, structurally.** The key IS the bound
+fields, so a retry that alters one derives a different key, names no prior
+spend, and is a new authorization that must pass the whole gate. There is no
+retry path around the descriptor comparison because a matching retry reaches no
+executor at all.
+
+**What the mutation runner measured, including where it disagreed with the
+brief's framing.** `scripts/spend_proofs.py`: 11 first-order rows, 22 runs with
+the assertions-deleted variants, all 11 caught by their named proof; 8 of 11
+still red with every assert deleted. Three findings worth keeping:
+
+* Defence in depth changed which proof each row reaches. The spend has two
+  independent barriers — the READ and the CLAIM — so deleting the read does
+  NOT redden the reproduction (the claim still refuses a replay); it reddens
+  the retry, the one behaviour only the read can give. Each row names the
+  proof its mutation actually reaches, measured.
+* **A one-field narrowing of the occurrence is not behaviourally visible.**
+  `resolve` binds the artifact, target, action class and attempt into the
+  snapshot, so `snapshot_digest` covaries with all six descriptor fields:
+  remove `artifact_sha256` from `KEY_FIELDS` and two occurrences differing in
+  it still derive different keys, and every behavioural proof stays green. Only
+  the composition pin sees it — G25 again, a behaviour standing in for a
+  composition. The covariance is itself pinned
+  (`test_the_MEASURED_redundancy_snapshot_digest_already_covaries`) so that if
+  it ever stops holding, the runner's selector is known to be wrong.
+* **Nulling the hold claim does not reach the spend.** F14's write is caught
+  first by `execution/pending.py`'s chain-derived outcome walk, as a plain
+  `ValueError`. So the held path has THREE guards and that scenario isolates
+  none of them; the single-target proof is two DISTINCT holds for one
+  occurrence, where the hold claim and the outcome walk are both keyed on
+  `pending_id` and cannot see across them. The order is pinned, because if it
+  ever starts raising `authorization_already_spent` the outcome walk stopped
+  running — a real regression wearing a green refusal.
+
+**A reader that called another reader hid its own scope.** Found by the
+instrument, not by review: `authorization_spend_state` first read the chain
+through the public `chained_events`, and the nested read guard restores
+`_ALLOW_ALL` on its way out, replacing the authorizer the scope instrument had
+installed. The instrument reported the EMPTY SET for a read that really
+touched `audit_chain` — doctrine #8 exactly. Fixed by reading through a private
+`_chain_rows`, not by pinning the empty reading.
+
+**Residual, named rather than implied away.**
+
+* The retry window (24h, mirroring `Config.pending_ttl_seconds`) is a module
+  constant and a controller argument. It is **not** a `Config` field: it cannot
+  be set from the environment and does not appear in the attested posture.
+  Pinned as a limit by `test_the_NAMED_LIMIT_the_retry_window_is_not_a_config_field`.
+* The swarm path records ATTEMPT rows, not execution rows, so its completion
+  names no `execution_id` and it has no prior result to return. No caller there
+  can declare a retry key, so the branch is unreachable rather than broken.
+* An auto-approved row's `authorization` column now HAS a chained counterpart —
+  the spend's key is derived from it — so a rewrite no longer re-derives to the
+  chained key. **Nothing in the tree performs that comparison today:**
+  `verify_receipts` walks holds and outcomes, not spends. The rewrite is
+  catchable by hand and still not caught by an instrument.
+* At-most-once is a property of this system's record of the occurrence. It says
+  nothing about two deployments with separate ledgers.
+
+**Six new refusal reasons** (`EXECUTION_REFUSAL_REASONS`, 24 → 30), each with a
+different remedy, and per the G44 rule every runner that pins refusals on those
+labels was re-run at the moment they were added.

@@ -29,12 +29,12 @@
   ],
   "steps": {
     "reachability": {
-      "description": "F1/F2 startup obligations, future-root discovery, F3 authoritative readers, the unreceipted/tampered classification, the two component scopes, and F-5's six credit paths; observed 187 passing cases before pinning, re-pinned from 169 (security_build 70 -> 87)",
+      "description": "F1/F2 startup obligations, future-root discovery, F3 authoritative readers, the unreceipted/tampered classification, the two component scopes, and F-5's six credit paths; observed 187 passing cases before pinning, re-pinned from 169 (security_build 70 -> 87), then to 193 on 2026-09-18 for G24's two new public ledger readers (`authorization_spend_state`, `execution`): reachability_readers 34 -> 38 (the derived population is parametrised by reader, two readers x two attacks) and receipt_classification 53 -> 55 (one undecodable-row case per reader). Read off the run, not predicted",
       "counts": {
         "tests.conformance.test_security_build": 87,
         "tests.conformance.test_security_build_inventory": 13,
-        "tests.conformance.test_reachability_readers": 34,
-        "tests.conformance.test_receipt_classification": 53
+        "tests.conformance.test_reachability_readers": 38,
+        "tests.conformance.test_receipt_classification": 55
       },
       "required": {
         "tests.conformance.test_security_build": [

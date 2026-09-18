@@ -48,6 +48,47 @@ that is deliberate: the descriptor is the *question*, the snapshot is the
 *answer*, and the seam's job is to check that the answer in hand answers this
 question, under the policy this deployment actually selected.
 
+### "One attempt at one consequential action" — which reading
+
+That phrase had **two readings**, and until G24 the code implemented the
+weaker one.
+
+* **The weak reading — DESCRIPTIVE.** The descriptor *describes* one attempt at
+  one action: it is the shape of a single action rather than a batch. Nothing
+  follows about how many times it may be acted on.
+* **The strong reading — a QUOTA.** The descriptor *is* one attempt at one
+  action: acting on it uses it up, and a second presentation of the same
+  descriptor is refused.
+
+Measured at `7cc2c4c`, before G24: a correctly bound assessment, action and
+`attempt_id` submitted twice through `ExecutionController.submit` called the
+executor **twice** and wrote **two execution rows**, and the same approved
+`GateDecision` handed twice to a concrete executor's public `execute()` ran
+**twice**. So only the weak reading was true, while this document's wording
+invited the strong one.
+
+**It now means the strong reading, and that is what the code enforces.** The
+unit is the OCCURRENCE — the six fields above plus the assessment's
+`snapshot_digest` — and an occurrence executes **at most once**. Two
+submissions differing in any one of those seven are two occurrences and both
+may run; two agreeing in all seven are one, and the second is refused by name.
+`risk_class` and `subject_id` are deliberately *outside* the descriptor, so
+they do not make a second occurrence.
+
+Where this is implemented and proved: `src/prometheus_protocol/ledger/spend.py`
+(the fold that is the authority), `execution/controller.py` and
+`swarm/runtime.py` (the two gateways that consume it), `policy/execution.py`'s
+`consume_authorization` (the executor wall, for a caller that passes no
+gateway), `tests/conformance/test_spend_the_authorization.py`, and
+`scripts/spend_proofs.py`.
+
+**What is still narrower than the sentence sounds.** "At most once" is a
+property of *this system's* record of the occurrence. It is not a claim about
+an action performed twice by two deployments with separate ledgers, and it is
+not a claim about an occurrence whose spend was claimed and never completed —
+that state refuses in both directions and names itself rather than guessing
+(`execution_outcome_unknown`).
+
 **The descriptor is not caller-supplied trust.** It is built only by a builder
 constructed at a composition root and holding the deployment's policy supplier.
 `policy_id` and `policy_digest` are read OFF the supplier's policy, never

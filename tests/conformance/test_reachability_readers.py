@@ -11,6 +11,7 @@ from prometheus_protocol.execution.controller import ExecutionController
 from prometheus_protocol.execution.models import PendingStatus
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
 from prometheus_protocol.ledger.readers import reader_methods
+from prometheus_protocol.ledger.spend import authorization_key
 from prometheus_protocol.policy.execution import ExecutionNotAuthorized
 from prometheus_protocol.policy.reobservation import (
     MOMENT_PRE_APPROVAL,
@@ -70,10 +71,22 @@ def test_F3_observed_hold_with_working_registry_approves_and_executes(tmp_path):
     assert ledger.verify_chain().ok
 
 
-def _read(reader, pending_id):
-    arguments = {"pending_id": pending_id, "threshold": 0.5, "workflow_id": "fixture"}
-    supplied = {name: arguments[name] for name, parameter in inspect.signature(reader).parameters.items()
-                if parameter.default is inspect.Parameter.empty}
+def _read(reader, pending_id, **extra):
+    arguments = {"pending_id": pending_id, "threshold": 0.5, "workflow_id": "fixture", **extra}
+    # A MISSING argument is refused by name rather than skipped. The population
+    # is derived, so a reader added later arrives here with a parameter this
+    # table has never seen; silently dropping it would call the reader with the
+    # wrong arity — or, worse, let a defaulted lookup succeed against nothing
+    # and read as a passing attack.
+    supplied = {}
+    for name, parameter in inspect.signature(reader).parameters.items():
+        if parameter.default is not inspect.Parameter.empty:
+            continue
+        assert name in arguments, (
+            f"reader {reader.__name__!r} needs a value for {name!r}: add one to "
+            "this table so the new reader is actually attacked"
+        )
+        supplied[name] = arguments[name]
     return reader(**supplied)
 
 
@@ -87,7 +100,17 @@ def test_every_derived_public_reader_refuses_non_authoritative_outcomes(tmp_path
     hold = held_fx.hold(controller, held_fx.action())
     controller.approve(hold.id, identity="human")
     aliased_reader = getattr(ledger, method)
-    _read(aliased_reader, hold.id)  # paired positive for this exact reader
+    # The two G24 readers are keyed on things this fixture must derive, not
+    # invent: the execution the approval actually wrote, and the spend key
+    # derived from the hold's own pinned record. Read BEFORE the attack, since
+    # the delete removes the row the id names.
+    extra = {
+        "execution_id": ledger.executions()[0]["id"],
+        "key": authorization_key(
+            json.loads(held_fx.chain_entry_for(ledger, hold.id)["payload"])
+        ),
+    }
+    _read(aliased_reader, hold.id, **extra)  # paired positive for this exact reader
     if attack == "delete":
         ledger._conn.execute("DELETE FROM executions")
         expected = "execution_row_missing"
@@ -96,7 +119,7 @@ def test_every_derived_public_reader_refuses_non_authoritative_outcomes(tmp_path
         expected = "outcome_differs_from_chain_entry"
     ledger._conn.commit()
     with pytest.raises(ExecutionNotAuthorized) as refusal:
-        _read(aliased_reader, hold.id)
+        _read(aliased_reader, hold.id, **extra)
     assert refusal.value.reason == expected
 
 
@@ -213,7 +236,7 @@ def test_an_alternate_ledger_implementation_is_outside_this_derivation():
         def pending_actions(self) -> list[dict]:
             return [{"id": 1, "status": "resolved"}]
 
-    assert len(reader_methods(SqliteLedger)) == 11, "the guarded population"
+    assert len(reader_methods(SqliteLedger)) == 13, "the guarded population"
     assert reader_methods(AlternateLedger) == ("pending_actions",), (
         "the derivation RECOGNISES the reader on an unrelated implementation"
     )

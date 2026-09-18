@@ -22,6 +22,7 @@ from prometheus_protocol.core.models import (
 if TYPE_CHECKING:  # pragma: no cover - the chain's types, for the port's signatures
     from prometheus_protocol.ledger.audit_chain import ChainTip, ChainVerification
     from prometheus_protocol.ledger.receipts import ReceiptSource
+    from prometheus_protocol.ledger.spend import SpendState
 
 
 class LearnableTask(Protocol):
@@ -328,6 +329,61 @@ class Ledger(ABC):
     @abstractmethod
     def release_pending_execution(self, pending_id: int) -> None:
         """Release a claim after a refused (no-side-effect) execution."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def execution(self, execution_id: int) -> dict | None:
+        """One execution row by id, or ``None`` if there is no such id."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def claim_authorization(
+        self,
+        key: str,
+        *,
+        attempt_id: str,
+        idempotency_key: str | None,
+        claimed_at: str,
+    ) -> bool:
+        """Atomically spend one AUTHORIZATION; True iff this call won it.
+
+        G24's at-most-once guard, and the one that has no exception: it is
+        keyed on the OCCURRENCE (``ledger/spend.py``) rather than on a hold, so
+        an auto-approved action gets the same guarantee a held one does. The
+        hold claim above remains the hold's own retry-eligibility state; this
+        is what makes a second execution of one authorization impossible on
+        every path.
+
+        The implementation decides the race with a row and records the state on
+        the append-only chain. Nothing may answer "is this spent?" from the
+        row: see :meth:`authorization_spend_state`.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def complete_authorization(
+        self, key: str, *, execution_id: int | None, completed_at: str
+    ) -> None:
+        """Record that a spend's execution finished, naming its execution row.
+
+        ``None`` for a caller that records no execution row; the completion
+        still distinguishes "ran" from "claimed and never came back".
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def release_authorization(self, key: str, *, released_at: str, reason: str) -> None:
+        """Retract a spend whose execution had no side effect, by APPENDING."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def authorization_spend_state(self, key: str) -> "SpendState":
+        """Whether this occurrence has been used, FOLDED FROM THE CHAIN.
+
+        The authority. An implementation that answers this from a mutable row
+        hands back the authority to whoever can write that row, which is the
+        adversary the chain exists to constrain.
+        """
         raise NotImplementedError
 
     @abstractmethod

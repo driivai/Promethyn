@@ -113,7 +113,13 @@ RECEIPT = REPO / "type-gate-receipt.json"
 #: scripts/matrix_agreement_proofs.py, tests/conformance/test_matrix_agreement.py
 #: and tests/conformance/test_doctrine_index.py. Observed by running the gate
 #: against the un-repinned value first, which refused at 340.
-EXPECTED_CHECKED_FILES = 340
+#: 340 -> 343 on 2026-09-18 (G55): THREE files, each named and each new in this
+#: sprint — ``src/prometheus_protocol/ledger/spend.py`` (the occurrence spend),
+#: ``tests/conformance/test_spend_the_authorization.py`` and
+#: ``scripts/spend_proofs.py``. Observed by running the gate against the
+#: un-repinned value first, which refused at 342 with two of the three present
+#: and again at 343 with all three.
+EXPECTED_CHECKED_FILES = 343
 
 _SUCCESS = re.compile(
     r"^Success: no issues found in (\d+) source files?$", re.MULTILINE

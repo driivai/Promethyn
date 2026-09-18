@@ -614,6 +614,23 @@
         "test_a_report_from_a_version_the_matrix_does_not_run_is_refused_even_when_the_count_of_versions_matches"
       ],
       "property": "three faithful reports for exactly the workflow's matrix are accepted and the table carries the reports' own counts, so each refusal beside it -- a version-specific collection, the same count with different membership, a differing skip set, a failure, an empty report, a missing or a stranger version -- is caused by the disagreement it names and not by a guard that refuses everything (G54)"
+    },
+    {
+      "module": "tests/conformance/test_spend_the_authorization.py",
+      "positive": "test_a_first_execution_on_each_path_succeeds_normally",
+      "negatives": [
+        "test_the_same_auto_approved_occurrence_submitted_twice_executes_ONCE",
+        "test_a_retained_approved_decision_handed_to_an_executor_twice_runs_ONCE",
+        "test_a_swarm_packet_re_run_does_not_execute_its_approved_proposals_again",
+        "test_a_SECOND_hold_for_the_same_occurrence_is_refused_by_the_SPEND_alone",
+        "test_each_way_a_claim_of_retry_fails_has_its_own_reason",
+        "test_a_matching_key_is_refused_once_the_retry_window_has_passed",
+        "test_deleting_the_spend_ROW_does_not_restore_the_authority",
+        "test_a_spend_record_from_a_DIFFERENT_attempt_is_detected",
+        "test_an_unreadable_spend_entry_refuses_rather_than_reading_as_unspent",
+        "test_an_outcome_entry_with_no_open_spend_is_a_broken_history"
+      ],
+      "property": "a first execution on the auto-approved path and on the held path both succeed and are recorded, so every refusal beside them -- a second submission of one occurrence, a retained decision presented twice, a packet re-run, a second hold for one occurrence, each way a claim of retry fails, an expired key, a reset spend row, a re-attributed spend record, an unreadable entry and an out-of-order outcome -- is caused by the occurrence being spent and not by a gateway that refuses everything (G55). test_two_occurrences_differing_in_ONE_bound_field_both_execute is the second half: without it, 'the executor was called once' would be equally consistent with a gateway that allows exactly one execution ever"
     }
   ]
 }

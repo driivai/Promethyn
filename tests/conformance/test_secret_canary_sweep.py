@@ -123,6 +123,16 @@ _NOT_CREDENTIALS: dict[str, str] = {
         "a pagination cursor returned by a KMS audit API, not a secret",
     "prometheus_protocol.chokepoint.audit_source_model.ModelSigner._public_key":
         "a PUBLIC key, and a callable at that; publishing it is its purpose",
+    "prometheus_protocol.ledger.spend.SpendState.idempotency_key":
+        "a caller-chosen RETRY CORRELATION TOKEN (G24), and it is written to "
+        "the audit chain in the clear on purpose: an auditor has to be able to "
+        "see which retry a caller declared. Wrapping it as a Secret would "
+        "claim a confidentiality this design does not provide and could not — "
+        "you cannot hold secret a value you publish. It is named 'key' because "
+        "that is the industry term for the idempotency contract, not because "
+        "it authorises anything: presenting it cannot cause an execution, only "
+        "the return of an already-recorded result. The capability it guards is "
+        "the spend itself, which is not this field and is not guessable.",
 }
 
 

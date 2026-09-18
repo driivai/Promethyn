@@ -34,6 +34,17 @@ from prometheus_protocol.ledger.audit_chain import (
     entry_hash,
     verify_rows,
 )
+from prometheus_protocol.ledger.spend import (
+    RELEASE_EVENT,
+    SPEND_EVENT,
+    SPEND_OUTCOME_EVENT,
+    SpendState,
+    outcome_payload,
+    release_payload,
+    spend_payload,
+    spend_state,
+    spend_subject,
+)
 from prometheus_protocol.ledger.receipts import (
     DECISION_EVENT,
     EXECUTION_TABLE,
@@ -176,6 +187,22 @@ CREATE TABLE IF NOT EXISTS audit_chain (
     payload    TEXT    NOT NULL,   -- canonical JSON of the decision detail
     prev_hash  TEXT    NOT NULL,   -- prior entry's entry_hash (GENESIS_ROOT for seq 1)
     entry_hash TEXT    NOT NULL    -- sha256 over this entry's content AND prev_hash
+);
+
+-- G24. The RACE, and only the race. `key` is the occurrence's identity
+-- (ledger/spend.py), and the PRIMARY KEY is what makes exactly one of several
+-- concurrent claimants win in a single statement -- the same property the
+-- hold claim gets from its conditional UPDATE, keyed on the occurrence rather
+-- than on a hold, so the auto-approved path is not an exception to it.
+--
+-- THIS TABLE IS NOT THE AUTHORITY AND IS NEVER ASKED WHETHER AN AUTHORIZATION
+-- IS SPENT. That answer is folded from the append-only chain, so an attacker
+-- with write authority who resets a row here restores nothing. See
+-- ledger/spend.py for why the authority has to sit on the chain.
+CREATE TABLE IF NOT EXISTS spent_authorizations (
+    key         TEXT PRIMARY KEY,
+    attempt_id  TEXT NOT NULL,
+    claimed_at  TEXT NOT NULL
 );
 """
 
@@ -878,6 +905,133 @@ class SqliteLedger(Ledger):
         )
         self._conn.commit()
 
+    # -- G24: the occurrence's spend, one mechanism for every path ----------
+
+    @writes_ledger
+    def claim_authorization(
+        self,
+        key: str,
+        *,
+        attempt_id: str,
+        idempotency_key: str | None,
+        claimed_at: str,
+    ) -> bool:
+        """Atomically spend one authorization; True iff this call won it.
+
+        THE RACE IS DECIDED BY THE ROW and the STATE IS RECORDED ON THE CHAIN,
+        and the two are not the same job. ``INSERT`` against a PRIMARY KEY is
+        one statement, so exactly one of any number of concurrent claimants
+        gets ``True`` — the same guarantee the hold claim takes from its
+        conditional ``UPDATE``, keyed on the occurrence so that the
+        auto-approved and swarm paths are not exceptions to it.
+
+        The chain entry is appended only by the winner, and only after it has
+        won, so the chain never carries a spend that did not happen. A loser
+        writes nothing at all.
+
+        THE ROW IS NOT THE AUTHORITY. Nothing reads it to decide whether an
+        authorization is spent; :meth:`authorization_spend_state` folds the
+        chain for that. Resetting or deleting a row here therefore restores no
+        authority — it only frees the key to be re-inserted, and the fold still
+        refuses. That asymmetry is the whole point of recording it this way.
+        """
+
+        try:
+            self._conn.execute(
+                "INSERT INTO spent_authorizations (key, attempt_id, claimed_at) "
+                "VALUES (?, ?, ?)",
+                (key, attempt_id, claimed_at),
+            )
+            self._conn.commit()
+        except sqlite3.IntegrityError:
+            # Another claimant holds the key. Not an error: it is the answer.
+            self._conn.rollback()
+            return False
+        self.record_chained(
+            event=SPEND_EVENT,
+            subject=spend_subject(key),
+            payload=spend_payload(
+                key,
+                attempt_id=attempt_id,
+                idempotency_key=idempotency_key,
+                claimed_at=claimed_at,
+            ),
+            created_at=claimed_at,
+        )
+        return True
+
+    @writes_ledger
+    def complete_authorization(
+        self, key: str, *, execution_id: int | None, completed_at: str
+    ) -> None:
+        """Record that this spend's execution finished, naming its row.
+
+        ``execution_id`` is ``None`` for a caller that writes no execution row
+        — the swarm runtime records attempts, not executions. The completion
+        still matters there: it is what separates an occurrence that RAN from
+        one claimed and never finished. What ``None`` costs is the ability to
+        hand back a prior result, and a caller that records no row had none to
+        hand back in the first place.
+
+        Appended AFTER the executor returns, so it cannot be part of the claim
+        and cannot be what makes the claim atomic. What it adds is the
+        distinction between an occurrence that ran and one that was claimed and
+        never came back — the second is the only state in which this system
+        does not know whether a side effect happened, and it must not be
+        confused with either neighbour.
+
+        The row stays: the key is spent for good, and deleting the row would
+        free it to be claimed again. Only a release frees it, and a release
+        says so on the chain.
+        """
+
+        self.record_chained(
+            event=SPEND_OUTCOME_EVENT,
+            subject=spend_subject(key),
+            payload=outcome_payload(
+                key, execution_id=execution_id, completed_at=completed_at
+            ),
+            created_at=completed_at,
+        )
+
+    @writes_ledger
+    def release_authorization(self, key: str, *, released_at: str, reason: str) -> None:
+        """Retract a spend whose execution had NO side effect.
+
+        AN APPEND, NOT A DELETE. The retraction is a ``authorization.release``
+        entry that names the spend it retracts, so the chain is never rewritten
+        and the state is the fold of both. Deleting a release entry can only
+        make the fold read MORE spent, which is the fail-closed direction —
+        the reason the retraction is expressed this way round rather than by
+        removing the spend.
+
+        The row is deleted so the key can be claimed again; it is the race's
+        mechanism and holds no history. The history is on the chain.
+        """
+
+        self._conn.execute("DELETE FROM spent_authorizations WHERE key = ?", (key,))
+        self._conn.commit()
+        self.record_chained(
+            event=RELEASE_EVENT,
+            subject=spend_subject(key),
+            payload=release_payload(key, released_at=released_at, reason=reason),
+            created_at=released_at,
+        )
+
+    def authorization_spend_state(self, key: str) -> SpendState:
+        """Whether this occurrence has been used, folded from the CHAIN.
+
+        The authority, and an authoritative reader like any other evidence
+        source: it is what the controller asks before it calls an executor.
+
+        Reads the chain through ``_chain_rows`` rather than through the public
+        ``chained_events``: the guard this reader is already wrapped in is the
+        same guard, and nesting a second one inside it hides this read from
+        SQLite's own account of what was touched. See ``_chain_rows``.
+        """
+
+        return spend_state(self._chain_rows(), key=key)
+
     def pending_actions(self, *, status: str | None = None) -> list[dict]:
         if status is None:
             rows = self._conn.execute(
@@ -975,6 +1129,21 @@ class SqliteLedger(Ledger):
             created_at=created_at,
         )
         return execution_id
+
+    def execution(self, execution_id: int) -> dict | None:
+        """One execution row by id, or ``None`` if there is no such id.
+
+        G24: what a retry owed the prior result reads. ``None`` rather than a
+        raise, because "the row is gone" is a fact the caller has to be able to
+        act on — a completed spend whose row has been deleted is the inverse
+        walk ``receipts.py`` already names, and the caller refuses on it rather
+        than treating an absent row as an absent execution.
+        """
+
+        row = self._conn.execute(
+            "SELECT * FROM executions WHERE id = ?", (execution_id,)
+        ).fetchone()
+        return self._execution_row(row) if row is not None else None
 
     def executions(self) -> list[dict]:
         rows = self._conn.execute("SELECT * FROM executions ORDER BY id").fetchall()
@@ -1262,11 +1431,26 @@ class SqliteLedger(Ledger):
             "concurrent writers"
         )
 
-    def chained_events(self) -> list[dict]:
-        """Every chain entry in insertion (id) order — the order verify walks."""
+    def _chain_rows(self) -> list[dict]:
+        """The chain, UNGUARDED, for a guarded reader that needs it.
+
+        A public reader that calls another public reader nests one guard inside
+        another, and the inner guard restores ``_ALLOW_ALL`` on its way out —
+        which REPLACES the authorizer the caller installed. Measured on
+        ``authorization_spend_state``: the scope instrument in
+        ``test_receipt_classification.py`` reported the empty set for it while
+        the read really did touch ``audit_chain``. An instrument that reads
+        empty is doctrine #8 exactly, so the nesting is removed rather than the
+        empty reading pinned.
+        """
 
         rows = self._conn.execute("SELECT * FROM audit_chain ORDER BY id").fetchall()
         return [dict(row) for row in rows]
+
+    def chained_events(self) -> list[dict]:
+        """Every chain entry in insertion (id) order — the order verify walks."""
+
+        return self._chain_rows()
 
     @unverified_diagnostic
     def chain_tip(self) -> ChainTip | None:

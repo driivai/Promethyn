@@ -69,6 +69,7 @@ from prometheus_protocol.policy.coverage import BoundResult
 from prometheus_protocol.policy.execution import (
     EXECUTION_REFUSAL_REASONS,
     ExecutionAuthorizer,
+    ExecutionNotAuthorized,
 )
 from prometheus_protocol.policy.profile import (
     CHECK_MERGE_PROOF,
@@ -1244,7 +1245,17 @@ def test_two_holds_sharing_an_attempt_id_do_not_share_an_observation_subject(
     )
 
     controller.approve(first.id, identity="reviewer")
-    controller.approve(second.id, identity="reviewer")
+    # AND THE SECOND EXECUTION IS REFUSED, which is G24 arriving in a test that
+    # predates it. Two holds on the same branch, same attempt, same artifact
+    # and same policy are ONE OCCURRENCE: the first approval spends the
+    # authorization and the second is a replay. The refusal is not what this
+    # test is about — it is about the observation SUBJECT — and the property it
+    # asserts survives, because the pre-approval observation is recorded by
+    # ``pending.approve`` BEFORE ``_execute`` is reached. So both holds still
+    # have receipts to collide on, and they still do not collide.
+    with pytest.raises(ExecutionNotAuthorized) as replay:
+        controller.approve(second.id, identity="reviewer")
+    assert replay.value.reason == "authorization_already_spent"
 
     subjects = [o["subject"] for o in _observations(ledger)]
     assert len(subjects) == len(set(subjects)), subjects

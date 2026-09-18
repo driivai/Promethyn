@@ -114,8 +114,12 @@ def test_milestone_live_execution_end_to_end():
 
     # 1. APPROVED, high-confidence, low-risk -> EXECUTES inside the sandbox.
     approved = controller.submit(
-        attempt_id="attempt-1",
-        assessment=carrying(good, artifact_sha256=content_hash(_ACTION_CODE)),
+        attempt_id="attempt-auto",
+        assessment=carrying(
+            good,
+            artifact_sha256=content_hash(_ACTION_CODE),
+            attempt_id="attempt-auto",
+        ),
         action=action,
         risk_class="low",
         subject_id="live/ok",
@@ -128,9 +132,21 @@ def test_milestone_live_execution_end_to_end():
     assert "add(2,3)= 5" in approved.execution.stdout
 
     # 2. The SAME action at HIGH risk HALTS for a human, then executes on approval.
+    #
+    # ITS OWN ATTEMPT ID, and that is the point rather than a workaround. G24
+    # made an authorization single-use, and ``attempt_id`` is what separates
+    # one occurrence from the next: ``risk_class`` and ``subject_id`` are
+    # deliberately outside the descriptor (``docs/execution-descriptor.md``),
+    # so three submissions sharing one attempt id are one occurrence submitted
+    # three times, which is now refused. These are three genuinely different
+    # attempts and they say so.
     held = controller.submit(
-        attempt_id="attempt-1",
-        assessment=carrying(good, artifact_sha256=content_hash(_ACTION_CODE)),
+        attempt_id="attempt-held",
+        assessment=carrying(
+            good,
+            artifact_sha256=content_hash(_ACTION_CODE),
+            attempt_id="attempt-held",
+        ),
         action=action,
         risk_class="high",
         subject_id="live/hold",
@@ -145,8 +161,12 @@ def test_milestone_live_execution_end_to_end():
     bad = _judge(_BAD)
     assert bad.verdict == Verdict.FAIL
     blocked = controller.submit(
-        attempt_id="attempt-1",
-        assessment=carrying(bad, artifact_sha256=content_hash(_ACTION_CODE)),
+        attempt_id="attempt-blocked",
+        assessment=carrying(
+            bad,
+            artifact_sha256=content_hash(_ACTION_CODE),
+            attempt_id="attempt-blocked",
+        ),
         action=action,
         risk_class="low",
         subject_id="live/bad",

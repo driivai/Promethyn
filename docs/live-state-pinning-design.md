@@ -485,6 +485,19 @@ refused, side-effect-free execution the claim is released
 hold is retry-eligible. So today an "execution attempt" has no identity of its
 own: two executions of one hold share every identifier the record carries.
 
+> **Superseded in part by G24 (2026-09-18).** "The at-most-once guard is
+> `claim_pending_execution`" was true of the HELD path and was never true of
+> the others: the auto-approved path and `swarm/runtime.py` reached an executor
+> with no claim at all, and a retained `GateDecision` reached one with no
+> gateway. At-most-once is now a property of the OCCURRENCE, enforced on every
+> path by the spend in `ledger/spend.py`, and `claim_pending_execution` remains
+> the hold's retry-eligibility state rather than the double-execution defence.
+> The paragraph's actual subject — that a *retry* of one hold reuses every
+> identifier the pinned record carries, so an execution attempt has no identity
+> of its own — is unchanged, and the design consequence below still follows
+> from it. Line references in this section are to the tree at the time it was
+> written and have since moved.
+
 **Design consequence:** an execution-attempt identity is minted at the claim —
 the moment `execution_committed_at` is written (`sqlite_ledger.py:567-568`) —
 as an ordinal per hold (the first claim is 1, a re-claim after release is 2) or

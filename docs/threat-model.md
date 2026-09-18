@@ -973,12 +973,33 @@ the row must equal its latest entry at approval, at retry, and under
   external anchor.
 - **What the adversary can still do**, named rather than implied away:
   null the at-most-once claim (no longer a double execution; still a race
-  between honest drivers); rewrite `executions.authorization` on an
-  auto-approved row, which has no hold entry; rewrite the promoted
+  between honest drivers); rewrite the promoted
   `verdict/confidence/authoritative` columns, which the backfill path also
   writes and which are not the chained account. Deleting a row outright is
   **detected** — the receipts are walked in both directions (G42, closed by
   review of #121 after it was measured as a double execution at retry).
+
+**Narrowed by G24 (`docs/OPEN-GAPS.md` G55).** Two entries above are no longer
+what they were, and both are stated as measured rather than as improvements
+claimed:
+
+- *"Rewrite `executions.authorization` on an auto-approved row, which has no
+  hold entry"* — an auto-approved row now DOES have a chained counterpart. The
+  spend appended at execution carries the occurrence key derived from that
+  record, so a rewritten record no longer re-derives to the chained key.
+  Measured: derived-from-row and chained-spend keys are equal on an
+  auto-approved execution. **The comparison is available and nothing in the
+  tree performs it today** — `verify_receipts` walks holds and outcomes, not
+  spends. So this is a rewrite an auditor can now catch by hand and the
+  instruments still do not, which is a smaller gap than before and not a
+  closed one. Filed as such.
+- *"Null the at-most-once claim"* — still not a double execution, and now for
+  two independent reasons rather than one. Measured order:
+  `execution/pending.py`'s chain-derived outcome walk refuses first (a plain
+  `ValueError`), and the occurrence's spend stands behind it. The isolation
+  proof for the spend on the held path is therefore two distinct holds for one
+  occurrence, where neither older guard can see across the `pending_id`
+  (`test_a_SECOND_hold_for_the_same_occurrence_is_refused_by_the_SPEND_alone`).
 
 ---
 

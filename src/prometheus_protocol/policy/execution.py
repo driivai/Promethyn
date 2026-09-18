@@ -98,6 +98,22 @@ EXECUTION_REFUSAL_REASONS: frozenset[str] = frozenset({
     # execution at retry; a deleted hold row left its entries orphaned.
     "execution_row_missing",                # a chained outcome, no execution row
     "hold_row_missing",                     # a chained hold/decision, no pending row
+    # -- G24: an authorization is SPENT when it is used ----------------------
+    # SIX reasons, not one, because the six states a presented authorization
+    # can be in have six different remedies, and an operator who reads only
+    # "refused" has to guess which. A replay needs a new authorization; a
+    # mismatched key needs the right key; an occurrence nobody declared
+    # retryable needed the opt-in on its FIRST call and cannot get it now; an
+    # expired key was right and is simply too late; an unknown outcome needs a
+    # human to establish what happened; an unreadable spend record needs the
+    # ledger repaired. Collapsing them would be the shape this repository keeps
+    # finding — a refusal that names a cause it does not have.
+    "authorization_already_spent",          # used once; this is a replay
+    "idempotency_key_mismatch",             # retry declared, wrong key
+    "authorization_not_retryable",          # retry declared, none was offered
+    "idempotency_key_expired",              # right key, past the retry window
+    "execution_outcome_unknown",            # claimed and never completed
+    "spend_record_unreadable",              # a chained spend entry that will not read
 })
 
 
@@ -219,6 +235,50 @@ class AuthorizedExecution(Generic[ActionT]):
                 "an authorized execution carries the resolved requirements it was "
                 "authorized against; an empty set is satisfied by anything"
             )
+
+
+#: Set on an :class:`AuthorizedExecution` the moment an executor acts on it.
+#: A private attribute rather than a field: it is not part of the value's
+#: identity, must not take part in equality, and must not appear in the
+#: authorization record — the record describes what was authorized, not what
+#: has since been done with it.
+_CONSUMED = "__consumed_by_an_executor__"
+
+
+def consume_authorization(authorization: AuthorizedExecution[Any]) -> None:
+    """Mark a minted authorization as USED, refusing a second use.
+
+    THE OTHER HALF OF G24, and it guards a different door. The ledger spend
+    (``ledger/spend.py``) makes an OCCURRENCE at-most-once across processes and
+    restarts, and it is consumed at the gateway. This makes the minted
+    AUTHORIZATION OBJECT at-most-once within a process, and it is consumed at
+    the executor — because a caller who retains an approved ``GateDecision``
+    and hands it straight to a concrete executor's public ``execute()`` never
+    passes a gateway at all. Measured at ``7cc2c4c``: that ran twice, with the
+    same ``attempt_id``, and nothing anywhere objected.
+
+    A DECISION THAT CAN BE PRESENTED TWICE IS A BEARER TOKEN. The ruling says
+    agents get capabilities and not keys; a capability that survives its own
+    use is a key with a short name. This is what makes the object itself
+    expire.
+
+    TWO MECHANISMS, DELIBERATELY, AND THEY ARE NOT REDUNDANT. Neither covers
+    the other's door: the in-process mark cannot survive a restart or reach a
+    second process, and the ledger spend never sees a caller who skips the
+    gateway. Because defence in depth can disarm a single-target proof (G44),
+    the two are proved separately and in scenarios where only one can fire —
+    the ledger's with two distinct decision objects for one occurrence, this
+    one with the same object twice.
+    """
+
+    if getattr(authorization, _CONSUMED, False):
+        raise ExecutionNotAuthorized(
+            "this authorization has already been acted on by an executor: an "
+            "authorization is spent when it is used, and a retained decision "
+            "is not a licence to run it again",
+            reason="authorization_already_spent",
+        )
+    object.__setattr__(authorization, _CONSUMED, True)
 
 
 def action_class_of(action: ExecutableAction) -> str:

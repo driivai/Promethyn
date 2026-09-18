@@ -477,10 +477,17 @@ class GitBranchDeleteExecutor(Executor):
             raise ValueError("refusing to execute an unapproved gate decision")
 
         action = decision.action
-        from prometheus_protocol.policy.execution import AuthorizedExecution
+        from prometheus_protocol.policy.execution import (
+            AuthorizedExecution,
+            consume_authorization,
+        )
         authorization = decision.authorization
         if not isinstance(authorization, AuthorizedExecution):
             raise ValueError("approved decision carries no validated execution descriptor")
+        # G24, and NO EXCEPTION for this executor either — "the same gateway
+        # with an exception" is the shape that made the claim unfalsifiable,
+        # and a destructive git delete is the last place to carve one.
+        consume_authorization(authorization)
         if authorization.action != action:
             raise ValueError("approved action differs from its execution descriptor")
         if authorization.descriptor.target_canonical != f"git://{self.repo_path}":

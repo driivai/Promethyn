@@ -47,6 +47,11 @@ the compromised host's control.
 - `MATCHED` means a signing event has an eligible, binding-consistent gate
   explanation. It does not prove delivery of an approval, single-use execution,
   a database commit, absence of other attacks, or complete coverage elsewhere.
+  (Single-use execution IS enforced and proved, since G24 — by the occurrence
+  spend in `ledger/spend.py`, not by this record and not by this match. The
+  point of the sentence is unchanged: a signing match is evidence about a
+  signature, and reading it as evidence about an execution is the substitution
+  this section exists to refuse.)
 
 The gate history uses the existing ledger chain and external anchor. Their
 limits remain those in [ledger integrity](ledger-integrity.md): an ordinary
