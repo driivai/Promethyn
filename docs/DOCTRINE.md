@@ -34,7 +34,7 @@ line in path order, not the origin.
 | 5 | 16 | `docs/OPEN-GAPS.md:14` | a named gap is a passing test, so it cannot erode quietly |
 | 6 | 0 | — | never cited in the tree |
 | 7 | 0 | — | never cited in the tree |
-| 8 | 40 | `docs/OPEN-GAPS.md:2096` | an empty instrument reads downstream as a pass, so emptiness refuses |
+| 8 | 42 | `docs/OPEN-GAPS.md:2096` | an empty instrument reads downstream as a pass, so emptiness refuses |
 | 9 | 9 | `docs/OPEN-GAPS.md:47` | re-sweep documentation claims when the code they describe changes |
 | 10 | 4 | `docs/live-state-pinning-design.md:187` | a claim about existing behaviour carries a file and line, or is marked UNVERIFIED |
 | 11 | 14 | this file | counts come from the artifact, never from a filtered view of it (below) |

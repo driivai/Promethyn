@@ -382,6 +382,40 @@ def run() -> int:
         if reds or clean is None:
             raise RuntimeError("baseline did not pass; no mutation evidence collected")
         baseline_count = int(clean.group(1))
+
+        # THE STRIPPED BASELINE, MEASURED BEFORE ANY MUTATION IS APPLIED, and
+        # this runner published a false number for want of it.
+        #
+        # WHAT WENT WRONG. The second-order pass deletes every assert and then
+        # asked only "are there any reds?". A test that performs an effect
+        # INSIDE an assert — ``assert ledger.claim_authorization(...)`` — loses
+        # the effect when the assert goes, and fails for a reason that has
+        # nothing to do with the mutation. Measured on this module: the
+        # stripped baseline was RED on one test with no mutation applied, so
+        # every "still red with every assert deleted" result counted that one
+        # invariant failure. The published 18 of 18 was not what it claimed,
+        # and neither were the 16 of 16, 9 of 14 and 8 of 11 before it.
+        #
+        # REFUSED RATHER THAN SUBTRACTED. Excluding the known-red test would
+        # make the count arithmetic over a number nobody re-derives. A stripped
+        # baseline that is not clean means the second-order experiment has no
+        # control, and an experiment with no control produces no evidence —
+        # doctrine #8, applied to a runner rather than a sweep.
+        original = (tree.path / TESTS).read_text()
+        weakened = ast.unparse(WithoutAssertions().visit(ast.parse(original))) + "\n"
+        tree.apply(TESTS, original, weakened)
+        stripped_reds, stripped_summary = tree.pytest([TESTS])
+        print(f"stripped baseline: {stripped_summary}", flush=True)
+        for node in stripped_reds:
+            print(f"  RED {node}", flush=True)
+        if stripped_reds:
+            raise RuntimeError(
+                "the assertions-deleted baseline is RED before any mutation is "
+                "applied, so the second-order runs have no control and measure "
+                "nothing. Almost always a side-effecting assert: move the call "
+                f"out of the assert. Reds: {stripped_reds}"
+            )
+        tree.revert()
         for label, edits, selector in MUTATIONS:
             for stripped in (False, True):
                 tree.revert()
@@ -400,10 +434,16 @@ def run() -> int:
                     print(f"  RED {node}", flush=True)
                 counts = re.fullmatch(r"(\d+) failed, (\d+) passed in [\d.]+s", summary)
                 if stripped:
-                    # The second-order run MAY be green: that means the row is
-                    # caught only by an assert. It is reported, never failed
-                    # on, and never summed with the first-order result.
-                    if not reds:
+                    # THE NAMED PROOF, in the stripped run too. "Some test went
+                    # red" is not evidence that THIS mutation is caught without
+                    # assertions — it was exactly that looseness, plus a red
+                    # stripped baseline, that let this runner publish a
+                    # second-order figure it had not measured.
+                    #
+                    # A row whose named proof stays green here is caught ONLY
+                    # by an assert. That is reported, never failed on, and
+                    # never summed with the first-order result.
+                    if not any(node.endswith("::" + selector) for node in reds):
                         survivors.append(label)
                     continue
                 if not reds or counts is None:
@@ -420,7 +460,8 @@ def run() -> int:
     print(f"all {len(MUTATIONS)} rows caught first-order, each by its named proof", flush=True)
     print(
         f"second-order: {len(MUTATIONS) - len(survivors)} of {len(MUTATIONS)} rows "
-        "still red with every assert deleted "
+        "still redden THEIR NAMED PROOF with every assert deleted, against a "
+        "stripped baseline verified clean above "
         f"(carried by raises/errors); assert-only rows: {sorted(survivors) or 'none'}",
         flush=True,
     )

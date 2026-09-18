@@ -5176,10 +5176,17 @@ recording.
 `ExecutionResult.stdout_recorded` was added with a default of `True`, on the
 reasoning that *"every executor that sets `stdout` sets it from a real run"*.
 That is a true statement about the **five** construction sites which pass
-`stdout=` — and the class is constructed at **eleven** sites. The other six are
-refusals, dry runs and replay refusals where nothing ran, and every one of them
-inherited the default and told a consumer the empty string was the program's
-own output. The flag added to remove an ambiguity reintroduced it at six sites.
+`stdout=` — and the class is constructed at **eleven** sites. **NINE** of them
+do not capture: three of the five passing `stdout=` pass the EMPTY LITERAL,
+which is "nothing to report" rather than output, and six omit `stdout`
+altogether. Every one of the nine inherited the default and told a consumer the
+empty string was the program's own output. The flag added to remove an
+ambiguity reintroduced it at nine sites.
+
+**This paragraph first said six**, counting only the sites that omit `stdout`
+and forgetting the three that pass the empty literal — the filtered-population
+error again, inside the entry recording the filtered-population error. Caught
+by review of #130; corrected here rather than rewritten away.
 
 **The same error as the count-from-a-filtered-view class (doctrine #11), in a
 different medium.** I reasoned about the population I had just edited instead
@@ -5198,9 +5205,50 @@ mutation rows, and the paired positive now drives the shipped `SandboxExecutor`
 against a fake isolating sandbox that really returns output, because the
 fixture spy captures nothing and honestly reports `False`.
 
+### WITHDRAWN: every second-order figure this entry published was wrong
+
+**The claim.** This entry reported, at four points, that N of N mutation rows
+stayed red with every assert deleted — `8 of 11`, `9 of 14`, `16 of 16`,
+`18 of 18`.
+
+**None of them measured that.** Found by review of #130 and confirmed by direct
+measurement: with every assert deleted and **no mutation applied at all**, the
+proof module was already RED on one test.
+
+```
+UNSTRIPPED baseline: 63 passed in 2.22s
+STRIPPED baseline  : 1 failed, 62 passed in 1.60s
+   RED ...::test_resetting_the_row_and_RE_CLAIMING_does_not_reopen_the_release
+```
+
+**Two causes, both mine.** A test performed its effect INSIDE an assert —
+`assert ledger.claim_authorization(...)` — so deleting the assert deleted the
+claim, and the test failed for a reason unrelated to any mutation. And the
+runner's second-order branch asked only *"are there any reds?"*, never *"did
+the NAMED proof redden?"*, and never measured a stripped baseline at all. So
+every row inherited that one invariant failure and was counted as surviving.
+
+**The corrected figure, measured against a stripped baseline verified clean:
+11 of 18.** Seven rows are caught only by an assert, and they are named in the
+runner's output rather than folded into a total.
+
+**What changed so this cannot recur.** The runner now measures the stripped
+baseline BEFORE any mutation and REFUSES if it is red — an experiment with no
+control produces no evidence, so it raises rather than reporting a number
+(doctrine #8 applied to a runner). Refused rather than subtracted: excluding
+the known-red test would make the count arithmetic over a number nobody
+re-derives. And the stripped runs now require the named selector, exactly as
+the first-order runs always did. Every side-effecting call in the module moved
+out of its assert — they were also broken under `python -O`.
+
+**Where the withdrawn numbers still appear.** The bodies of #128 and #129 are
+merged and carry `16 of 16` and the figures before it. They are superseded by
+this section rather than edited, so the record shows what was claimed and when
+it was corrected.
+
 **Three reviews, three findings in code written to fix the previous one.**
-`spend_proofs.py` is now **18 rows, 36 runs, 18 of 18 red with every assert
-deleted**. The sequence is recorded here rather than smoothed over: each fix
+`spend_proofs.py` is now **18 rows, 36 runs**, and its second-order figure is
+**11 of 18** — see the withdrawal below. The sequence is recorded here rather than smoothed over: each fix
 was correct about what it fixed and wrong about a neighbour it did not look
 at — the release branch, then its sibling the spend branch, then the flag's
 default over the construction sites.

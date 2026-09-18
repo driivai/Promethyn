@@ -782,12 +782,19 @@ def test_the_claim_is_what_makes_it_atomic_a_second_claimant_loses(tmp_path):
     ledger = anchored(tmp_path, "atomic")
     key = "a" * 64
 
-    assert ledger.claim_authorization(
+    # THE CALLS HAPPEN OUTSIDE THE ASSERTS. A claim performed inside an
+    # ``assert`` vanishes under ``python -O`` and under the assertions-deleted
+    # proof run, so the test would then fail for a reason that has nothing to
+    # do with any mutation. Measured: that is exactly what made the stripped
+    # baseline red and every second-order count meaningless.
+    first = ledger.claim_authorization(
         key, attempt_id="attempt-1", idempotency_key=None, claimed_at=_NOW
-    ) is True
-    assert ledger.claim_authorization(
+    )
+    second = ledger.claim_authorization(
         key, attempt_id="attempt-1", idempotency_key=None, claimed_at=_NOW
-    ) is False, "two claimants both won one authorization"
+    )
+    assert first is True
+    assert second is False, "two claimants both won one authorization"
 
     # THE LOSER WROTE NOTHING. A second chain entry would be a spend that did
     # not happen, and the fold would carry it forever.
@@ -813,9 +820,10 @@ def test_deleting_the_spend_ROW_does_not_restore_the_authority(tmp_path):
 
     ledger._conn.execute("DELETE FROM spent_authorizations WHERE key = ?", (key,))
     ledger._conn.commit()
-    assert ledger._conn.execute(
+    remaining = ledger._conn.execute(
         "SELECT count(*) AS n FROM spent_authorizations"
-    ).fetchone()["n"] == 0, "precondition: the row really is gone"
+    ).fetchone()["n"]
+    assert remaining == 0, "precondition: the row really is gone"
 
     with pytest.raises(ExecutionNotAuthorized) as refused:
         one_action(ctl, a)
@@ -1209,14 +1217,19 @@ def test_the_legitimate_release_and_re_claim_sequence_still_folds(tmp_path):
 
     ledger = anchored(tmp_path, "sequence")
     key = "f" * 64
-    assert ledger.claim_authorization(
+    # Calls outside the asserts, for the reason given in
+    # ``test_the_claim_is_what_makes_it_atomic...``: an assert is not a place
+    # to perform an effect the rest of the test depends on.
+    claimed = ledger.claim_authorization(
         key, attempt_id="a1", idempotency_key=None, claimed_at=_NOW
     )
+    assert claimed
     ledger.release_authorization(key, released_at=_NOW, reason="no sandbox")
     assert ledger.authorization_spend_state(key).status == RELEASED
-    assert ledger.claim_authorization(
+    re_claimed = ledger.claim_authorization(
         key, attempt_id="a1", idempotency_key=None, claimed_at=_NOW
-    ), "a released occurrence must be claimable again, or a refusal bricks it"
+    )
+    assert re_claimed, "a released occurrence must be claimable again, or a refusal bricks it"
     ledger.complete_authorization(key, execution_id=1, completed_at=_NOW)
     assert ledger.authorization_spend_state(key).status == COMPLETED
     assert ledger.verify_chain().ok
@@ -1416,9 +1429,10 @@ def test_resetting_the_row_and_RE_CLAIMING_does_not_reopen_the_release(tmp_path)
     # The re-claim still WINS the row — that is the mutex doing its one job on
     # an empty table, and it is not the authority. What it can no longer do is
     # make the chain agree.
-    assert ledger.claim_authorization(
+    re_claim = ledger.claim_authorization(
         key, attempt_id=fx.ATTEMPT, idempotency_key=None, claimed_at=_NOW
-    ) is True
+    )
+    assert re_claim is True
     with pytest.raises(SpendRecordMalformed):
         ledger.authorization_spend_state(key)
 
