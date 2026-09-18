@@ -2639,6 +2639,17 @@ first measured. **Running total 39: 28 review replies, 8 bodies, 3 comments**,
 recounted from the bounded table (25 review replies, 3 bodies, 1 comment) plus
 carriers 30 to 39, not incremented.
 
+**CARRIER 40, opening #128 (`6b95f4e`'s pull request). 15 of 15.** Full body
+again, appended to identically, rewritten through `update_pull_request`. The
+two-check split recorded at carrier 39 reproduced exactly: `pr-text` red on the
+frozen body then green on the edit, the three `build` jobs red on their own
+frozen copy until this push. A second observation of a measured behaviour, so
+the split is a property of the workflow rather than one run's accident.
+**Running total 40: 28 review replies, 9 bodies, 3 comments**, recounted from
+the bounded table (25 review replies, 3 bodies, 1 comment) plus carriers 30 to
+40, not incremented. The three review replies posted on #127 while fixing its
+findings are carriers 41 to 43 by the same rule, recorded at the next push.
+
 **THE COUNT IS ACCURATE AS OF THIS COMMIT AND CANNOT BE ACCURATE AFTER IT, which
 is a property of the count and not an oversight.** Reporting this commit's own
 CI means posting a comment, and that comment will carry the footer -- so
@@ -5069,3 +5080,18 @@ where the output should be.
 it reddens. Finding 1's row is the only one in this entry that mutates a guard
 which did not previously exist — the others re-introduce something the sprint
 had already closed.
+
+**THE SEQUENCE, RECORDED BECAUSE IT DECIDED WHERE THE FIX LANDED.** #127 was
+merged at `3e0adf8` while these three fixes were still local, so for the
+interval between that merge and #128 landing, `main` carried finding 1 — a
+reproducible way to undo G24 and execute a spent authorization a second time
+with the chain still verifying. A merged pull request is finished, so the fixes
+are a NEW pull request off `3e0adf8` rather than more commits on the merged
+branch; the repository's own pre-push hook refused the resurrection when the
+attempt was made, which is that guard (`docs/OPEN-GAPS.md` Block 1.2) doing
+exactly its job on a real occasion rather than in a test.
+
+**AND IT IS THE CASE FOR REVIEWING THE HEAD THAT MERGES.** The automated review
+that found all three landed on `afa32de`, #127's FIRST head. The head actually
+merged was `fd5cee2`. Nothing reviewed the merged head, and the three findings
+were against code that was already in it.
