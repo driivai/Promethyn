@@ -12,6 +12,7 @@ from __future__ import annotations
 import dataclasses
 from dataclasses import dataclass, field
 import hashlib
+import threading
 from typing import TYPE_CHECKING, Any, Generic, Mapping, Protocol, TypeVar
 
 if TYPE_CHECKING:
@@ -244,6 +245,10 @@ class AuthorizedExecution(Generic[ActionT]):
 #: has since been done with it.
 _CONSUMED = "__consumed_by_an_executor__"
 
+#: Serialises the check-and-set in :func:`consume_authorization`. See the
+#: reasoning there for why it is one module lock and not one per object.
+_CONSUME_LOCK = threading.Lock()
+
 
 def consume_authorization(authorization: AuthorizedExecution[Any]) -> None:
     """Mark a minted authorization as USED, refusing a second use.
@@ -271,14 +276,31 @@ def consume_authorization(authorization: AuthorizedExecution[Any]) -> None:
     one with the same object twice.
     """
 
-    if getattr(authorization, _CONSUMED, False):
-        raise ExecutionNotAuthorized(
-            "this authorization has already been acted on by an executor: an "
-            "authorization is spent when it is used, and a retained decision "
-            "is not a licence to run it again",
-            reason="authorization_already_spent",
-        )
-    object.__setattr__(authorization, _CONSUMED, True)
+    # UNDER A LOCK, because the check and the set are two operations and an
+    # at-most-once guarantee made of two operations is not one. Review of #127
+    # named this: two threads handed the SAME retained decision can both read
+    # the attribute as absent before either writes it, and both proceed —
+    # which is the very duplication this function exists to prevent, moved
+    # from across processes to within one.
+    #
+    # A MODULE LOCK, not one per authorization. The critical section is a
+    # getattr and a setattr; a per-object lock would have to be created
+    # somewhere, and the place to create it has the same race. Contention is
+    # a few instructions on a path that is already about to run a sandbox.
+    #
+    # This is the in-process counterpart of ``claim_authorization``'s single
+    # INSERT against a PRIMARY KEY. Both doors now close atomically; leaving
+    # one of them as a read-then-write while the other was atomic is the
+    # asymmetry this sprint closed one level up.
+    with _CONSUME_LOCK:
+        if getattr(authorization, _CONSUMED, False):
+            raise ExecutionNotAuthorized(
+                "this authorization has already been acted on by an executor: an "
+                "authorization is spent when it is used, and a retained decision "
+                "is not a licence to run it again",
+                reason="authorization_already_spent",
+            )
+        object.__setattr__(authorization, _CONSUMED, True)
 
 
 def action_class_of(action: ExecutableAction) -> str:

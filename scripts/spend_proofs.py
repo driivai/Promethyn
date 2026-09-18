@@ -228,6 +228,71 @@ MUTATIONS: tuple[tuple[str, tuple[tuple[str, str, str], ...], str], ...] = (
         ),
         "test_the_window_boundary_is_pinned_on_both_sides[no-claim-time-at-all]",
     ),
+    # -- the three findings from the review of #127 -------------------------
+    # 12. THE RELEASE'S ORDERING CHECK, DELETED — and this is the one that was
+    #     REALLY MISSING until review found it, not a mutation of a guard that
+    #     was already there. A release appended after a completion un-spends
+    #     the occurrence, the chain still verifies, and the executor runs
+    #     again.
+    (
+        "release-ordering-check-deleted",
+        (
+            (
+                SPEND,
+                "            if status != SPENT:\n"
+                "                raise SpendRecordMalformed(\n"
+                "                    f\"a chained {RELEASE_EVENT!r} entry under {subject!r} \"\n",
+                "            if False:\n"
+                "                raise SpendRecordMalformed(\n"
+                "                    f\"a chained {RELEASE_EVENT!r} entry under {subject!r} \"\n",
+            ),
+        ),
+        "test_a_release_cannot_UN_SPEND_a_completed_occurrence",
+    ),
+    # 13. THE EXECUTOR WALL'S CHECK-AND-SET, MADE NON-ATOMIC AGAIN. The lock
+    #     replaced by a no-op context manager, so the two operations can
+    #     interleave exactly as they did before.
+    #
+    #     CAUGHT STRUCTURALLY, NOT BEHAVIOURALLY, and that is measured rather
+    #     than preferred. A thread test for this mutation ran GREEN, so the
+    #     field was probed directly on unmutated-but-unlocked code: 32 threads
+    #     from a barrier raced 0 of 400 trials at CPython's default 5ms switch
+    #     interval and 9 of 400 at 1e-7 — about 1% per trial at every thread
+    #     count tried. The race is real; a behavioural proof of it would miss
+    #     its own guard's deletion ~99% of the time, which reads as a proof and
+    #     is not one. The named test asserts the read and the write are inside
+    #     the lock, derived from the AST, which this mutation reddens with
+    #     certainty.
+    (
+        "consume-check-and-set-not-atomic",
+        (
+            (
+                POLICY,
+                "    with _CONSUME_LOCK:\n",
+                "    with contextlib.nullcontext():\n",
+            ),
+            (
+                POLICY,
+                "import threading\n",
+                "import contextlib\nimport threading\n",
+            ),
+        ),
+        "test_the_check_and_set_in_consume_authorization_is_INSIDE_the_lock",
+    ),
+    # 14. THE UNRECORDED STDOUT, SILENTLY DEFAULTED. "Never recorded" and
+    #     "printed nothing" collapse into the same bytes at the one point a
+    #     caller reads them — doctrine #1.
+    (
+        "unrecorded-stdout-defaulted-to-empty",
+        (
+            (
+                CONTROLLER,
+                "                stdout=_STDOUT_NOT_RECORDED,\n",
+                '                stdout="",\n',
+            ),
+        ),
+        "test_a_returned_prior_result_NAMES_the_stdout_it_cannot_have",
+    ),
 )
 
 

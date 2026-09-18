@@ -5000,3 +5000,72 @@ touched `audit_chain` — doctrine #8 exactly. Fixed by reading through a privat
 **Six new refusal reasons** (`EXECUTION_REFUSAL_REASONS`, 24 → 30), each with a
 different remedy, and per the G44 rule every runner that pins refusals on those
 labels was re-run at the moment they were added.
+
+### What review of #127 found in this sprint's OWN code, and what each cost
+
+Three findings on `afa32de`, all in code written for G24, and all the same
+shape the entry above is about: a guarantee that holds against the attack it
+was designed for and not against its mirror image.
+
+**1. A RELEASE COULD UN-SPEND A COMPLETED OCCURRENCE (the serious one).**
+Reproduced on an ordinary anchored ledger: call the public
+`release_authorization` for an already `COMPLETED` key, and it deletes the
+mutex row, appends a WELL-FORMED release, and the fold reads `released`;
+`retry_verdict` then returns `may_execute` and **the executor runs a second
+time, with `verify_chain().ok` True throughout**. G24 undone by an append that
+looks legitimate.
+
+The cause is an asymmetry in the fold I wrote: the outcome event carried an
+ordering check (`if status != SPENT: raise`) from the start and the release
+did not. The module docstring reasoned only about a release being **deleted**
+— "can only make the fold read MORE spent, which is the fail-closed
+direction" — which is true and was not the whole story. **A release ADDED
+where none belongs moves the fold the other way, and the permissive direction
+is the one an attacker picks.** Fixed symmetrically; the docstring's reasoning
+is corrected in place rather than left to read as complete.
+
+**2. THE EXECUTOR WALL'S CHECK-AND-SET WAS NOT ATOMIC.** `consume_authorization`
+read the flag and then set it — two operations — so two threads handed the
+same retained decision could both read it absent and both proceed. Now under a
+module lock, the in-process counterpart of `claim_authorization`'s single
+`INSERT` against a `PRIMARY KEY`.
+
+**AND THE PROOF IS STRUCTURAL, NOT BEHAVIOURAL, WHICH THE MUTATION RUNNER
+ESTABLISHED BEFORE I CLAIMED OTHERWISE.** Replacing the lock with a no-op
+context manager left a thread test GREEN. Green means untested until a direct
+probe says otherwise, so the field was probed on unmutated-but-unlocked code,
+32 threads released from a barrier:
+
+| switch interval | trials | raced |
+|---|---|---|
+| CPython default, 5ms | 400 | **0** |
+| forced to 1e-7 | 400 | **9** (worst case 2 grants) |
+
+Per-trial catch rate stayed near 1% at 8, 16, 32 and 64 threads. So the race is
+**real** — that is what the second row measures — and a behavioural test for it
+would miss its own guard's deletion about 99% of the time, which reads as a
+proof and is not one. What is pinned instead is that the read and the write are
+both inside the lock, derived from the AST. **The named limit: that proves the
+code is shaped so the interpreter provides atomicity, not that it is atomic.**
+The lock still matters beyond CPython — a free-threaded build has no GIL to
+mask the window at all.
+
+**3. A RETURNED PRIOR RESULT PRESENTED AN UNRECORDED `stdout` AS `""`.**
+Measured: `executions` has no `stdout` column, so a retry cannot be handed the
+program's output, and the first reconstruction left the field at its default.
+`""` is exactly what a program that printed nothing produces, so "never
+recorded" and "printed nothing" became the same bytes at the one point a caller
+reads them — doctrine #1, in code written to serve a retry.
+
+**The column was NOT added**, and that is a decision rather than an omission:
+PROD-FIX-2 removed a raw model response from `Evidence.detail` because an
+endpoint reflecting a header put a bearer token into the ledger, and candidate
+stdout is the same class of unbounded, attacker-influenced text. The limit is
+named in the field a caller reads, and a test derives the column set from the
+table so that adding `stdout` later reddens rather than leaving a placeholder
+where the output should be.
+
+**Three more mutation rows** (14 first-order, 28 runs), each naming the proof
+it reddens. Finding 1's row is the only one in this entry that mutates a guard
+which did not previously exist — the others re-introduce something the sprint
+had already closed.

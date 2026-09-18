@@ -54,6 +54,17 @@ the fold of both, and nothing is ever rewritten. Deleting a release entry can
 only make the fold read MORE spent, which is the fail-closed direction; that
 is why the retraction is expressed this way round.
 
+WHICH LEFT THE OTHER DIRECTION, and review of #127 found it. The paragraph
+above reasons about a release being DELETED and says nothing about one being
+ADDED — and an added release is the permissive direction, which is the one an
+attacker picks. Measured before the fix: calling the public
+``release_authorization`` for an already COMPLETED key deleted the mutex row,
+appended a well-formed release, and the fold read RELEASED; the executor then
+ran a SECOND time with ``verify_chain().ok`` True throughout. The fold now
+refuses a release that does not follow an open spend, symmetrically with the
+outcome, which had that check from the start. The asymmetry was the defect: an
+ordering rule applied to one event and not its sibling.
+
 RETRY IS DECLARED, NOT INFERRED. Unbounded replay is not a retry story, and a
 network failure mid-execute must not become a stuck state with no safe
 recovery. A caller that wants to be able to retry supplies an
@@ -357,6 +368,31 @@ def spend_state(events: list[dict], *, key: str) -> SpendState:
             status = COMPLETED
             execution_id = payload.get("execution_id")
         else:
+            # ONLY AN OPEN SPEND MAY BE RELEASED, for exactly the reason an
+            # outcome may only follow one — and this branch did NOT check it
+            # until review of #127 measured what that cost.
+            #
+            # REPRODUCED before the fix, on an ordinary anchored ledger: call
+            # the public ``release_authorization`` for an already COMPLETED
+            # key, and the row is deleted, a well-formed release is appended,
+            # the fold reads RELEASED, ``retry_verdict`` returns MAY_EXECUTE
+            # and the executor runs a SECOND time — with ``verify_chain().ok``
+            # True throughout, because nothing was rewritten. An append that
+            # looks legitimate resurrected a spent authorization.
+            #
+            # The module docstring reasoned only about a release being
+            # DELETED ("can only make the fold read MORE spent, which is the
+            # fail-closed direction"). That is still true and it was not the
+            # whole story: a release ADDED where none belongs moves the fold
+            # the other way, and the permissive direction is the one an
+            # attacker picks. Refused here, symmetrically with the outcome.
+            if status != SPENT:
+                raise SpendRecordMalformed(
+                    f"a chained {RELEASE_EVENT!r} entry under {subject!r} "
+                    f"follows state {status!r}, not an open spend; a release "
+                    "retracts a claim that is still open and cannot un-spend a "
+                    "completed occurrence"
+                )
             status = RELEASED
             idempotency_key = None
             claimed_at = None

@@ -583,6 +583,18 @@ EXPECTED_PROTECTED_FILES = 23
 #:   row, which decides the race and nothing else. See ``docs/OPEN-GAPS.md``
 #:   G55 for the measurement, the residuals and what the mutation runner found.
 #:
+#:   RE-SANCTIONED IN THE SAME SPRINT, after review of #127 found that a
+#:   returned prior result left ``stdout`` at its default. ``executions`` has
+#:   no ``stdout`` column — measured — so a retry cannot be handed the
+#:   program's output, and ``""`` is exactly what a program that printed
+#:   nothing produces: "never recorded" and "printed nothing" became the same
+#:   bytes at the point a caller reads them. The column is NOT added, because
+#:   PROD-FIX-2 removed a raw model response from a persisted record for the
+#:   same class of unbounded, attacker-influenced text; the limit is named in
+#:   the field instead. ``policy/execution.py`` moved with it, putting the
+#:   executor wall's check-and-set under a lock — see G55's residuals for what
+#:   that does and does not prove.
+#:
 #: Those sprints are why these bytes are what they are. They do NOT license the
 #: next edit to the same files: updating a digest below is a fresh decision, and
 #: the reason for it belongs beside it.
@@ -604,7 +616,7 @@ DIGESTS: dict[str, str] = {
     "src/prometheus_protocol/core/models.py":
         "96fe20410439abdb87fd9a34becdffab032fd106a5fa70f80271527a79df5910",
     "src/prometheus_protocol/execution/controller.py":
-        "106540abe7732f15999106ff2b863cb13aa1865186140fa8e25f1256f7ad3ce6",
+        "906c5d283dc7964fc20454d6da95ea0011ffc3afb3252278d8cca04c0063d701",
     "src/prometheus_protocol/execution/executor.py":
         "406e74033bc63d0c1739d109cab02ee31a553e5194d2e529526787dbe9dc944d",
     "src/prometheus_protocol/execution/pending.py":
