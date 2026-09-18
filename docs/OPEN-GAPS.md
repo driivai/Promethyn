@@ -2671,6 +2671,12 @@ three `build` jobs red on their own frozen copy until a push. Three
 observations of the same behaviour across three pull requests, so it is a
 property of the workflow and not an accident of one run.
 
+**CARRIERS 47 AND 48.** The reply on #129's finding (47, a review reply, not
+editable) and the opening of #130 (48, a body, rewritten). **17 of 17
+openings.** **Running total 48: 34 review replies, 11 bodies, 3 comments**,
+recounted from the bounded table (25 review replies, 3 bodies, 1 comment) plus
+carriers 30 to 48, not incremented. The two-check split held a fourth time.
+
 **THE COUNT IS ACCURATE AS OF THIS COMMIT AND CANNOT BE ACCURATE AFTER IT, which
 is a property of the count and not an oversight.** Reporting this commit's own
 CI means posting a comment, and that comment will carry the footer -- so
