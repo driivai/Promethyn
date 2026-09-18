@@ -1064,8 +1064,15 @@ def test_the_shape_rule_is_not_universally_true():
         verdicts.append(_measurement_form("started_ok", call.keywords[0].value))
 
     assert verdicts == [expected for _, expected in planted], verdicts
-    # The sweep itself must still find the population it constrains.
-    assert len(_harness_flag_arguments()) == 18
+    # The sweep itself must still find a population to constrain (doctrine #8).
+    # NOT the exact count: pinning 18 here made this control redden whenever a
+    # construction site changed, which is the SUBJECT moving, not the
+    # classifier failing -- a control coupled to the thing it controls for. The
+    # exact census is the rule's own assertion above, where it belongs.
+    assert _harness_flag_arguments(), (
+        "the sweep finds no harness-fact argument at all, so the rule above "
+        "holds vacuously and this control proves nothing about it"
+    )
 
 
 def test_the_replay_carries_the_STORED_harness_facts_not_a_default():

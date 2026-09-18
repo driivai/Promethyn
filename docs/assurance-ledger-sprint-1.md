@@ -396,3 +396,111 @@ The identifier is not a naming convention; it is the thing that decides whether
 * §2.1's classifier reads `validate_build`'s branch chain. A row whose work
   moves out of that chain leaves the classification silently stale; nothing
   derives that it has moved.
+
+---
+
+# Addendum, 2026-09-18 — the review round, and three instruments that could not fail as documented
+
+The automated review of this branch's first head raised three findings. All
+three are correct, all three are the same shape, and the shape is this sprint's
+own subject turned back on it: **a guard whose passing direction is wider than
+the sentence written beside it.** They are recorded here rather than only fixed,
+because the pattern is more useful than the three instances.
+
+## The common shape: a comparand that is not independent of its subject
+
+| # | the instrument | what it compared | why it could not go red |
+|---|---|---|---|
+| 1 | `_UNREAD_AT_SPRINT_0` | the unread set against a snapshot | the snapshot was RECOMPUTED from the same checkout by the same expression |
+| 2 | the harness-flag sweep | each argument against the literal `True` | a DENYLIST OF ONE SHAPE over an open set of expressions |
+| 3 | the register-coverage pin | the mapping against `{1: 5, 2: 16, 3: 1}` | an AGGREGATE stands in for the mapping, and compensating moves cancel |
+
+One and three are the same error: the thing compared against was derived from
+the thing being compared, so it agreed with it whatever it said. Two is the
+mirror image — the comparand was independent, but the *rule* enumerated the
+wrong side of an open set. **A denylist over expressions cannot be complete**,
+and the three evasions are concrete: `started_ok=1` is a different constant with
+the same truth value, `started_ok=decision.approved` is an unrelated boolean,
+and `started_ok=result.candidate_started` is the OTHER harness fact read off the
+right object. Each asserts something nothing measured; each passed.
+
+Doctrine #11 is usually read as a rule about reports — a count comes from the
+artifact, never a filtered view. Finding 3 is the same rule **inside an
+instrument**: a histogram is a filtered view of a mapping, and asserting on it
+pins the filter rather than the population.
+
+## What changed
+
+* The forty-one filenames are written out, and the assertion is set equality.
+* The harness-flag rule is an **allowlist of the four forms this tree uses** —
+  the fail-closed constant, the adapter result attribute, the same-named
+  parameter pass-through, and the stored ledger column. Every one carries the
+  flag's own name, so a cross-wired read is refused too. The census is pinned at
+  4 / 8 / 4 / 2, because a shrinking population is how the rule goes quiet
+  without going red.
+* The `field -> registers` mapping is pinned per property, with the distribution
+  kept beside it so the number §1.4 quotes is still pinned by name.
+* The **class** gets its own derivation:
+  `test_a_pinned_snapshot_is_never_recomputed_from_the_tree_it_checks` requires
+  every `*_AT_SPRINT_0` binding to reference none of the live sources its
+  subject is derived from. Fixing two instances is not closing the class.
+* The compensating move is a **passing test** rather than a paragraph
+  (doctrine #5): `test_the_histogram_cannot_stand_in_for_the_register_mapping`
+  constructs the single-property trade and the two-property cancellation and
+  shows the distribution does not move by one count in either.
+
+## Executed proof: each finding reproduced, then caught
+
+Three MutationWorktrees, one per finding, each measuring its own control. The
+third leg restores the guard verbatim from the parent commit `52f98fa`, so the
+"before" is the real pre-fix code and not a hand-written approximation.
+
+```
+FINDING 1 - unread set: pinned snapshot vs recomputed comparand
+  CONTROL    expect GREEN observed GREEN  [ok]  1 passed
+  CATCHES    expect RED   observed RED    [ok]  1 failed
+  REPRODUCE  expect GREEN observed GREEN  [ok]  1 passed
+FINDING 2 - harness flags: allowlist of forms vs denylist of `True`
+  CONTROL    expect GREEN observed GREEN  [ok]  1 passed
+  CATCHES    expect RED   observed RED    [ok]  1 failed
+  REPRODUCE  expect GREEN observed GREEN  [ok]  1 passed
+FINDING 3 - register coverage: per-property mapping vs histogram
+  CONTROL    expect GREEN observed GREEN  [ok]  1 passed
+  occurrences of the token in docs/OPEN-GAPS.md: 6
+  CATCHES    expect RED   observed RED    [ok]  1 failed
+  REPRODUCE  expect GREEN observed GREEN  [ok]  1 passed
+
+9 of 9 legs matched their expectation
+```
+
+The mutations: finding 1 swaps one filename in `CONSULTED_NOT_INVENTORIED`, so
+one document leaves the unread set and another enters it and **the count holds
+at 41** while the membership changes; finding 2 plants `started_ok=1` at a real
+construction site; finding 3 moves `verifier_cpu_seconds` out of OPEN-GAPS and
+into the threat model, so it is a one-register property before and after and the
+distribution does not move.
+
+## Two errors inside the proof harness, both in the flattering direction
+
+Reported because they are the same class as the findings, committed while
+checking for the findings.
+
+**The harness read an empty run as a pass.** The first version classified a leg
+with no summary line as GREEN. The selector for finding 1 named a test that does
+not exist, so nothing ran, and the script reported **three matching legs** for a
+finding it had not tested at all. That is doctrine #8 — an empty instrument
+reads as a pass — inside the harness written to check instruments for exactly
+that. A missing summary is now a distinct `NO-RUN` verdict that matches no
+expectation.
+
+**A mutation that did not do what it said.** `MutationWorktree.apply` replaces
+the FIRST occurrence; `verifier_cpu_seconds` is on **six** OPEN-GAPS lines. The
+first draft called it once, so the property *gained* a register instead of
+trading one, its tuple went from length 1 to 2, and the histogram moved — the
+leg went red, and it went red for the wrong reason. It would have been reported
+as proof that the mapping pin works, when what had actually been proved was that
+the old histogram pin works. The row now counts the occurrences, applies once
+per occurrence, and asserts the token is absent before running.
+
+Both were caught by the controls rather than by reading, which is the argument
+for the controls.

@@ -2719,6 +2719,53 @@ reports `no commit carries a banned token in its message or identities`. The
 attribution it carried is not lost — it is in this entry, which is a more
 durable record than a trailer the guard refuses.
 
+**AND A REPAIRED BODY CANNOT BE CLEARED BY A RE-RUN. The two-check split has
+been recorded four times in this entry as a behaviour; this is its MECHANISM,
+and it was measured rather than inferred.** `.github/workflows/ci.yml:129` hands
+the text to the job as `PR_BODY: ${{ github.event.pull_request.body }}`. Re-running
+a failed job REPLAYS THE ORIGINAL EVENT PAYLOAD rather than re-reading the pull
+request, so a body repaired after the event is not in the copy the re-run sees.
+
+Observed on #131, run `35350855570` attempt 2, head `52f98fa`, started
+13:35:17Z — after the body had been repaired and after `pr-text` had already
+gone green against the live text at 13:33:43Z:
+
+```
+message hygiene passed: 3 commit(s) in 1506b61..52f98fa, 17 terms, no banned
+  tokens in any message or identity
+message hygiene passed: pr-title.txt (83 chars), no banned tokens
+message hygiene FAILED: pr-body.txt contains banned token(s)
+```
+
+The commit-range check in the SAME step passed, so the re-authoring recorded
+above had taken and the body was the only thing left red; the job's own
+environment dump still held the pre-edit body verbatim, footer included. Two
+checks over one artifact, two minutes apart, disagreeing because they are
+reading two different versions of it.
+
+The trigger half of this was already known and is written down at
+`.github/workflows/pr-text-hygiene.yml:3-13`: `ci.yml`'s bare `pull_request:`
+expands to opened, synchronize and reopened and NOT `edited`, which is why that
+workflow exists. What is new here is that the OTHER escape — re-running the
+failed job — does not work either, so the set of things that can clear a
+repaired body in `ci.yml` has exactly one member: a push.
+
+WHY THIS IS RECORDED AND NOT FIXED. The remedies a red-on-stale-text job
+invites are the two this repository forbids — an empty commit, and a close and
+reopen — and the reason they are forbidden does not weaken because the red is
+spurious. The remedy that remains is a push carrying real content, which is
+what this commit is. Adding `edited` to `ci.yml` would re-run the whole
+three-interpreter matrix on every description edit, and
+`pr-text-hygiene.yml:22-28` already weighs that trade and declines it; nothing
+measured here changes the inputs to it. The checker is not at fault in either
+direction: it refused the text it was handed, and the text it was handed was
+stale.
+
+**CARRIER 50 AND WHAT IT IS.** Invoking a review on this pull request's final
+head is a comment, and a comment is a carrier. It is not posted as of this
+commit, so by this entry's own rule it is counted at the next push and the
+running total below is unchanged.
+
 **THE COUNT IS ACCURATE AS OF THIS COMMIT AND CANNOT BE ACCURATE AFTER IT, which
 is a property of the count and not an oversight.** Reporting this commit's own
 CI means posting a comment, and that comment will carry the footer -- so

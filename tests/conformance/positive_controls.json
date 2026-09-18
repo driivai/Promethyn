@@ -679,7 +679,15 @@
       "negatives": [
         "test_no_site_may_claim_a_harness_fact_it_did_not_MEASURE"
       ],
-      "property": "no site claims a harness fact with a literal True, established by an AST sweep that really can tell a literal from a measured value"
+      "property": "no site claims a harness fact in a form nothing measured, established by an AST sweep whose allowlist of four measurement forms really can refuse the evasions a literal-True denylist let through -- a different truthy constant, an unrelated boolean, and the other harness fact read off the right object under the wrong name (#131 review)"
+    },
+    {
+      "module": "tests/conformance/test_assurance_ledger_limits.py",
+      "positive": "test_the_snapshot_shape_rule_is_not_universally_true",
+      "negatives": [
+        "test_a_pinned_snapshot_is_never_recomputed_from_the_tree_it_checks"
+      ],
+      "property": "every *_AT_SPRINT_0 snapshot is a measurement written down rather than an expression recomputed from the tree it checks, established by a sweep that really can recognise the recomputed form -- the pre-fix _UNREAD_AT_SPRINT_0, planted, must come back naming the live sources it was derived from (#131 review, finding 1)"
     }
   ]
 }

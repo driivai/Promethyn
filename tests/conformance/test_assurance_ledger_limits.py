@@ -526,3 +526,123 @@ def test_the_sprint_document_still_states_the_limits_these_tests_pin():
         "no identity for a claim in this repository",
     ):
         assert marker in text, f"docs/assurance-ledger-sprint-0.md no longer states: {marker}"
+
+
+# ===========================================================================
+# THE RULE THE #131 REVIEW'S FIRST AND THIRD FINDINGS ARE INSTANCES OF.
+#
+# Both are the same defect in two places: a comparand that is not independent
+# of the thing it is compared against. One was RECOMPUTED from the tree it
+# checks; the other was an AGGREGATE of the mapping it stood in for. Neither
+# could go red for the change its sentence claimed to pin.
+#
+# Fixing the two instances is not the same as closing the class, so the class
+# gets a derivation of its own and the aggregate gets its counter-example.
+# ===========================================================================
+
+
+def test_a_pinned_snapshot_is_never_recomputed_from_the_tree_it_checks():
+    """Derived over the SHAPE of the assignment, not over a list of names.
+
+    ``_UNREAD_AT_SPRINT_0`` was built by the same expression, over the same
+    checkout, as the value the test compared against it. It therefore agreed
+    with that checkout whatever the checkout said: a rename holding the totals
+    at 49 and 41 passed, and the "newly unread" / "no longer unread"
+    diagnostics were empty even under a real count change.
+
+    A snapshot has to be a MEASUREMENT WRITTEN DOWN. This requires every
+    ``*_AT_SPRINT_0`` binding in this module to be a literal -- to reference
+    none of the live sources its subject is derived from -- so the next
+    snapshot cannot quietly become a restatement of the thing it pins.
+    """
+
+    live_sources = {
+        "_markdown_under",
+        "CLAIM_SOURCES_READ",
+        "CONSULTED_NOT_INVENTORIED",
+        "_registers_naming",
+        "dataclasses",
+        "Config",
+        "REPO",
+        "read_text",
+    }
+
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    snapshots = {}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        name = getattr(node.targets[0], "id", "")
+        if not name.endswith("_AT_SPRINT_0"):
+            continue
+        referenced = {n.id for n in ast.walk(node.value) if isinstance(n, ast.Name)}
+        referenced |= {n.attr for n in ast.walk(node.value) if isinstance(n, ast.Attribute)}
+        snapshots[name] = sorted(referenced & live_sources)
+
+    # Doctrine #8: an empty sweep would hold this rule vacuously for every
+    # snapshot at once, which is the failure mode the rule itself is about.
+    assert sorted(snapshots) == [
+        "_REGISTER_COVERAGE_AT_SPRINT_0",
+        "_UNREAD_AT_SPRINT_0",
+    ], f"the snapshot population changed: {sorted(snapshots)}"
+
+    recomputed = {name: refs for name, refs in snapshots.items() if refs}
+    assert recomputed == {}, (
+        f"snapshot(s) recomputed from their own subject: {recomputed}. A "
+        "comparand derived from the tree agrees with the tree whatever it "
+        "says. Write the measured value out."
+    )
+
+
+def test_the_snapshot_shape_rule_is_not_universally_true():
+    """Doctrine #8: the positive control for the rule above.
+
+    The pre-fix form of ``_UNREAD_AT_SPRINT_0``, planted, must be recognised
+    as recomputed -- otherwise the rule passes for a reason unrelated to the
+    assignments it is reading.
+    """
+
+    planted = ast.parse(
+        "_UNREAD_AT_SPRINT_0 = frozenset(\n"
+        '    _markdown_under("docs")\n'
+        '    - {n for n in CLAIM_SOURCES_READ if n.startswith("docs/")}\n'
+        ")\n"
+        '_OTHER_AT_SPRINT_0 = frozenset({"docs/sandbox.md"})\n'
+    )
+    live_sources = {"_markdown_under", "CLAIM_SOURCES_READ"}
+    verdicts = []
+    for node in planted.body:
+        referenced = {n.id for n in ast.walk(node.value) if isinstance(n, ast.Name)}
+        verdicts.append(sorted(referenced & live_sources))
+
+    assert verdicts == [["CLAIM_SOURCES_READ", "_markdown_under"], []], verdicts
+
+
+def test_the_histogram_cannot_stand_in_for_the_register_mapping():
+    """Doctrine #5: the gap the third finding named, as a passing test.
+
+    A COMPENSATING MOVE, constructed: ``verifier_cpu_seconds`` trades
+    OPEN-GAPS for threat-model. It is a one-register property before and
+    after, so the distribution does not move by a single count while the
+    mapping is materially different. That is the proof that the histogram
+    cannot be the thing that holds, and therefore that the per-property
+    assertion above is load-bearing rather than decorative.
+    """
+
+    def histogram(mapping: dict[str, tuple[str, ...]]) -> dict[int, int]:
+        return {n: sum(1 for r in mapping.values() if len(r) == n) for n in (1, 2, 3)}
+
+    moved = dict(_REGISTER_COVERAGE_AT_SPRINT_0)
+    assert moved["verifier_cpu_seconds"] == ("OPEN-GAPS",)
+    moved["verifier_cpu_seconds"] = ("threat-model",)
+
+    assert moved != _REGISTER_COVERAGE_AT_SPRINT_0
+    assert histogram(moved) == histogram(_REGISTER_COVERAGE_AT_SPRINT_0) == {1: 5, 2: 16, 3: 1}
+
+    # And the same cancellation between two properties, which no single-property
+    # rule would catch either: one gains the register the other loses.
+    traded = dict(_REGISTER_COVERAGE_AT_SPRINT_0)
+    traded["verifier_cpu_seconds"] = ("OPEN-GAPS", "threat-model")
+    traded["verifier_timeout_s"] = ("threat-model",)
+    assert traded != _REGISTER_COVERAGE_AT_SPRINT_0
+    assert histogram(traded) == {1: 5, 2: 16, 3: 1}
