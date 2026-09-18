@@ -2778,10 +2778,70 @@ entry exists under.
 
 **Running total 53: 37 review replies, 12 bodies, 4 comments**, recounted from
 the bounded table (25 review replies, 3 bodies, 1 comment) plus carriers 30 to
-53, not incremented. The two replies answering the SECOND review round are
-carriers 54 and 55 by the same rule, recorded at the next push; #131's body has
-been rewritten several times and a rewrite of an existing body is not a new
-carrier.
+53, not incremented. #131's body has been rewritten several times and a rewrite
+of an existing body is not a new carrier.
+
+**CARRIERS 54 TO 56**, the second review round answered the same way:
+
+| carrier | channel | where |
+|---|---|---|
+| 54, 55 | review replies | the two answers on #131's second review round |
+| 56 | comment | invoking a review on the head that answered it |
+
+**Running total 56: 39 review replies, 12 bodies, 5 comments**, recounted from
+the bounded table plus carriers 30 to 56, not incremented. The THIRD round's two
+replies and its review invocation are carriers 57 to 59 by the same rule,
+recorded at the next push.
+
+**CARRIERS 57 TO 60, AND THE ENTRY'S SUBJECT ARRIVING IN ITS OWN
+ANNOUNCEMENT.** The third review round's two replies and its review invocation
+are carriers 57, 58 and 59. Carrier 60 is the opening body of #132 -- the
+follow-up pull request for the round-three fixes that #131's merge did not carry
+-- and it is the first carrier in this entry that is HALF MINE.
+
+The body was posted with a session link written into it by hand, which is a
+banned token this entry has recorded for five pull requests as something a
+CHANNEL appends. The channel then appended its footer on top, carrying the same
+token twice more. `pr-text` refused the created body exactly as this entry
+predicts, and it was rewritten through the update tool, which appends nothing.
+
+The distinction matters and is the reason this is written down rather than
+cleaned up quietly: every carrier from 1 to 59 is text a channel added AFTER the
+hygiene checker had passed the message, which no author could have prevented.
+Carrier 60 is text an author put in before the checker saw it, in a repository
+whose tracker he had just finished editing on that exact subject. A guard that
+catches both is doing its job; a record that reports only the half it did not
+cause is not.
+
+| carrier | channel | where |
+|---|---|---|
+| 57, 58 | review replies | the two answers on #131's third review round |
+| 59 | comment | invoking a review on the head that answered it |
+| 60 | body | the opening of #132, hand-written token plus appended footer |
+
+**Running total 60: 41 review replies, 13 bodies, 6 comments**, recounted from
+the bounded table (25 review replies, 3 bodies, 1 comment) plus carriers 30 to
+60, not incremented.
+
+**CARRIER 61, AND A FOURTH ROUND.** The comment invoking a review on #132's
+head is carrier 61; the reply answering that round's finding is 62, counted at
+the next push. **Running total 61: 41 review replies, 13 bodies, 7 comments.**
+
+**AND THE RE-RUN MECHANISM APPLIES TO THIS ONE TOO**, which is why the record
+above is being pushed rather than only edited into the body: #132's three
+`build` jobs hold the frozen pre-edit body, and no re-run can reach the repaired
+one. The push that carries this paragraph is the single thing that clears them,
+as measured on #131 and recorded above.
+
+**AND THE RATE IS NOW THE ENTRY'S OWN SUBJECT.** Three review rounds on one
+pull request produced ten carriers in under two hours. Every one is a channel
+appending a vendor footer to text that had already passed the hygiene checker,
+which is what this entry has recorded since #111 — but the earlier carriers
+arrived one pull request at a time. What is new is the MULTIPLIER: a project
+whose merge rule requires a review on the final head, and which answers each
+finding on its own thread, generates carriers in proportion to how carefully it
+reviews. Recorded rather than argued with: the alternative is answering fewer
+findings, and that trade is not one this entry gets to make.
 
 **THE COUNT IS ACCURATE AS OF THIS COMMIT AND CANNOT BE ACCURATE AFTER IT, which
 is a property of the count and not an oversight.** Reporting this commit's own

@@ -223,11 +223,42 @@ class ExecutionResult:
     subject_id: str
     detail: str = ""
     refused: bool = False
-    started_ok: bool = False
-    candidate_started: bool = False
-    sandbox_name: str = ""
-    exit_status: int | None = None
-    stdout: str = ""
+    #: EVERY FIELD FROM HERE ON IS KEYWORD-ONLY, and that is a guard rather than
+    #: a style. ``ExecutionResult`` is an ordinary dataclass, so before this a
+    #: caller could write ``ExecutionResult(False, subject, "", False, True,
+    #: True)`` and claim both harness facts positionally — the flags were the
+    #: fifth and sixth slots. The derived rule in
+    #: ``test_execution_start_signal.py`` reads keyword arguments, so that claim
+    #: was invisible to it and the exact census did not move: the #131 review's
+    #: third round, and it was right.
+    #:
+    #: THE FIRST VERSION OF THIS FIX MARKED ONLY THE TWO FLAGS, AND THAT MADE IT
+    #: WORSE. ``dataclasses`` moves keyword-only fields to the end of the
+    #: signature, so the trailing fields slid FORWARD into the vacated slots:
+    #: the same six-positional call then bound ``sandbox_name=True`` and
+    #: ``exit_status=True`` — a ``bool`` in a ``str`` field and a ``bool`` in an
+    #: ``int | None`` field — while the flags quietly took their defaults. No
+    #: error. Observed::
+    #:
+    #:     sandbox_name = True   type bool  (declared str)
+    #:     exit_status  = True   type bool  (declared int | None)
+    #:
+    #: A false claim had been turned into a CORRUPTED RECORD, and both are
+    #: silent. The #132 review caught it, and the reason it is worth this much
+    #: comment is that the corruption was observed while making the change and
+    #: written up as the fix working: "the fifth and sixth slots now bind to
+    #: sandbox_name and exit_status" is a description of the bug.
+    #:
+    #: Everything after ``refused`` is keyword-only, so the positional form is
+    #: a ``TypeError`` rather than a wrong value. Measured before the change: 0
+    #: of 22 constructions in the tree pass ANY positional argument, so nothing
+    #: depended on either signature. The derived rule reads positional slots
+    #: too, so it does not depend on these lines staying.
+    started_ok: bool = field(default=False, kw_only=True)
+    candidate_started: bool = field(default=False, kw_only=True)
+    sandbox_name: str = field(default="", kw_only=True)
+    exit_status: int | None = field(default=None, kw_only=True)
+    stdout: str = field(default="", kw_only=True)
     #: Whether ``stdout`` is the candidate's captured output at all.
     #:
     #: ``False`` means it was NEVER RECORDED, and the field carries a
@@ -251,4 +282,4 @@ class ExecutionResult:
     #: An unset flag now says "not recorded", so a path that forgets to opt in
     #: under-claims rather than asserting something false. The two capturing
     #: sites opt in explicitly, and a derived test holds them to it.
-    stdout_recorded: bool = False
+    stdout_recorded: bool = field(default=False, kw_only=True)

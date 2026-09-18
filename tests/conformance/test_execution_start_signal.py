@@ -1018,6 +1018,21 @@ def _calls_with_enclosing_function(node, current=None):
         yield from _calls_with_enclosing_function(child, current)
 
 
+def _positional_binding_order() -> list[str]:
+    """The field names ``ExecutionResult``'s POSITIONAL slots bind to, in order.
+
+    Read from the live class rather than hand-listed, so it tracks the class:
+    a keyword-only field is not in a positional slot at all, and a field that
+    stops being keyword-only re-enters one.
+    """
+
+    import dataclasses
+
+    from prometheus_protocol.swarm.models import ExecutionResult
+
+    return [f.name for f in dataclasses.fields(ExecutionResult) if not f.kw_only]
+
+
 def _harness_flag_arguments():
     """Every ``started_ok`` / ``candidate_started`` argument in ``src/``.
 
@@ -1028,10 +1043,21 @@ def _harness_flag_arguments():
     Each row carries the function the argument is written in, because the
     pass-through form is only a measurement if that function's parameter
     defaults fail-closed.
+
+    POSITIONAL ARGUMENTS ARE READ TOO, and until the #131 review's third round
+    they were not. ``ExecutionResult`` is an ordinary dataclass, so
+    ``ExecutionResult(False, subject, "", False, True, True)`` claimed both
+    harness facts in the fifth and sixth slots — and a collector that looked
+    only at ``node.keywords`` saw nothing, left the census unmoved, and stayed
+    green. The class now makes both flags keyword-only, which refuses that
+    shape outright; this reads the slots anyway, so the rule does not depend on
+    that line staying. The binding order comes from the class, so the two
+    cannot disagree.
     """
 
     src = Path(__file__).resolve().parents[2] / "src"
     flags = ("started_ok", "candidate_started")
+    order = _positional_binding_order()
     found = []
     for path in sorted(src.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -1039,15 +1065,76 @@ def _harness_flag_arguments():
             called = getattr(node.func, "id", getattr(node.func, "attr", None))
             if called not in ("ExecutionResult", "_refuse"):
                 continue
-            for keyword in node.keywords:
-                if keyword.arg in flags:
+            arguments = [(keyword.arg, keyword.value) for keyword in node.keywords]
+            # ``_refuse`` declares its flags after a bare ``*``, so no
+            # positional slot can reach them; only the dataclass needs this.
+            if called == "ExecutionResult":
+                arguments += [
+                    (order[index] if index < len(order) else None, value)
+                    for index, value in enumerate(node.args)
+                ]
+            for name, value in arguments:
+                if name in flags:
                     found.append((
-                        f"{path.relative_to(src.parent)}:{node.lineno}:{keyword.arg}",
-                        keyword.arg,
-                        keyword.value,
+                        f"{path.relative_to(src.parent)}:{node.lineno}:{name}",
+                        name,
+                        value,
                         enclosing,
                     ))
     return found
+
+
+def test_the_two_harness_flags_are_KEYWORD_ONLY_on_the_record_class():
+    """The structural half of the third review round's second finding — and the
+    correction the FOURTH round made to it.
+
+    A positional claim is the one shape the derived rule could not see, so the
+    class refuses it. Marking only the two flags keyword-only did NOT refuse
+    it: ``dataclasses`` moves keyword-only fields to the end, so the trailing
+    fields slid forward into the vacated slots and the same call bound
+    ``sandbox_name=True`` and ``exit_status=True`` — a ``bool`` in a ``str``
+    field and a ``bool`` in an ``int | None`` field — with no error raised. A
+    false claim traded for a corrupted record, both silent.
+
+    So the rule is over the WHOLE TAIL: nothing after ``refused`` may be given
+    positionally, and the four slots that remain are the ones whose types a
+    mis-slotted argument could not survive anyway.
+    """
+
+    import dataclasses
+
+    import pytest
+
+    from prometheus_protocol.swarm.models import ExecutionResult
+
+    fields = {f.name: f.kw_only for f in dataclasses.fields(ExecutionResult)}
+    assert fields == {
+        "executed": False,
+        "subject_id": False,
+        "detail": False,
+        "refused": False,
+        "started_ok": True,
+        "candidate_started": True,
+        "sandbox_name": True,
+        "exit_status": True,
+        "stdout": True,
+        "stdout_recorded": True,
+    }, f"the record class's positional surface changed: {fields}"
+
+    # Exact, both directions: the positional surface is these four and no more.
+    assert _positional_binding_order() == ["executed", "subject_id", "detail", "refused"]
+
+    # And the behaviour, not only the metadata. CALLED THROUGH A LOCAL NAME,
+    # which is this repository's own convention for a control of this kind --
+    # `test_evidence_and_judgment_cannot_be_built_positionally` in
+    # `test_open_gaps.py` does the same and says why: G2's positional sweep
+    # must not count a control as a construction site.
+    record = ExecutionResult
+    with pytest.raises(TypeError):
+        record(False, "s", "", False, True, True)
+    # The four that remain still work, and a keyword call is untouched.
+    assert record(True, "s", "d", False).detail == "d"
+    assert record(executed=True, subject_id="s", started_ok=True).started_ok is True
 
 
 def test_no_site_may_claim_a_harness_fact_it_did_not_MEASURE():
