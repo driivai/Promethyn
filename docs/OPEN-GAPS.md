@@ -2650,6 +2650,27 @@ the bounded table (25 review replies, 3 bodies, 1 comment) plus carriers 30 to
 40, not incremented. The three review replies posted on #127 while fixing its
 findings are carriers 41 to 43 by the same rule, recorded at the next push.
 
+**CARRIERS 41 TO 46**, enumerated rather than batched:
+
+| carrier | channel | where |
+|---|---|---|
+| 41, 42, 43 | review replies | the three answers on #127's findings |
+| 44, 45 | review replies | the two answers on #128's findings |
+| 46 | body | the opening of #129 |
+
+**16 of 16 openings** carry the footer, with no exception in either direction.
+The five review replies cannot be edited — that is this entry's fourth-channel
+note — so they stay as posted and are recorded rather than repaired; the body
+was rewritten through `update_pull_request`. **Running total 46: 33 review
+replies, 10 bodies, 3 comments**, recounted from the bounded table (25 review
+replies, 3 bodies, 1 comment) plus carriers 30 to 46, not incremented.
+
+**THE SPLIT HELD A THIRD TIME.** #128's opening reproduced carrier 39's
+measurement again: `pr-text` red on the frozen body then green on the edit, the
+three `build` jobs red on their own frozen copy until a push. Three
+observations of the same behaviour across three pull requests, so it is a
+property of the workflow and not an accident of one run.
+
 **THE COUNT IS ACCURATE AS OF THIS COMMIT AND CANNOT BE ACCURATE AFTER IT, which
 is a property of the count and not an oversight.** Reporting this commit's own
 CI means posting a comment, and that comment will carry the footer -- so
