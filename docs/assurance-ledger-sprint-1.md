@@ -504,3 +504,120 @@ per occurrence, and asserts the token is absent before running.
 
 Both were caught by the controls rather than by reading, which is the argument
 for the controls.
+
+---
+
+# Second review round — both fixes were the same defect, one level up
+
+The review of the fixed head raised two more findings. Both are correct, and
+the result is more useful than either: **the class I declared closed in the
+addendum above was closed with an instrument of that class.**
+
+## What the two findings say
+
+| # | where | the evasion | verdict |
+|---|---|---|---|
+| A | `test_a_pinned_snapshot_is_never_recomputed_from_the_tree_it_checks` | `frozenset(_current_unread())` — the identical derivation behind a helper the rule had never heard of | GREEN |
+| B | the harness-flag allowlist | flip `GitBranchDeleteExecutor._refuse`'s own `started_ok` default back to `True`; every call-site shape and the exact census are unchanged | GREEN |
+
+Both measured before either was fixed, in a `MutationWorktree` — not argued.
+
+**Finding A is the open-set error, committed inside the rule written to close
+the open-set error.** The addendum above says, of the harness flags, that *a
+denylist over an open set of expressions cannot be complete*. The snapshot rule
+one section later asks whether the assignment mentions any of **eight
+hard-coded names** — a denylist over an open set of *names*, which is the same
+sentence with one word changed. A helper is one `def` away, and there is no
+list of names that contains the names nobody has written yet.
+
+**Finding B is the difference between a spelling and a premise.** The
+pass-through `started_ok=started_ok` was called a measurement because the
+identifier matched. It is a measurement only because the parameter it forwards
+*defaults to the fail-closed answer* — and that premise lives in a different
+statement from the claim resting on it, so the rule could go on holding while
+the premise was removed. That is not a hypothetical: flipping the default
+restores a live fail-open on every pre-sandbox refusal in the git executor,
+which is the defect this whole pull request exists to fix, re-entering through
+the guard built to prevent it.
+
+## What changed
+
+* `_non_literal_in` replaces the name list with an **allowlist of node types**:
+  a snapshot is constants and the containers that hold them, all the way down.
+  Every name, attribute, call, comprehension and operator is a way of asking
+  the tree, and the tree is what a snapshot exists to disagree with. Only
+  `frozenset` / `set` / `tuple` / `list` / `dict` may be called, with at most
+  one argument that is itself literal.
+* `_parameter_default_is_false` makes the pass-through's premise a **checked
+  condition**: the name must resolve to a parameter of the enclosing function
+  whose default is literally `False`. A parameter with no default is refused
+  too — the value is then whatever a caller passes, which this function cannot
+  see. The form is renamed from "same-named parameter pass-through" to
+  **"fail-closed parameter pass-through"**, because the old name recorded the
+  spelling and the new one records the reason.
+* Both positive controls now plant the evasions that defeated the previous
+  version alongside the ones it caught: the helper indirection, a set union, a
+  comprehension and a dict splat for A; a fail-open default, a no-default
+  parameter and no enclosing function at all for B.
+* **Row 22** in `scripts/spend_proofs.py` — `pass-through-parameter-default-flipped-fail-open`.
+  Finding B's evasion is a source mutation, so it belongs in the runner rather
+  than in a one-off demonstration. The premise is now proved on every run.
+
+## Executed proof
+
+```
+FINDING A - snapshot rule: literal construction vs eight hard-coded names
+  CONTROL    expect GREEN observed GREEN  [ok]
+  CATCHES    expect RED   observed RED    [ok]
+  REPRODUCE  expect GREEN observed GREEN  [ok]
+FINDING B - pass-through: the parameter's default vs its spelling
+  CONTROL    expect GREEN observed GREEN  [ok]
+  CATCHES    expect RED   observed RED    [ok]
+  REPRODUCE  expect GREEN observed GREEN  [ok]
+
+6 of 6 legs matched their expectation
+```
+
+`REPRODUCE` restores the guard from the reviewed head `a288260`, so the
+"before" is the code the review was written about.
+
+**And a third error in the harness, of the kind it keeps finding.** The first
+run of this script used `MutationWorktree()` with its default
+`include_dirty=False`, so the worktree was a checkout of `HEAD` — the reviewed
+code, without the fixes. It reported both evasions GREEN and it was right to:
+it had tested the old guards. A harness that silently substitutes a different
+subject is the same failure as one that silently tests nothing, and it was
+caught only because the expected verdict was written down before the run.
+
+**And a fourth, found by the mutation runner rather than by the suite.**
+Applying finding B's fix as a block rewrite of one region of
+`test_execution_start_signal.py` **deleted a test** —
+`test_the_replay_carries_the_STORED_harness_facts_not_a_default`, which sat
+inside the replaced range. The module still reported `34 passed`, and a count
+that goes down by one while staying green says nothing to a reader who does not
+already know the number. What caught it was row 21 of `scripts/spend_proofs.py`:
+its mutation stopped reddening **its named proof** and reddened only a
+bystander, and the runner refuses that rather than counting the red. The test
+was restored verbatim from `a288260`, and the module's test inventory is now
+identical to the reviewed head's, checked by comparing the two.
+
+That is the argument for naming the proof a row must redden instead of
+accepting any red. "Something went red" would have passed this, and the proof
+for the least visible of the three fail-open sites would have left the tree in
+the same commit that claimed to strengthen it.
+
+## What this round does not establish
+
+* `_non_literal_in` bounds what a snapshot may be *built from*. It does not
+  establish that the literal written down is the value that was measured — that
+  is a human act, and the tie between them is the re-measurement discipline,
+  not a test.
+* `_parameter_default_is_false` checks the default of the enclosing function's
+  parameter. It does not follow a pass-through through a second hop, and a
+  parameter reassigned in the body before the call would still read as
+  fail-closed. Neither shape occurs in this tree; both are UNVERIFIED for a
+  tree where they do.
+* The two fixes are allowlists, which is the direction that fails closed. An
+  allowlist that is too narrow reddens a legitimate new form, which is a false
+  red and a cost — paid deliberately, because the other direction is a false
+  green and this entry is a record of what false greens cost.

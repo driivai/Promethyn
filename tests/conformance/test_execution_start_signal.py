@@ -896,19 +896,59 @@ def test_the_two_harness_flags_default_to_the_fail_closed_answer():
 _MEASUREMENT_FORMS = (
     "fail-closed constant",
     "adapter result attribute",
-    "same-named parameter pass-through",
+    "fail-closed parameter pass-through",
     "stored ledger column",
 )
 
 
-def _measurement_form(flag: str, node: ast.expr) -> str | None:
+def _parameter_default_is_false(flag: str, function: ast.AST | None) -> bool:
+    """Does ``flag`` name a parameter of ``function`` whose default is ``False``?
+
+    THE SECOND #131 REVIEW FOUND THAT SPELLING WAS NOT ENOUGH, and it was
+    right. ``started_ok=started_ok`` was accepted because the name matched, so
+    flipping ``GitBranchDeleteExecutor._refuse``'s own default back to ``True``
+    left every call-site shape and the exact census untouched and the rule
+    green — while every pre-sandbox refusal claimed isolation had started
+    again. Reproduced before this function existed: the mutation was GREEN.
+
+    The pass-through is only a measurement because the parameter it forwards
+    defaults to the fail-closed answer and every call to the helper is itself
+    in the swept population. That premise is now CHECKED rather than assumed.
+
+    A parameter with NO default is refused too: the flag is then whatever a
+    caller passes, which is a claim this function cannot see.
+    """
+
+    if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return False
+
+    arguments = function.args
+    for parameter, default in zip(arguments.kwonlyargs, arguments.kw_defaults):
+        if parameter.arg == flag:
+            return isinstance(default, ast.Constant) and default.value is False
+
+    positional = [*arguments.posonlyargs, *arguments.args]
+    offset = len(positional) - len(arguments.defaults)
+    for index, parameter in enumerate(positional):
+        if parameter.arg == flag:
+            if index < offset:
+                return False
+            default = arguments.defaults[index - offset]
+            return isinstance(default, ast.Constant) and default.value is False
+
+    return False
+
+
+def _measurement_form(
+    flag: str, node: ast.expr, enclosing: ast.AST | None = None
+) -> str | None:
     """Name the MEASUREMENT this expression is, or ``None`` if it is not one.
 
     THIS IS AN ALLOWLIST, AND THE FIRST VERSION WAS A DENYLIST OF ONE SHAPE.
     That version asked only "is this the literal ``True``?" and called
-    everything else measured — which is the reviewer's finding on #131, and it
-    was right. ``started_ok=1`` is a different constant with the same truth
-    value; ``started_ok=decision.approved`` is an unrelated boolean read off an
+    everything else measured — the first review's finding, and it was right.
+    ``started_ok=1`` is a different constant with the same truth value;
+    ``started_ok=decision.approved`` is an unrelated boolean read off an
     unrelated object; ``started_ok=result.candidate_started`` is the OTHER
     harness fact read off the right object. All three assert a fact nothing
     measured, and all three passed a rule that only knew one way to be wrong.
@@ -918,6 +958,9 @@ def _measurement_form(flag: str, node: ast.expr) -> str | None:
     forms that this tree can show comes from an adapter, a parameter that
     itself defaults fail-closed, or a stored column — and every one of them
     carries THE FLAG'S OWN NAME, so a cross-wired read is refused too.
+
+    ``enclosing`` is the function the argument is written in, and it is
+    required for the pass-through form: see ``_parameter_default_is_false``.
     """
 
     # ``started_ok=False`` — the fail-closed constant, which claims nothing.
@@ -936,12 +979,14 @@ def _measurement_form(flag: str, node: ast.expr) -> str | None:
     ):
         return "adapter result attribute"
 
-    # ``started_ok=started_ok`` — the enclosing helper's parameter, passed
-    # through under its own name. Sound only because that parameter defaults to
-    # ``False`` and every CALL to the helper is itself in this population, so
-    # the pass-through resolves to another recognised form or to the default.
+    # ``started_ok=started_ok`` — the enclosing helper's own parameter, passed
+    # through under its own name, AND that parameter's default is the literal
+    # ``False``. The name alone is not the measurement; the default behind it
+    # is (second #131 review).
     if isinstance(node, ast.Name) and node.id == flag:
-        return "same-named parameter pass-through"
+        if _parameter_default_is_false(flag, enclosing):
+            return "fail-closed parameter pass-through"
+        return None
 
     # ``started_ok=bool(row["started_ok"])`` — the column this fact was stored
     # in, under the flag's own name. The ledger replay.
@@ -962,12 +1007,27 @@ def _measurement_form(flag: str, node: ast.expr) -> str | None:
     return None
 
 
+def _calls_with_enclosing_function(node, current=None):
+    """``(enclosing FunctionDef | None, Call)`` for every call under ``node``."""
+
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        current = node
+    if isinstance(node, ast.Call):
+        yield current, node
+    for child in ast.iter_child_nodes(node):
+        yield from _calls_with_enclosing_function(child, current)
+
+
 def _harness_flag_arguments():
     """Every ``started_ok`` / ``candidate_started`` argument in ``src/``.
 
     Derived from the AST rather than hand-listed: a hand-list is an allowlist
     of SITES, and the one thing this rule must not need is a judgement about
     which sites "really ran" — the half Sprint 0 could not derive.
+
+    Each row carries the function the argument is written in, because the
+    pass-through form is only a measurement if that function's parameter
+    defaults fail-closed.
     """
 
     src = Path(__file__).resolve().parents[2] / "src"
@@ -975,9 +1035,7 @@ def _harness_flag_arguments():
     found = []
     for path in sorted(src.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
+        for enclosing, node in _calls_with_enclosing_function(tree):
             called = getattr(node.func, "id", getattr(node.func, "attr", None))
             if called not in ("ExecutionResult", "_refuse"):
                 continue
@@ -987,6 +1045,7 @@ def _harness_flag_arguments():
                         f"{path.relative_to(src.parent)}:{node.lineno}:{keyword.arg}",
                         keyword.arg,
                         keyword.value,
+                        enclosing,
                     ))
     return found
 
@@ -1000,12 +1059,13 @@ def test_no_site_may_claim_a_harness_fact_it_did_not_MEASURE():
     claim written at a place that cannot have measured anything, and it is what
     the two pre-fix ``_refuse`` defaults and the git dry-run were.
 
-    The rule is over the SHAPE of the argument, and the shape is in the tree.
+    The rule is over the SHAPE of the argument AND the default behind it, and
+    both are in the tree.
     """
 
     unrecognised, census = [], {name: 0 for name in _MEASUREMENT_FORMS}
-    for where, flag, value in _harness_flag_arguments():
-        form = _measurement_form(flag, value)
+    for where, flag, value, enclosing in _harness_flag_arguments():
+        form = _measurement_form(flag, value, enclosing)
         if form is None:
             unrecognised.append(f"{where} = {ast.unparse(value)}")
         else:
@@ -1017,9 +1077,9 @@ def test_no_site_may_claim_a_harness_fact_it_did_not_MEASURE():
     )
     assert unrecognised == [], (
         f"site(s) claiming a harness fact in an unrecognised form: {unrecognised}. "
-        "Pass the value the sandbox adapter reported, the stored column, or the "
-        "helper's own parameter — or leave the fail-closed default. Anything "
-        "else is a claim nothing measured."
+        "Pass the value the sandbox adapter reported, the stored column, or a "
+        "helper parameter that itself defaults False — or leave the fail-closed "
+        "default. Anything else is a claim nothing measured."
     )
 
     # Exact, both directions. A SHRINKING population is the way this rule goes
@@ -1028,44 +1088,61 @@ def test_no_site_may_claim_a_harness_fact_it_did_not_MEASURE():
     assert census == {
         "fail-closed constant": 4,
         "adapter result attribute": 8,
-        "same-named parameter pass-through": 4,
+        "fail-closed parameter pass-through": 4,
         "stored ledger column": 2,
     }, f"the harness-fact population changed: {census}"
 
 
 def test_the_shape_rule_is_not_universally_true():
-    """The positive control for the sweep above: it must be able to say no.
+    """Doctrine #8: the positive control for the sweep above.
 
     It calls ``_measurement_form`` rather than restating the test, because a
     control that reimplements the rule tests the restatement. Each rejected
-    line is a concrete evasion of the denylist this replaced — the same truth
-    value as a different constant, an unrelated boolean, and the OTHER harness
-    fact read off the right object under the wrong name.
+    line is a concrete evasion of a rule this replaced: the three the
+    literal-``True`` denylist let through, and the pass-through accepted on
+    spelling alone while the parameter behind it defaulted ``True``.
     """
+
+    fail_closed = ast.parse(
+        "def _refuse(self, d, detail, *, started_ok=False):\n    pass\n"
+    ).body[0]
+    fail_open = ast.parse(
+        "def _refuse(self, d, detail, *, started_ok=True):\n    pass\n"
+    ).body[0]
+    no_default = ast.parse(
+        "def _refuse(self, d, detail, *, started_ok):\n    pass\n"
+    ).body[0]
 
     planted = [
         # Recognised: the four forms the tree actually uses.
-        ("started_ok=False", "fail-closed constant"),
-        ("started_ok=result.started_ok", "adapter result attribute"),
-        ("started_ok=started_ok", "same-named parameter pass-through"),
-        ('started_ok=bool(row["started_ok"])', "stored ledger column"),
+        ("started_ok=False", None, "fail-closed constant"),
+        ("started_ok=result.started_ok", None, "adapter result attribute"),
+        ("started_ok=started_ok", fail_closed, "fail-closed parameter pass-through"),
+        ('started_ok=bool(row["started_ok"])', None, "stored ledger column"),
         # Refused: the literal the original rule caught...
-        ("started_ok=True", None),
-        # ...and the four it did not.
-        ("started_ok=1", None),
-        ("started_ok=decision.approved", None),
-        ("started_ok=result.candidate_started", None),
-        ('started_ok=bool(row["candidate_started"])', None),
+        ("started_ok=True", None, None),
+        # ...the three it did not...
+        ("started_ok=1", None, None),
+        ("started_ok=decision.approved", None, None),
+        ("started_ok=result.candidate_started", None, None),
+        ('started_ok=bool(row["candidate_started"])', None, None),
+        # ...and the three the SPELLING rule did not: the same pass-through
+        # over a parameter that defaults fail-OPEN, over one with no default at
+        # all, and over no enclosing function whatsoever.
+        ("started_ok=started_ok", fail_open, None),
+        ("started_ok=started_ok", no_default, None),
+        ("started_ok=started_ok", None, None),
     ]
 
     verdicts = []
-    for argument, _expected in planted:
+    for argument, enclosing, _expected in planted:
         call = ast.parse(f"ExecutionResult({argument})").body[0].value
-        verdicts.append(_measurement_form("started_ok", call.keywords[0].value))
+        verdicts.append(_measurement_form("started_ok", call.keywords[0].value, enclosing))
 
-    assert verdicts == [expected for _, expected in planted], verdicts
+    assert verdicts == [expected for _, _, expected in planted], verdicts
+
     # The sweep itself must still find a population to constrain (doctrine #8).
-    # NOT the exact count: pinning 18 here made this control redden whenever a
+    # NOT the exact count: pinning it here made this control redden whenever a
     # construction site changed, which is the SUBJECT moving, not the
     # classifier failing -- a control coupled to the thing it controls for. The
     # exact census is the rule's own assertion above, where it belongs.

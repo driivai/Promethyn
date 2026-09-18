@@ -2761,10 +2761,27 @@ measured here changes the inputs to it. The checker is not at fault in either
 direction: it refused the text it was handed, and the text it was handed was
 stale.
 
-**CARRIER 50 AND WHAT IT IS.** Invoking a review on this pull request's final
-head is a comment, and a comment is a carrier. It is not posted as of this
-commit, so by this entry's own rule it is counted at the next push and the
-running total below is unchanged.
+**CARRIERS 50 TO 53, AND AN UNDERCOUNT CORRECTED BEFORE IT WAS RECORDED.**
+Answering the first review round on #131 meant three replies on its review
+threads and one comment invoking a review on the final head — four carriers,
+not the one an earlier draft of this paragraph named. That draft said "the
+comment invoking a review is carrier 50", counting the channel it had in mind
+and not the ones it had already used; the three replies precede the comment, so
+the comment is 53. Corrected here rather than quietly amended, because an
+undercount by three in a count that enters this entry is the doctrine this
+entry exists under.
+
+| carrier | channel | where |
+|---|---|---|
+| 50, 51, 52 | review replies | the three answers on #131's first review round |
+| 53 | comment | invoking a review on the final head |
+
+**Running total 53: 37 review replies, 12 bodies, 4 comments**, recounted from
+the bounded table (25 review replies, 3 bodies, 1 comment) plus carriers 30 to
+53, not incremented. The two replies answering the SECOND review round are
+carriers 54 and 55 by the same rule, recorded at the next push; #131's body has
+been rewritten several times and a rewrite of an existing body is not a new
+carrier.
 
 **THE COUNT IS ACCURATE AS OF THIS COMMIT AND CANNOT BE ACCURATE AFTER IT, which
 is a property of the count and not an oversight.** Reporting this commit's own
@@ -5505,7 +5522,8 @@ what was claimed and when it was corrected. Extends the note in G55.
 | #127 | `spend_proofs` at its first size, and the second-order figures before any stripped baseline existed | G55's withdrawal — every second-order figure this sprint published measured nothing, because the stripped baseline was red and nothing checked it |
 | #128 | `16 of 16` second-order | the same withdrawal; the corrected figure was **11 of 18** |
 | #129 | the figures before the withdrawal | the same withdrawal |
-| #130 | `spend_proofs is now 18 rows, 36 runs`; `stdout_recorded` presented as the fail-open default corrected | **23 rows, 46 runs** after G56's five; and the correction was one field of three — G56 is the other two |
+| #130 | `spend_proofs is now 18 rows, 36 runs`; `stdout_recorded` presented as the fail-open default corrected | **24 rows, 48 runs** after G56's five and #131's review round; and the correction was one field of three — G56 is the other two |
+| #131, first head | `23 rows, 46 runs` | **24 rows, 48 runs**. The second review round added `pass-through-parameter-default-flipped-fail-open`: the pass-through form's premise — that the parameter it forwards defaults `False` — lives in a different statement from the claim resting on it, so flipping it left every call-site shape and the exact census unchanged. Superseded by my own change within the same pull request, and recorded here rather than edited in place |
 
 **None of these bodies is wrong about what it measured at the time.** Each is a
 figure that a later change moved, and the reason they are listed together is

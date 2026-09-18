@@ -541,6 +541,69 @@ def test_the_sprint_document_still_states_the_limits_these_tests_pin():
 # ===========================================================================
 
 
+#: The calls a snapshot may be built with. Each takes at most one argument and
+#: that argument must itself be literal construction.
+_LITERAL_CONSTRUCTORS = frozenset({"frozenset", "set", "tuple", "list", "dict"})
+
+
+def _non_literal_in(node: ast.expr) -> ast.expr | None:
+    """The first sub-expression that is NOT literal construction, or ``None``.
+
+    AN ALLOWLIST OF NODE TYPES, and the version this replaces was a denylist of
+    eight spellings. That version asked whether the assignment mentioned
+    ``_markdown_under``, ``CLAIM_SOURCES_READ`` and six other names, so
+    ``frozenset(_current_unread())`` -- a helper doing the identical derivation
+    under a name the list had never heard of -- restored the whole defect with
+    the guard still green. Measured before this function existed: that mutation
+    was GREEN.
+
+    THAT IS THE SAME ERROR THE RULE ITSELF WAS WRITTEN TO CLOSE, committed
+    inside it one commit later. A denylist over an open set of names is the
+    denylist over an open set of expressions from the harness-flag rule,
+    wearing different clothes; a reviewer found both. The question is inverted
+    here for the same reason it was there: a snapshot is a MEASUREMENT WRITTEN
+    DOWN, so the only things it may be made of are constants and the containers
+    that hold them. Every name, attribute, call, comprehension and operator is
+    a way of asking the tree, and the tree is what the snapshot exists to
+    disagree with.
+    """
+
+    if isinstance(node, ast.Constant):
+        return None
+
+    if isinstance(node, (ast.Set, ast.List, ast.Tuple)):
+        for element in node.elts:
+            offender = _non_literal_in(element)
+            if offender is not None:
+                return offender
+        return None
+
+    if isinstance(node, ast.Dict):
+        # ``keys`` is typed ``list[expr | None]`` because of ``**`` splats, so
+        # the combined list is annotated rather than inferred from ``values``.
+        entries: list[ast.expr | None] = [*node.keys, *node.values]
+        for entry in entries:
+            # ``{**other}`` parses as a None key: a splat of something this
+            # function cannot see into.
+            if entry is None:
+                return node
+            offender = _non_literal_in(entry)
+            if offender is not None:
+                return offender
+        return None
+
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in _LITERAL_CONSTRUCTORS
+        and not node.keywords
+        and len(node.args) <= 1
+    ):
+        return _non_literal_in(node.args[0]) if node.args else None
+
+    return node
+
+
 def test_a_pinned_snapshot_is_never_recomputed_from_the_tree_it_checks():
     """Derived over the SHAPE of the assignment, not over a list of names.
 
@@ -550,34 +613,22 @@ def test_a_pinned_snapshot_is_never_recomputed_from_the_tree_it_checks():
     at 49 and 41 passed, and the "newly unread" / "no longer unread"
     diagnostics were empty even under a real count change.
 
-    A snapshot has to be a MEASUREMENT WRITTEN DOWN. This requires every
-    ``*_AT_SPRINT_0`` binding in this module to be a literal -- to reference
-    none of the live sources its subject is derived from -- so the next
-    snapshot cannot quietly become a restatement of the thing it pins.
+    A snapshot has to be a MEASUREMENT WRITTEN DOWN. Every ``*_AT_SPRINT_0``
+    binding in this module must therefore be literal construction all the way
+    down -- constants and the containers that hold them, and nothing that can
+    reach the tree.
     """
 
-    live_sources = {
-        "_markdown_under",
-        "CLAIM_SOURCES_READ",
-        "CONSULTED_NOT_INVENTORIED",
-        "_registers_naming",
-        "dataclasses",
-        "Config",
-        "REPO",
-        "read_text",
-    }
-
     tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
-    snapshots = {}
+    snapshots: dict[str, str | None] = {}
     for node in tree.body:
         if not isinstance(node, ast.Assign) or len(node.targets) != 1:
             continue
         name = getattr(node.targets[0], "id", "")
         if not name.endswith("_AT_SPRINT_0"):
             continue
-        referenced = {n.id for n in ast.walk(node.value) if isinstance(n, ast.Name)}
-        referenced |= {n.attr for n in ast.walk(node.value) if isinstance(n, ast.Attribute)}
-        snapshots[name] = sorted(referenced & live_sources)
+        offender = _non_literal_in(node.value)
+        snapshots[name] = None if offender is None else ast.unparse(offender)
 
     # Doctrine #8: an empty sweep would hold this rule vacuously for every
     # snapshot at once, which is the failure mode the rule itself is about.
@@ -586,36 +637,44 @@ def test_a_pinned_snapshot_is_never_recomputed_from_the_tree_it_checks():
         "_UNREAD_AT_SPRINT_0",
     ], f"the snapshot population changed: {sorted(snapshots)}"
 
-    recomputed = {name: refs for name, refs in snapshots.items() if refs}
+    recomputed = {name: bad for name, bad in snapshots.items() if bad is not None}
     assert recomputed == {}, (
-        f"snapshot(s) recomputed from their own subject: {recomputed}. A "
-        "comparand derived from the tree agrees with the tree whatever it "
-        "says. Write the measured value out."
+        f"snapshot(s) built from something other than a literal: {recomputed}. "
+        "A comparand that can reach the tree agrees with the tree whatever it "
+        "says -- whether it reaches it by name, by call or by comprehension. "
+        "Write the measured value out."
     )
 
 
 def test_the_snapshot_shape_rule_is_not_universally_true():
     """Doctrine #8: the positive control for the rule above.
 
-    The pre-fix form of ``_UNREAD_AT_SPRINT_0``, planted, must be recognised
-    as recomputed -- otherwise the rule passes for a reason unrelated to the
-    assignments it is reading.
+    It calls ``_non_literal_in`` rather than restating it. The rejected lines
+    are the pre-fix form, the helper indirection that defeated the name-based
+    version, and three further ways to reach the tree without naming it.
     """
 
-    planted = ast.parse(
-        "_UNREAD_AT_SPRINT_0 = frozenset(\n"
-        '    _markdown_under("docs")\n'
-        '    - {n for n in CLAIM_SOURCES_READ if n.startswith("docs/")}\n'
-        ")\n"
-        '_OTHER_AT_SPRINT_0 = frozenset({"docs/sandbox.md"})\n'
-    )
-    live_sources = {"_markdown_under", "CLAIM_SOURCES_READ"}
-    verdicts = []
-    for node in planted.body:
-        referenced = {n.id for n in ast.walk(node.value) if isinstance(n, ast.Name)}
-        verdicts.append(sorted(referenced & live_sources))
+    planted = [
+        # Accepted: what a written-down measurement looks like.
+        ('frozenset({"docs/sandbox.md", "docs/operations.md"})', None),
+        ('{"a": ("OPEN-GAPS",), "b": ("README", "threat-model")}', None),
+        ("frozenset()", None),
+        # Refused: the original recomputed form...
+        ('frozenset(_markdown_under("docs") - CLAIM_SOURCES_READ)', "not literal"),
+        # ...the helper indirection the name-based rule could not see...
+        ("frozenset(_current_unread())", "not literal"),
+        # ...and three more routes to the tree that name nothing on any list.
+        ('frozenset({"docs/sandbox.md"} | OTHER)', "not literal"),
+        ("frozenset({n for n in POPULATION})", "not literal"),
+        ('{**BASE, "a": ("README",)}', "not literal"),
+    ]
 
-    assert verdicts == [["CLAIM_SOURCES_READ", "_markdown_under"], []], verdicts
+    verdicts = []
+    for source, _expected in planted:
+        offender = _non_literal_in(ast.parse(source).body[0].value)
+        verdicts.append(None if offender is None else "not literal")
+
+    assert verdicts == [expected for _, expected in planted], verdicts
 
 
 def test_the_histogram_cannot_stand_in_for_the_register_mapping():

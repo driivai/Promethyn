@@ -58,7 +58,7 @@ existing behaviour, carrying a file and line, that was never re-read.
 | 5 | 23 | `docs/OPEN-GAPS.md:14` | a named gap is a passing test, so it cannot erode quietly |
 | 6 | 0 | — | never cited in the tree |
 | 7 | 0 | — | never cited in the tree |
-| 8 | 55 | `docs/OPEN-GAPS.md:2096` | an empty instrument reads downstream as a pass, so emptiness refuses |
+| 8 | 57 | `docs/OPEN-GAPS.md:2096` | an empty instrument reads downstream as a pass, so emptiness refuses |
 | 9 | 10 | `docs/OPEN-GAPS.md:47` | re-sweep documentation claims when the code they describe changes |
 | 10 | 9 | `docs/assurance-ledger-sprint-0.md:18` | a claim about existing behaviour carries a file and line, or is marked UNVERIFIED |
 | 11 | 23 | `docs/OPEN-GAPS.md:5280` | counts come from the artifact, never from a filtered view of it (below) |

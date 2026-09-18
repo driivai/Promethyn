@@ -451,6 +451,29 @@ MUTATIONS: tuple[tuple, ...] = (
         "test_the_replay_carries_the_STORED_harness_facts_not_a_default",
         START_SIGNAL,
     ),
+    # 22. THE PASS-THROUGH'S PREMISE, REMOVED. ``started_ok=started_ok`` is a
+    #     measurement only because the parameter it forwards defaults to the
+    #     fail-closed answer; flip that default and every call-site SHAPE is
+    #     unchanged, the census is unchanged, and every pre-sandbox refusal
+    #     claims isolation started again. The second #131 review found that the
+    #     rule accepted the pass-through on its SPELLING, so this mutation was
+    #     green. It is a row now because the premise lives in a different
+    #     statement from the claim that rests on it, which is how it went
+    #     unnoticed the first time.
+    (
+        "pass-through-parameter-default-flipped-fail-open",
+        (
+            (
+                GIT,
+                "        started_ok: bool = False,\n"
+                "        candidate_started: bool = False,\n",
+                "        started_ok: bool = True,\n"
+                "        candidate_started: bool = True,\n",
+            ),
+        ),
+        "test_no_site_may_claim_a_harness_fact_it_did_not_MEASURE",
+        START_SIGNAL,
+    ),
 )
 
 
