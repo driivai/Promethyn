@@ -2613,6 +2613,32 @@ body. **Running total 38: 28 review replies, 7 bodies, 3 comments**, recounted
 from the bounded table (25 review replies, 3 bodies, 1 comment) plus carriers
 30 to 38, not incremented.
 
+**CARRIER 39, opening #127 (`afa32de`'s pull request). 14 of 14.** Opened with
+the FULL body — not a placeholder — read back carrying the footer, rewritten
+through `update_pull_request`. Fourteen of fourteen openings, with no exception
+in either direction: a one-line placeholder and a ten-thousand-character body
+are appended to identically.
+
+**A REFINEMENT MEASURED HERE, which narrows what "only a push clears it"
+means.** This repository runs the body check in TWO places, and they behave
+differently:
+
+* the standalone `pr-text` workflow re-ran on the `edited` event and
+  **PASSED** (`35293021482`, 7s) once the footer was stripped;
+* the same check inside each `build` job read `PR_BODY` frozen at the OPEN
+  trigger and **FAILED** on all three Pythons (`35292928221`), in 31–45s,
+  after the type gate (343 files), the receipt check and the repository
+  hygiene check had all passed — so the failure is genuinely the stale
+  payload and nothing else.
+
+So "only a push clears a stale text refusal" is true of the BUILD jobs and not
+of `pr-text`, and a reader seeing one green and one red on the same body is
+looking at that split rather than at a flake. The commit carrying this
+paragraph is the push that clears the build jobs, for the reason carrier 30
+first measured. **Running total 39: 28 review replies, 8 bodies, 3 comments**,
+recounted from the bounded table (25 review replies, 3 bodies, 1 comment) plus
+carriers 30 to 39, not incremented.
+
 **THE COUNT IS ACCURATE AS OF THIS COMMIT AND CANNOT BE ACCURATE AFTER IT, which
 is a property of the count and not an oversight.** Reporting this commit's own
 CI means posting a comment, and that comment will carry the footer -- so
