@@ -891,23 +891,88 @@ def test_the_two_harness_flags_default_to_the_fail_closed_answer():
     assert bare.started_ok is False and bare.candidate_started is False
 
 
-def test_no_site_may_claim_a_harness_fact_it_did_not_MEASURE():
-    """The population rule, derived from the AST rather than hand-listed.
+#: The forms an argument to ``started_ok`` / ``candidate_started`` may take.
+#: An ALLOWLIST, and it has to be one — see ``_measurement_form``.
+_MEASUREMENT_FORMS = (
+    "fail-closed constant",
+    "adapter result attribute",
+    "same-named parameter pass-through",
+    "stored ledger column",
+)
 
-    A site that observed isolation passes the value the ADAPTER reported
-    (``result.started_ok``); a site that did not leaves the fail-closed
-    default. So a literal ``True`` is never correct here: it is a claim
-    written by hand at a place that cannot have measured anything, and it is
-    what the two pre-fix ``_refuse`` defaults and the git dry-run were.
 
-    This needs no allowlist and no judgement about which sites "really ran" —
-    which is the half Sprint 0 could not derive. The rule is over the SHAPE of
-    the argument, and the shape is in the tree.
+def _measurement_form(flag: str, node: ast.expr) -> str | None:
+    """Name the MEASUREMENT this expression is, or ``None`` if it is not one.
+
+    THIS IS AN ALLOWLIST, AND THE FIRST VERSION WAS A DENYLIST OF ONE SHAPE.
+    That version asked only "is this the literal ``True``?" and called
+    everything else measured — which is the reviewer's finding on #131, and it
+    was right. ``started_ok=1`` is a different constant with the same truth
+    value; ``started_ok=decision.approved`` is an unrelated boolean read off an
+    unrelated object; ``started_ok=result.candidate_started`` is the OTHER
+    harness fact read off the right object. All three assert a fact nothing
+    measured, and all three passed a rule that only knew one way to be wrong.
+
+    A denylist over an open set of expressions cannot be complete, so the
+    question is inverted: an argument is measured only if it is one of the
+    forms that this tree can show comes from an adapter, a parameter that
+    itself defaults fail-closed, or a stored column — and every one of them
+    carries THE FLAG'S OWN NAME, so a cross-wired read is refused too.
+    """
+
+    # ``started_ok=False`` — the fail-closed constant, which claims nothing.
+    # ``True`` is deliberately not here: it is the hand-written claim this
+    # whole entry exists to refuse.
+    if isinstance(node, ast.Constant) and node.value is False:
+        return "fail-closed constant"
+
+    # ``started_ok=result.started_ok`` — read off the adapter's own result,
+    # under the flag's own name.
+    if (
+        isinstance(node, ast.Attribute)
+        and node.attr == flag
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "result"
+    ):
+        return "adapter result attribute"
+
+    # ``started_ok=started_ok`` — the enclosing helper's parameter, passed
+    # through under its own name. Sound only because that parameter defaults to
+    # ``False`` and every CALL to the helper is itself in this population, so
+    # the pass-through resolves to another recognised form or to the default.
+    if isinstance(node, ast.Name) and node.id == flag:
+        return "same-named parameter pass-through"
+
+    # ``started_ok=bool(row["started_ok"])`` — the column this fact was stored
+    # in, under the flag's own name. The ledger replay.
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "bool"
+        and len(node.args) == 1
+        and not node.keywords
+        and isinstance(node.args[0], ast.Subscript)
+        and isinstance(node.args[0].value, ast.Name)
+        and node.args[0].value.id == "row"
+        and isinstance(node.args[0].slice, ast.Constant)
+        and node.args[0].slice.value == flag
+    ):
+        return "stored ledger column"
+
+    return None
+
+
+def _harness_flag_arguments():
+    """Every ``started_ok`` / ``candidate_started`` argument in ``src/``.
+
+    Derived from the AST rather than hand-listed: a hand-list is an allowlist
+    of SITES, and the one thing this rule must not need is a judgement about
+    which sites "really ran" — the half Sprint 0 could not derive.
     """
 
     src = Path(__file__).resolve().parents[2] / "src"
     flags = ("started_ok", "candidate_started")
-    literal_true, measured = [], []
+    found = []
     for path in sorted(src.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
@@ -917,46 +982,90 @@ def test_no_site_may_claim_a_harness_fact_it_did_not_MEASURE():
             if called not in ("ExecutionResult", "_refuse"):
                 continue
             for keyword in node.keywords:
-                if keyword.arg not in flags:
-                    continue
-                where = f"{path.relative_to(src.parent)}:{node.lineno}:{keyword.arg}"
-                if isinstance(keyword.value, ast.Constant) and keyword.value.value is True:
-                    literal_true.append(where)
-                else:
-                    measured.append(where)
+                if keyword.arg in flags:
+                    found.append((
+                        f"{path.relative_to(src.parent)}:{node.lineno}:{keyword.arg}",
+                        keyword.arg,
+                        keyword.value,
+                    ))
+    return found
 
-    assert measured, (
+
+def test_no_site_may_claim_a_harness_fact_it_did_not_MEASURE():
+    """The population rule, derived from the AST rather than hand-listed.
+
+    A site that observed isolation passes the value the ADAPTER reported
+    (``result.started_ok``); a site that did not leaves the fail-closed
+    default. So a hand-written truthy argument is never correct here: it is a
+    claim written at a place that cannot have measured anything, and it is what
+    the two pre-fix ``_refuse`` defaults and the git dry-run were.
+
+    The rule is over the SHAPE of the argument, and the shape is in the tree.
+    """
+
+    unrecognised, census = [], {name: 0 for name in _MEASUREMENT_FORMS}
+    for where, flag, value in _harness_flag_arguments():
+        form = _measurement_form(flag, value)
+        if form is None:
+            unrecognised.append(f"{where} = {ast.unparse(value)}")
+        else:
+            census[form] += 1
+
+    assert sum(census.values()) or unrecognised, (
         "no harness-fact argument found at all: an empty sweep reads as a pass "
         "(doctrine #8), and this rule would then hold vacuously"
     )
-    assert literal_true == [], (
-        f"site(s) claiming a harness fact with a literal True: {literal_true}. "
-        "Pass the value the sandbox adapter reported, or leave the fail-closed "
-        "default. A hand-written True is a claim nothing measured."
+    assert unrecognised == [], (
+        f"site(s) claiming a harness fact in an unrecognised form: {unrecognised}. "
+        "Pass the value the sandbox adapter reported, the stored column, or the "
+        "helper's own parameter — or leave the fail-closed default. Anything "
+        "else is a claim nothing measured."
     )
+
+    # Exact, both directions. A SHRINKING population is the way this rule goes
+    # quiet without ever going red: the sites are the thing being constrained,
+    # so their disappearance is a change to re-measure deliberately, not a pass.
+    assert census == {
+        "fail-closed constant": 4,
+        "adapter result attribute": 8,
+        "same-named parameter pass-through": 4,
+        "stored ledger column": 2,
+    }, f"the harness-fact population changed: {census}"
 
 
 def test_the_shape_rule_is_not_universally_true():
     """The positive control for the sweep above: it must be able to say no.
 
-    A collector that matched nothing, or that classified every argument as
-    "measured", would make the rule vacuous for every site at once.
+    It calls ``_measurement_form`` rather than restating the test, because a
+    control that reimplements the rule tests the restatement. Each rejected
+    line is a concrete evasion of the denylist this replaced — the same truth
+    value as a different constant, an unrelated boolean, and the OTHER harness
+    fact read off the right object under the wrong name.
     """
 
-    planted = ast.parse(
-        "ExecutionResult(executed=False, subject_id='s', started_ok=True)\n"
-        "ExecutionResult(executed=False, subject_id='s', started_ok=result.started_ok)\n"
-    )
+    planted = [
+        # Recognised: the four forms the tree actually uses.
+        ("started_ok=False", "fail-closed constant"),
+        ("started_ok=result.started_ok", "adapter result attribute"),
+        ("started_ok=started_ok", "same-named parameter pass-through"),
+        ('started_ok=bool(row["started_ok"])', "stored ledger column"),
+        # Refused: the literal the original rule caught...
+        ("started_ok=True", None),
+        # ...and the four it did not.
+        ("started_ok=1", None),
+        ("started_ok=decision.approved", None),
+        ("started_ok=result.candidate_started", None),
+        ('started_ok=bool(row["candidate_started"])', None),
+    ]
+
     verdicts = []
-    for node in ast.walk(planted):
-        if isinstance(node, ast.Call):
-            for keyword in node.keywords:
-                if keyword.arg == "started_ok":
-                    verdicts.append(
-                        isinstance(keyword.value, ast.Constant)
-                        and keyword.value.value is True
-                    )
-    assert verdicts == [True, False], verdicts
+    for argument, _expected in planted:
+        call = ast.parse(f"ExecutionResult({argument})").body[0].value
+        verdicts.append(_measurement_form("started_ok", call.keywords[0].value))
+
+    assert verdicts == [expected for _, expected in planted], verdicts
+    # The sweep itself must still find the population it constrains.
+    assert len(_harness_flag_arguments()) == 18
 
 
 def test_the_replay_carries_the_STORED_harness_facts_not_a_default():

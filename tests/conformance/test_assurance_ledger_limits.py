@@ -120,24 +120,72 @@ def test_the_documents_the_ledger_did_not_read_are_counted_and_named():
         f"docs/ now holds {len(population)} markdown files, not 49. Re-measure "
         "docs/assurance-ledger-sprint-0.md §1.5 rather than editing this number."
     )
-    assert len(unread) == 41, (
+    # THE SET, not the size. Review finding on #131, and it was right: the
+    # comparand below used to be RECOMPUTED from the same checkout by the same
+    # expression, so it was identical to ``unread`` by construction. A rename
+    # that held the totals at 49 and 41 passed, and the two diagnostics under a
+    # genuine count change were always empty. The instrument could not fail in
+    # the direction the document said it pinned.
+    assert unread == _UNREAD_AT_SPRINT_0, (
         f"the ledger's unread set is now {len(unread)} documents, not 41:\n"
         f"  newly unread: {sorted(unread - _UNREAD_AT_SPRINT_0)}\n"
         f"  no longer unread: {sorted(_UNREAD_AT_SPRINT_0 - unread)}\n"
         "A new document is a new claim source. Either inventory it and move it "
-        "into CLAIM_SOURCES_READ, or re-measure this number deliberately."
+        "into CLAIM_SOURCES_READ, or re-measure this SET deliberately."
     )
+    # Kept beside the set so the number the document cites is pinned by name
+    # and not only implied by the membership above.
+    assert len(unread) == 41, f"the unread count is now {len(unread)}, not 41"
 
 
-#: The unread set as measured on 2026-09-18, kept so the failure message above
-#: can name the DIFFERENCE rather than only the new total. A count says a change
-#: happened; a set says which.
-_UNREAD_AT_SPRINT_0 = frozenset(
-    _markdown_under("docs")
-    - {n for n in CLAIM_SOURCES_READ if n.startswith("docs/")}
-    - {n for n in CONSULTED_NOT_INVENTORIED if n.startswith("docs/")}
-    - {"docs/assurance-ledger-sprint-0.md", "docs/assurance-ledger-sprint-1.md"}
-)
+#: The unread set as measured on 2026-09-18 by the derivation in the test above,
+#: WRITTEN OUT. A snapshot recomputed from the tree it is meant to check is not
+#: a snapshot: it agrees with that tree whatever the tree says. These are the
+#: forty-one filenames, so a rename is a failure and the diagnostics above name
+#: which document moved rather than reporting an empty difference.
+_UNREAD_AT_SPRINT_0 = frozenset({
+    "docs/DEPENDENCY-LICENSES.md",
+    "docs/IP-READINESS.md",
+    "docs/LICENSE-HISTORY.md",
+    "docs/adr/0001-architecture.md",
+    "docs/architecture.md",
+    "docs/audit-source-acceptance.md",
+    "docs/authorization-record.md",
+    "docs/chokepoint-threat-model.md",
+    "docs/composition-study.md",
+    "docs/demo-stale-branches.md",
+    "docs/domains-grounding.md",
+    "docs/domains-sql.md",
+    "docs/execution-authorization-record.md",
+    "docs/execution-descriptor.md",
+    "docs/extending-promethyn.md",
+    "docs/gold-set-v3-protocol.md",
+    "docs/judge-quality.md",
+    "docs/key-custody.md",
+    "docs/ledger-integrity.md",
+    "docs/observability.md",
+    "docs/open-core-boundary.md",
+    "docs/operations.md",
+    "docs/orchestration.md",
+    "docs/pre-disclosure-audit.md",
+    "docs/reachability-inventory-proof.md",
+    "docs/reachability-type-proof.md",
+    "docs/readiness-assessment.md",
+    "docs/reconciliation.md",
+    "docs/repository-identity.md",
+    "docs/reviews/PROM-F11-checkpoint-2a.md",
+    "docs/reviews/PROM-F11-checkpoint-2b.md",
+    "docs/reviews/PROM-F11-checkpoint-3.md",
+    "docs/reviews/PROM-F11-close-out.md",
+    "docs/reviews/opened-substrate-1a-1b.md",
+    "docs/sandbox.md",
+    "docs/security-model.md",
+    "docs/shakeout-report.md",
+    "docs/skip-sweep.md",
+    "docs/soft-calibration-adoption-rule.md",
+    "docs/soft-calibration.md",
+    "docs/swarm-roles.md",
+})
 
 
 def test_the_source_partition_is_not_universally_true():
@@ -293,14 +341,60 @@ def test_every_build_matrix_property_is_restated_in_at_least_one_other_register(
         "different finding from the one this test records."
     )
 
-    # Exact, both directions: a floor would permit a register to stop naming a
-    # property without anyone noticing (taxonomy mode 5).
+    # Exact, both directions, AND PER PROPERTY. The histogram alone was the
+    # #131 review's third finding, and it was right: with five properties at one
+    # register each, `verifier_cpu_seconds` could leave OPEN-GAPS for
+    # threat-model and the distribution would still read {1: 5, 2: 16, 3: 1}.
+    # Two properties trading registers cancels the same way. A histogram is a
+    # count of a filtered view of the mapping (doctrine #11), so the mapping is
+    # what gets pinned.
+    assert coverage == _REGISTER_COVERAGE_AT_SPRINT_0, (
+        "register coverage changed per property:\n"
+        + "\n".join(
+            f"  {field}: {_REGISTER_COVERAGE_AT_SPRINT_0.get(field)} -> {registers}"
+            for field, registers in sorted(coverage.items())
+            if _REGISTER_COVERAGE_AT_SPRINT_0.get(field) != registers
+        )
+        + "\nRe-measure docs/assurance-ledger-sprint-0.md §1.4."
+    )
+
+    # The distribution the document quotes, kept beside the mapping so the
+    # number in §1.4 is pinned by name and not only implied by it.
     by_count = {n: sum(1 for r in coverage.values() if len(r) == n) for n in (1, 2, 3)}
     assert by_count == {1: 5, 2: 16, 3: 1}, (
         f"register coverage changed: {by_count}. Re-measure "
         "docs/assurance-ledger-sprint-0.md §1.4."
     )
     assert coverage["sandbox"] == ("OPEN-GAPS", "README", "threat-model")
+
+
+#: The ``field -> registers`` mapping as measured on 2026-09-18. Written out,
+#: for the same reason ``_UNREAD_AT_SPRINT_0`` is: a comparand recomputed from
+#: the tree agrees with the tree whatever it says.
+_REGISTER_COVERAGE_AT_SPRINT_0 = {
+    "verifier_timeout_s": ("OPEN-GAPS", "threat-model"),
+    "verifier_memory_mb": ("OPEN-GAPS", "threat-model"),
+    "verifier_cpu_seconds": ("OPEN-GAPS",),
+    "verifier_max_processes": ("OPEN-GAPS",),
+    "sandbox": ("OPEN-GAPS", "README", "threat-model"),
+    "require_digest_pin": ("OPEN-GAPS", "threat-model"),
+    "gate_threshold": ("OPEN-GAPS", "threat-model"),
+    "escalate_below": ("OPEN-GAPS", "threat-model"),
+    "pending_ttl_seconds": ("OPEN-GAPS", "threat-model"),
+    "max_role_calls": ("OPEN-GAPS",),
+    "request_timeout_s": ("OPEN-GAPS", "threat-model"),
+    "allow_insecure_loopback": ("OPEN-GAPS", "threat-model"),
+    "provider_max_response_bytes": ("OPEN-GAPS", "threat-model"),
+    "ledger_anchor": ("OPEN-GAPS", "threat-model"),
+    "ledger_anchor_retention_days": ("OPEN-GAPS", "threat-model"),
+    "require_ledger_anchor": ("OPEN-GAPS", "threat-model"),
+    "require_external_signer": ("OPEN-GAPS", "threat-model"),
+    "require_verified_substrate": ("OPEN-GAPS", "threat-model"),
+    "allow_unverified_substrate": ("OPEN-GAPS", "threat-model"),
+    "config_attestation_target": ("OPEN-GAPS",),
+    "require_config_attestation": ("OPEN-GAPS", "threat-model"),
+    "verification_profile": ("OPEN-GAPS",),
+}
 
 
 def test_the_register_search_is_not_universally_true():
