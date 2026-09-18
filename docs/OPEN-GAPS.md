@@ -2677,6 +2677,48 @@ openings.** **Running total 48: 34 review replies, 11 bodies, 3 comments**,
 recounted from the bounded table (25 review replies, 3 bodies, 1 comment) plus
 carriers 30 to 48, not incremented. The two-check split held a fourth time.
 
+**CARRIER 49, opening #131, and the footer was REWRITTEN in flight — observed,
+not inferred.** The body was posted with the footer's link pointing at the
+product's bare documentation root; read back immediately through the
+pull-request API, that link has a session-scoped path appended to it. The
+channel substituted a longer URL into text that had already left the hygiene
+checker — this entry's exact subject in a form it had not yet recorded: not an
+APPENDED trailer but an EDITED one. The link is not quoted here, because
+quoting it would put the banned token in this file and the checker refuses it,
+which is the correct behaviour and was measured by trying. **18 of 18
+openings** carry the footer.
+**Running total 49: 34 review replies, 12 bodies, 3 comments**, recounted from
+the bounded table (25 review replies, 3 bodies, 1 comment) plus carriers 30 to
+49, not incremented.
+
+A note on what that rewrite costs and does not cost. It does not defeat the
+hygiene checker, which refuses the token whatever URL follows it; the footer
+was always going to be a carrier and is recorded as one. What is new is that
+the link is not the link that was sent, so a reader reconciling a carrier
+against what the author wrote cannot do it from the text alone.
+
+**RECORDED AND THEN REPAIRED, and the first version of this paragraph got the
+second half wrong.** It said the body was "recorded rather than repaired,
+because rewriting it would remove the evidence of the rewrite" — reasoning from
+this entry's own habit rather than from what the repository does. Checked
+against the artifact: **#130's `pr-text` check conclusion is `success`**, and so
+are all eleven of its checks. A red `pr-text` is not this project's steady
+state; the body is repaired and the carrier record is what preserves the
+evidence, which is the arrangement that keeps both. Corrected, and #131's body
+was rewritten to clear the check.
+
+**AND THE COMMIT CHANNEL IS NOT THE PR-TEXT CHANNEL.** #131's first three
+commits were authored and committed under a vendor identity and carried a
+session trailer in the message, so `check_message_hygiene.py --history` refused
+**15 findings across 3 commits** — five per commit: the message, and the author
+and committer names and addresses. Every prior carrier in this entry is text a
+CHANNEL appended after the fact; these were in the commit objects themselves,
+which is a different seam and one G13 already names for `main`. Re-authored to
+the project identity and the trailer removed; the sweep over the same range now
+reports `no commit carries a banned token in its message or identities`. The
+attribution it carried is not lost — it is in this entry, which is a more
+durable record than a trailer the guard refuses.
+
 **THE COUNT IS ACCURATE AS OF THIS COMMIT AND CANNOT BE ACCURATE AFTER IT, which
 is a property of the count and not an oversight.** Reporting this commit's own
 CI means posting a comment, and that comment will carry the footer -- so
