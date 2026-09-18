@@ -62,6 +62,7 @@ from prometheus_protocol.ledger.spend import (
     SpendState,
     authorization_key,
     retry_verdict,
+    spend_state,
     spend_subject,
 )
 from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
@@ -1105,4 +1106,230 @@ def test_the_MEASURED_order_nulling_the_hold_claim_is_caught_before_the_spend(
     assert len(spy.calls) == 1, (
         "nulling the hold claim bought a second execution: neither the outcome "
         "walk nor the spend held"
+    )
+
+
+# ---------------------------------------------------------------------------
+# PART 8 — the three findings from the review of #127, each reproduced
+#
+# All three were in code written THIS sprint, and all three are the same shape
+# the sprint exists to close, one level down: a guarantee that holds against
+# the attack it was designed for and not against its mirror image.
+# ---------------------------------------------------------------------------
+
+
+def test_a_release_cannot_UN_SPEND_a_completed_occurrence(tmp_path):
+    """REPRODUCED before the fix, on an ordinary anchored ledger.
+
+    ``release_authorization`` for an already COMPLETED key deleted the mutex
+    row, appended a WELL-FORMED release, and the fold read ``released``;
+    ``retry_verdict`` then returned ``may_execute`` and the executor ran a
+    SECOND time — with ``verify_chain().ok`` True throughout, because nothing
+    was rewritten. An append that looks legitimate resurrected a spent
+    authorization.
+
+    The module docstring had reasoned only about a release being DELETED. The
+    outcome event carried an ordering check from the start and the release did
+    not, and that asymmetry was the whole defect.
+    """
+
+    ctl, spy, ledger = auto(tmp_path, "unspend")
+    a = fx.action()
+    one_action(ctl, a)
+    key = authorization_key(ledger.executions()[0]["authorization"])
+    assert ledger.authorization_spend_state(key).status == COMPLETED
+
+    ledger.release_authorization(key, released_at=_NOW, reason="forged")
+
+    # The fold REFUSES the history rather than folding it to the permissive
+    # answer, and the controller turns that into a typed refusal.
+    with pytest.raises(SpendRecordMalformed):
+        ledger.authorization_spend_state(key)
+    with pytest.raises(ExecutionNotAuthorized) as refused:
+        one_action(ctl, a)
+    assert refused.value.reason == "spend_record_unreadable"
+    assert len(spy.calls) == 1, (
+        "a forged release bought a second execution: the fold folded an "
+        "impossible history into the one answer that permits running again"
+    )
+
+
+def test_a_release_with_no_open_spend_at_all_is_also_a_broken_history():
+    """The same rule from the other side, as a pure fold.
+
+    A release under a subject that was never spent is not "unspent with extra
+    steps"; it is a history that cannot have happened, and doctrine #2 says a
+    state the fold cannot establish is refused rather than normalised.
+    """
+
+    key = "e" * 64
+    with pytest.raises(SpendRecordMalformed):
+        spend_state(
+            [
+                {
+                    "event": RELEASE_EVENT,
+                    "subject": spend_subject(key),
+                    "payload": {"key": key, "released_at": _NOW, "reason": "r"},
+                }
+            ],
+            key=key,
+        )
+
+
+def test_the_legitimate_release_and_re_claim_sequence_still_folds(tmp_path):
+    """THE PAIRED POSITIVE for the two refusals above (doctrine #4).
+
+    Without it, "a release is refused" is equally consistent with a fold that
+    refuses every release — which would brick the fail-closed retry path the
+    release exists for. Claim, release, re-claim, complete: the sequence a
+    refused execution followed by a successful retry actually produces.
+    """
+
+    ledger = anchored(tmp_path, "sequence")
+    key = "f" * 64
+    assert ledger.claim_authorization(
+        key, attempt_id="a1", idempotency_key=None, claimed_at=_NOW
+    )
+    ledger.release_authorization(key, released_at=_NOW, reason="no sandbox")
+    assert ledger.authorization_spend_state(key).status == RELEASED
+    assert ledger.claim_authorization(
+        key, attempt_id="a1", idempotency_key=None, claimed_at=_NOW
+    ), "a released occurrence must be claimable again, or a refusal bricks it"
+    ledger.complete_authorization(key, execution_id=1, completed_at=_NOW)
+    assert ledger.authorization_spend_state(key).status == COMPLETED
+    assert ledger.verify_chain().ok
+
+
+def test_the_check_and_set_in_consume_authorization_is_INSIDE_the_lock():
+    """STRUCTURAL, because the behavioural proof is not available. Measured.
+
+    Review of #127 was right that the check-and-set was two operations and not
+    atomic. Fixing it was easy; PROVING it behaviourally is not, and the
+    mutation runner said so before I claimed otherwise: replacing the lock with
+    a no-op context manager left a thread test GREEN, and a green mutation
+    means untested until a direct probe says otherwise.
+
+    THE DIRECT PROBE, on the unlocked check-and-set, 32 threads released from a
+    barrier:
+
+      * CPython's DEFAULT switch interval (5ms): **0 of 400 trials** raced. The
+        ``getattr`` and the ``object.__setattr__`` are adjacent, and the
+        interpreter almost never preempts between them.
+      * switch interval forced to 1e-7: **9 of 400 trials** raced, worst case
+        2 grants. Per-trial catch rate stayed near 1% at every thread count
+        tried (8/16/32/64).
+
+    So the race is REAL — that is what the second line measures — and a
+    behavioural test for it would be a test that fails to notice its own guard
+    being deleted about 99% of the time. That is worse than no test: it reads
+    as a proof.
+
+    WHAT IS PINNED HERE INSTEAD is the property that can be established with
+    certainty: the read and the write both happen inside the lock, derived from
+    the source rather than asserted about it. THE NAMED LIMIT: this does not
+    prove atomicity, it proves the code is shaped so that the interpreter
+    provides it. The lock still matters beyond CPython — a free-threaded build
+    has no GIL to mask the window at all.
+    """
+
+    import prometheus_protocol.policy.execution as module
+
+    tree = ast.parse(pathlib.Path(module.__file__).read_text(encoding="utf-8"))
+    functions = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "consume_authorization"
+    ]
+    assert len(functions) == 1, functions
+
+    guarded = [n for n in functions[0].body if isinstance(n, ast.With)]
+    assert len(guarded) == 1, (
+        "consume_authorization's body is no longer one guarded block; the "
+        "check-and-set must be inside exactly one lock"
+    )
+    held = {
+        name.id
+        for item in guarded[0].items
+        for name in ast.walk(item.context_expr)
+        if isinstance(name, ast.Name)
+    }
+    assert "_CONSUME_LOCK" in held, (
+        f"the check-and-set is inside a context manager over {sorted(held)}, "
+        "not the module lock"
+    )
+
+    inside = ast.dump(ast.Module(body=guarded[0].body, type_ignores=[]))
+    assert "authorization_already_spent" in inside, "the CHECK escaped the lock"
+    assert "__setattr__" in inside, "the SET escaped the lock"
+    # And nothing but the guarded block: a second copy of the set outside it
+    # would be the whole race again with a lock decorating it.
+    outside = ast.dump(
+        ast.Module(
+            body=[n for n in functions[0].body if not isinstance(n, ast.With)],
+            type_ignores=[],
+        )
+    )
+    assert "__setattr__" not in outside
+
+
+def test_the_first_caller_is_granted_and_every_later_one_is_refused():
+    """The deterministic half, and the paired positive for the structural pin.
+
+    Sequential rather than concurrent, deliberately: this asserts the OUTCOME
+    the lock exists to guarantee — exactly one grant, every later presentation
+    refused by name — without pretending to have observed a race.
+    """
+
+    from prometheus_protocol.policy.execution import consume_authorization
+
+    decision = minted(fx.action(), attempt_id="atomic-1")
+    consume_authorization(decision.authorization)
+
+    refusals = []
+    for _ in range(8):
+        with pytest.raises(ExecutionNotAuthorized) as refused:
+            consume_authorization(decision.authorization)
+        refusals.append(refused.value.reason)
+    assert set(refusals) == {"authorization_already_spent"}
+
+
+def test_a_returned_prior_result_NAMES_the_stdout_it_cannot_have(tmp_path):
+    """Doctrine #1 where the caller reads it.
+
+    ``executions`` has no ``stdout`` column, so a retry cannot be handed the
+    program's output. The first reconstruction left the field at its default —
+    ``""`` — which is exactly what a program that printed nothing produces, so
+    "never recorded" and "printed nothing" became the same bytes.
+
+    The column is NOT added: PROD-FIX-2 removed a raw model response from a
+    persisted record because a reflecting endpoint put a bearer token in the
+    ledger, and candidate stdout is the same class of text. The limit is named
+    instead, in the field a caller actually reads.
+    """
+
+    from prometheus_protocol.execution.controller import _STDOUT_NOT_RECORDED
+
+    ctl, spy, ledger = auto(tmp_path, "stdout")
+    a = fx.action()
+    one_action(ctl, a, idempotency_key="retry-me")
+    again = one_action(ctl, a, idempotency_key="retry-me")
+
+    assert len(spy.calls) == 1
+    assert again.execution.stdout == _STDOUT_NOT_RECORDED
+    assert again.execution.stdout != "", (
+        "an unrecorded stdout was returned as an empty string, which is what a "
+        "silent program produces"
+    )
+    assert _STDOUT_NOT_RECORDED in again.execution.detail
+
+    # And the limit is REAL rather than a habit: no execution row carries the
+    # field, derived from the table rather than asserted about one row.
+    columns = {
+        row["name"]
+        for row in ledger._conn.execute("PRAGMA table_info(executions)")
+    }
+    assert columns, "an empty column set reads downstream as a pass"
+    assert "stdout" not in columns, (
+        "executions now records stdout: return the real value and delete this "
+        "limit, rather than leaving a placeholder where the output is"
     )

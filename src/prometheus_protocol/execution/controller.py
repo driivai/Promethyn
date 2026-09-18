@@ -66,6 +66,11 @@ from prometheus_protocol.policy.record import authorization_record
 #: a chain of ``if``s so the mapping is one object a test can compare against
 #: the verdict set — a verdict added without a reason is then a missing key and
 #: a loud failure, not a refusal that silently borrows its neighbour's cause.
+#: What a returned prior result puts in ``stdout``, because the ledger records
+#: no such column and an empty string would read as "the program printed
+#: nothing". A named unavailable value, never a plausible one.
+_STDOUT_NOT_RECORDED = "stdout was not recorded for this execution"
+
 _SPEND_REFUSAL_REASON = {
     REPLAY: "authorization_already_spent",
     KEY_MISMATCH: "idempotency_key_mismatch",
@@ -497,14 +502,37 @@ class ExecutionController:
                     "whose row is missing: the prior result cannot be returned",
                     reason="execution_row_missing",
                 )
+            # WHAT IS RETURNED IS THE RECORDED OUTCOME, AND IT SAYS SO.
+            #
+            # ``executions`` has no ``stdout`` column — measured, not assumed:
+            # the row carries subject, source, executed, refused, sandbox,
+            # exit_status, detail, the judgment and the authorization record,
+            # and nothing else. So a retry cannot be handed the program's
+            # output, and the first version of this reconstruction left
+            # ``stdout`` at its default, which is ``""``.
+            #
+            # THAT IS THE ONE VALUE IT MUST NOT BE (doctrine #1). An empty
+            # string is what a program that printed nothing produces, so
+            # "never recorded" and "printed nothing" became the same bytes at
+            # the point a caller reads them — could-not-know reported as a
+            # fact about the program. Review of #127 named it.
+            #
+            # NOT FIXED BY ADDING THE COLUMN, deliberately. PROD-FIX-2 (F8)
+            # removed a raw model response from ``Evidence.detail`` precisely
+            # because an endpoint reflecting a header put a bearer token into
+            # the ledger; candidate stdout is the same class of unbounded,
+            # attacker-influenced text. The limit is stated instead, in the
+            # field a caller actually reads.
             return ExecutionResult(
                 executed=bool(row["executed"]),
                 subject_id=row["subject_id"],
                 detail=f"{detail_prefix}returned the prior result of this "
-                f"authorization (execution #{state.execution_id}): {row['detail']}",
+                f"authorization (execution #{state.execution_id}): {row['detail']}"
+                f" [{_STDOUT_NOT_RECORDED}]",
                 refused=bool(row["refused"]),
                 sandbox_name=row["sandbox"] or "",
                 exit_status=row["exit_status"],
+                stdout=_STDOUT_NOT_RECORDED,
             )
         raise ExecutionNotAuthorized(
             _SPEND_REFUSAL_DETAIL[verdict].format(
