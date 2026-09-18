@@ -181,6 +181,7 @@ def controller(
     route_high_risk: bool = False,
     policy: VerificationPolicy = POLICY,
     spy: Spy | None = None,
+    clock=None,
 ):
     ledger = ledger if ledger is not None else SqliteLedger(":memory:")
     spy = spy if spy is not None else Spy()
@@ -189,7 +190,12 @@ def controller(
         target_canonical=TARGET,
         route_high_risk=route_high_risk,
     )
-    return ExecutionController(gate=gate, executor=spy, ledger=ledger, clock=lambda: CLOCK), spy, ledger
+    # The frozen CLOCK stays the default: most tests here assert on recorded
+    # timestamps. A caller that needs time to MOVE — G24's retry window — hands
+    # in its own, rather than every test paying for an advancing clock.
+    return ExecutionController(
+        gate=gate, executor=spy, ledger=ledger, clock=clock or (lambda: CLOCK)
+    ), spy, ledger
 
 
 def hold(ctl, a: ExecutableAction):

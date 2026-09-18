@@ -28,16 +28,16 @@ line in path order, not the origin.
 | # | citations | first cited | the usage, in one line |
 |---|---|---|---|
 | 1 | 13 | `docs/OPEN-GAPS.md:1315` | `Unavailable` is first-class: absence of an answer is a value, never a default |
-| 2 | 7 | `docs/OPEN-GAPS.md:2782` | refused, not degraded: a state the guard cannot establish is written as a refusal, not a clean one |
+| 2 | 9 | `docs/OPEN-GAPS.md:2782` | refused, not degraded: a state the guard cannot establish is written as a refusal, not a clean one |
 | 3 | 0 | — | never cited in the tree |
-| 4 | 32 | `docs/OPEN-GAPS.md:358` | every negative has a positive control |
-| 5 | 15 | `docs/OPEN-GAPS.md:14` | a named gap is a passing test, so it cannot erode quietly |
+| 4 | 33 | `docs/OPEN-GAPS.md:358` | every negative has a positive control |
+| 5 | 16 | `docs/OPEN-GAPS.md:14` | a named gap is a passing test, so it cannot erode quietly |
 | 6 | 0 | — | never cited in the tree |
 | 7 | 0 | — | never cited in the tree |
-| 8 | 37 | `docs/OPEN-GAPS.md:2096` | an empty instrument reads downstream as a pass, so emptiness refuses |
+| 8 | 40 | `docs/OPEN-GAPS.md:2096` | an empty instrument reads downstream as a pass, so emptiness refuses |
 | 9 | 9 | `docs/OPEN-GAPS.md:47` | re-sweep documentation claims when the code they describe changes |
 | 10 | 4 | `docs/live-state-pinning-design.md:187` | a claim about existing behaviour carries a file and line, or is marked UNVERIFIED |
-| 11 | 12 | this file | counts come from the artifact, never from a filtered view of it (below) |
+| 11 | 13 | this file | counts come from the artifact, never from a filtered view of it (below) |
 
 The one-line usages for #1–#10 are paraphrases of how the citations use each
 number; they are not the doctrines' text, which was never written down. Where

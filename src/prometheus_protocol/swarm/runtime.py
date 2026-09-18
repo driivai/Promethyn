@@ -40,7 +40,14 @@ from prometheus_protocol.swarm.models import (
     VerifiedProposal,
     content_hash,
 )
+from prometheus_protocol.ledger.spend import (
+    MAY_EXECUTE,
+    authorization_key,
+    retry_verdict,
+)
 from prometheus_protocol.policy.coverage import BoundResult
+from prometheus_protocol.policy.execution import AuthorizedExecution
+from prometheus_protocol.policy.record import authorization_record
 from prometheus_protocol.policy.implementations import SWARM_CHECKS
 from prometheus_protocol.policy.profile import (
     CHECK_EXECUTABLE_CASES,
@@ -71,6 +78,16 @@ ACTION_SANDBOX_EXECUTE = _ACTION_SANDBOX_EXECUTE
 # this skeleton; live-tool evidence is follow-up). The DECLARED object from
 # ``policy/implementations.py``, by reference, not a re-spelled literal (G26).
 CHECK_VERIFIER_ID = SWARM_CHECKS
+
+
+def _utc_now_iso() -> str:
+    # Module-level, as ``orchestration/runtime.py:416`` already does, rather
+    # than an injected clock: this runtime has no clock seam to inject into,
+    # and the spend's timestamps are audit detail — the at-most-once guarantee
+    # is keyed on the bound fields and never on a time.
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
 
 
 @dataclass(frozen=True)
@@ -287,7 +304,7 @@ class SwarmRuntime:
                     attempt_id=attempt_id,
                 )
                 if decision.approved:
-                    execution = self.executor.execute(decision)
+                    execution = self._execute_once(decision, attempt_id)
 
             self._record(packet_id, entry, evidence, judgment, decision, execution)
             records.append(
@@ -474,6 +491,107 @@ class SwarmRuntime:
             return self.code_verifier.verify(code=proposal.content, task=task)
         except Exception:
             return None
+
+    def _execute_once(self, decision, attempt_id: str) -> ExecutionResult:
+        """Execute an approved decision AT MOST ONCE, on this path too.
+
+        G24 FOUND THREE PATHS TO AN EXECUTOR, NOT TWO. The controller's held
+        path claimed atomically and its auto-approved path did not; this third
+        one — a shipped path, built by ``runtime/factory.py:406`` — called
+        ``self.executor.execute(decision)`` with no claim of any kind and no
+        hold to claim. Re-running a packet re-ran every approved proposal in
+        it.
+
+        ONE MECHANISM, NOT A PARALLEL ONE. This is the same spend: the same key
+        derivation over the same authorization record, the same ledger methods,
+        the same two chain events, the same fold as the authority. What differs
+        is only what each caller RENDERS — the controller can return a prior
+        result as an ``ExecutionResult``, and this path reports a refusal,
+        because a swarm packet has no caller to hand a retry key to. That is a
+        difference in presentation, not in the guarantee.
+
+        NO IDEMPOTENCY KEY HERE, AND THAT IS THE NAMED LIMIT. Retryability is
+        opted into on the first call by a caller who can supply a key; this
+        path has no such caller, so a packet re-run is always a replay and is
+        always refused. An operator who means to run the work again gives the
+        packet a new identity, which changes ``attempt_id`` and makes it what
+        it actually is: a new occurrence. ``test_spend_the_authorization.py``
+        pins both halves.
+        """
+
+        # Narrowed in STATEMENT position, not a ternary: the repository's type
+        # gate refuses an ``isinstance`` in expression position on a union,
+        # and it caught this one — a third authorization shape would fall
+        # through a ternary's else-branch into ``None`` and be read here as
+        # "no descriptor", which is a refusal naming a cause it does not have.
+        record: dict | None = None
+        if isinstance(decision.authorization, AuthorizedExecution):
+            record = authorization_record(
+                decision.authorization, pinned_at=_utc_now_iso()
+            )
+        if record is None:
+            # No descriptor, no occurrence to spend. The executor refuses this
+            # decision on its own account; returning that refusal here keeps
+            # the un-spendable case from reaching it as if it were ordinary.
+            return ExecutionResult(
+                executed=False,
+                subject_id=decision.subject_id,
+                detail="refused: no validated execution descriptor, so this "
+                "action cannot be authorized as a single occurrence",
+                refused=True,
+            )
+        key = authorization_key(record)
+        state = self.ledger.authorization_spend_state(key)
+        at = _utc_now_iso()
+        # ``idempotency_key=None`` is the named limit above: this path declares
+        # no retry, so the only verdicts it can see are MAY_EXECUTE and a
+        # refusal. The window is passed anyway rather than defaulted away, so
+        # that a future caller here inherits a checked lifetime instead of an
+        # unchecked one.
+        if retry_verdict(state, idempotency_key=None, now=at) != MAY_EXECUTE:
+            return ExecutionResult(
+                executed=False,
+                subject_id=decision.subject_id,
+                detail=(
+                    f"refused: this authorization was already used ({state.status}); "
+                    "an authorization is spent when it is used, and re-running a "
+                    "packet is a replay rather than a retry"
+                ),
+                refused=True,
+            )
+        if not self.ledger.claim_authorization(
+            key, attempt_id=attempt_id, idempotency_key=None, claimed_at=at
+        ):
+            return ExecutionResult(
+                executed=False,
+                subject_id=decision.subject_id,
+                detail="refused: a concurrent driver spent this authorization",
+                refused=True,
+            )
+        result = self.executor.execute(decision)
+        # Settled the same way the controller settles it: a refusal had no side
+        # effect and releases by APPENDING a retraction; an execution that
+        # happened completes the spend. ``_record`` writes the execution row
+        # below, so the completion names it there.
+        if result.refused:
+            self.ledger.release_authorization(
+                key,
+                released_at=_utc_now_iso(),
+                reason=f"fail-closed refusal, no side effect: {result.detail}"[:200],
+            )
+        else:
+            # ``execution_id=None``, and that is a NAMED LIMIT rather than an
+            # omission: this path records an ATTEMPT row (``_record`` below),
+            # never an execution row, so there is no row for the completion to
+            # name. It still completes, because the difference between "ran"
+            # and "claimed and never came back" is exactly what an operator
+            # needs and this path does know which. What it cannot offer is a
+            # prior RESULT to return, which costs nothing here — no caller on
+            # this path can declare a retry key, so that branch is unreachable.
+            self.ledger.complete_authorization(
+                key, execution_id=None, completed_at=_utc_now_iso()
+            )
+        return result
 
     def _record(
         self,

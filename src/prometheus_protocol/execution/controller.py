@@ -46,8 +46,68 @@ from prometheus_protocol.policy.execution import (
     AuthorizedExecution,
     ExecutionNotAuthorized,
 )
+from prometheus_protocol.ledger.spend import (
+    DEFAULT_IDEMPOTENCY_WINDOW_SECONDS,
+    KEY_EXPIRED,
+    KEY_MISMATCH,
+    MAY_EXECUTE,
+    NOT_RETRYABLE,
+    OUTCOME_UNKNOWN,
+    REPLAY,
+    RETURN_PRIOR,
+    SpendRecordMalformed,
+    authorization_key,
+    retry_verdict,
+)
 from prometheus_protocol.policy.reobservation import refusal_retains_claim
 from prometheus_protocol.policy.record import authorization_record
+
+#: Which typed reason each refusing spend verdict carries. A table rather than
+#: a chain of ``if``s so the mapping is one object a test can compare against
+#: the verdict set — a verdict added without a reason is then a missing key and
+#: a loud failure, not a refusal that silently borrows its neighbour's cause.
+_SPEND_REFUSAL_REASON = {
+    REPLAY: "authorization_already_spent",
+    KEY_MISMATCH: "idempotency_key_mismatch",
+    NOT_RETRYABLE: "authorization_not_retryable",
+    OUTCOME_UNKNOWN: "execution_outcome_unknown",
+    KEY_EXPIRED: "idempotency_key_expired",
+}
+
+#: What each refusal SAYS. Kept beside the reason for the same reason the
+#: reasons are separate at all: an operator reading one of these has a
+#: different next step for each, and the message is where that is said.
+_SPEND_REFUSAL_DETAIL = {
+    REPLAY: (
+        "this authorization for {subject!r} was already used (spent at "
+        "{claimed_at}). An authorization is spent when it is used; a second "
+        "execution needs a new one. To retry the first, the original call had "
+        "to declare an idempotency key."
+    ),
+    KEY_MISMATCH: (
+        "a retry of this authorization for {subject!r} was declared with an "
+        "idempotency key that is not the one recorded when it was spent at "
+        "{claimed_at}: this is a different caller's retry, or a replay dressed "
+        "as one."
+    ),
+    NOT_RETRYABLE: (
+        "a retry of this authorization for {subject!r} was declared, but the "
+        "call that spent it at {claimed_at} declared no idempotency key, so no "
+        "retry was ever offered. Retryability is opted into on the FIRST call."
+    ),
+    OUTCOME_UNKNOWN: (
+        "this authorization for {subject!r} was claimed at {claimed_at} and "
+        "never completed: whether the side effect happened is unknown. It is "
+        "neither re-run nor reported as done — establish what happened, then "
+        "authorize deliberately."
+    ),
+    KEY_EXPIRED: (
+        "the idempotency key for {subject!r} matches, and the retry window "
+        "since {claimed_at} has passed. The occurrence stays spent and is NOT "
+        "re-run; the execution and its receipt are still on the ledger and can "
+        "be read there."
+    ),
+}
 from prometheus_protocol.swarm.executor import Executor
 from prometheus_protocol.swarm.models import ExecutionResult
 
@@ -94,11 +154,18 @@ class ExecutionController:
         clock: Callable[[], str] | None = None,
         ttl_seconds: int = _DEFAULT_TTL_SECONDS,
         reobservation: "ReObservation | None" = None,
+        idempotency_window_seconds: int = DEFAULT_IDEMPOTENCY_WINDOW_SECONDS,
     ) -> None:
         self._gate = gate
         self._executor = executor
         self._ledger = ledger
         self._clock = clock or _utc_now_iso
+        # G24 §3. How long a matching idempotency key is still honoured after
+        # the claim. A constructor argument rather than a ``Config`` field, and
+        # that shortfall is stated in ``ledger/spend.py`` and pinned by
+        # ``test_spend_the_authorization.py`` — it is not settable from the
+        # environment and does not reach the attested posture.
+        self._idempotency_window_seconds = idempotency_window_seconds
         # ONE registry, both comparisons. The pending service runs the
         # pre-approval comparison and this controller runs the pre-execution
         # re-read, and they must agree about which classes are observed and
@@ -167,8 +234,18 @@ class ExecutionController:
         attempt_id: str,
         risk_class: str = "low",
         subject_id: str = "",
+        idempotency_key: str | None = None,
     ) -> SubmitOutcome:
         """Authorize an action and act on the outcome.
+
+        ``idempotency_key`` is the caller's DECLARATION that this occurrence
+        may be retried, and it is opted into on the first call. Supplying the
+        same key again for the same occurrence returns that occurrence's
+        recorded result without running anything; supplying none, or a
+        different one, is a replay and refuses (G24, ``ledger/spend.py``).
+        Note what it is NOT: it is not part of the occurrence's identity, so it
+        cannot be used to make two executions of one authorization look like
+        two authorizations.
 
         approve -> execute now; route -> halt as a pending action; block ->
         record and never execute; unavailable -> record distinctly and halt, when
@@ -196,7 +273,9 @@ class ExecutionController:
         )
         outcome = decision.effective_outcome
         if outcome == OUTCOME_APPROVE:
-            result = self._execute(decision, source="auto-approved")
+            result = self._execute(
+                decision, source="auto-approved", idempotency_key=idempotency_key
+            )
             return SubmitOutcome(outcome=outcome, decision=decision, execution=result)
         if outcome == OUTCOME_ROUTE:
             held = self._pending.hold(decision, risk_class=risk_class, action=action)
@@ -348,6 +427,92 @@ class ExecutionController:
 
         return len(self._ledger.executions_for_pending(pending_id)) + 1
 
+    def _spend_key(self, decision: GateDecision, record: dict | None) -> str:
+        """This occurrence's identity, or a refusal.
+
+        REFUSED, NOT SKIPPED. An approved decision with no authorization record
+        is one whose bound fields cannot be named, so no spend can be recorded
+        against it — and an execution that cannot be spent is an execution that
+        could be replayed forever. Treating a missing record as "no spend
+        needed" would re-open the exception this sprint closes, one level down.
+        """
+
+        if record is None:
+            raise ExecutionNotAuthorized(
+                "this decision carries no authorization record, so the "
+                "occurrence it would execute cannot be identified or spent",
+                reason="descriptor_absent",
+            )
+        try:
+            return authorization_key(record)
+        except SpendRecordMalformed as exc:
+            raise ExecutionNotAuthorized(
+                f"the authorization record cannot be reduced to an occurrence: {exc}",
+                reason="spend_record_unreadable",
+            ) from exc
+
+    def _settle_spend(
+        self,
+        key: str,
+        decision: GateDecision,
+        *,
+        idempotency_key: str | None,
+        detail_prefix: str,
+    ) -> ExecutionResult | None:
+        """Dispatch on what this caller is entitled to; ``None`` means run.
+
+        The prior result is returned for a DECLARED retry whose key matches,
+        and it is read back through the chain's record of which execution row
+        completed the spend — not recomputed and not re-executed. Every other
+        used state refuses with its own typed reason.
+        """
+
+        try:
+            state = self._ledger.authorization_spend_state(key)
+        except SpendRecordMalformed as exc:
+            raise ExecutionNotAuthorized(
+                f"this occurrence's spend record cannot be read: {exc}",
+                reason="spend_record_unreadable",
+            ) from exc
+        verdict = retry_verdict(
+            state,
+            idempotency_key=idempotency_key,
+            now=self._clock(),
+            window_seconds=self._idempotency_window_seconds,
+        )
+        if verdict == MAY_EXECUTE:
+            return None
+        if verdict == RETURN_PRIOR:
+            row = (
+                self._ledger.execution(state.execution_id)
+                if state.execution_id is not None
+                else None
+            )
+            if row is None:
+                # A completed spend whose row is gone: the inverse walk
+                # ``receipts.py`` names. There is a recorded execution and no
+                # record of what it did, which is not a result to return.
+                raise ExecutionNotAuthorized(
+                    f"this occurrence completed as execution #{state.execution_id}, "
+                    "whose row is missing: the prior result cannot be returned",
+                    reason="execution_row_missing",
+                )
+            return ExecutionResult(
+                executed=bool(row["executed"]),
+                subject_id=row["subject_id"],
+                detail=f"{detail_prefix}returned the prior result of this "
+                f"authorization (execution #{state.execution_id}): {row['detail']}",
+                refused=bool(row["refused"]),
+                sandbox_name=row["sandbox"] or "",
+                exit_status=row["exit_status"],
+            )
+        raise ExecutionNotAuthorized(
+            _SPEND_REFUSAL_DETAIL[verdict].format(
+                subject=decision.subject_id, claimed_at=state.claimed_at
+            ),
+            reason=_SPEND_REFUSAL_REASON[verdict],
+        )
+
     def _execute(
         self,
         decision: GateDecision,
@@ -356,11 +521,32 @@ class ExecutionController:
         pending_id: int | None = None,
         detail_prefix: str = "",
         record: dict | None = None,
+        idempotency_key: str | None = None,
     ) -> ExecutionResult:
         # The authorization record the execution row carries: the hold's PINNED
         # record when it came from one, otherwise the decision's own.
         if record is None:
             record = _record_or_none(decision, at=self._clock())
+        # ------------------------------------------------------------------
+        # G24: THE SPEND. An authorization is spent when it is USED, and this
+        # is the one place every path passes through, so this is where it is
+        # consumed. No `pending_id is not None` guard: the exception for the
+        # auto-approved path is precisely the finding, and "the same gateway
+        # with an exception" is what made the control-plane claim
+        # unfalsifiable.
+        #
+        # ORDER, and why it is this order. The STATE is read here, early, so a
+        # replay is refused before any work is done and with a reason that
+        # names which of the five states it is in. The CLAIM is taken below,
+        # immediately before the executor, because only an atomic claim
+        # adjacent to the call is at-most-once under concurrency. The read is
+        # for the message; the claim is for the guarantee.
+        key = self._spend_key(decision, record)
+        prior = self._settle_spend(
+            key, decision, idempotency_key=idempotency_key, detail_prefix=detail_prefix
+        )
+        if prior is not None:
+            return prior
         # At-most-once execution per hold: atomically claim the right to run
         # before calling the executor, so two concurrent drivers (a second
         # approve racing the first, or concurrent retries) cannot both execute.
@@ -455,8 +641,25 @@ class ExecutionController:
                 if not refusal_retains_claim(refusal):
                     self._ledger.release_pending_execution(pending_id)
                 raise
+        # THE CLAIM, adjacent to the executor and nothing between them. One
+        # statement against a PRIMARY KEY, so of any number of concurrent
+        # drivers on any path exactly one proceeds. The loser refuses with the
+        # same reason a replay gets, because from its side that is what it is:
+        # the occurrence was spent by someone else.
+        attempt_id = str(record.get("attempt_id", "")) if record is not None else ""
+        if not self._ledger.claim_authorization(
+            key,
+            attempt_id=attempt_id,
+            idempotency_key=idempotency_key,
+            claimed_at=self._clock(),
+        ):
+            raise ExecutionNotAuthorized(
+                f"this authorization for {decision.subject_id!r} was spent by a "
+                "concurrent driver between the check and the claim",
+                reason="authorization_already_spent",
+            )
         result = self._executor.execute(decision)
-        self._ledger.record_execution(
+        execution_id = self._ledger.record_execution(
             subject_id=decision.subject_id,
             source=source,
             executed=result.executed,
@@ -475,6 +678,28 @@ class ExecutionController:
             started_ok=result.started_ok,
             candidate_started=result.candidate_started,
         )
+        # THE SPEND SETTLES, both ways, and on every path.
+        #
+        # A fail-closed refusal has no side effect, so the authorization is
+        # RELEASED — by appending a retraction, never by deleting the spend.
+        # Without this a missing sandbox would burn the authorization
+        # permanently, which is the same brick the hold claim's release exists
+        # to avoid, and the reason a release is available at all.
+        #
+        # An execution that happened COMPLETES the spend, naming the row it
+        # wrote. That is what makes a later declared retry able to return this
+        # result rather than run anything, and what separates "ran" from
+        # "claimed and never came back".
+        if result.refused:
+            self._ledger.release_authorization(
+                key,
+                released_at=self._clock(),
+                reason=f"fail-closed refusal, no side effect: {result.detail}"[:200],
+            )
+        else:
+            self._ledger.complete_authorization(
+                key, execution_id=execution_id, completed_at=self._clock()
+            )
         # A fail-closed refusal has no side-effect: release the claim so the
         # approved hold stays retry-eligible. A successful execution keeps its
         # claim, so the hold cannot execute again.

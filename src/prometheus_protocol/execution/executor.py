@@ -52,11 +52,20 @@ class SandboxExecutor(Executor):
                 "Executor.execute accepts only a GateDecision; a proposal or "
                 "test plan cannot be executed"
             )
-        from prometheus_protocol.policy.execution import AuthorizedExecution
+        from prometheus_protocol.policy.execution import (
+            AuthorizedExecution,
+            consume_authorization,
+        )
         if not isinstance(decision.authorization, AuthorizedExecution):
             raise ValueError("gate decision carries no validated execution descriptor")
         if not decision.approved:
             raise ValueError("refusing to execute an unapproved gate decision")
+        # G24: the authorization is spent HERE, by the executor that acts on
+        # it, because a caller holding a retained decision reaches this line
+        # without passing a gateway. Before the sandbox check and before any
+        # refusal: a second presentation is refused for being a second
+        # presentation, whatever the sandbox would have said about it.
+        consume_authorization(decision.authorization)
 
         action = decision.action
         if action is None:

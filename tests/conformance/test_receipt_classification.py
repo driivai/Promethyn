@@ -485,7 +485,15 @@ def test_sqlite_reports_the_table_each_guarded_reader_reads(tmp_path):
     from prometheus_protocol.ledger.readers import reader_methods
 
     ledger = SqliteLedger(tmp_path / "scope.db")
-    arguments = {"pending_id": 1, "threshold": 0.5, "workflow_id": "w"}
+    arguments = {
+        "pending_id": 1,
+        "threshold": 0.5,
+        "workflow_id": "w",
+        "execution_id": 1,
+        # A key with no spend recorded: this section is about DECODING,
+        # and an absent occurrence still has to be read out of the chain.
+        "key": "0" * 64,
+    }
     observed: dict[str, set[str]] = {}
     for name in reader_methods(SqliteLedger):
         descriptor = inspect.getattr_static(SqliteLedger, name)
@@ -513,7 +521,14 @@ def test_sqlite_reports_the_table_each_guarded_reader_reads(tmp_path):
     assert observed == {
         "attempts": {"attempts"},
         "authoritative_pass_below": {EXECUTION_TABLE},
+        # G24's two additions. ``authorization_spend_state`` folds the chain,
+        # so ``audit_chain`` is its whole scope: the spend is DERIVED from the
+        # append-only record and never read off the ``spent_authorizations``
+        # row, which exists only to decide a race. If this row ever grows that
+        # table, the authority moved to a mutable row and the ruling changed.
+        "authorization_spend_state": {"audit_chain"},
         "chained_events": {"audit_chain"},
+        "execution": {EXECUTION_TABLE},
         "executions": {EXECUTION_TABLE},
         "executions_below_confidence": {EXECUTION_TABLE},
         "executions_for_pending": {EXECUTION_TABLE},
@@ -645,7 +660,15 @@ def test_every_guarded_reader_refuses_an_undecodable_row_in_the_typed_vocabulary
     projection and the snapshot, which decodes all three tables whatever the
     reader touched, so a reader of an unrelated table refuses too."""
 
-    arguments = {"pending_id": 1, "threshold": 0.5, "workflow_id": "w"}
+    arguments = {
+        "pending_id": 1,
+        "threshold": 0.5,
+        "workflow_id": "w",
+        "execution_id": 1,
+        # A key with no spend recorded: this section is about DECODING,
+        # and an absent occurrence still has to be read out of the chain.
+        "key": "0" * 64,
+    }
     ledger = SqliteLedger(tmp_path / "corrupt.db")
     _corrupt_a_json_column(ledger)
     descriptor = inspect.getattr_static(SqliteLedger, reader)

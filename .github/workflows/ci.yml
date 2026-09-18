@@ -274,6 +274,18 @@ jobs:
         # Each row must redden the proof it names; the runner raises otherwise.
         run: python scripts/matrix_agreement_proofs.py
 
+      - name: Spend the authorization reverts (must be caught)
+        # G24, both attack classes on the occurrence spend: the spend check,
+        # the chained counterpart (row kept), the claim, the executor wall and
+        # two fold refusals DELETED; the key comparison made to compare a value
+        # against itself, a spend record re-attributed from a different
+        # occurrence, the auto-approved path excluded from the claim again, and
+        # the occurrence's identity narrowed — SUBSTITUTED. Every row names the
+        # proof it must redden and the runner raises otherwise; it also runs
+        # each row a second time with every assert deleted and reports which
+        # rows are carried by asserts alone rather than summing the two.
+        run: python scripts/spend_proofs.py
+
       - name: Receipt classification reverts (must be caught)
         # Both attack classes on the unreceipted/tampered split, the two read
         # scopes and the report vocabulary. The runner refuses a surviving

@@ -35,11 +35,19 @@ class RecordingExecutor(Executor):
                 "Executor.execute accepts only a GateDecision; a proposal or "
                 "test plan cannot be executed"
             )
-        from prometheus_protocol.policy.execution import AuthorizedExecution
+        from prometheus_protocol.policy.execution import (
+            AuthorizedExecution,
+            consume_authorization,
+        )
         if not isinstance(decision.authorization, AuthorizedExecution):
             raise ValueError("gate decision carries no validated execution descriptor")
         if not decision.approved:
             raise ValueError("refusing to execute an unapproved gate decision")
+        # G24. A no-op recorder has no side effect to duplicate, and it is
+        # guarded anyway: an executor that is exempt is an executor a caller
+        # can reach for when they want a second run, and "no side effect" is a
+        # property of this implementation rather than of the interface.
+        consume_authorization(decision.authorization)
         self.executed.append(decision)
         return ExecutionResult(
             executed=True,

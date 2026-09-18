@@ -282,21 +282,52 @@ def test_inv_exec_4_execution_chain_is_re_readable_from_the_ledger():
         ledger=ledger,
         clock=lambda: _CLOCK,
     )
+    # ONE ATTEMPT ID PER SUBMISSION, and this is G24's ruling showing up in a
+    # test that predates it. These three submissions used to share
+    # ``attempt-1``; under "an authorization is spent when it is used" the
+    # first two are ONE occurrence — same artifact, same policy, same attempt —
+    # and the second is refused as a replay. ``subject_id`` is deliberately not
+    # part of the occurrence (it is not in the descriptor), because a key that
+    # included it could be replayed by relabelling the subject.
+    #
+    # What this test is FOR is unchanged: three submissions, three sources,
+    # re-readable from the ledger. Each now names its own attempt, which is
+    # what real callers do — ``orchestration/runtime.py:258`` and
+    # ``benchmarks/sql_loop_demo.py:93`` both pass ``attempt_id=subject_id``.
+    def assessed(outcome, attempt_id):
+        return carrying(
+            outcome,
+            artifact_sha256=content_hash("print('MARK')"),
+            attempt_id=attempt_id,
+        )
+
     controller.submit(
-        attempt_id="attempt-1",
-        assessment=_PASS_HIGH,
+        attempt_id="attempt-auto",
+        assessment=assessed(
+            Judgment(verdict=Verdict.PASS, confidence=0.99, authoritative=True),
+            "attempt-auto",
+        ),
         action=_action(),
         subject_id="s/auto",
     )
     held = controller.submit(
-        attempt_id="attempt-1",
-        assessment=_PASS_LOW,
+        attempt_id="attempt-hold",
+        assessment=assessed(
+            Judgment(verdict=Verdict.PASS, confidence=0.60, authoritative=True),
+            "attempt-hold",
+        ),
         action=_action(),
         subject_id="s/hold",
     ).pending
     controller.approve(held.id, identity="will@driivai.com")
     controller.submit(
-        attempt_id="attempt-1", assessment=_FAIL, action=_action(), subject_id="s/block"
+        attempt_id="attempt-block",
+        assessment=assessed(
+            Judgment(verdict=Verdict.FAIL, confidence=0.99, authoritative=True),
+            "attempt-block",
+        ),
+        action=_action(),
+        subject_id="s/block",
     )
 
     execs = ledger.executions()

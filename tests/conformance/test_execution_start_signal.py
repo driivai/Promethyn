@@ -554,17 +554,23 @@ def test_the_branch_delete_executor_keeps_the_same_distinction(tmp_path):
 
     fixture._make_repo(tmp_path)
     tool = fixture._tool(tmp_path)
-    decision = ActionGate(
-        target_canonical=f"git://{tool.repo_path}",
-        authorizer=ExecutionAuthorizer(lambda: load_profile(DEFAULT_PROFILE_ID)),
-    ).decide(
-        fixture._assessment(tool, fixture.BRANCH),
-        attempt_id=f"delete-branch:{fixture.BRANCH}",
-        action=tool.delete_action(fixture.BRANCH),
-        subject_id="s",
-    )
 
     def run(**fields):
+        # A FRESH decision per run. G24 made a minted authorization single-use
+        # at the executor wall, so handing one object to both runs would now be
+        # refused as a replay — and it should be: these are two attempts under
+        # two different harness conditions, and the first one's refusal (no
+        # side effect) is exactly the case that leaves the caller free to mint
+        # again and try.
+        decision = ActionGate(
+            target_canonical=f"git://{tool.repo_path}",
+            authorizer=ExecutionAuthorizer(lambda: load_profile(DEFAULT_PROFILE_ID)),
+        ).decide(
+            fixture._assessment(tool, fixture.BRANCH),
+            attempt_id=f"delete-branch:{fixture.BRANCH}",
+            action=tool.delete_action(fixture.BRANCH),
+            subject_id="s",
+        )
         return GitBranchDeleteExecutor(
             repo_path=tmp_path, sandbox=_GitTriple(**fields), allow_delete=True
         ).execute(decision)
@@ -675,6 +681,23 @@ _AUTHORIZATION_REFUSAL_REASONS = frozenset({
     # the inverse walk (review of #121): a receipt whose row is gone
     "execution_row_missing",
     "hold_row_missing",
+    # G24: an authorization is SPENT when it is used. Every one of these
+    # answers "why may this authorization not proceed" — the authorization
+    # stage's own question — and none of them describes what the sandbox did,
+    # which is the line G35 draws and the reason this pin exists.
+    #
+    # ``execution_outcome_unknown`` is the one worth arguing, because its NAME
+    # contains "execution". It is still an authorization condition: it does not
+    # report a harness fault or a candidate's fate, it reports that this
+    # occurrence was already claimed and the system cannot establish what
+    # happened — so the authorization cannot be granted again. A name is not a
+    # membership (G25) in this direction too.
+    "authorization_already_spent",
+    "idempotency_key_mismatch",
+    "authorization_not_retryable",
+    "idempotency_key_expired",
+    "execution_outcome_unknown",
+    "spend_record_unreadable",
 })
 
 
@@ -705,7 +728,7 @@ def test_the_authorization_vocabulary_names_no_harness_fault():
     # The count is asserted too, and it is NOT the property — membership is.
     # It is here because G35 quotes a number, and a quoted number that nothing
     # checks is how "nineteen" was written for a set of seventeen.
-    assert len(EXECUTION_REFUSAL_REASONS) == 24
+    assert len(EXECUTION_REFUSAL_REASONS) == 30
     assert "descriptor_absent" in EXECUTION_REFUSAL_REASONS
 
 

@@ -554,6 +554,35 @@ EXPECTED_PROTECTED_FILES = 23
 #:   and emitted reason: the controller halts without an approvable human hold.
 #:   These are deliberate content changes, not a permanent exemption for paths.
 #:
+#: * **G24 — AN AUTHORIZATION IS SPENT WHEN IT IS USED** — three files, one
+#:   ruling. Measured at ``7cc2c4c``: the same correctly bound assessment,
+#:   action and ``attempt_id`` submitted twice called the executor TWICE and
+#:   wrote two execution rows, and a retained approved ``GateDecision`` handed
+#:   straight to a concrete executor ran TWICE. A third path — ``swarm/
+#:   runtime.py`` — reached an executor with no claim at all.
+#:
+#:   - ``execution/controller.py`` — ``_execute`` now spends the OCCURRENCE on
+#:     every path, with NO ``pending_id is not None`` exception: that exception
+#:     was the finding. The state is read early (so a replay refuses by name)
+#:     and the claim is taken immediately before the executor (so it is
+#:     at-most-once under concurrency). ``submit`` gains an optional
+#:     ``idempotency_key``; a matching retry returns the PRIOR result, read
+#:     through the chain, and calls no executor. The hold claim is untouched
+#:     and remains the hold's retry-eligibility state.
+#:   - ``execution/executor.py`` — ``SandboxExecutor.execute`` consumes the
+#:     minted authorization BEFORE the sandbox check, because a caller holding
+#:     a retained decision reaches that line without passing any gateway. A
+#:     second presentation is refused for being a second presentation, whatever
+#:     the sandbox would have said.
+#:   - ``core/interfaces.py`` — the ``Ledger`` port gains the five spend
+#:     methods and the single-row ``execution`` reader. A port that could not
+#:     express the spend would have made the guarantee a property of one
+#:     implementation.
+#:
+#:   The authority is the append-only chain, not the ``spent_authorizations``
+#:   row, which decides the race and nothing else. See ``docs/OPEN-GAPS.md``
+#:   G55 for the measurement, the residuals and what the mutation runner found.
+#:
 #: Those sprints are why these bytes are what they are. They do NOT license the
 #: next edit to the same files: updating a digest below is a fresh decision, and
 #: the reason for it belongs beside it.
@@ -571,13 +600,13 @@ DIGESTS: dict[str, str] = {
     "src/prometheus_protocol/benchmarks/judge_eval.py":
         "25430b5645aff6f655cfaccf33edd9e1cea3e5b4d0c62ef7f23183d9da9f3866",
     "src/prometheus_protocol/core/interfaces.py":
-        "90bc623d7739638de84e25ed1430a1504f66f8788d16ba9304436d92141bc039",
+        "b7cbd57ea6b3ae889effac572e69fe111fd6f5e1701237019dcc560f8f1d4689",
     "src/prometheus_protocol/core/models.py":
         "96fe20410439abdb87fd9a34becdffab032fd106a5fa70f80271527a79df5910",
     "src/prometheus_protocol/execution/controller.py":
-        "101bcd19dcd0f2c8c35e4e484ed6ad94a50e2bd5c8d76261ec1e71ed2e833b5c",
+        "106540abe7732f15999106ff2b863cb13aa1865186140fa8e25f1256f7ad3ce6",
     "src/prometheus_protocol/execution/executor.py":
-        "4ab23cc2c96ba2ff17115126c6786bc1600ddad1109f9dabb814c97622bb0508",
+        "406e74033bc63d0c1739d109cab02ee31a553e5194d2e529526787dbe9dc944d",
     "src/prometheus_protocol/execution/pending.py":
         "eb4f2af5dd7999b4ed7504b8a52831af9522494fce3a5d88580bbd5224b4536a",
     "src/prometheus_protocol/forge/miner.py":
