@@ -663,6 +663,23 @@
         "test_the_tracker_states_an_entry_schema_that_nothing_enforces"
       ],
       "property": "the tracker's stated entry schema is followed by one entry in fifty-six, measured by a split that parses real entries with real bodies"
+    },
+    {
+      "module": "tests/conformance/test_execution_start_signal.py",
+      "positive": "test_the_POSITIVE_CONTROL_a_real_run_still_claims_both",
+      "negatives": [
+        "test_a_refusal_taken_BEFORE_the_sandbox_claims_neither_harness_fact",
+        "test_the_refusal_reaches_the_AUDIT_LEDGER_claiming_nothing"
+      ],
+      "property": "a refusal taken before the sandbox claims neither harness fact while a real isolating run still claims both -- without the positive, 'the record claims nothing' is equally consistent with an executor that never records a successful execution at all (G56)"
+    },
+    {
+      "module": "tests/conformance/test_execution_start_signal.py",
+      "positive": "test_the_shape_rule_is_not_universally_true",
+      "negatives": [
+        "test_no_site_may_claim_a_harness_fact_it_did_not_MEASURE"
+      ],
+      "property": "no site claims a harness fact with a literal True, established by an AST sweep that really can tell a literal from a measured value"
     }
   ]
 }

@@ -109,15 +109,15 @@ def test_the_documents_the_ledger_did_not_read_are_counted_and_named():
     # The sprint's own output is not one of its sources. Held apart rather than
     # folded into either bucket: counting a document as read because this sprint
     # wrote it is the shape of crediting a component the guard never saw.
-    output = {str(SPRINT.relative_to(REPO))} & population
+    output = {str(SPRINT.relative_to(REPO)), "docs/assurance-ledger-sprint-1.md"} & population
     unread = population - inventoried - consulted - output
 
     # The tie-back: every member of the population lands in exactly one bucket,
     # so a file the partition cannot see is a red line and not a quiet shortfall.
     assert len(inventoried) + len(consulted) + len(output) + len(unread) == len(population)
 
-    assert len(population) == 48, (
-        f"docs/ now holds {len(population)} markdown files, not 48. Re-measure "
+    assert len(population) == 49, (
+        f"docs/ now holds {len(population)} markdown files, not 49. Re-measure "
         "docs/assurance-ledger-sprint-0.md §1.5 rather than editing this number."
     )
     assert len(unread) == 41, (
@@ -136,7 +136,7 @@ _UNREAD_AT_SPRINT_0 = frozenset(
     _markdown_under("docs")
     - {n for n in CLAIM_SOURCES_READ if n.startswith("docs/")}
     - {n for n in CONSULTED_NOT_INVENTORIED if n.startswith("docs/")}
-    - {"docs/assurance-ledger-sprint-0.md"}
+    - {"docs/assurance-ledger-sprint-0.md", "docs/assurance-ledger-sprint-1.md"}
 )
 
 
@@ -355,20 +355,25 @@ def test_the_tracker_states_an_entry_schema_that_nothing_enforces():
     """
 
     entries = _tracker_entries()
-    assert len(entries) == 56, (
-        f"the tracker now has {len(entries)} headings, not 56; re-measure §1.3"
+    # 56 -> 57 on 2026-09-18: G56 (the fail-open harness facts). Re-measured
+    # from the artifact after the entry landed, never predicted before it.
+    assert len(entries) == 57, (
+        f"the tracker now has {len(entries)} headings, not 57; re-measure §1.3"
     )
 
     adherence = {
         field: sum(1 for _, body in entries if re.search(pattern, body))
         for field, pattern in _SCHEMA_FIELDS.items()
     }
+    # Re-measured 2026-09-18 with G56 added: What 38->39, Measured 27->28,
+    # Test 23->24. The new entry carries three of the five stated fields, which
+    # is the median and is itself the finding this test records.
     assert adherence == {
-        "What": 38,
-        "Measured": 27,
+        "What": 39,
+        "Measured": 28,
         "Why not closed": 2,
         "What closes it": 12,
-        "Test": 23,
+        "Test": 24,
     }, f"tracker schema adherence changed: {adherence}; re-measure §1.3"
 
     complete = [

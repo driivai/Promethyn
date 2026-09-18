@@ -753,3 +753,253 @@ def test_the_boolean_pair_IS_expressible_which_is_the_other_half():
     assert (setup_timeout.started_ok, setup_timeout.candidate_started) == (True, False)
     assert (no_runtime.started_ok, no_runtime.candidate_started) == (False, False)
     assert not setup_timeout.executed and not no_runtime.executed
+
+
+# ===========================================================================
+# THE FAIL-OPEN DEFAULT ON THE SAME TWO FLAGS
+#
+# #130 flipped ``stdout_recorded`` to the fail-closed direction after finding
+# that a claim true of the FIVE sites passing ``stdout=`` had been made about
+# all ELEVEN that construct ``ExecutionResult``. Its own entry names
+# ``started_ok`` and ``candidate_started`` as "two facts" and left both
+# defaulting ``True``.
+#
+# Measured on the tree before this change, from the AST of every construction:
+#
+#     ExecutionResult constructions in src/: 11
+#     started_ok:        explicit at 5 sites, INHERITED at 6
+#     candidate_started: explicit at 2 sites, INHERITED at 9
+#
+# and of the thirteen ``_refuse`` calls, NINE inherited at least one
+# permissive default — four of them refusals taken before the sandbox is ever
+# constructed. The controller persists both flags into the audit ledger
+# (``controller.py``, the one call that passes them), so the claim reached the
+# audit record.
+# ===========================================================================
+
+
+class _NeverRuns(Sandbox):
+    """Not isolating, so ``execute`` refuses BEFORE ``_run``. ``run`` raises:
+    if the refusal path ever reached the sandbox this would say so loudly
+    rather than letting the probe pass for the wrong reason."""
+
+    name = "never-runs"
+    isolating = False
+
+    def run(self, *, argv, workspace, limits):  # pragma: no cover - must not run
+        raise AssertionError("the sandbox was invoked on a pre-sandbox refusal path")
+
+
+def test_a_refusal_taken_BEFORE_the_sandbox_claims_neither_harness_fact():
+    """THE REPRODUCTION. Nothing started, so the record must not say it did.
+
+    Observed before the fix::
+
+        started_ok        : True   <- the sandbox was never invoked
+        candidate_started : True   <- nothing ran
+
+    The adapter is non-isolating, which ``SandboxExecutor.execute`` refuses
+    before constructing anything, and its ``run`` raises — so this cannot pass
+    because the sandbox quietly ran and reported success.
+    """
+
+    result = SandboxExecutor(sandbox=_NeverRuns()).execute(_approved())
+
+    assert result.refused and not result.executed
+    assert result.started_ok is False, (
+        "a refusal taken before the sandbox is constructed claimed isolation "
+        "started; the default was True and this path inherited it"
+    )
+    assert result.candidate_started is False, (
+        "the same refusal claimed the candidate began"
+    )
+
+
+def test_the_refusal_reaches_the_AUDIT_LEDGER_claiming_nothing():
+    """The consequential half: the controller persists both flags.
+
+    ``record_execution`` is three-valued (``None`` = no executor invoked) and
+    the controller passes ``result.started_ok``/``result.candidate_started``
+    straight through on the one path that calls an executor. A refusal
+    inheriting ``True`` therefore wrote ``started_ok=1, candidate_started=1``
+    into the ``executions`` table for a run that never happened.
+    """
+
+    from prometheus_protocol.execution.controller import ExecutionController
+    from prometheus_protocol.ledger.sqlite_ledger import SqliteLedger
+
+    code = "print('RAN')"
+    action = ExecutableAction(kind=ACTION_PYTHON_CODE, code=code)
+    assessed = carrying(
+        Judgment(verdict=Verdict.PASS, confidence=1.0, authoritative=True),
+        artifact_sha256=content_hash(code),
+    )
+    ledger = SqliteLedger(":memory:")
+    controller = ExecutionController(
+        gate=ActionGate(
+            target_canonical="sandbox://test",
+            authorizer=ExecutionAuthorizer(lambda: a_policy()),
+        ),
+        executor=SandboxExecutor(sandbox=_NeverRuns()),
+        ledger=ledger,
+    )
+    controller.submit(
+        attempt_id="attempt-1", assessment=assessed, action=action, subject_id="s"
+    )
+
+    rows = ledger.executions()
+    assert len(rows) == 1, f"expected one execution row, got {len(rows)}"
+    row = rows[0]
+    assert row["refused"] is True and row["executed"] is False
+    assert row["started_ok"] is False, (
+        "the audit ledger records that isolation started for a refusal whose "
+        "sandbox was never invoked — couldn't-verify persisted as "
+        "verified-clean (doctrine #1)"
+    )
+    assert row["candidate_started"] is False
+
+
+def test_the_POSITIVE_CONTROL_a_real_run_still_claims_both():
+    """The positive control for the two reproductions above (doctrine #4).
+
+    Without this, "no site claims a harness fact" is equally
+    consistent with an executor that never claims anything at all, and the
+    reproduction above would pass against a record that says nothing ever runs.
+
+    ``_Triple`` is isolating and reports a real started/started/no-timeout run,
+    which is the one shape that must still come back claiming both.
+    """
+
+    result = _execute(started_ok=True, candidate_started=True, exit_status=0)
+
+    assert result.executed and not result.refused
+    assert result.started_ok is True and result.candidate_started is True
+
+
+def test_the_two_harness_flags_default_to_the_fail_closed_answer():
+    """An unset flag must under-claim, never over-claim — #130's rule, applied
+    to the two fields its own entry named and did not change."""
+
+    import dataclasses
+
+    from prometheus_protocol.swarm.models import ExecutionResult
+
+    fields = {f.name: f for f in dataclasses.fields(ExecutionResult)}
+    assert fields["started_ok"].default is False
+    assert fields["candidate_started"].default is False
+    bare = ExecutionResult(executed=False, subject_id="s")
+    assert bare.started_ok is False and bare.candidate_started is False
+
+
+def test_no_site_may_claim_a_harness_fact_it_did_not_MEASURE():
+    """The population rule, derived from the AST rather than hand-listed.
+
+    A site that observed isolation passes the value the ADAPTER reported
+    (``result.started_ok``); a site that did not leaves the fail-closed
+    default. So a literal ``True`` is never correct here: it is a claim
+    written by hand at a place that cannot have measured anything, and it is
+    what the two pre-fix ``_refuse`` defaults and the git dry-run were.
+
+    This needs no allowlist and no judgement about which sites "really ran" —
+    which is the half Sprint 0 could not derive. The rule is over the SHAPE of
+    the argument, and the shape is in the tree.
+    """
+
+    src = Path(__file__).resolve().parents[2] / "src"
+    flags = ("started_ok", "candidate_started")
+    literal_true, measured = [], []
+    for path in sorted(src.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            called = getattr(node.func, "id", getattr(node.func, "attr", None))
+            if called not in ("ExecutionResult", "_refuse"):
+                continue
+            for keyword in node.keywords:
+                if keyword.arg not in flags:
+                    continue
+                where = f"{path.relative_to(src.parent)}:{node.lineno}:{keyword.arg}"
+                if isinstance(keyword.value, ast.Constant) and keyword.value.value is True:
+                    literal_true.append(where)
+                else:
+                    measured.append(where)
+
+    assert measured, (
+        "no harness-fact argument found at all: an empty sweep reads as a pass "
+        "(doctrine #8), and this rule would then hold vacuously"
+    )
+    assert literal_true == [], (
+        f"site(s) claiming a harness fact with a literal True: {literal_true}. "
+        "Pass the value the sandbox adapter reported, or leave the fail-closed "
+        "default. A hand-written True is a claim nothing measured."
+    )
+
+
+def test_the_shape_rule_is_not_universally_true():
+    """The positive control for the sweep above: it must be able to say no.
+
+    A collector that matched nothing, or that classified every argument as
+    "measured", would make the rule vacuous for every site at once.
+    """
+
+    planted = ast.parse(
+        "ExecutionResult(executed=False, subject_id='s', started_ok=True)\n"
+        "ExecutionResult(executed=False, subject_id='s', started_ok=result.started_ok)\n"
+    )
+    verdicts = []
+    for node in ast.walk(planted):
+        if isinstance(node, ast.Call):
+            for keyword in node.keywords:
+                if keyword.arg == "started_ok":
+                    verdicts.append(
+                        isinstance(keyword.value, ast.Constant)
+                        and keyword.value.value is True
+                    )
+    assert verdicts == [True, False], verdicts
+
+
+def test_the_replay_carries_the_STORED_harness_facts_not_a_default():
+    """The third site the default reached, and the least visible.
+
+    ``_returned_prior_result`` rebuilds an ``ExecutionResult`` from a stored
+    ``executions`` row. It reconstructed ``executed``, ``refused``,
+    ``sandbox_name`` and ``exit_status`` from the row and inherited the two
+    harness facts — so every replay asserted isolation had started and the
+    candidate had begun, whatever the row said, including rows whose columns
+    are ``NULL`` because no executor was ever invoked.
+    """
+
+    import inspect
+
+    from prometheus_protocol.execution import controller as controller_module
+
+    source = inspect.getsource(controller_module)
+    tree = ast.parse(source)
+    replays = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and getattr(node.func, "id", None) == "ExecutionResult"
+        and any(
+            isinstance(k.value, ast.Constant) and k.value.value is False
+            for k in node.keywords
+            if k.arg == "stdout_recorded"
+        )
+    ]
+    assert len(replays) == 1, (
+        f"expected exactly the one replay construction, found {len(replays)}"
+    )
+    carried = {
+        k.arg: ast.unparse(k.value)
+        for k in replays[0].keywords
+        if k.arg in ("started_ok", "candidate_started")
+    }
+    assert carried == {
+        "started_ok": "bool(row['started_ok'])",
+        "candidate_started": "bool(row['candidate_started'])",
+    }, (
+        f"the replay does not carry the stored harness facts: {carried}. A "
+        "NULL column means no executor was invoked and must read as False, "
+        "never as the class default."
+    )

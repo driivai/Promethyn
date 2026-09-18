@@ -62,10 +62,22 @@ tests), **J = 5 named as not measured by this probe**. 10 + 7 + 5 = 22, tied
 back to the population. That is the target artifact, at the scale this sprint
 could honestly reach.
 
+> **WITHDRAWN 2026-09-18.** `K = 7, J = 5` was wrong: the inert rows were
+> separated by hand, and three of the five had in fact executed the mutation
+> and survived it. Measured mechanically in Sprint 1, this axis is **M = 10,
+> K = 10, J = 2**. See §4.7's withdrawal and
+> `docs/assurance-ledger-sprint-1.md` §2.3.
+
 ## The measurement environment, stated before any number
 
-Measured 2026-09-18 at commit `bfe0a1b`, Python 3.11.14, Linux,
+Measured 2026-09-18 at commit `bfe0a1b`, Python 3.11, Linux,
 `pip install -e ".[dev]" -c constraints.txt`.
+
+> **Corrected 2026-09-18 (Sprint 1).** This line said "Python 3.11.14", a
+> version I had not run `python -V` to obtain — a claim about existing
+> behaviour with no observation behind it, which is doctrine #10 broken in the
+> document's own environment header. Observed: **3.11.15**. The suite numbers
+> below reproduce on it.
 
 ```
 $ python -m pytest -q
@@ -974,6 +986,23 @@ uniform. It is not the whole repository, and §5 says why it cannot be.
 >
 > 10 + 7 + 5 = 22. The bookkeeping ties back to the population, which is the
 > only property of this statement that is mechanically guaranteed.
+
+> ### WITHDRAWN 2026-09-18 — `K = 7, J = 5` above is wrong
+>
+> Sprint 1 replaced the hand reading with a mechanical oracle: does the mutated
+> statement EXECUTE during the proof run? Measured that way, the correct
+> figures for this axis are **M = 10, K = 10, J = 2**.
+>
+> `allow_insecure_loopback`, `ledger_anchor` and `require_ledger_anchor` were
+> classified inert by reading their branches. All three REACH the mutated line
+> and all three SURVIVE it — they are non-isolating, not unmeasured. **K was
+> understated by three and J overstated by three**, and the error moved three
+> real survivors out of the column that counts them, which is the flattering
+> direction.
+>
+> The figures are left standing above and withdrawn here rather than edited,
+> so the record shows what was claimed and what corrected it. See
+> `docs/assurance-ledger-sprint-1.md` §2.3.
 
 **Read the K row carefully, because it is the easiest sentence here to
 over-read.** It does not say those seven mechanisms are broken; every one of

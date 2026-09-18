@@ -35,6 +35,13 @@ rather than at their origins. That is what "earliest line in path order, not the
 origin" means, and the earlier cells were `docs/live-state-pinning-design.md:187`
 and this file.
 
+**Re-measured again on 2026-09-18 (G56 and Sprint 1).** Counts moved for #1,
+#4, #8, #10 and #11; #11's "first cited" moved to `docs/OPEN-GAPS.md:5191`
+because that file sorts before the sprint documents and now carries a citation
+of its own. The location column moved without the count column moving for #2
+(`:2852` → `:2858`) — the same unchecked column corrected below, drifting again
+with the lines above it.
+
 **And a correction the pin could not make.** Row #2's "first cited" read
 `docs/OPEN-GAPS.md:2782`; the derivation puts it at `docs/OPEN-GAPS.md:2852`. The
 count column is pinned and was right; the *location* column is checked by
@@ -44,17 +51,17 @@ existing behaviour, carrying a file and line, that was never re-read.
 
 | # | citations | first cited | the usage, in one line |
 |---|---|---|---|
-| 1 | 17 | `docs/OPEN-GAPS.md:1315` | `Unavailable` is first-class: absence of an answer is a value, never a default |
-| 2 | 10 | `docs/OPEN-GAPS.md:2852` | refused, not degraded: a state the guard cannot establish is written as a refusal, not a clean one |
+| 1 | 20 | `docs/OPEN-GAPS.md:1315` | `Unavailable` is first-class: absence of an answer is a value, never a default |
+| 2 | 10 | `docs/OPEN-GAPS.md:2858` | refused, not degraded: a state the guard cannot establish is written as a refusal, not a clean one |
 | 3 | 0 | — | never cited in the tree |
-| 4 | 36 | `docs/OPEN-GAPS.md:358` | every negative has a positive control |
+| 4 | 38 | `docs/OPEN-GAPS.md:358` | every negative has a positive control |
 | 5 | 21 | `docs/OPEN-GAPS.md:14` | a named gap is a passing test, so it cannot erode quietly |
 | 6 | 0 | — | never cited in the tree |
 | 7 | 0 | — | never cited in the tree |
-| 8 | 49 | `docs/OPEN-GAPS.md:2096` | an empty instrument reads downstream as a pass, so emptiness refuses |
+| 8 | 52 | `docs/OPEN-GAPS.md:2096` | an empty instrument reads downstream as a pass, so emptiness refuses |
 | 9 | 10 | `docs/OPEN-GAPS.md:47` | re-sweep documentation claims when the code they describe changes |
-| 10 | 7 | `docs/assurance-ledger-sprint-0.md:18` | a claim about existing behaviour carries a file and line, or is marked UNVERIFIED |
-| 11 | 19 | `docs/assurance-ledger-sprint-0.md:16` | counts come from the artifact, never from a filtered view of it (below) |
+| 10 | 9 | `docs/assurance-ledger-sprint-0.md:18` | a claim about existing behaviour carries a file and line, or is marked UNVERIFIED |
+| 11 | 21 | `docs/OPEN-GAPS.md:5191` | counts come from the artifact, never from a filtered view of it (below) |
 
 The one-line usages for #1–#10 are paraphrases of how the citations use each
 number; they are not the doctrines' text, which was never written down. Where

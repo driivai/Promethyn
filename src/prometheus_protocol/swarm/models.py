@@ -175,7 +175,7 @@ class ExecutionResult:
     isolation ``started_ok``, whether the candidate itself began
     (``candidate_started``), the ``sandbox_name`` that ran it, the process
     ``exit_status``, and captured ``stdout``. A no-op recorder leaves them at
-    their defaults.
+    their defaults, which say that nothing started and nothing ran.
 
     ``started_ok`` AND ``candidate_started`` ARE TWO FACTS, not one, and the
     record carries both because their remedies differ. Isolation that never
@@ -188,14 +188,43 @@ class ExecutionResult:
     ``started_ok=False`` — overwriting a true fact with a false one and making
     the two harness faults indistinguishable in the record. Collapsing them is
     the defect the refusal itself existed to fix, committed one field over.
+
+    BOTH DEFAULT TO ``False``, AND DID NOT UNTIL NOW. #130 flipped
+    ``stdout_recorded`` to the fail-closed direction after finding that a claim
+    true of the five sites passing ``stdout=`` had been made about all eleven
+    that construct this class. The same entry names ``started_ok`` and
+    ``candidate_started`` as "two facts" one paragraph above — and left them
+    defaulting ``True``. Measured on this tree before the change: of the eleven
+    constructions, ``started_ok`` was inherited at SIX and ``candidate_started``
+    at NINE, and five of those are paths where nothing ran at all — three swarm
+    refusals, the ledger replay, and a controller refusal. The executor's
+    ``_refuse`` helper repeated the shape with its own ``=True`` parameter
+    defaults, inherited by nine of thirteen call sites, four of them refusals
+    taken BEFORE the sandbox is constructed.
+
+    Observed end to end at the audit ledger before the fix, driving the real
+    ``SandboxExecutor`` against a non-isolating adapter whose ``run`` raises::
+
+        executions rows written: 1
+          executed          : False
+          refused           : True
+          started_ok        : True   <- the sandbox was never invoked
+          candidate_started : True   <- nothing ran
+
+    That is couldn't-verify persisted as verified-clean in the audit record,
+    which is doctrine #1 at the point the executor's own comment calls "where it
+    is most expensive". Defaulting ``False`` means a path that forgets to state
+    a fact under-claims rather than asserting one that did not happen; the sites
+    that really observed isolation pass the MEASURED value rather than a
+    literal, so the claim cannot drift from the guard above it.
     """
 
     executed: bool
     subject_id: str
     detail: str = ""
     refused: bool = False
-    started_ok: bool = True
-    candidate_started: bool = True
+    started_ok: bool = False
+    candidate_started: bool = False
     sandbox_name: str = ""
     exit_status: int | None = None
     stdout: str = ""

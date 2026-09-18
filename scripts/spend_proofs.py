@@ -47,9 +47,20 @@ CONTROLLER = "src/prometheus_protocol/execution/controller.py"
 POLICY = "src/prometheus_protocol/policy/execution.py"
 MODELS = "src/prometheus_protocol/swarm/models.py"
 EXECUTOR = "src/prometheus_protocol/execution/executor.py"
+GIT = "src/prometheus_protocol/tools/git.py"
+START_SIGNAL = "tests/conformance/test_execution_start_signal.py"
 
-#: ``(label, [(path, old, new), ...], selector)``.
-MUTATIONS: tuple[tuple[str, tuple[tuple[str, str, str], ...], str], ...] = (
+#: ``(label, [(path, old, new), ...], selector)`` or, where the proof lives in
+#: a different module, ``(label, edits, selector, module)``.
+#:
+#: THE MODULE IS PART OF THE ROW because a runner bound to one test file can
+#: only pin proofs that happen to live there, and the fail-open harness-fact
+#: rows below are proved in ``test_execution_start_signal.py`` — the module
+#: that owns those two flags. Each distinct module gets its OWN clean baseline
+#: and its own stripped baseline, established before any mutation is applied;
+#: a module whose stripped baseline is red has no second-order control and the
+#: run refuses rather than reporting a figure it did not measure.
+MUTATIONS: tuple[tuple, ...] = (
     # 1. THE SPEND CHECK, DELETED. The read is what turns a spent occurrence
     #    into a typed answer; with it gone the claim still refuses a replay, so
     #    what is lost is the RETRY — the one thing only the read can give.
@@ -358,6 +369,88 @@ MUTATIONS: tuple[tuple[str, tuple[tuple[str, str, str], ...], str], ...] = (
         ),
         "test_only_a_site_that_CAPTURES_output_may_claim_it_recorded_it",
     ),
+    # ---- THE SAME CLASS ON THE TWO FLAGS #130's OWN ENTRY NAMED -----------
+    #
+    # ``stdout_recorded`` was flipped fail-closed; ``started_ok`` and
+    # ``candidate_started`` — named as "two facts" one paragraph above in the
+    # same docstring — were left defaulting ``True``. Measured before the fix:
+    # ``started_ok`` inherited at 6 of 11 constructions, ``candidate_started``
+    # at 9 of 11, and 9 of 13 ``_refuse`` calls inherited at least one. These
+    # rows restore each half of the defect.
+    #
+    # 17. THE CLASS DEFAULTS, FLIPPED FAIL-OPEN AGAIN.
+    (
+        "harness-facts-default-fail-open",
+        (
+            (
+                MODELS,
+                "    started_ok: bool = False\n    candidate_started: bool = False\n",
+                "    started_ok: bool = True\n    candidate_started: bool = True\n",
+            ),
+        ),
+        "test_the_two_harness_flags_default_to_the_fail_closed_answer",
+        START_SIGNAL,
+    ),
+    # 18. THE REFUSAL HELPER'S DEFAULTS, RESTORED TO THE PERMISSIVE VALUE.
+    #     Four of this module's six ``_refuse`` calls are refusals taken
+    #     BEFORE the sandbox is constructed, and every one inherited these.
+    (
+        "refusal-helper-claims-what-it-never-observed",
+        (
+            (
+                EXECUTOR,
+                "        started_ok: bool = False,\n        candidate_started: bool = False,\n",
+                "        started_ok: bool = True,\n        candidate_started: bool = True,\n",
+            ),
+        ),
+        "test_a_refusal_taken_BEFORE_the_sandbox_claims_neither_harness_fact",
+        START_SIGNAL,
+    ),
+    # 19. THE SAME, MEASURED AT THE AUDIT LEDGER rather than at the executor's
+    #     return value — the consequential half, since the controller persists
+    #     both flags into the ``executions`` table.
+    (
+        "refusal-claims-reach-the-audit-ledger",
+        (
+            (
+                EXECUTOR,
+                "        started_ok: bool = False,\n        candidate_started: bool = False,\n",
+                "        started_ok: bool = True,\n        candidate_started: bool = True,\n",
+            ),
+        ),
+        "test_the_refusal_reaches_the_AUDIT_LEDGER_claiming_nothing",
+        START_SIGNAL,
+    ),
+    # 20. A HAND-WRITTEN CLAIM WHERE A MEASUREMENT BELONGS. The shape rule has
+    #     no allowlist: a literal ``True`` is a claim nothing measured, and the
+    #     site restored here is the git dry-run, which constructs no sandbox.
+    (
+        "a-literal-claim-replaces-a-measurement",
+        (
+            (
+                GIT,
+                "                refused=False,\n                # NOTHING RAN.",
+                "                refused=False,\n                started_ok=True,\n                # NOTHING RAN.",
+            ),
+        ),
+        "test_no_site_may_claim_a_harness_fact_it_did_not_MEASURE",
+        START_SIGNAL,
+    ),
+    # 21. THE REPLAY DROPS THE STORED FACTS AGAIN. A row whose columns are
+    #     NULL — no executor invoked — read back as the class default.
+    (
+        "replay-discards-the-stored-harness-facts",
+        (
+            (
+                CONTROLLER,
+                '                started_ok=bool(row["started_ok"]),\n'
+                '                candidate_started=bool(row["candidate_started"]),\n',
+                "",
+            ),
+        ),
+        "test_the_replay_carries_the_STORED_harness_facts_not_a_default",
+        START_SIGNAL,
+    ),
 )
 
 
@@ -375,13 +468,23 @@ def run() -> int:
         flush=True,
     )
     survivors: list[str] = []
+    modules = []
+    for row in MUTATIONS:
+        module = row[3] if len(row) > 3 else TESTS
+        if module not in modules:
+            modules.append(module)
+    print(f"proof modules named by the table: {len(modules)} -> {modules}", flush=True)
+    baseline_counts: dict[str, int] = {}
     with MutationWorktree(include_dirty=True) as tree:
-        reds, summary = tree.pytest([TESTS])
-        print(f"baseline: {summary}", flush=True)
-        clean = re.fullmatch(r"(\d+) passed in [\d.]+s", summary)
-        if reds or clean is None:
-            raise RuntimeError("baseline did not pass; no mutation evidence collected")
-        baseline_count = int(clean.group(1))
+        for module in modules:
+            reds, summary = tree.pytest([module])
+            print(f"baseline[{module}]: {summary}", flush=True)
+            clean = re.fullmatch(r"(\d+) passed in [\d.]+s", summary)
+            if reds or clean is None:
+                raise RuntimeError(
+                    f"baseline did not pass for {module}; no mutation evidence collected"
+                )
+            baseline_counts[module] = int(clean.group(1))
 
         # THE STRIPPED BASELINE, MEASURED BEFORE ANY MUTATION IS APPLIED, and
         # this runner published a false number for want of it.
@@ -401,33 +504,37 @@ def run() -> int:
         # baseline that is not clean means the second-order experiment has no
         # control, and an experiment with no control produces no evidence —
         # doctrine #8, applied to a runner rather than a sweep.
-        original = (tree.path / TESTS).read_text()
-        weakened = ast.unparse(WithoutAssertions().visit(ast.parse(original))) + "\n"
-        tree.apply(TESTS, original, weakened)
-        stripped_reds, stripped_summary = tree.pytest([TESTS])
-        print(f"stripped baseline: {stripped_summary}", flush=True)
-        for node in stripped_reds:
-            print(f"  RED {node}", flush=True)
-        if stripped_reds:
-            raise RuntimeError(
-                "the assertions-deleted baseline is RED before any mutation is "
-                "applied, so the second-order runs have no control and measure "
-                "nothing. Almost always a side-effecting assert: move the call "
-                f"out of the assert. Reds: {stripped_reds}"
-            )
+        for module in modules:
+            tree.revert()
+            original = (tree.path / module).read_text()
+            weakened = ast.unparse(WithoutAssertions().visit(ast.parse(original))) + "\n"
+            tree.apply(module, original, weakened)
+            stripped_reds, stripped_summary = tree.pytest([module])
+            print(f"stripped baseline[{module}]: {stripped_summary}", flush=True)
+            for node in stripped_reds:
+                print(f"  RED {node}", flush=True)
+            if stripped_reds:
+                raise RuntimeError(
+                    f"the assertions-deleted baseline is RED for {module} before any "
+                    "mutation is applied, so the second-order runs have no control "
+                    "and measure nothing. Almost always a side-effecting assert: "
+                    f"move the call out of the assert. Reds: {stripped_reds}"
+                )
         tree.revert()
-        for label, edits, selector in MUTATIONS:
+        for row in MUTATIONS:
+            label, edits, selector = row[0], row[1], row[2]
+            module = row[3] if len(row) > 3 else TESTS
             for stripped in (False, True):
                 tree.revert()
                 for path, old, new in edits:
                     tree.apply(path, old, new)
                 if stripped:
-                    original = (tree.path / TESTS).read_text()
+                    original = (tree.path / module).read_text()
                     weakened = (
                         ast.unparse(WithoutAssertions().visit(ast.parse(original))) + "\n"
                     )
-                    tree.apply(TESTS, original, weakened)
-                reds, summary = tree.pytest([TESTS])
+                    tree.apply(module, original, weakened)
+                reds, summary = tree.pytest([module])
                 name = f"{label}{'-assertions-deleted' if stripped else ''}"
                 print(f"{name}: {summary}", flush=True)
                 for node in reds:
@@ -448,9 +555,10 @@ def run() -> int:
                     continue
                 if not reds or counts is None:
                     raise RuntimeError(f"{label}: no valid red measurement")
-                if int(counts.group(1)) + int(counts.group(2)) != baseline_count:
+                if int(counts.group(1)) + int(counts.group(2)) != baseline_counts[module]:
                     raise RuntimeError(
-                        f"{label}: proof population changed from {baseline_count}"
+                        f"{label}: proof population in {module} changed from "
+                        f"{baseline_counts[module]}"
                     )
                 if not any(node.endswith("::" + selector) for node in reds):
                     raise RuntimeError(

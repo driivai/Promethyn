@@ -142,8 +142,13 @@ class SandboxExecutor(Executor):
                 # runtime — two harness faults with different remedies,
                 # collapsed into one value. ``candidate_started`` carries what
                 # actually went wrong.
-                started_ok=True,
-                candidate_started=False,
+                #
+                # The MEASURED value, not the literal ``True`` this used to
+                # pass: the guard above returns on ``not result.started_ok``,
+                # so the two agree today, and passing what the adapter reported
+                # means they cannot stop agreeing silently.
+                started_ok=result.started_ok,
+                candidate_started=result.candidate_started,
             )
 
         # The action ran inside isolation. exit_status records its own success
@@ -157,7 +162,12 @@ class SandboxExecutor(Executor):
                 f"(exit {result.exit_status}, network denied)"
             ),
             refused=False,
-            started_ok=True,
+            # THE MEASURED VALUES, not literals. Both are necessarily True
+            # here — the two guards above return on the False branch — and
+            # passing what the adapter reported rather than ``True`` means the
+            # claim cannot survive a change to either guard.
+            started_ok=result.started_ok,
+            candidate_started=result.candidate_started,
             sandbox_name=self._sandbox.name,
             exit_status=result.exit_status,
             stdout=result.stdout,
@@ -171,9 +181,19 @@ class SandboxExecutor(Executor):
         decision: GateDecision,
         detail: str,
         *,
-        started_ok: bool = True,
-        candidate_started: bool = True,
+        started_ok: bool = False,
+        candidate_started: bool = False,
     ) -> ExecutionResult:
+        """Both facts default to the fail-closed answer.
+
+        These defaulted ``True``, and four of this module's six ``_refuse``
+        calls are refusals taken BEFORE ``_run`` — no action, a descriptor
+        mismatch, an unsupported kind, a non-isolating adapter — where the
+        sandbox is never constructed. Every one of them claimed isolation had
+        started and the candidate had begun, and the controller persists both
+        into the audit ledger. The two calls that really did observe isolation
+        state what they observed and are unaffected.
+        """
         return ExecutionResult(
             executed=False,
             subject_id=decision.subject_id,

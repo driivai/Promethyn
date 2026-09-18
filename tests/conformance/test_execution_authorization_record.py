@@ -169,10 +169,27 @@ class Spy(Executor):
     def execute(self, decision: GateDecision) -> ExecutionResult:
         self.calls.append(decision)
         if self._refuse:
+            # "no sandbox" — so isolation did not start and nothing ran, and the
+            # two harness facts are left at their fail-closed defaults. Stating
+            # them would be this spy claiming what it is simulating NOT having.
             return ExecutionResult(
                 executed=False, subject_id=decision.subject_id, refused=True, detail="no sandbox"
             )
-        return ExecutionResult(executed=True, subject_id=decision.subject_id)
+        # STATED, because this spy stands in for a SUCCESSFUL execution and the
+        # class defaults now say that nothing started. G56 flipped
+        # ``started_ok``/``candidate_started`` fail-closed after finding that
+        # nine of thirteen refusal sites inherited a ``True`` they had not
+        # observed; the same flip makes a spy that inherits them report a
+        # success in which isolation never came up. The callers that tamper
+        # with these columns (``test_receipt_derivation``) need a row whose
+        # stored value differs from the tampered one, and a simulated success
+        # is the one place saying so is honest.
+        return ExecutionResult(
+            executed=True,
+            subject_id=decision.subject_id,
+            started_ok=True,
+            candidate_started=True,
+        )
 
 
 def controller(

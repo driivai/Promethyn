@@ -521,7 +521,11 @@ class GitBranchDeleteExecutor(Executor):
                     f"in {self.repo_path}"
                 ),
                 refused=False,
-                started_ok=True,
+                # NOTHING RAN. This said ``started_ok=True`` explicitly, which
+                # is the only site in the tree that asserted the claim rather
+                # than inheriting it: a dry run constructs no sandbox, so
+                # isolation did not start and git did not begin. Both flags are
+                # left at their fail-closed defaults and the record says so.
                 sandbox_name=self._sandbox.name,
                 exit_status=None,
                 stdout="",
@@ -555,9 +559,10 @@ class GitBranchDeleteExecutor(Executor):
                 f"and nothing can be claimed about it: {result.detail}",
                 # Isolation really did start; saying otherwise would collapse
                 # this into "no runtime", a different fault with a different
-                # remedy. ``candidate_started`` carries what went wrong.
-                started_ok=True,
-                candidate_started=False,
+                # remedy. ``candidate_started`` carries what went wrong. The
+                # measured values, not literals — see the executor's twin.
+                started_ok=result.started_ok,
+                candidate_started=result.candidate_started,
             )
         deleted = result.exit_status == 0
         return ExecutionResult(
@@ -573,7 +578,9 @@ class GitBranchDeleteExecutor(Executor):
                 )
             ),
             refused=False,
-            started_ok=True,
+            # The measured values, not literals — see the executor's twin.
+            started_ok=result.started_ok,
+            candidate_started=result.candidate_started,
             sandbox_name=self._sandbox.name,
             exit_status=result.exit_status,
             stdout=result.stdout,
@@ -588,9 +595,17 @@ class GitBranchDeleteExecutor(Executor):
         decision: GateDecision,
         detail: str,
         *,
-        started_ok: bool = True,
-        candidate_started: bool = True,
+        started_ok: bool = False,
+        candidate_started: bool = False,
     ) -> ExecutionResult:
+        """Both facts default to the fail-closed answer.
+
+        The same shape as ``execution/executor.py``: five of this module's
+        seven ``_refuse`` calls are refusals taken before the sandbox runs —
+        no action, an unsupported kind, an unsafe branch name, the base
+        branch, a non-isolating adapter — and every one of them claimed
+        isolation had started and git had begun.
+        """
         return ExecutionResult(
             executed=False,
             subject_id=decision.subject_id,

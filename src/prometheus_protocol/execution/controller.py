@@ -532,6 +532,17 @@ class ExecutionController:
                 refused=bool(row["refused"]),
                 sandbox_name=row["sandbox"] or "",
                 exit_status=row["exit_status"],
+                # CARRIED FROM THE STORED ROW, which has held both columns
+                # since #120 and which this replay was discarding. The row is
+                # three-valued (``None`` means no executor was invoked, see
+                # ``sqlite_ledger._execution_row``) and ``ExecutionResult`` is
+                # two-valued, so ``None`` reads as ``False``: a replay of a row
+                # that never observed isolation does not claim it did. Before
+                # this, both were inherited — and the inherited value was
+                # ``True``, so every replay asserted isolation had started and
+                # the candidate had begun, whatever the row said.
+                started_ok=bool(row["started_ok"]),
+                candidate_started=bool(row["candidate_started"]),
                 # OUT OF BAND. The sentence stays in ``detail``, where prose
                 # belongs and where no consumer reads captured output; the
                 # FACT that nothing was captured is its own field, because a
