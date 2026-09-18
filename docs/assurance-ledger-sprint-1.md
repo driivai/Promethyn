@@ -621,3 +621,185 @@ the same commit that claimed to strengthen it.
   allowlist that is too narrow reddens a legitimate new form, which is a false
   red and a cost — paid deliberately, because the other direction is a false
   green and this entry is a record of what false greens cost.
+
+---
+
+# Third review round — the population, twice, and a red CI I caused myself
+
+Two more findings on `5d5f3f0`, both correct, both reproduced before either was
+touched. Neither is a weakness in a *rule*: both are **members a collector could
+not see**, which is the fourth and fifth time in this pull request that the
+population rather than the logic was the hole.
+
+| # | the collector | the member it could not see | verdict |
+|---|---|---|---|
+| C | the `*_AT_SPRINT_0` sweep | `_OTHER_AT_SPRINT_0: frozenset[str] = frozenset(_current_unread())` — an `AnnAssign`, not an `Assign` | GREEN |
+| D | the harness-flag sweep | `ExecutionResult(False, subject, "", False, True, True)` — the flags claimed in the fifth and sixth POSITIONAL slots | GREEN |
+
+Finding C is worse than it first reads. The skipped binding was not merely
+unchecked: it never reached the population assertion either, which went on
+naming the same two snapshots and passing. **A collector that cannot see a
+member cannot refuse it, and it cannot report that it is missing one.** That is
+doctrine #8 in the shape the sprint document names as taxonomy mode 5.
+
+## What changed
+
+* `_snapshot_binding` reads **both** binding forms and returns `("", None)` for
+  a statement that binds no single name, so a bare annotation is not mistaken
+  for a snapshot with an empty value.
+* `ExecutionResult.started_ok` and `.candidate_started` are now
+  **`field(default=False, kw_only=True)`**. Measured first: **0 of 22**
+  constructions in the tree pass any positional argument, so nothing depended on
+  the old signature. The class now refuses the shape outright — the fifth and
+  sixth slots bind elsewhere and the flags keep their fail-closed default.
+* The collector reads the positional slots **anyway**, with the binding order
+  derived from `dataclasses.fields` on the live class, so the rule does not
+  depend on the `kw_only` line staying and the two halves fail independently.
+* **Row 23**, `record-class-harness-flags-no-longer-keyword-only`: removing the
+  keyword-only guard must redden its pin.
+
+## Executed proof
+
+```
+FINDING C   CONTROL            GREEN   CATCHES RED   REPRODUCE GREEN
+FINDING D   CONTROL kw-only pin GREEN
+            CONTROL shape rule  GREEN
+            STRUCTURAL          RED     (kw_only removed -> its pin notices)
+            DEFENCE             RED     (kw_only removed + positional claim
+                                         planted -> the rule itself notices)
+            REPRODUCE           GREEN   (the reviewed head sees neither)
+```
+
+**Finding D needed two legs, and the first version of its proof asserted the
+wrong thing.** It expected the fixed guard to *catch* a planted positional
+claim. It did not, and should not have: with the flags keyword-only there is no
+claim left to catch — the argument binds to `sandbox_name` and the flags stay
+`False`. A structural fix and a detection fix are different claims and they need
+different legs, and writing the expectation down before the run is what exposed
+the confusion.
+
+## Finding D's premise, refused: the tree was not defenceless
+
+The finding says a positional claim leaves "the population rule green despite a
+new unmeasured harness claim". The first half is right and is measured above.
+The second half overstates it, and the thing that settles it is a guard neither
+the review nor I had consulted.
+
+`tests/conformance/test_open_gaps.py::test_positional_construction_of_wide_dataclasses_does_not_grow`
+is G2's ratchet over every dataclass of six fields or more, swept across `src`,
+`tests`, `scripts` and `harness`. `ExecutionResult` is not in
+`POSITIONAL_SITES_CEILING`, so its ceiling is **zero**. Planting the reviewer's
+exact evasion in `src/` on the reviewed head `5d5f3f0`:
+
+```
+harness-flag rule         GREEN   1 passed
+G2 positional ratchet     RED     1 failed
+```
+
+So the shape could not have reached `main` through this rule's blind spot; a
+different guard, written for a different reason, refuses it. That does not make
+the finding wrong — a rule whose sentence says "no site may claim a harness fact
+it did not measure" must be able to see the claim, and it could not. It makes
+the *consequence* wrong, and the difference matters: **two guards agreeing is
+what defence in depth looks like, and reporting one of them as the only one is
+how a tree gets described as weaker than it is.** Recorded in the direction that
+does not flatter me either — I did not know G2 covered this until my own change
+made it fail.
+
+And it failed for a reason worth keeping: the behavioural assertion in the new
+keyword-only pin was itself a positional construction of a wide dataclass, so
+G2 counted it and refused. The repository already has the convention for that —
+`test_evidence_and_judgment_cannot_be_built_positionally` calls through a local
+name and says why — and the pin now follows it rather than inventing a way
+around the sweep. A control that evades the guard it shares a tree with is not
+a control.
+
+## And the drift check earned its keep
+
+Making the flags keyword-only changed the source text of the very lines that row
+17 (`harness-facts-default-fail-open`) mutates. `MutationWorktree.apply` refused
+it — *"the string has drifted, so this mutation would silently not apply"* — and
+the run stopped rather than reporting twenty-four rows caught out of a set where
+one had planted nothing.
+
+That is the failure mode the drift check exists for, arriving on its own: a row
+whose target moves does not go red, it goes **vacuous**, and a runner that
+counted it would report a stronger result than it had. Re-stated against the new
+source text, and the row is caught by its named proof again. **25 rows, 48 runs
+plus the two new ones, all caught first-order by their named proof; second-order
+11 of 25.**
+
+Three of this pull request's own instruments have now refused work that would
+have flattered it — the drift check here, the named-proof requirement when a
+block rewrite deleted a test, and G2's ratchet when a control constructed
+positionally. None of the three was consulted deliberately; all three fired.
+
+## The CI failure on `a288260`, which was mine
+
+The three `build` jobs went red on `a288260` — `1 failed, 3174 passed, 23
+skipped`, the failure `test_doctrine_index`, the tree citing doctrine **#8**
+fifty-six times against an index that said fifty-five.
+
+The cause is not subtle. After running the full suite and before committing, I
+edited the shape rule's positive control and the comment I added ends
+`(doctrine #8)`. One more citation, never re-measured, pushed. **The figure that
+commit's own message reports as observed — `2 failed, 3173 passed` — was
+measured on a tree one edit short of the tree it describes**, which makes it a
+claim about something that was never run. Withdrawn here rather than rewritten:
+`a288260` was `1 failed, 3174 passed, 23 skipped` in CI, and the failing pin was
+re-measured and corrected in the very next commit, so the head that carries it
+is green on that test.
+
+The rule broken is the one written down for pushing — *run the repo's own fast
+checks, then push* — applied to a tree that was no longer the tree I had
+checked. An edit after verification is a new tree, and this entry is now the
+measured cost of treating it as the same one.
+
+## What this round does not establish
+
+* `_snapshot_binding` reads module-level statements. A snapshot bound inside a
+  function, a class body, or a conditional is outside the sweep entirely, and
+  nothing derives that one has moved there.
+* The keyword-only guard covers `ExecutionResult` only. `SandboxResult`
+  (`src/prometheus_protocol/sandbox/base.py:139-154`) carries the same two flag
+  names and neither is keyword-only; measured from `dataclasses.fields`,
+  `started_ok` defaults **`True`** there and `candidate_started` defaults
+  `False`. So the positional shape is still available on that class, over a
+  field whose default is already the permissive one. It is named here rather
+  than fixed: it is the latent near-miss Part 1 already recorded (0 of 13
+  constructions inherit that default), and widening this pull request to a
+  second class is not what the review asked for.
+
+---
+
+# Where these three rounds actually landed
+
+**#131 was merged at 14:56:28Z on head `5d5f3f0`, by its owner, while round 3's
+fixes were still being written.** Recorded because the sections above would
+otherwise read as if all three rounds landed together, and they did not.
+
+| in `main` as of the squash `0944a0d` | not in it |
+|---|---|
+| Part 1, Part 2, and the fixes for review rounds **1 and 2** | review round **3** — findings C and D |
+
+So the two gaps round 3 named were live in `main` for as long as it took to
+carry this commit across: the snapshot collector reading `ast.Assign` only, and
+the harness-flag collector reading `node.keywords` only. Neither is a defect in
+shipped behaviour — both are guards that could not see a member — and the
+positional one is covered in the meantime by G2's ratchet, measured above. The
+snapshot one is covered by nothing else.
+
+**The merge was a squash**, so `a288260`, `5d5f3f0` and the rest exist only on
+the pull request, not in `main`'s history. Every SHA this document cites for a
+reproduction is one of those: they remain fetchable through the pull request
+and are named here so a reader who cannot find them in `git log main` knows
+where to look rather than concluding the record is wrong. This is G13's seam
+seen from the other side — a squash does not only compose a new message, it
+makes the composed-from commits unreachable from the branch that keeps them.
+
+And a smaller fact, recorded because the alternative is a silent gap: three
+review replies, a review invocation and a body rewrite were posted to #131
+between 15:02 and 15:04Z, after it had merged at 14:56. They are accurate and
+they are answers to findings, but they answer them on a closed thread. A
+session that watches a pull request learns it has merged from an event, and an
+event that arrives late is indistinguishable from one that has not arrived.

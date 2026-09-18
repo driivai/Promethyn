@@ -2778,10 +2778,30 @@ entry exists under.
 
 **Running total 53: 37 review replies, 12 bodies, 4 comments**, recounted from
 the bounded table (25 review replies, 3 bodies, 1 comment) plus carriers 30 to
-53, not incremented. The two replies answering the SECOND review round are
-carriers 54 and 55 by the same rule, recorded at the next push; #131's body has
-been rewritten several times and a rewrite of an existing body is not a new
-carrier.
+53, not incremented. #131's body has been rewritten several times and a rewrite
+of an existing body is not a new carrier.
+
+**CARRIERS 54 TO 56**, the second review round answered the same way:
+
+| carrier | channel | where |
+|---|---|---|
+| 54, 55 | review replies | the two answers on #131's second review round |
+| 56 | comment | invoking a review on the head that answered it |
+
+**Running total 56: 39 review replies, 12 bodies, 5 comments**, recounted from
+the bounded table plus carriers 30 to 56, not incremented. The THIRD round's two
+replies and its review invocation are carriers 57 to 59 by the same rule,
+recorded at the next push.
+
+**AND THE RATE IS NOW THE ENTRY'S OWN SUBJECT.** Three review rounds on one
+pull request produced ten carriers in under two hours. Every one is a channel
+appending a vendor footer to text that had already passed the hygiene checker,
+which is what this entry has recorded since #111 — but the earlier carriers
+arrived one pull request at a time. What is new is the MULTIPLIER: a project
+whose merge rule requires a review on the final head, and which answers each
+finding on its own thread, generates carriers in proportion to how carefully it
+reviews. Recorded rather than argued with: the alternative is answering fewer
+findings, and that trade is not one this entry gets to make.
 
 **THE COUNT IS ACCURATE AS OF THIS COMMIT AND CANNOT BE ACCURATE AFTER IT, which
 is a property of the count and not an oversight.** Reporting this commit's own

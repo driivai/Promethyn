@@ -384,8 +384,15 @@ MUTATIONS: tuple[tuple, ...] = (
         (
             (
                 MODELS,
-                "    started_ok: bool = False\n    candidate_started: bool = False\n",
-                "    started_ok: bool = True\n    candidate_started: bool = True\n",
+                # Re-stated after the flags became keyword-only (#131, third
+                # review round). The runner REFUSED the old string rather than
+                # running a mutation that would not apply, which is the whole
+                # point of the drift check: this row would otherwise have gone
+                # on reporting a caught defect it never planted.
+                "    started_ok: bool = field(default=False, kw_only=True)\n"
+                "    candidate_started: bool = field(default=False, kw_only=True)\n",
+                "    started_ok: bool = field(default=True, kw_only=True)\n"
+                "    candidate_started: bool = field(default=True, kw_only=True)\n",
             ),
         ),
         "test_the_two_harness_flags_default_to_the_fail_closed_answer",
@@ -472,6 +479,26 @@ MUTATIONS: tuple[tuple, ...] = (
             ),
         ),
         "test_no_site_may_claim_a_harness_fact_it_did_not_MEASURE",
+        START_SIGNAL,
+    ),
+    # 23. THE KEYWORD-ONLY GUARD REMOVED. ExecutionResult is an ordinary
+    #     dataclass, so before the flags were made keyword-only a caller could
+    #     claim both harness facts in the fifth and sixth POSITIONAL slots --
+    #     invisible to a rule that read node.keywords, with the census unmoved.
+    #     The third #131 review round found it. The class now refuses the shape;
+    #     this row is what notices if that line goes away. The rule itself reads
+    #     the positional slots as well, so the two halves fail independently.
+    (
+        "record-class-harness-flags-no-longer-keyword-only",
+        (
+            (
+                MODELS,
+                "    started_ok: bool = field(default=False, kw_only=True)\n"
+                "    candidate_started: bool = field(default=False, kw_only=True)\n",
+                "    started_ok: bool = False\n    candidate_started: bool = False\n",
+            ),
+        ),
+        "test_the_two_harness_flags_are_KEYWORD_ONLY_on_the_record_class",
         START_SIGNAL,
     ),
 )

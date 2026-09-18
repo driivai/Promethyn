@@ -604,6 +604,20 @@ def _non_literal_in(node: ast.expr) -> ast.expr | None:
     return node
 
 
+def _snapshot_binding(node: ast.stmt) -> tuple[str, ast.expr | None]:
+    """``(bound name, assigned expression)`` for either binding form.
+
+    ``("", None)`` for a statement that binds no single name -- a tuple target,
+    a bare annotation with no value, anything else.
+    """
+
+    if isinstance(node, ast.Assign) and len(node.targets) == 1:
+        return getattr(node.targets[0], "id", ""), node.value
+    if isinstance(node, ast.AnnAssign):
+        return getattr(node.target, "id", ""), node.value
+    return "", None
+
+
 def test_a_pinned_snapshot_is_never_recomputed_from_the_tree_it_checks():
     """Derived over the SHAPE of the assignment, not over a list of names.
 
@@ -622,12 +636,18 @@ def test_a_pinned_snapshot_is_never_recomputed_from_the_tree_it_checks():
     tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
     snapshots: dict[str, str | None] = {}
     for node in tree.body:
-        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+        # BOTH BINDING FORMS. Reading only ``ast.Assign`` skipped the annotated
+        # form entirely -- `_OTHER_AT_SPRINT_0: frozenset[str] = frozenset(...)`
+        # is an ``AnnAssign``, so a recomputed snapshot declared that way was
+        # never collected, never checked, and never even reached the population
+        # assertion below, which went on naming the same two. The third #131
+        # review round found it. A collector that cannot see a member cannot
+        # refuse it, and this is the fourth time in this pull request that the
+        # POPULATION rather than the RULE was the hole.
+        name, value = _snapshot_binding(node)
+        if not name.endswith("_AT_SPRINT_0") or value is None:
             continue
-        name = getattr(node.targets[0], "id", "")
-        if not name.endswith("_AT_SPRINT_0"):
-            continue
-        offender = _non_literal_in(node.value)
+        offender = _non_literal_in(value)
         snapshots[name] = None if offender is None else ast.unparse(offender)
 
     # Doctrine #8: an empty sweep would hold this rule vacuously for every
@@ -653,6 +673,19 @@ def test_the_snapshot_shape_rule_is_not_universally_true():
     are the pre-fix form, the helper indirection that defeated the name-based
     version, and three further ways to reach the tree without naming it.
     """
+
+    # BOTH BINDING FORMS, so the collector's blind spot is a control too.
+    annotated = ast.parse(
+        "_OTHER_AT_SPRINT_0: frozenset[str] = frozenset(_current_unread())\n"
+    ).body[0]
+    plain = ast.parse('_OTHER_AT_SPRINT_0 = frozenset({"docs/sandbox.md"})\n').body[0]
+    assert _snapshot_binding(annotated)[0] == "_OTHER_AT_SPRINT_0"
+    assert _snapshot_binding(plain)[0] == "_OTHER_AT_SPRINT_0"
+    assert _non_literal_in(_snapshot_binding(annotated)[1]) is not None
+    assert _non_literal_in(_snapshot_binding(plain)[1]) is None
+    # A bare annotation binds no value and must not be mistaken for a snapshot.
+    bare = ast.parse("_OTHER_AT_SPRINT_0: frozenset[str]\n").body[0]
+    assert _snapshot_binding(bare) == ("_OTHER_AT_SPRINT_0", None)
 
     planted = [
         # Accepted: what a written-down measurement looks like.

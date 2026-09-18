@@ -223,8 +223,19 @@ class ExecutionResult:
     subject_id: str
     detail: str = ""
     refused: bool = False
-    started_ok: bool = False
-    candidate_started: bool = False
+    #: KEYWORD-ONLY, and that is a guard rather than a style. ``ExecutionResult``
+    #: is an ordinary dataclass, so before this line a caller could write
+    #: ``ExecutionResult(False, subject, "", False, True, True)`` and claim both
+    #: harness facts positionally — the flags were the fifth and sixth slots.
+    #: The derived rule in ``test_execution_start_signal.py`` reads keyword
+    #: arguments, so that claim was invisible to it and the exact census did not
+    #: move: the #131 review's third round, and it was right. Measured before
+    #: the change: 0 of 22 constructions in the tree pass ANY positional
+    #: argument, so nothing depended on the old signature. Now the shape is
+    #: refused by the class itself, and the rule reads the positional slots too
+    #: so it does not depend on this line staying.
+    started_ok: bool = field(default=False, kw_only=True)
+    candidate_started: bool = field(default=False, kw_only=True)
     sandbox_name: str = ""
     exit_status: int | None = None
     stdout: str = ""
