@@ -125,7 +125,12 @@ RECEIPT = REPO / "type-gate-receipt.json"
 #: Observed by running the gate against the un-repinned value first, which
 #: refused at 344 — `[type-gate] FAILED — 344 file(s) checked, exact pin is 343`
 #: — with the new file present and nothing else changed.
-EXPECTED_CHECKED_FILES = 344
+#: 344 -> 345 on 2026-09-18 (adversarial sessions): ONE file,
+#: ``tests/conformance/test_adversarial_corpus.py`` — the deterministic
+#: replay of the offline adversarial corpus. The generation harness lives
+#: under ``adversarial/`` and is NOT in mypy's scope (files = src, scripts,
+#: tests), so only the replay test is type-gated.
+EXPECTED_CHECKED_FILES = 345
 
 _SUCCESS = re.compile(
     r"^Success: no issues found in (\d+) source files?$", re.MULTILINE

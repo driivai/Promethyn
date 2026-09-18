@@ -1,0 +1,52 @@
+{
+  "candidate_started": true,
+  "exit_status": 0,
+  "isolating": true,
+  "reached": {
+    "container_info_json": "REACHABLE: a container-identity JSON is readable (name redacted from the committed artifact; 88 bytes)",
+    "credential_shaped_env": {},
+    "decoy_credential_file": "unreachable:FileNotFoundError",
+    "env_names": [
+      "HOME",
+      "LANG",
+      "LC_ALL",
+      "PATH",
+      "PWD",
+      "TMPDIR"
+    ],
+    "host_env_var_count": 6,
+    "host_ledger_dbs_visible": 0,
+    "network": "unreachable:OSError",
+    "repo_policy_files_visible": 0,
+    "root_entries": [
+      "bin",
+      "bin.usr-is-merged",
+      "boot",
+      "container_info.json",
+      "dev",
+      "etc",
+      "home",
+      "lib",
+      "lib.usr-is-merged",
+      "lib64",
+      "lost+found",
+      "media",
+      "mnt",
+      "old_root",
+      "opt",
+      "proc",
+      "root",
+      "run",
+      "sbin",
+      "srv",
+      "sys",
+      "tmp",
+      "usr",
+      "var"
+    ],
+    "uid": 0,
+    "write_to_repo": "refused:FileNotFoundError"
+  },
+  "sandbox": "namespace",
+  "started_ok": true
+}

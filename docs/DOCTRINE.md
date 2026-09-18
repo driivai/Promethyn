@@ -51,10 +51,10 @@ existing behaviour, carrying a file and line, that was never re-read.
 
 | # | citations | first cited | the usage, in one line |
 |---|---|---|---|
-| 1 | 20 | `docs/OPEN-GAPS.md:1315` | `Unavailable` is first-class: absence of an answer is a value, never a default |
+| 1 | 21 | `docs/OPEN-GAPS.md:1315` | `Unavailable` is first-class: absence of an answer is a value, never a default |
 | 2 | 10 | `docs/OPEN-GAPS.md:3024` | refused, not degraded: a state the guard cannot establish is written as a refusal, not a clean one |
 | 3 | 0 | — | never cited in the tree |
-| 4 | 38 | `docs/OPEN-GAPS.md:358` | every negative has a positive control |
+| 4 | 40 | `docs/OPEN-GAPS.md:358` | every negative has a positive control |
 | 5 | 23 | `docs/OPEN-GAPS.md:14` | a named gap is a passing test, so it cannot erode quietly |
 | 6 | 0 | — | never cited in the tree |
 | 7 | 0 | — | never cited in the tree |
