@@ -603,6 +603,16 @@ EXPECTED_PROTECTED_FILES = 23
 #:   is left empty, which is the same shape ``started_ok`` and
 #:   ``candidate_started`` already have: two facts, not one.
 #:
+#:   RE-SANCTIONED A THIRD TIME, after a third review of the same sprint. The
+#:   new flag DEFAULTED to ``True``, on a claim about the five construction
+#:   sites that pass ``stdout=`` rather than the ELEVEN that construct the
+#:   class — so the six refusals and dry runs inherited it and told a consumer
+#:   the empty string was recorded output, recreating the ambiguity the flag
+#:   was added to remove. The default is now ``False``, the fail-closed
+#:   direction, and the two sites that really capture a candidate's output
+#:   (``execution/executor.py`` and ``tools/git.py``) opt in explicitly. A
+#:   derived test holds the whole population to that rule.
+#:
 #: Those sprints are why these bytes are what they are. They do NOT license the
 #: next edit to the same files: updating a digest below is a fresh decision, and
 #: the reason for it belongs beside it.
@@ -624,9 +634,9 @@ DIGESTS: dict[str, str] = {
     "src/prometheus_protocol/core/models.py":
         "96fe20410439abdb87fd9a34becdffab032fd106a5fa70f80271527a79df5910",
     "src/prometheus_protocol/execution/controller.py":
-        "793dfe58d08664c832b57e38c1384d96a30077cc62da15dd26b66870a25679d4",
+        "e57fadcba8a9fc7c1d5577c9d553690af84157d64245f1b7bfb6d0a41a2877e9",
     "src/prometheus_protocol/execution/executor.py":
-        "406e74033bc63d0c1739d109cab02ee31a553e5194d2e529526787dbe9dc944d",
+        "6ee5000ee60e42a1512263924235802447be0a592dbb1171122da35845179886",
     "src/prometheus_protocol/execution/pending.py":
         "eb4f2af5dd7999b4ed7504b8a52831af9522494fce3a5d88580bbd5224b4536a",
     "src/prometheus_protocol/forge/miner.py":

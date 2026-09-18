@@ -45,6 +45,8 @@ SPEND = "src/prometheus_protocol/ledger/spend.py"
 LEDGER = "src/prometheus_protocol/ledger/sqlite_ledger.py"
 CONTROLLER = "src/prometheus_protocol/execution/controller.py"
 POLICY = "src/prometheus_protocol/policy/execution.py"
+MODELS = "src/prometheus_protocol/swarm/models.py"
+EXECUTOR = "src/prometheus_protocol/execution/executor.py"
 
 #: ``(label, [(path, old, new), ...], selector)``.
 MUTATIONS: tuple[tuple[str, tuple[tuple[str, str, str], ...], str], ...] = (
@@ -320,6 +322,41 @@ MUTATIONS: tuple[tuple[str, tuple[tuple[str, str, str], ...], str], ...] = (
             ),
         ),
         "test_a_returned_prior_result_NAMES_the_stdout_it_cannot_have",
+    ),
+    # 15. THE FLAG DEFAULTED FAIL-OPEN AGAIN — the third review's finding. Of
+    #     ELEVEN ``ExecutionResult`` constructions only two capture output;
+    #     with a ``True`` default the other nine tell a consumer the empty
+    #     string is the program's own.
+    (
+        "stdout-recorded-defaults-fail-open",
+        (
+            (
+                MODELS,
+                "    stdout_recorded: bool = False\n",
+                "    stdout_recorded: bool = True\n",
+            ),
+        ),
+        "test_the_flag_defaults_to_the_fail_closed_answer",
+    ),
+    # 16. A REFUSAL CLAIMING IT CAPTURED. The population rule from the other
+    #     side: a site that records nothing must not say it did.
+    (
+        "a-refusal-claims-it-captured-output",
+        (
+            (
+                EXECUTOR,
+                "            sandbox_name=self._sandbox.name,\n"
+                "            exit_status=None,\n"
+                '            stdout="",\n'
+                "        )\n",
+                "            sandbox_name=self._sandbox.name,\n"
+                "            exit_status=None,\n"
+                '            stdout="",\n'
+                "            stdout_recorded=True,\n"
+                "        )\n",
+            ),
+        ),
+        "test_only_a_site_that_CAPTURES_output_may_claim_it_recorded_it",
     ),
 )
 

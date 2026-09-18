@@ -5164,3 +5164,37 @@ every row still red with every assert deleted. A fold that refuses a history
 raises, and a raise does not need an assertion to be observed. The structural
 fix made the evidence stronger, which is not why it was chosen and is worth
 recording.
+
+### The THIRD review: the new flag defaulted fail-open, over a population I never looked at
+
+`ExecutionResult.stdout_recorded` was added with a default of `True`, on the
+reasoning that *"every executor that sets `stdout` sets it from a real run"*.
+That is a true statement about the **five** construction sites which pass
+`stdout=` — and the class is constructed at **eleven** sites. The other six are
+refusals, dry runs and replay refusals where nothing ran, and every one of them
+inherited the default and told a consumer the empty string was the program's
+own output. The flag added to remove an ambiguity reintroduced it at six sites.
+
+**The same error as the count-from-a-filtered-view class (doctrine #11), in a
+different medium.** I reasoned about the population I had just edited instead
+of the population the rule is over, and a claim true of the part read as a
+claim about the whole.
+
+Fixed in the fail-closed direction: the default is `False`, so a path that
+forgets to opt in **under-claims** rather than asserting something untrue, and
+the two sites that really capture a candidate's output — `execution/executor.py`
+and `tools/git.py` — opt in explicitly.
+`test_only_a_site_that_CAPTURES_output_may_claim_it_recorded_it` derives all
+eleven from the AST and requires the claiming set and the capturing set to be
+**identical**, with `stdout=""` counted as "nothing to report" rather than a
+capture; a third capturing site has to be justified in that test. Two more
+mutation rows, and the paired positive now drives the shipped `SandboxExecutor`
+against a fake isolating sandbox that really returns output, because the
+fixture spy captures nothing and honestly reports `False`.
+
+**Three reviews, three findings in code written to fix the previous one.**
+`spend_proofs.py` is now **18 rows, 36 runs, 18 of 18 red with every assert
+deleted**. The sequence is recorded here rather than smoothed over: each fix
+was correct about what it fixed and wrong about a neighbour it did not look
+at — the release branch, then its sibling the spend branch, then the flag's
+default over the construction sites.
