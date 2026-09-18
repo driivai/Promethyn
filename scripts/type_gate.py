@@ -119,7 +119,13 @@ RECEIPT = REPO / "type-gate-receipt.json"
 #: ``scripts/spend_proofs.py``. Observed by running the gate against the
 #: un-repinned value first, which refused at 342 with two of the three present
 #: and again at 343 with all three.
-EXPECTED_CHECKED_FILES = 343
+#: 343 -> 344 on 2026-09-18: ONE file,
+#: ``tests/conformance/test_assurance_ledger_limits.py``, which holds the limits
+#: of ``docs/assurance-ledger-sprint-0.md`` as passing tests (doctrine #5).
+#: Observed by running the gate against the un-repinned value first, which
+#: refused at 344 — `[type-gate] FAILED — 344 file(s) checked, exact pin is 343`
+#: — with the new file present and nothing else changed.
+EXPECTED_CHECKED_FILES = 344
 
 _SUCCESS = re.compile(
     r"^Success: no issues found in (\d+) source files?$", re.MULTILINE

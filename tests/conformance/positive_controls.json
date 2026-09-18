@@ -631,6 +631,38 @@
         "test_an_outcome_entry_with_no_open_spend_is_a_broken_history"
       ],
       "property": "a first execution on the auto-approved path and on the held path both succeed and are recorded, so every refusal beside them -- a second submission of one occurrence, a retained decision presented twice, a packet re-run, a second hold for one occurrence, each way a claim of retry fails, an expired key, a reset spend row, a re-attributed spend record, an unreadable entry and an out-of-order outcome -- is caused by the occurrence being spent and not by a gateway that refuses everything (G55). test_two_occurrences_differing_in_ONE_bound_field_both_execute is the second half: without it, 'the executor was called once' would be equally consistent with a gateway that allows exactly one execution ever"
+    },
+    {
+      "module": "tests/conformance/test_assurance_ledger_limits.py",
+      "positive": "test_the_source_partition_is_not_universally_true",
+      "negatives": [
+        "test_the_documents_the_ledger_did_not_read_are_counted_and_named"
+      ],
+      "property": "the ledger's blind spot is an exact, named set of documents, derived by a collector that can also say no"
+    },
+    {
+      "module": "tests/conformance/test_assurance_ledger_limits.py",
+      "positive": "test_the_refusal_label_derivation_is_not_universally_true",
+      "negatives": [
+        "test_a_refusal_label_raised_from_several_sites_cannot_be_isolated_alone"
+      ],
+      "property": "the build guard's shared refusal labels are pinned exactly, by an AST walk that finds real raise sites and not invented ones"
+    },
+    {
+      "module": "tests/conformance/test_assurance_ledger_limits.py",
+      "positive": "test_the_register_search_is_not_universally_true",
+      "negatives": [
+        "test_every_build_matrix_property_is_restated_in_at_least_one_other_register"
+      ],
+      "property": "every security property is restated in another register, established by a search that does not match a name that is absent"
+    },
+    {
+      "module": "tests/conformance/test_assurance_ledger_limits.py",
+      "positive": "test_the_tracker_derivation_is_not_universally_true",
+      "negatives": [
+        "test_the_tracker_states_an_entry_schema_that_nothing_enforces"
+      ],
+      "property": "the tracker's stated entry schema is followed by one entry in fifty-six, measured by a split that parses real entries with real bodies"
     }
   ]
 }
