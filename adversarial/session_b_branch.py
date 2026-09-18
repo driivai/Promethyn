@@ -105,6 +105,7 @@ def run(tmp: Path):
 if __name__ == "__main__":
     with tempfile.TemporaryDirectory(prefix="adv-B-") as td:
         sess = run(Path(td))
+        sess.export_chain()
         print(f"\n=== Session B: {len(sess.records)} proposals; chain_ok={sess.chain_ok()} ===")
         for r in sess.records:
             print(f"[{r.seq}] {r.label:30} ev={r.grader_verdict:11} outcome={r.submit_outcome:8} "

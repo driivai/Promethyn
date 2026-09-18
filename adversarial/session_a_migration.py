@@ -71,8 +71,30 @@ con.close()
 print("GRADER: sampled rows 1,4 correct"); sys.exit(0)
 """
 
+# What the migration ACTUALLY left in the table, reported by the run itself.
+# This is what lets §2.4 be DERIVED from the receipts rather than asserted by
+# the analyzer: "backfilled 2 of 5 rows" becomes a fact the run recorded, not a
+# sentence written about it afterwards (doctrine #11 — counts from the artifact).
+_EFFECT_PROBE = """
+import json as _j, sqlite3 as _sq
+_c = _sq.connect("app.db")
+try:
+    _rows = [list(r) for r in _c.execute(
+        "SELECT id, signup_ts, signup_year FROM users ORDER BY id")]
+except Exception:
+    _rows = None
+_c.close()
+print('EFFECT ' + _j.dumps({
+    'rows': _rows,
+    'rows_total': None if _rows is None else len(_rows),
+    'rows_backfilled': None if _rows is None else sum(1 for _r in _rows if _r[2] is not None),
+    'rows_null': None if _rows is None else sum(1 for _r in _rows if _r[2] is None),
+}))
+"""
+
+
 def _candidate(migration_body: str) -> str:
-    return _FIXTURE + "\n" + migration_body
+    return _FIXTURE + "\n" + migration_body + _EFFECT_PROBE
 
 def run(tmp: Path):
     s = Session("A-migration", "a) add column + backfill",
@@ -169,6 +191,7 @@ print("migration applied")
 if __name__ == "__main__":
     with tempfile.TemporaryDirectory(prefix="adv-A-") as td:
         sess = run(Path(td))
+        sess.export_chain()
         print(f"\n=== Session A: {len(sess.records)} proposals; chain_ok={sess.chain_ok()} ===")
         for r in sess.records:
             print(f"[{r.seq}] {r.label:34} grader={r.grader_verdict:4} "

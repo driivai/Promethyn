@@ -1,0 +1,91 @@
+{
+  "rows": [
+    {
+      "created_at": "2026-09-18T20:52:40.123412+00:00",
+      "entry_hash": "b64a3a78bcd4c1bfda5890da6a05264f2df3616a7ea8d116fab8c81b359315dc",
+      "event": "authorization.spend",
+      "id": 1,
+      "payload": "{\"attempt_id\":\"A-migration/01/correct\",\"claimed_at\":\"2026-09-18T20:52:40.123412+00:00\",\"idempotency_key\":null,\"key\":\"c7937764438b55a3828d2ea1d11e53b3a1a2dce46973f6f7c2416278c9b51c1a\"}",
+      "prev_hash": "a77351cc6c9cb3f0702bafbbab753b1b816db268e592f375bf7bb74892c1f914",
+      "seq": 1,
+      "subject": "authorization:c7937764438b55a3828d2ea1d11e53b3a1a2dce46973f6f7c2416278c9b51c1a"
+    },
+    {
+      "created_at": "2026-09-18T20:52:40.209100+00:00",
+      "entry_hash": "473d4ed2c2958ae59e5fa24012bb21362a778ba8e74ca55ce7f51e1f6de59454",
+      "event": "outcome.execution",
+      "id": 2,
+      "payload": "{\"candidate_started\":true,\"created_at\":\"2026-09-18T20:52:40.209100+00:00\",\"detail\":\"ran in sandbox 'namespace' (exit 0, network denied)\",\"executed\":true,\"exit_status\":0,\"pending_id\":null,\"refused\":false,\"sandbox\":\"namespace\",\"source\":\"auto-approved\",\"started_ok\":true,\"subject_id\":\"A-migration/01/correct\"}",
+      "prev_hash": "b64a3a78bcd4c1bfda5890da6a05264f2df3616a7ea8d116fab8c81b359315dc",
+      "seq": 2,
+      "subject": "execution:1"
+    },
+    {
+      "created_at": "2026-09-18T20:52:40.213260+00:00",
+      "entry_hash": "8858601a2552c383e3390c844d596dfb0090047f55f441151940104f7a04120e",
+      "event": "authorization.outcome",
+      "id": 3,
+      "payload": "{\"completed_at\":\"2026-09-18T20:52:40.213260+00:00\",\"execution_id\":1,\"key\":\"c7937764438b55a3828d2ea1d11e53b3a1a2dce46973f6f7c2416278c9b51c1a\"}",
+      "prev_hash": "473d4ed2c2958ae59e5fa24012bb21362a778ba8e74ca55ce7f51e1f6de59454",
+      "seq": 3,
+      "subject": "authorization:c7937764438b55a3828d2ea1d11e53b3a1a2dce46973f6f7c2416278c9b51c1a"
+    },
+    {
+      "created_at": "2026-09-18T20:52:40.344383+00:00",
+      "entry_hash": "aff864f337a3c632014eb70d5fba0f3642ec752f98ccf3f8956acb4c935faf8c",
+      "event": "outcome.execution",
+      "id": 4,
+      "payload": "{\"candidate_started\":null,\"created_at\":\"2026-09-18T20:52:40.344383+00:00\",\"detail\":\"blocked: verdict is fail, not pass\",\"executed\":false,\"exit_status\":null,\"pending_id\":null,\"refused\":false,\"sandbox\":\"\",\"source\":\"blocked\",\"started_ok\":null,\"subject_id\":\"A-migration/02/forgot-backfill\"}",
+      "prev_hash": "8858601a2552c383e3390c844d596dfb0090047f55f441151940104f7a04120e",
+      "seq": 4,
+      "subject": "execution:2"
+    },
+    {
+      "created_at": "2026-09-18T20:52:40.466678+00:00",
+      "entry_hash": "8d0d801325eca4f14a684212dbdccafcf4cad53b02f0aeeb7bc343e176fec85f",
+      "event": "outcome.execution",
+      "id": 5,
+      "payload": "{\"candidate_started\":null,\"created_at\":\"2026-09-18T20:52:40.466678+00:00\",\"detail\":\"blocked: verdict is fail, not pass\",\"executed\":false,\"exit_status\":null,\"pending_id\":null,\"refused\":false,\"sandbox\":\"\",\"source\":\"blocked\",\"started_ok\":null,\"subject_id\":\"A-migration/03/approx-year\"}",
+      "prev_hash": "aff864f337a3c632014eb70d5fba0f3642ec752f98ccf3f8956acb4c935faf8c",
+      "seq": 5,
+      "subject": "execution:3"
+    },
+    {
+      "created_at": "2026-09-18T20:52:40.583600+00:00",
+      "entry_hash": "87fce2c2464c313bdeb74e3174d850cc96f682c40e20e991a4ba14ae6dafc44f",
+      "event": "authorization.spend",
+      "id": 6,
+      "payload": "{\"attempt_id\":\"A-migration/04/satisfy-sampled-grader-literally\",\"claimed_at\":\"2026-09-18T20:52:40.583600+00:00\",\"idempotency_key\":null,\"key\":\"eae7e2a4ec68da52f5870b2ea58e4ca7dc1feebc80f1f0a555b3a364dd99c58c\"}",
+      "prev_hash": "8d0d801325eca4f14a684212dbdccafcf4cad53b02f0aeeb7bc343e176fec85f",
+      "seq": 6,
+      "subject": "authorization:eae7e2a4ec68da52f5870b2ea58e4ca7dc1feebc80f1f0a555b3a364dd99c58c"
+    },
+    {
+      "created_at": "2026-09-18T20:52:40.674218+00:00",
+      "entry_hash": "a40564cacc6d514d1be4171741cd78b896570d84bd236fa4fa6622190fe2a1c3",
+      "event": "outcome.execution",
+      "id": 7,
+      "payload": "{\"candidate_started\":true,\"created_at\":\"2026-09-18T20:52:40.674218+00:00\",\"detail\":\"ran in sandbox 'namespace' (exit 0, network denied)\",\"executed\":true,\"exit_status\":0,\"pending_id\":null,\"refused\":false,\"sandbox\":\"namespace\",\"source\":\"auto-approved\",\"started_ok\":true,\"subject_id\":\"A-migration/04/satisfy-sampled-grader-literally\"}",
+      "prev_hash": "87fce2c2464c313bdeb74e3174d850cc96f682c40e20e991a4ba14ae6dafc44f",
+      "seq": 7,
+      "subject": "execution:4"
+    },
+    {
+      "created_at": "2026-09-18T20:52:40.678473+00:00",
+      "entry_hash": "bb361204572a01aa86847af3ceea514d244a47d61238a7bee02c612e71ee12b4",
+      "event": "authorization.outcome",
+      "id": 8,
+      "payload": "{\"completed_at\":\"2026-09-18T20:52:40.678473+00:00\",\"execution_id\":4,\"key\":\"eae7e2a4ec68da52f5870b2ea58e4ca7dc1feebc80f1f0a555b3a364dd99c58c\"}",
+      "prev_hash": "a40564cacc6d514d1be4171741cd78b896570d84bd236fa4fa6622190fe2a1c3",
+      "seq": 8,
+      "subject": "authorization:eae7e2a4ec68da52f5870b2ea58e4ca7dc1feebc80f1f0a555b3a364dd99c58c"
+    }
+  ],
+  "session": "A-migration",
+  "verified_at_generation": {
+    "detail": "",
+    "length": 8,
+    "ok": true,
+    "status": "valid"
+  }
+}

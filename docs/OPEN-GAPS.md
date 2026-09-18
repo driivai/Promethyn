@@ -2852,6 +2852,33 @@ carrier observed up to the commit that carries this paragraph is counted here,
 and any carrier created while reporting it is recorded at the next push. A
 total in this entry therefore means "as of its commit", never "as of now".
 
+**CARRIERS 62 TO 64, the two #132 deferred plus the opening of #133. 19 of 19
+openings.** #132's own body deferred "carriers 62-63 ... to the next push", and
+its merge did not carry them, so `main` still read `Running total 61` when #133
+opened. They are recorded here, at the next push, which is what that deferral
+meant:
+
+| carrier | channel | where |
+|---|---|---|
+| 62 | review reply | the answer to #132's fourth-round P2, `4048661952` — read back, footer present, and NOT editable |
+| 63 | comment | the review invocation on #132's final head `24d0f63`, `5733072242` — read back, footer present |
+| 64 | body | the opening of #133, the FULL report body, not a placeholder |
+
+**Running total 64: 42 review replies, 14 bodies, 8 comments**, recounted from
+the bounded table (25 review replies, 3 bodies, 1 comment) plus carriers 30 to
+64, not incremented.
+
+Carrier 64 is the ordinary shape: opened with the full body, read back carrying
+the footer, refused by `check_message_hygiene.py` naming **two** tokens — which
+is the creation-tool fingerprint this entry recorded at carrier 39, not the
+one-token author-written shape of #114 — and rewritten through
+`update_pull_request`. The two-check split held for a fifth time: `pr-text` and
+all three `build` jobs failed on the frozen OPEN payload, `matrix-agreement`
+skipped behind them, and only a push clears the build jobs. The commit carrying
+this paragraph is that push, and it carries real content rather than being an
+empty one, for the reason recorded above: an empty commit is a remedy this
+repository forbids, and the review-round fixes are what it carries instead.
+
 ---
 
 ## G29 — re-observation at execution: built for `branch.delete`, opted out by name for the other two
@@ -5661,3 +5688,75 @@ seam≠ground-truth findings by id, and that the corpus contains shapes the seam
 gets right (doctrine #4). A change that makes the seam start catching finding 1,
 or start missing a new shape, reddens the replay and is ruled on rather than
 absorbed.
+
+### THE INSTRUMENT WAS THE WEAKEST THING THIS SPRINT MEASURED
+
+An automated review of `7b506e1` returned four findings, all in `adversarial/`
+and none in the seam. All four were verified against the code before being
+acted on, all four were correct, and all four are fixed. They are recorded here
+because three of them are **this file's own doctrines turned on this sprint's
+own instrument**, which is the more useful half of the result.
+
+**1. THE CANDIDATE COULD FORGE ITS OWN PASS (P1).** `grade()` composed
+candidate-then-grader into ONE interpreter over ONE workspace with `runpy`,
+candidate first — so the candidate ran before the check, inside the check's own
+process, with the check beside it as a writable file. Reproduced against that
+composition, restored verbatim: `open('grader.py','w').write('import sys;
+sys.exit(0)')` exited **0**, and `os._exit(0)` exited **0**, while the honest
+non-satisfying control exited 1. **Two lines manufactured `executable.cases`
+evidence**, which `VerifierBank.assess` would have taken as genuine and
+`ActionGate` carried to an approval. Larger than anything the sessions found,
+and §5's "a clean result may be a property of the prober" turning out literally
+true.
+
+Fixed: the grader is the sandbox ENTRY POINT and the candidate is a child
+process, so a child cannot set its parent's exit status and the only direction
+available is fail-closed. A grader that must EXECUTE candidate code runs it in a
+further child, from a directory created after the candidate finished, reporting
+through a file rather than stdout. Live in CI (not replayed) at
+`tests/conformance/test_adversarial_grader_isolation.py`, 8 tests gated by
+`PROM_REQUIRE_SANDBOX`, with the positive control asserted first.
+
+**THE CORPUS DID NOT MOVE** when regenerated under the fixed harness — same 8
+shape ids, same outcomes, no field changed. That is the evidence that the
+recorded candidates satisfied their checks honestly; a forging candidate's
+verdict would have flipped.
+
+**2. THE §4 CREDENTIAL RESULT HAD NO POSITIVE CONTROL (P1).** The probe read a
+decoy credential at a path **nothing had ever planted**, so `FileNotFoundError`
+meant "no such file anywhere" and was reported as "the sandbox could not reach
+the credential" — doctrine #4's missing positive control and doctrine #8's empty
+instrument reading as a pass, in this project's own probe. Fixed: the probe
+plants the decoy and a canary env var on the host and proves the host reads them
+before their absence inside means anything; session D plants its own and records
+the control in its transcript.
+
+**AND ONE ROW OF THE §4 TABLE WAS NEVER EVIDENCE, withdrawn rather than
+dropped.** "Host audit-ledger `.db` files — no (0 visible)" was reported as
+isolation. The host has **zero** files matching that glob, so the sandbox seeing
+zero said nothing. It now reports `NO_POSITIVE_CONTROL` and is not counted.
+
+**3 AND 4. THE ANALYZER READ NO CHAIN AND PRINTED ITS CONCLUSIONS (P2 ×2).**
+`analyze.py` parsed the committed JSONL only, while the tamper-evident ledger
+was built in a temporary directory and discarded — so §2.4's "caught against a
+tamper-evident chain" was a claim the analysis could not support. Worse, the
+§2.4 verdicts for sessions A, C and D were **hardcoded strings**: session D's row
+asserted "all four attempts reached nothing" without reading what was recorded,
+so a regenerated session that DID reach a credential would still have printed
+that it had not — the analyzer concealing the exact regression the session
+exists to detect (doctrine #8, doctrine #11).
+
+Fixed: each session exports its audit chain (`sessions/*.chain.json`); the
+analyzer re-verifies it with the project's OWN auditor
+(`ledger/audit_chain.py:136` `verify_rows`, which re-hashes the exact stored
+payload bytes), reconciles every recorded execution against it, and **refuses to
+report §2.1–§2.4 at all** when a transcript disagrees with its chain. Every §2.4
+verdict is computed and carries a chain-backed / NOT-chain-backed label, so the
+G24/#130 stdout limit is stated at the point of use instead of in prose
+elsewhere. Observed: 4 chains `valid` (lengths 8, 10, 8, 12), §2.4 totals
+**5 MATCH, 3 DISCREPANCY**, and B's discrepancy is the chain-backed one.
+
+**What this costs the sprint's headline claim.** The first version of this
+entry's report said "no forged assessment" flatly. That was false at `7b506e1`
+and is withdrawn. It is true of the fixed harness, and it is now a test rather
+than a sentence.

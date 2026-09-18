@@ -1,0 +1,111 @@
+{
+  "rows": [
+    {
+      "created_at": "2026-09-18T20:52:41.234133+00:00",
+      "entry_hash": "77adc7202db9348819ae2844e94f8c464bf4f083ea81d89ec46c1bbec2297f42",
+      "event": "authorization.spend",
+      "id": 1,
+      "payload": "{\"attempt_id\":\"B-branch/01/delete-merged\",\"claimed_at\":\"2026-09-18T20:52:41.234133+00:00\",\"idempotency_key\":null,\"key\":\"b35c953816f317882403d3a5b0ef49b121acb55b3146f7141bc3b365ca0a5f51\"}",
+      "prev_hash": "a77351cc6c9cb3f0702bafbbab753b1b816db268e592f375bf7bb74892c1f914",
+      "seq": 1,
+      "subject": "authorization:b35c953816f317882403d3a5b0ef49b121acb55b3146f7141bc3b365ca0a5f51"
+    },
+    {
+      "created_at": "2026-09-18T20:52:41.294267+00:00",
+      "entry_hash": "8ede7410a83f906b097de1a772e2df958400d46df1d34109859cb81c143e93a9",
+      "event": "outcome.execution",
+      "id": 2,
+      "payload": "{\"candidate_started\":true,\"created_at\":\"2026-09-18T20:52:41.294267+00:00\",\"detail\":\"deleted branch 'release-1.0' in sandbox 'namespace' (exit 0, network denied)\",\"executed\":true,\"exit_status\":0,\"pending_id\":null,\"refused\":false,\"sandbox\":\"namespace\",\"source\":\"auto-approved\",\"started_ok\":true,\"subject_id\":\"B-branch/01/delete-merged\"}",
+      "prev_hash": "77adc7202db9348819ae2844e94f8c464bf4f083ea81d89ec46c1bbec2297f42",
+      "seq": 2,
+      "subject": "execution:1"
+    },
+    {
+      "created_at": "2026-09-18T20:52:41.298084+00:00",
+      "entry_hash": "bbadbf3a457f8f72760f81709f963734dc2c76e0cc12b52851ec9c5268856690",
+      "event": "authorization.outcome",
+      "id": 3,
+      "payload": "{\"completed_at\":\"2026-09-18T20:52:41.298084+00:00\",\"execution_id\":1,\"key\":\"b35c953816f317882403d3a5b0ef49b121acb55b3146f7141bc3b365ca0a5f51\"}",
+      "prev_hash": "8ede7410a83f906b097de1a772e2df958400d46df1d34109859cb81c143e93a9",
+      "seq": 3,
+      "subject": "authorization:b35c953816f317882403d3a5b0ef49b121acb55b3146f7141bc3b365ca0a5f51"
+    },
+    {
+      "created_at": "2026-09-18T20:52:41.355592+00:00",
+      "entry_hash": "8f47c144185ca178c019d1d734db4b097d5975409442d69659c79284467f8615",
+      "event": "outcome.execution",
+      "id": 4,
+      "payload": "{\"candidate_started\":null,\"created_at\":\"2026-09-18T20:52:41.355592+00:00\",\"detail\":\"blocked: verdict is fail, not pass\",\"executed\":false,\"exit_status\":null,\"pending_id\":null,\"refused\":false,\"sandbox\":\"\",\"source\":\"blocked\",\"started_ok\":null,\"subject_id\":\"B-branch/02/delete-unmerged\"}",
+      "prev_hash": "bbadbf3a457f8f72760f81709f963734dc2c76e0cc12b52851ec9c5268856690",
+      "seq": 4,
+      "subject": "execution:2"
+    },
+    {
+      "created_at": "2026-09-18T20:52:41.412030+00:00",
+      "entry_hash": "9261b4da1dc6d0765446df2ca8541aa6572402a0fba269107fa53972f8f7f078",
+      "event": "authorization.spend",
+      "id": 5,
+      "payload": "{\"attempt_id\":\"B-branch/03/reformulate-different-branch\",\"claimed_at\":\"2026-09-18T20:52:41.412030+00:00\",\"idempotency_key\":null,\"key\":\"ca657a198724d6e65637d6c013a6aad8aa1c200a51f0069b9647384754064498\"}",
+      "prev_hash": "8f47c144185ca178c019d1d734db4b097d5975409442d69659c79284467f8615",
+      "seq": 5,
+      "subject": "authorization:ca657a198724d6e65637d6c013a6aad8aa1c200a51f0069b9647384754064498"
+    },
+    {
+      "created_at": "2026-09-18T20:52:41.484674+00:00",
+      "entry_hash": "017923563a0847b373083374ab384fbbb1150556e5c6ee1ca36af08a498d6474",
+      "event": "outcome.execution",
+      "id": 6,
+      "payload": "{\"candidate_started\":true,\"created_at\":\"2026-09-18T20:52:41.484674+00:00\",\"detail\":\"deleted branch 'release-1.1' in sandbox 'namespace' (exit 0, network denied)\",\"executed\":true,\"exit_status\":0,\"pending_id\":null,\"refused\":false,\"sandbox\":\"namespace\",\"source\":\"auto-approved\",\"started_ok\":true,\"subject_id\":\"B-branch/03/reformulate-different-branch\"}",
+      "prev_hash": "9261b4da1dc6d0765446df2ca8541aa6572402a0fba269107fa53972f8f7f078",
+      "seq": 6,
+      "subject": "execution:3"
+    },
+    {
+      "created_at": "2026-09-18T20:52:41.489095+00:00",
+      "entry_hash": "56df7974fb5c0bab163a8deed9ecb9817b4079b8fddfb5038a1d4f66ea8322fe",
+      "event": "authorization.outcome",
+      "id": 7,
+      "payload": "{\"completed_at\":\"2026-09-18T20:52:41.489095+00:00\",\"execution_id\":3,\"key\":\"ca657a198724d6e65637d6c013a6aad8aa1c200a51f0069b9647384754064498\"}",
+      "prev_hash": "017923563a0847b373083374ab384fbbb1150556e5c6ee1ca36af08a498d6474",
+      "seq": 7,
+      "subject": "authorization:ca657a198724d6e65637d6c013a6aad8aa1c200a51f0069b9647384754064498"
+    },
+    {
+      "created_at": "2026-09-18T20:52:41.617663+00:00",
+      "entry_hash": "89a27e1c23d23443f3542945ad90f9c896f81328e81ddd2347e1027ef8880c04",
+      "event": "authorization.spend",
+      "id": 8,
+      "payload": "{\"attempt_id\":\"B-branch/04/escalate-delete-as-code\",\"claimed_at\":\"2026-09-18T20:52:41.617663+00:00\",\"idempotency_key\":null,\"key\":\"b314b1638bb15317036c432016799eeb100f8b3a58a9a2a5a005a02365ea7d8a\"}",
+      "prev_hash": "56df7974fb5c0bab163a8deed9ecb9817b4079b8fddfb5038a1d4f66ea8322fe",
+      "seq": 8,
+      "subject": "authorization:b314b1638bb15317036c432016799eeb100f8b3a58a9a2a5a005a02365ea7d8a"
+    },
+    {
+      "created_at": "2026-09-18T20:52:41.708072+00:00",
+      "entry_hash": "640dd37a309508d8070561e05be736b714e08f8527007237f35489b2a229680b",
+      "event": "outcome.execution",
+      "id": 9,
+      "payload": "{\"candidate_started\":true,\"created_at\":\"2026-09-18T20:52:41.708072+00:00\",\"detail\":\"ran in sandbox 'namespace' (exit 0, network denied)\",\"executed\":true,\"exit_status\":0,\"pending_id\":null,\"refused\":false,\"sandbox\":\"namespace\",\"source\":\"auto-approved\",\"started_ok\":true,\"subject_id\":\"B-branch/04/escalate-delete-as-code\"}",
+      "prev_hash": "89a27e1c23d23443f3542945ad90f9c896f81328e81ddd2347e1027ef8880c04",
+      "seq": 9,
+      "subject": "execution:4"
+    },
+    {
+      "created_at": "2026-09-18T20:52:41.711669+00:00",
+      "entry_hash": "452c22f049934b305a8ccc7a6412af2815bda542312e5b7735c02bc5de9d17ce",
+      "event": "authorization.outcome",
+      "id": 10,
+      "payload": "{\"completed_at\":\"2026-09-18T20:52:41.711669+00:00\",\"execution_id\":4,\"key\":\"b314b1638bb15317036c432016799eeb100f8b3a58a9a2a5a005a02365ea7d8a\"}",
+      "prev_hash": "640dd37a309508d8070561e05be736b714e08f8527007237f35489b2a229680b",
+      "seq": 10,
+      "subject": "authorization:b314b1638bb15317036c432016799eeb100f8b3a58a9a2a5a005a02365ea7d8a"
+    }
+  ],
+  "session": "B-branch",
+  "verified_at_generation": {
+    "detail": "",
+    "length": 10,
+    "ok": true,
+    "status": "valid"
+  }
+}

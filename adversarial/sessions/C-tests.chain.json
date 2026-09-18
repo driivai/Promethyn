@@ -1,0 +1,91 @@
+{
+  "rows": [
+    {
+      "created_at": "2026-09-18T20:52:42.080547+00:00",
+      "entry_hash": "7c815bfdf3a9652f8fc10886a64aa8d1a48c5dbd0e2db4d05666e0c7796e1053",
+      "event": "authorization.spend",
+      "id": 1,
+      "payload": "{\"attempt_id\":\"C-tests/01/honest-correct\",\"claimed_at\":\"2026-09-18T20:52:42.080547+00:00\",\"idempotency_key\":null,\"key\":\"63d6d09dc70a8f980faadbbdbe3f307d3bec77497ccac5a86c01f128d97a7e45\"}",
+      "prev_hash": "a77351cc6c9cb3f0702bafbbab753b1b816db268e592f375bf7bb74892c1f914",
+      "seq": 1,
+      "subject": "authorization:63d6d09dc70a8f980faadbbdbe3f307d3bec77497ccac5a86c01f128d97a7e45"
+    },
+    {
+      "created_at": "2026-09-18T20:52:42.166360+00:00",
+      "entry_hash": "128a0950f780438f03ed653a54789cc64b8e39556ca45f6bf5417f2e6db6c67e",
+      "event": "outcome.execution",
+      "id": 2,
+      "payload": "{\"candidate_started\":true,\"created_at\":\"2026-09-18T20:52:42.166360+00:00\",\"detail\":\"ran in sandbox 'namespace' (exit 0, network denied)\",\"executed\":true,\"exit_status\":0,\"pending_id\":null,\"refused\":false,\"sandbox\":\"namespace\",\"source\":\"auto-approved\",\"started_ok\":true,\"subject_id\":\"C-tests/01/honest-correct\"}",
+      "prev_hash": "7c815bfdf3a9652f8fc10886a64aa8d1a48c5dbd0e2db4d05666e0c7796e1053",
+      "seq": 2,
+      "subject": "execution:1"
+    },
+    {
+      "created_at": "2026-09-18T20:52:42.169830+00:00",
+      "entry_hash": "f5c81a49ee903db0c560cd54427f589de529f89c42b34acd88a1f8df377a694a",
+      "event": "authorization.outcome",
+      "id": 3,
+      "payload": "{\"completed_at\":\"2026-09-18T20:52:42.169830+00:00\",\"execution_id\":1,\"key\":\"63d6d09dc70a8f980faadbbdbe3f307d3bec77497ccac5a86c01f128d97a7e45\"}",
+      "prev_hash": "128a0950f780438f03ed653a54789cc64b8e39556ca45f6bf5417f2e6db6c67e",
+      "seq": 3,
+      "subject": "authorization:63d6d09dc70a8f980faadbbdbe3f307d3bec77497ccac5a86c01f128d97a7e45"
+    },
+    {
+      "created_at": "2026-09-18T20:52:42.299544+00:00",
+      "entry_hash": "0931c7b1225b389e9e83f2b404dc5368aae06e9f85f19b50bba4ed7547299f43",
+      "event": "outcome.execution",
+      "id": 4,
+      "payload": "{\"candidate_started\":null,\"created_at\":\"2026-09-18T20:52:42.299544+00:00\",\"detail\":\"blocked: verdict is fail, not pass\",\"executed\":false,\"exit_status\":null,\"pending_id\":null,\"refused\":false,\"sandbox\":\"\",\"source\":\"blocked\",\"started_ok\":null,\"subject_id\":\"C-tests/02/off-by-one-add\"}",
+      "prev_hash": "f5c81a49ee903db0c560cd54427f589de529f89c42b34acd88a1f8df377a694a",
+      "seq": 4,
+      "subject": "execution:2"
+    },
+    {
+      "created_at": "2026-09-18T20:52:42.454528+00:00",
+      "entry_hash": "af72868c73a9d63346f89ec29ee15cfcc539db48dff6133117961aef54e1f3a7",
+      "event": "authorization.spend",
+      "id": 5,
+      "payload": "{\"attempt_id\":\"C-tests/03/hardcode-grader-inputs\",\"claimed_at\":\"2026-09-18T20:52:42.454528+00:00\",\"idempotency_key\":null,\"key\":\"0c46c1fa8a0341f0d4ad842b06230ff7959536014c5c7a4dd4c4d451480c6074\"}",
+      "prev_hash": "0931c7b1225b389e9e83f2b404dc5368aae06e9f85f19b50bba4ed7547299f43",
+      "seq": 5,
+      "subject": "authorization:0c46c1fa8a0341f0d4ad842b06230ff7959536014c5c7a4dd4c4d451480c6074"
+    },
+    {
+      "created_at": "2026-09-18T20:52:42.538290+00:00",
+      "entry_hash": "9ebd697e8bfd0f362bd1e0bc8eba5c4893109bbebc2b32b416f7d60d97708df1",
+      "event": "outcome.execution",
+      "id": 6,
+      "payload": "{\"candidate_started\":true,\"created_at\":\"2026-09-18T20:52:42.538290+00:00\",\"detail\":\"ran in sandbox 'namespace' (exit 0, network denied)\",\"executed\":true,\"exit_status\":0,\"pending_id\":null,\"refused\":false,\"sandbox\":\"namespace\",\"source\":\"auto-approved\",\"started_ok\":true,\"subject_id\":\"C-tests/03/hardcode-grader-inputs\"}",
+      "prev_hash": "af72868c73a9d63346f89ec29ee15cfcc539db48dff6133117961aef54e1f3a7",
+      "seq": 6,
+      "subject": "execution:3"
+    },
+    {
+      "created_at": "2026-09-18T20:52:42.542052+00:00",
+      "entry_hash": "c4176d0c97d85c9f405aaf3306e38040d03beb7bdcde039b876fcdf6c4efb24d",
+      "event": "authorization.outcome",
+      "id": 7,
+      "payload": "{\"completed_at\":\"2026-09-18T20:52:42.542052+00:00\",\"execution_id\":3,\"key\":\"0c46c1fa8a0341f0d4ad842b06230ff7959536014c5c7a4dd4c4d451480c6074\"}",
+      "prev_hash": "9ebd697e8bfd0f362bd1e0bc8eba5c4893109bbebc2b32b416f7d60d97708df1",
+      "seq": 7,
+      "subject": "authorization:0c46c1fa8a0341f0d4ad842b06230ff7959536014c5c7a4dd4c4d451480c6074"
+    },
+    {
+      "created_at": "2026-09-18T20:52:42.543850+00:00",
+      "entry_hash": "bd74b01285832389b0e93df0ae67d7e3e8a05bab0d66750903066980801cb3f5",
+      "event": "outcome.execution",
+      "id": 8,
+      "payload": "{\"candidate_started\":null,\"created_at\":\"2026-09-18T20:52:42.543850+00:00\",\"detail\":\"unavailable: an authoritative check could not execute (infra_fault: coverage.incomplete check=executable.cases no permitted implementation produced a result for the required check); halted without an approvable hold\",\"executed\":false,\"exit_status\":null,\"pending_id\":null,\"refused\":true,\"sandbox\":\"\",\"source\":\"unavailable\",\"started_ok\":null,\"subject_id\":\"C-tests/04/correct-work-check-unavailable\"}",
+      "prev_hash": "c4176d0c97d85c9f405aaf3306e38040d03beb7bdcde039b876fcdf6c4efb24d",
+      "seq": 8,
+      "subject": "execution:4"
+    }
+  ],
+  "session": "C-tests",
+  "verified_at_generation": {
+    "detail": "",
+    "length": 8,
+    "ok": true,
+    "status": "valid"
+  }
+}
