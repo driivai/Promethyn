@@ -311,6 +311,28 @@ def _payload_of(entry: Mapping[str, Any]) -> dict[str, Any]:
     return payload
 
 
+#: THE STATE MACHINE, DECLARED. Which prior states each chain event may
+#: legally follow; anything else is a history that cannot have happened and
+#: :func:`spend_state` refuses it rather than folding it to an answer.
+#:
+#: WHY A TABLE AND NOT THREE CHECKS. Two reviews found the same defect in two
+#: different branches — an ordering rule applied to some events and not their
+#: siblings — and each time the bypass was to reach the unguarded one. Three
+#: separate ``if`` statements is three chances to forget the fourth; one table
+#: cannot have a branch missing from it, and the fold below is a single lookup.
+#:
+#: A SPEND from ``RELEASED`` is the legitimate retry after a fail-closed
+#: refusal, and from ``UNSPENT`` the ordinary first claim. From ``SPENT`` it is
+#: a double claim and from ``COMPLETED`` it is the re-claim of a finished
+#: occurrence — which, followed by a release, is exactly how a reset mutex row
+#: was turned into a second execution.
+_PERMITTED_FROM: dict[str, frozenset[str]] = {
+    SPEND_EVENT: frozenset({UNSPENT, RELEASED}),
+    SPEND_OUTCOME_EVENT: frozenset({SPENT}),
+    RELEASE_EVENT: frozenset({SPENT}),
+}
+
+
 def spend_state(events: list[dict], *, key: str) -> SpendState:
     """Fold this subject's entries, in chain order, into the current state.
 
@@ -351,48 +373,41 @@ def spend_state(events: list[dict], *, key: str) -> SpendState:
                 f"{payload.get('key')!r}: the entry was re-attributed"
             )
         folded += 1
+        # EVERY TRANSITION IS CHECKED, FROM ONE TABLE, and that is the fix
+        # rather than a third guard bolted beside two others.
+        #
+        # THE HISTORY THIS CLOSES, because it is the whole argument for the
+        # table. The outcome branch carried an ordering check from the start.
+        # Review of #127 found the RELEASE branch had none: append a release
+        # after a completion and the fold read ``released``, so the executor
+        # ran again with the chain still verifying. I guarded the release —
+        # and review of #128 then found the SPEND branch had none either, so
+        # the identical bypass worked in two steps: reset the mutex row
+        # (explicitly inside this module's stated threat model), re-claim,
+        # and the unconditional ``COMPLETED -> SPENT`` made the now-guarded
+        # release legal again. Measured: executor calls 2, rows 2, chain ok.
+        #
+        # Twice the same defect — an ordering rule applied to some branches
+        # and not their siblings — and patching the branch that was named
+        # would invite a third. So the permitted transitions are DECLARED,
+        # once, and the fold reads them: a shape where forgetting a branch is
+        # not expressible.
+        allowed = _PERMITTED_FROM[event]
+        if status not in allowed:
+            raise SpendRecordMalformed(
+                f"a chained {event!r} entry under {subject!r} follows state "
+                f"{status!r}; this event is only valid from "
+                f"{' or '.join(sorted(allowed))}"
+            )
         if event == SPEND_EVENT:
             status = SPENT
             idempotency_key = payload.get("idempotency_key")
             claimed_at = payload.get("claimed_at")
             execution_id = None
         elif event == SPEND_OUTCOME_EVENT:
-            # Only a live spend can complete. An outcome with no spend before
-            # it is an entry out of order, which is a broken history rather
-            # than a completion, and it refuses.
-            if status != SPENT:
-                raise SpendRecordMalformed(
-                    f"a chained {SPEND_OUTCOME_EVENT!r} entry under {subject!r} "
-                    f"follows state {status!r}, not an open spend"
-                )
             status = COMPLETED
             execution_id = payload.get("execution_id")
         else:
-            # ONLY AN OPEN SPEND MAY BE RELEASED, for exactly the reason an
-            # outcome may only follow one — and this branch did NOT check it
-            # until review of #127 measured what that cost.
-            #
-            # REPRODUCED before the fix, on an ordinary anchored ledger: call
-            # the public ``release_authorization`` for an already COMPLETED
-            # key, and the row is deleted, a well-formed release is appended,
-            # the fold reads RELEASED, ``retry_verdict`` returns MAY_EXECUTE
-            # and the executor runs a SECOND time — with ``verify_chain().ok``
-            # True throughout, because nothing was rewritten. An append that
-            # looks legitimate resurrected a spent authorization.
-            #
-            # The module docstring reasoned only about a release being
-            # DELETED ("can only make the fold read MORE spent, which is the
-            # fail-closed direction"). That is still true and it was not the
-            # whole story: a release ADDED where none belongs moves the fold
-            # the other way, and the permissive direction is the one an
-            # attacker picks. Refused here, symmetrically with the outcome.
-            if status != SPENT:
-                raise SpendRecordMalformed(
-                    f"a chained {RELEASE_EVENT!r} entry under {subject!r} "
-                    f"follows state {status!r}, not an open spend; a release "
-                    "retracts a claim that is still open and cannot un-spend a "
-                    "completed occurrence"
-                )
             status = RELEASED
             idempotency_key = None
             claimed_at = None

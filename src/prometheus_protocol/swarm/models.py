@@ -199,3 +199,17 @@ class ExecutionResult:
     sandbox_name: str = ""
     exit_status: int | None = None
     stdout: str = ""
+    #: Whether ``stdout`` is the candidate's captured output at all.
+    #:
+    #: ``False`` means it was NEVER RECORDED, and the field carries a
+    #: diagnostic rather than program output. Review of #128: a returned prior
+    #: result first said so with a sentence IN ``stdout``, which candidate code
+    #: can print verbatim — an in-band signal, so a consumer reading the field
+    #: as documented captured output could not tell a diagnostic from the real
+    #: thing. The availability is its own fact, exactly as ``started_ok`` and
+    #: ``candidate_started`` are two facts and not one.
+    #:
+    #: Defaults to ``True`` because every executor that sets ``stdout`` sets it
+    #: from a real run; only the retry path, which reads a row that has no such
+    #: column, sets this ``False``.
+    stdout_recorded: bool = True

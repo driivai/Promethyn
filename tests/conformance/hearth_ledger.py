@@ -595,6 +595,14 @@ EXPECTED_PROTECTED_FILES = 23
 #:   executor wall's check-and-set under a lock — see G55's residuals for what
 #:   that does and does not prove.
 #:
+#:   RE-SANCTIONED AGAIN, after a SECOND review of the same sprint. The stdout
+#:   limit was first stated with a sentence inside ``stdout`` itself, which a
+#:   candidate can print verbatim — an in-band signal a consumer reading the
+#:   field as captured output cannot tell from the real thing. The fact is now
+#:   its own field on ``ExecutionResult`` (``stdout_recorded``) and ``stdout``
+#:   is left empty, which is the same shape ``started_ok`` and
+#:   ``candidate_started`` already have: two facts, not one.
+#:
 #: Those sprints are why these bytes are what they are. They do NOT license the
 #: next edit to the same files: updating a digest below is a fresh decision, and
 #: the reason for it belongs beside it.
@@ -616,7 +624,7 @@ DIGESTS: dict[str, str] = {
     "src/prometheus_protocol/core/models.py":
         "96fe20410439abdb87fd9a34becdffab032fd106a5fa70f80271527a79df5910",
     "src/prometheus_protocol/execution/controller.py":
-        "906c5d283dc7964fc20454d6da95ea0011ffc3afb3252278d8cca04c0063d701",
+        "793dfe58d08664c832b57e38c1384d96a30077cc62da15dd26b66870a25679d4",
     "src/prometheus_protocol/execution/executor.py":
         "406e74033bc63d0c1739d109cab02ee31a553e5194d2e529526787dbe9dc944d",
     "src/prometheus_protocol/execution/pending.py":

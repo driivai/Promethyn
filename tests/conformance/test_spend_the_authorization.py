@@ -1294,7 +1294,7 @@ def test_the_first_caller_is_granted_and_every_later_one_is_refused():
 
 
 def test_a_returned_prior_result_NAMES_the_stdout_it_cannot_have(tmp_path):
-    """Doctrine #1 where the caller reads it.
+    """Doctrine #1 where the caller reads it, OUT OF BAND.
 
     ``executions`` has no ``stdout`` column, so a retry cannot be handed the
     program's output. The first reconstruction left the field at its default —
@@ -1315,12 +1315,21 @@ def test_a_returned_prior_result_NAMES_the_stdout_it_cannot_have(tmp_path):
     again = one_action(ctl, a, idempotency_key="retry-me")
 
     assert len(spy.calls) == 1
-    assert again.execution.stdout == _STDOUT_NOT_RECORDED
-    assert again.execution.stdout != "", (
-        "an unrecorded stdout was returned as an empty string, which is what a "
-        "silent program produces"
-    )
+    # OUT OF BAND. Review of #128: the first fix put the sentence IN ``stdout``,
+    # which candidate code can print verbatim — an in-band signal a consumer
+    # reading the field as captured output cannot tell from the real thing. The
+    # availability is now its own fact, and the prose stays in ``detail``.
+    assert again.execution.stdout_recorded is False
+    assert again.execution.stdout == ""
     assert _STDOUT_NOT_RECORDED in again.execution.detail
+    assert _STDOUT_NOT_RECORDED not in again.execution.stdout
+
+    # THE PAIRED POSITIVE, and the reason the flag is not decoration: a real
+    # execution says its output WAS recorded, even when the program printed
+    # nothing. Without this, ``stdout_recorded is False`` on a retry is equally
+    # consistent with a field that is always False.
+    first = one_action(ctl, fx.action("print('other')"))
+    assert first.execution.stdout_recorded is True
 
     # And the limit is REAL rather than a habit: no execution row carries the
     # field, derived from the table rather than asserted about one row.
@@ -1333,3 +1342,139 @@ def test_a_returned_prior_result_NAMES_the_stdout_it_cannot_have(tmp_path):
         "executions now records stdout: return the real value and delete this "
         "limit, rather than leaving a placeholder where the output is"
     )
+
+
+# ---------------------------------------------------------------------------
+# PART 9 — the second review, which found the FIRST fix incomplete
+# ---------------------------------------------------------------------------
+
+
+def test_resetting_the_row_and_RE_CLAIMING_does_not_reopen_the_release(tmp_path):
+    """The same bypass in two steps, after one step had been closed.
+
+    Review of #127 got the release branch guarded. Review of #128 then found
+    the SPEND branch had no ordering check either, so the identical attack
+    worked with one more move — and the move is explicitly inside this
+    module's own stated threat model, which says a reset row restores nothing:
+
+      1. execute; the occurrence is ``completed``
+      2. DELETE the ``spent_authorizations`` row
+      3. ``claim_authorization`` again — it wins, because the row is gone, and
+         the unconditional ``COMPLETED -> SPENT`` made the fold agree
+      4. ``release_authorization`` — now legal, because step 3 forged the open
+         spend the guard requires
+      5. execute again
+
+    Measured at step 5 before the fix: **executor calls 2, execution rows 2,
+    chain valid**. The row-reset claim in the module docstring was true of the
+    fold as a lookup and false of the fold as a state machine.
+    """
+
+    ctl, spy, ledger = auto(tmp_path, "twostep")
+    a = fx.action()
+    one_action(ctl, a)
+    key = authorization_key(ledger.executions()[0]["authorization"])
+
+    ledger._conn.execute("DELETE FROM spent_authorizations WHERE key = ?", (key,))
+    ledger._conn.commit()
+
+    # The re-claim still WINS the row — that is the mutex doing its one job on
+    # an empty table, and it is not the authority. What it can no longer do is
+    # make the chain agree.
+    assert ledger.claim_authorization(
+        key, attempt_id=fx.ATTEMPT, idempotency_key=None, claimed_at=_NOW
+    ) is True
+    with pytest.raises(SpendRecordMalformed):
+        ledger.authorization_spend_state(key)
+
+    with pytest.raises(ExecutionNotAuthorized) as refused:
+        one_action(ctl, a)
+    assert refused.value.reason == "spend_record_unreadable"
+    assert len(spy.calls) == 1, "the two-step reset bought a second execution"
+
+
+@pytest.mark.parametrize(
+    "history, permitted",
+    [
+        ((), True),
+        ((SPEND_EVENT,), True),
+        ((SPEND_EVENT, SPEND_OUTCOME_EVENT), True),
+        ((SPEND_EVENT, RELEASE_EVENT), True),
+        ((SPEND_EVENT, RELEASE_EVENT, SPEND_EVENT), True),
+        ((SPEND_EVENT, SPEND_OUTCOME_EVENT, SPEND_EVENT), False),
+        ((SPEND_EVENT, SPEND_OUTCOME_EVENT, RELEASE_EVENT), False),
+        ((SPEND_EVENT, SPEND_EVENT), False),
+        ((SPEND_OUTCOME_EVENT,), False),
+        ((RELEASE_EVENT,), False),
+        ((SPEND_EVENT, RELEASE_EVENT, RELEASE_EVENT), False),
+        ((SPEND_EVENT, RELEASE_EVENT, SPEND_OUTCOME_EVENT), False),
+    ],
+    ids=[
+        "empty",
+        "claimed",
+        "claimed-completed",
+        "claimed-released",
+        "released-then-reclaimed",
+        "completed-then-reclaimed",
+        "completed-then-released",
+        "claimed-twice",
+        "outcome-with-no-spend",
+        "release-with-no-spend",
+        "released-twice",
+        "outcome-after-release",
+    ],
+)
+def test_every_sequence_of_three_events_is_permitted_or_refused_by_the_TABLE(
+    history, permitted
+):
+    """The state machine, exhaustively over the sequences that can occur.
+
+    Two reviews found the same defect in two different branches, so the
+    permitted transitions are now declared in one table rather than checked
+    branch by branch — and this walks the table's consequences instead of
+    trusting that three ``if`` statements agree. The five permitted rows are
+    the paired positives: without them "a sequence is refused" would be
+    consistent with a fold that refuses every history including the ones the
+    system actually produces.
+    """
+
+    key = "d" * 64
+    events = [
+        {
+            "event": event,
+            "subject": spend_subject(key),
+            "payload": {
+                "key": key,
+                "claimed_at": _NOW,
+                "released_at": _NOW,
+                "completed_at": _NOW,
+                "reason": "r",
+                "idempotency_key": None,
+                "execution_id": 1,
+            },
+        }
+        for event in history
+    ]
+    if permitted:
+        state = spend_state(events, key=key)
+        assert state.entries == len(history)
+    else:
+        with pytest.raises(SpendRecordMalformed):
+            spend_state(events, key=key)
+
+
+def test_the_transition_table_covers_every_event_the_fold_folds():
+    """An allowlist is only an allowlist if it is total.
+
+    The fold selects three event names and the table permits three; a fourth
+    event added to one and not the other would either fold unchecked or raise
+    a ``KeyError`` instead of a typed refusal. Derived from both, both ways.
+    """
+
+    from prometheus_protocol.ledger.spend import _PERMITTED_FROM
+
+    assert set(_PERMITTED_FROM) == {SPEND_EVENT, SPEND_OUTCOME_EVENT, RELEASE_EVENT}
+    assert all(_PERMITTED_FROM.values()), "an event permitted from nothing is dead"
+    reachable = {UNSPENT} | {SPENT, COMPLETED, RELEASED}
+    for event, allowed in _PERMITTED_FROM.items():
+        assert allowed <= reachable, f"{event} permits a state the fold never sets"
