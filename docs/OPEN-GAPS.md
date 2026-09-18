@@ -2677,6 +2677,112 @@ openings.** **Running total 48: 34 review replies, 11 bodies, 3 comments**,
 recounted from the bounded table (25 review replies, 3 bodies, 1 comment) plus
 carriers 30 to 48, not incremented. The two-check split held a fourth time.
 
+**CARRIER 49, opening #131, and the footer was REWRITTEN in flight — observed,
+not inferred.** The body was posted with the footer's link pointing at the
+product's bare documentation root; read back immediately through the
+pull-request API, that link has a session-scoped path appended to it. The
+channel substituted a longer URL into text that had already left the hygiene
+checker — this entry's exact subject in a form it had not yet recorded: not an
+APPENDED trailer but an EDITED one. The link is not quoted here, because
+quoting it would put the banned token in this file and the checker refuses it,
+which is the correct behaviour and was measured by trying. **18 of 18
+openings** carry the footer.
+**Running total 49: 34 review replies, 12 bodies, 3 comments**, recounted from
+the bounded table (25 review replies, 3 bodies, 1 comment) plus carriers 30 to
+49, not incremented.
+
+A note on what that rewrite costs and does not cost. It does not defeat the
+hygiene checker, which refuses the token whatever URL follows it; the footer
+was always going to be a carrier and is recorded as one. What is new is that
+the link is not the link that was sent, so a reader reconciling a carrier
+against what the author wrote cannot do it from the text alone.
+
+**RECORDED AND THEN REPAIRED, and the first version of this paragraph got the
+second half wrong.** It said the body was "recorded rather than repaired,
+because rewriting it would remove the evidence of the rewrite" — reasoning from
+this entry's own habit rather than from what the repository does. Checked
+against the artifact: **#130's `pr-text` check conclusion is `success`**, and so
+are all eleven of its checks. A red `pr-text` is not this project's steady
+state; the body is repaired and the carrier record is what preserves the
+evidence, which is the arrangement that keeps both. Corrected, and #131's body
+was rewritten to clear the check.
+
+**AND THE COMMIT CHANNEL IS NOT THE PR-TEXT CHANNEL.** #131's first three
+commits were authored and committed under a vendor identity and carried a
+session trailer in the message, so `check_message_hygiene.py --history` refused
+**15 findings across 3 commits** — five per commit: the message, and the author
+and committer names and addresses. Every prior carrier in this entry is text a
+CHANNEL appended after the fact; these were in the commit objects themselves,
+which is a different seam and one G13 already names for `main`. Re-authored to
+the project identity and the trailer removed; the sweep over the same range now
+reports `no commit carries a banned token in its message or identities`. The
+attribution it carried is not lost — it is in this entry, which is a more
+durable record than a trailer the guard refuses.
+
+**AND A REPAIRED BODY CANNOT BE CLEARED BY A RE-RUN. The two-check split has
+been recorded four times in this entry as a behaviour; this is its MECHANISM,
+and it was measured rather than inferred.** `.github/workflows/ci.yml:129` hands
+the text to the job as `PR_BODY: ${{ github.event.pull_request.body }}`. Re-running
+a failed job REPLAYS THE ORIGINAL EVENT PAYLOAD rather than re-reading the pull
+request, so a body repaired after the event is not in the copy the re-run sees.
+
+Observed on #131, run `35350855570` attempt 2, head `52f98fa`, started
+13:35:17Z — after the body had been repaired and after `pr-text` had already
+gone green against the live text at 13:33:43Z:
+
+```
+message hygiene passed: 3 commit(s) in 1506b61..52f98fa, 17 terms, no banned
+  tokens in any message or identity
+message hygiene passed: pr-title.txt (83 chars), no banned tokens
+message hygiene FAILED: pr-body.txt contains banned token(s)
+```
+
+The commit-range check in the SAME step passed, so the re-authoring recorded
+above had taken and the body was the only thing left red; the job's own
+environment dump still held the pre-edit body verbatim, footer included. Two
+checks over one artifact, two minutes apart, disagreeing because they are
+reading two different versions of it.
+
+The trigger half of this was already known and is written down at
+`.github/workflows/pr-text-hygiene.yml:3-13`: `ci.yml`'s bare `pull_request:`
+expands to opened, synchronize and reopened and NOT `edited`, which is why that
+workflow exists. What is new here is that the OTHER escape — re-running the
+failed job — does not work either, so the set of things that can clear a
+repaired body in `ci.yml` has exactly one member: a push.
+
+WHY THIS IS RECORDED AND NOT FIXED. The remedies a red-on-stale-text job
+invites are the two this repository forbids — an empty commit, and a close and
+reopen — and the reason they are forbidden does not weaken because the red is
+spurious. The remedy that remains is a push carrying real content, which is
+what this commit is. Adding `edited` to `ci.yml` would re-run the whole
+three-interpreter matrix on every description edit, and
+`pr-text-hygiene.yml:22-28` already weighs that trade and declines it; nothing
+measured here changes the inputs to it. The checker is not at fault in either
+direction: it refused the text it was handed, and the text it was handed was
+stale.
+
+**CARRIERS 50 TO 53, AND AN UNDERCOUNT CORRECTED BEFORE IT WAS RECORDED.**
+Answering the first review round on #131 meant three replies on its review
+threads and one comment invoking a review on the final head — four carriers,
+not the one an earlier draft of this paragraph named. That draft said "the
+comment invoking a review is carrier 50", counting the channel it had in mind
+and not the ones it had already used; the three replies precede the comment, so
+the comment is 53. Corrected here rather than quietly amended, because an
+undercount by three in a count that enters this entry is the doctrine this
+entry exists under.
+
+| carrier | channel | where |
+|---|---|---|
+| 50, 51, 52 | review replies | the three answers on #131's first review round |
+| 53 | comment | invoking a review on the final head |
+
+**Running total 53: 37 review replies, 12 bodies, 4 comments**, recounted from
+the bounded table (25 review replies, 3 bodies, 1 comment) plus carriers 30 to
+53, not incremented. The two replies answering the SECOND review round are
+carriers 54 and 55 by the same rule, recorded at the next push; #131's body has
+been rewritten several times and a rewrite of an existing body is not a new
+carrier.
+
 **THE COUNT IS ACCURATE AS OF THIS COMMIT AND CANNOT BE ACCURATE AFTER IT, which
 is a property of the count and not an oversight.** Reporting this commit's own
 CI means posting a comment, and that comment will carry the footer -- so
@@ -5252,3 +5358,174 @@ it was corrected.
 was correct about what it fixed and wrong about a neighbour it did not look
 at — the release branch, then its sibling the spend branch, then the flag's
 default over the construction sites.
+
+---
+
+## G56 — the fix for the fail-open default named its two siblings and left them fail-open
+
+**Found by asking the sprint's own question of the population rather than of
+the flag.** #130 flipped `ExecutionResult.stdout_recorded` to the fail-closed
+direction, and its entry above records why: a claim true of the FIVE sites that
+pass `stdout=` had been made about all ELEVEN that construct the class. The
+same dataclass docstring names `started_ok` and `candidate_started` as "two
+facts, not one" — one paragraph above the field it fixed — and both were still
+defaulting `True`.
+
+**What.** `ExecutionResult.started_ok` and `ExecutionResult.candidate_started`
+are claims about whether isolation came up and whether the candidate command
+began. Both defaulted `True`, so any construction that did not state them
+asserted that isolation started and the candidate ran. The executors' `_refuse`
+helpers repeated the shape with their own `started_ok: bool = True,
+candidate_started: bool = True` parameter defaults.
+
+**Measured, from the AST, before the change** (`src/` only; the derivation is
+the one `test_only_a_site_that_CAPTURES_output_may_claim_it_recorded_it` uses,
+widened from one flag to three):
+
+| | sites | explicit | INHERITED |
+|---|---|---|---|
+| `ExecutionResult` constructions | 11 | — | — |
+| — `started_ok` | | 5 | **6** |
+| — `candidate_started` | | 2 | **9** |
+| — `stdout_recorded` (fixed by #130) | | 3 | 8 |
+| `_refuse(...)` calls | 13 | 4 state both | **9 inherit at least one** |
+
+Of the inheriting constructions, five are paths where nothing ran at all: three
+swarm refusals (`swarm/runtime.py:536,552,565`), the ledger replay
+(`execution/controller.py:526`) and a controller refusal (`:596`). Four of the
+nine inheriting `_refuse` calls are refusals taken **before the sandbox is
+constructed** — no action, a descriptor mismatch, an unsupported action kind, a
+non-isolating adapter (`execution/executor.py:72,74,76,81`), and five more in
+`tools/git.py:496,498,502,504,508`. One site asserted the claim outright rather
+than inheriting it: the git dry-run at `tools/git.py:516` passed
+`started_ok=True` while constructing no sandbox.
+
+**Reproduced before fixing, and it reaches the audit ledger.** Driving the real
+`SandboxExecutor` against a non-isolating adapter whose `run` raises — so the
+probe cannot pass because the sandbox quietly ran — and then the real
+`ExecutionController` against an in-memory `SqliteLedger`:
+
+```
+executions rows written: 1
+  executed          : False
+  refused           : True
+  detail            : refused: sandbox 'non-isolating' does not isolate; ...
+  started_ok        : True   <- the sandbox was never invoked
+  candidate_started : True   <- nothing ran
+```
+
+The controller passes both through to `record_execution` on the one path that
+calls an executor, so this is couldn't-verify persisted as verified-clean in
+the audit record — doctrine #1 at the point `executor.py`'s own comment calls
+"where it is most expensive".
+
+**THE POPULATION IS THE FINDING, NOT THE FLAG.** #130 corrected a claim about
+five sites into a claim about eleven, and in the same change left two fields
+whose population it had just enumerated. The lesson the previous entry drew was
+"reason about the population the rule is over"; the population it reasoned
+about was one field's, and the rule is over the class.
+
+**Fixed.** Both class defaults are `False`; both `_refuse` helpers default
+`False`; the git dry-run states nothing; and the replay carries the stored
+columns (`bool(row["started_ok"])`, three-valued in the ledger, so a `NULL`
+from a row where no executor was invoked reads as `False`).
+
+**And the rule is now a SHAPE, which needs no allowlist.** Every site that
+observed isolation passes the value the adapter reported
+(`started_ok=result.started_ok`), never a literal. So a literal `True` for
+either flag is never correct: it is a claim written by hand where nothing was
+measured. `test_no_site_may_claim_a_harness_fact_it_did_not_MEASURE` derives
+every argument from the AST and requires the literal-`True` set to be EMPTY —
+no hand-list, and no judgement about which sites "really ran", which is the
+half a population rule alone could not decide. Measured after the fix: **0
+literal-`True` arguments, 18 measured-or-`False` arguments.**
+
+**WOULD THE BUILD GUARD HAVE CAUGHT IT? No, and the reason is its population.**
+Measured:
+
+* `started_ok` / `candidate_started` are not `Config` fields at all (37 fields,
+  22 security-classified) — so `validate_build`'s row set never contains them;
+* neither is in `SECURITY_FIELDS`;
+* `ExecutionResult` carries none of the 24 attribute names
+  `security_attribute_carriers()` keys on, so the unregistered-carrier refusal
+  does not reach it either;
+* and an `ExecutionResult` is a transient return value, not a component held in
+  the returned runtime graph, so neither traversal scope sees one.
+
+**That is a gap in the guard, not in the code.** The build guard ends this
+class *for Config-derived properties applied to live components*. This defect
+is a default on a RECORD the runtime produces, and the guard has no population
+that includes records. Closing it would mean a second population — "fields that
+are claims about what happened" — and deriving that set is semantic, which is
+G50's wall. Not attempted here; named.
+
+**The class sweep — three media, population first.**
+
+| medium | population in `src/` | screened | live defect |
+|---|---|---|---|
+| boolean defaults a caller can omit (dataclass fields + keyword params) | **72** (44 fields, 28 params, 35 files) | 15 selected, 16 classified-not-permissive, **41 the screen could not classify** | this entry |
+| three-argument absent-value reads (`getattr(o,k,d)`, `d.get(k,d)`) | **132** (65 `getattr`, 67 `.get`; 104 literal defaults, 28 computed) | 9 on control-shaped keys | none |
+| claim-shaped flags defaulting `True`, by construction site | 3 classes | — | this entry only |
+
+The screen is keyed on the NAME, which is G50's and G17's shape, and it is
+reported as a screen rather than a verdict: every selected member was read, and
+the 41 it could not classify are listed in the sweep's output rather than
+dropped.
+
+**The two near misses, latent rather than live, recorded so the next change
+does not make them live:**
+
+* `SandboxResult.started_ok` (`sandbox/base.py:176`) also defaults `True` —
+  and **0 of its 13 constructions inherit it**. Every site states the value, so
+  the permissive default is unreachable today. Nothing enforces that.
+* `ReceiptVerification.checked` (`ledger/receipts.py:384`) defaults `True` with
+  1 of 4 constructions inheriting, and `CoverageReport.recorded`
+  (`policy/assessment.py:85`) defaults `True` with 2 of 4 inheriting. In all
+  three the inheriting site is the success path where the claim is true
+  (`receipts.py:559` after the walk ran; `assessment.py:96,99` inside
+  `coverage_report`, which is only called with a real `validate_coverage`
+  outcome). Correct today, one careless site from not being, and neither has a
+  derived guard.
+
+**Test.** `tests/conformance/test_execution_start_signal.py` — the reproduction
+at the executor and again at the audit ledger, the paired positive control (a
+real isolating run must still claim both, or "nothing claims anything" would
+satisfy the reproduction), the fail-closed defaults, the shape rule with its
+own non-vacuity control, and the replay.
+
+**Executed mutations.** `scripts/spend_proofs.py` rows 17–21, each restoring one
+half of the defect: the class defaults flipped back, the `_refuse` defaults
+flipped back (measured twice — once at the executor's return value, once at the
+ledger row), a literal claim put back where a measurement belongs, and the
+replay's stored columns discarded again. All five are caught first-order by
+their named proof.
+
+**The runner grew a second proof module to carry them**, because a runner bound
+to one test file can only pin proofs that happen to live there. Each distinct
+module now gets its own clean baseline AND its own stripped baseline,
+established before any mutation; a module whose stripped baseline is red has no
+second-order control and the run refuses.
+
+**Limit, stated.** The shape rule covers `ExecutionResult` and `_refuse` by
+name. A third executor that constructs the record through a different helper is
+outside it, and nothing derives the set of helpers that build this class.
+
+---
+
+## Superseded figures in merged pull-request bodies — #127, #128, #129, #130
+
+Recorded here rather than by editing the merged bodies, so the record shows
+what was claimed and when it was corrected. Extends the note in G55.
+
+| PR | figure in its merged body | superseded by |
+|---|---|---|
+| #127 | `spend_proofs` at its first size, and the second-order figures before any stripped baseline existed | G55's withdrawal — every second-order figure this sprint published measured nothing, because the stripped baseline was red and nothing checked it |
+| #128 | `16 of 16` second-order | the same withdrawal; the corrected figure was **11 of 18** |
+| #129 | the figures before the withdrawal | the same withdrawal |
+| #130 | `spend_proofs is now 18 rows, 36 runs`; `stdout_recorded` presented as the fail-open default corrected | **24 rows, 48 runs** after G56's five and #131's review round; and the correction was one field of three — G56 is the other two |
+| #131, first head | `23 rows, 46 runs` | **24 rows, 48 runs**. The second review round added `pass-through-parameter-default-flipped-fail-open`: the pass-through form's premise — that the parameter it forwards defaults `False` — lives in a different statement from the claim resting on it, so flipping it left every call-site shape and the exact census unchanged. Superseded by my own change within the same pull request, and recorded here rather than edited in place |
+
+**None of these bodies is wrong about what it measured at the time.** Each is a
+figure that a later change moved, and the reason they are listed together is
+that all four were merged before the review of their final head had landed —
+which is the mechanism, not the arithmetic.

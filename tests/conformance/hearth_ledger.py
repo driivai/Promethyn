@@ -613,6 +613,26 @@ EXPECTED_PROTECTED_FILES = 23
 #:   (``execution/executor.py`` and ``tools/git.py``) opt in explicitly. A
 #:   derived test holds the whole population to that rule.
 #:
+#:   RE-SANCTIONED A FOURTH TIME (G56), and for the two fields the third
+#:   re-sanction named and did not change. ``started_ok`` and
+#:   ``candidate_started`` are described four lines above as "two facts, not
+#:   one" — and both still defaulted ``True``, so any construction that did not
+#:   state them asserted that isolation came up and the candidate ran.
+#:   Measured from the AST before the change: of the eleven constructions
+#:   ``started_ok`` was inherited at SIX and ``candidate_started`` at NINE, and
+#:   nine of the thirteen ``_refuse`` calls inherited at least one — four of
+#:   them refusals taken before the sandbox is constructed. Observed end to end
+#:   at the audit ledger: a refusal against a non-isolating adapter wrote
+#:   ``started_ok=1, candidate_started=1`` into the ``executions`` table.
+#:
+#:   ``executor.py`` changes because its ``_refuse`` defaults flip to ``False``
+#:   and its two real-run constructions now pass the value the ADAPTER reported
+#:   rather than a literal ``True``. ``controller.py`` changes because the
+#:   ledger replay was discarding two stored columns and inheriting the class
+#:   default instead of carrying them. The rule is now a shape with no
+#:   allowlist: a literal ``True`` for either flag is a claim nothing measured,
+#:   and a derived test requires that set to be empty.
+
 #: Those sprints are why these bytes are what they are. They do NOT license the
 #: next edit to the same files: updating a digest below is a fresh decision, and
 #: the reason for it belongs beside it.
@@ -634,9 +654,9 @@ DIGESTS: dict[str, str] = {
     "src/prometheus_protocol/core/models.py":
         "96fe20410439abdb87fd9a34becdffab032fd106a5fa70f80271527a79df5910",
     "src/prometheus_protocol/execution/controller.py":
-        "e57fadcba8a9fc7c1d5577c9d553690af84157d64245f1b7bfb6d0a41a2877e9",
+        "0978a3780ca19ef412f7ebcd37a5c351f37d763f09a3eb1148e2978b6d2c6035",
     "src/prometheus_protocol/execution/executor.py":
-        "6ee5000ee60e42a1512263924235802447be0a592dbb1171122da35845179886",
+        "bfcc68916561dd3b1fa71f7febf4a4c16833d22360b88da7ba3c8b192bdb955f",
     "src/prometheus_protocol/execution/pending.py":
         "eb4f2af5dd7999b4ed7504b8a52831af9522494fce3a5d88580bbd5224b4536a",
     "src/prometheus_protocol/forge/miner.py":

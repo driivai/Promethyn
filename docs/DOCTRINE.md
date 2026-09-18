@@ -18,26 +18,50 @@ references. This file does not reconstruct them either. It does two things:
 
 ## Index of cited numbers
 
-Measured 2026-09-17 over `docs/`, `src/`, `tests/`, `scripts/` and
-`.github/`, by the derivation the test runs, which also PINS the citation
-count per number exactly: a new citation anywhere reddens
+Re-measured 2026-09-18 (was 2026-09-17) over `docs/`, `src/`, `tests/`,
+`scripts/` and `.github/`, by the derivation the test runs, which also PINS the
+citation count per number exactly: a new citation anywhere reddens
 `test_doctrine_index.py` until this table is re-measured, so the numbers here
 are never a remembered snapshot (doctrine #11). "First cited" is the earliest
 line in path order, not the origin.
 
+**What moved on 2026-09-18 and why.** `docs/assurance-ledger-sprint-0.md` and
+`tests/conformance/test_assurance_ledger_limits.py` arrived, citing #4, #5, #8,
+#9, #10 and #11; the gate refused the un-re-measured table first, which is the
+behaviour this pin is for. Two rows changed their "first cited" cell as a
+consequence of path order alone — `assurance-ledger-sprint-0.md` sorts before
+`live-state-pinning-design.md`, so #10 and #11 now point at the new document
+rather than at their origins. That is what "earliest line in path order, not the
+origin" means, and the earlier cells were `docs/live-state-pinning-design.md:187`
+and this file.
+
+**Re-measured again on 2026-09-18 (G56 and Sprint 1).** Counts moved for #1,
+#4, #8, #10 and #11; #11's "first cited" moved to `docs/OPEN-GAPS.md:5191`
+because that file sorts before the sprint documents and now carries a citation
+of its own. The location column moved without the count column moving for #2
+(`:2852` → `:2858`) — the same unchecked column corrected below, drifting again
+with the lines above it.
+
+**And a correction the pin could not make.** Row #2's "first cited" read
+`docs/OPEN-GAPS.md:2782`; the derivation puts it at `docs/OPEN-GAPS.md:2852`. The
+count column is pinned and was right; the *location* column is checked by
+nothing, so it drifted seventy lines and no test could say so. Corrected here.
+That is doctrine #10's own shape inside doctrine #11's own table — a claim about
+existing behaviour, carrying a file and line, that was never re-read.
+
 | # | citations | first cited | the usage, in one line |
 |---|---|---|---|
-| 1 | 17 | `docs/OPEN-GAPS.md:1315` | `Unavailable` is first-class: absence of an answer is a value, never a default |
-| 2 | 10 | `docs/OPEN-GAPS.md:2782` | refused, not degraded: a state the guard cannot establish is written as a refusal, not a clean one |
+| 1 | 20 | `docs/OPEN-GAPS.md:1315` | `Unavailable` is first-class: absence of an answer is a value, never a default |
+| 2 | 10 | `docs/OPEN-GAPS.md:2947` | refused, not degraded: a state the guard cannot establish is written as a refusal, not a clean one |
 | 3 | 0 | — | never cited in the tree |
-| 4 | 34 | `docs/OPEN-GAPS.md:358` | every negative has a positive control |
-| 5 | 16 | `docs/OPEN-GAPS.md:14` | a named gap is a passing test, so it cannot erode quietly |
+| 4 | 38 | `docs/OPEN-GAPS.md:358` | every negative has a positive control |
+| 5 | 23 | `docs/OPEN-GAPS.md:14` | a named gap is a passing test, so it cannot erode quietly |
 | 6 | 0 | — | never cited in the tree |
 | 7 | 0 | — | never cited in the tree |
-| 8 | 42 | `docs/OPEN-GAPS.md:2096` | an empty instrument reads downstream as a pass, so emptiness refuses |
-| 9 | 9 | `docs/OPEN-GAPS.md:47` | re-sweep documentation claims when the code they describe changes |
-| 10 | 4 | `docs/live-state-pinning-design.md:187` | a claim about existing behaviour carries a file and line, or is marked UNVERIFIED |
-| 11 | 14 | this file | counts come from the artifact, never from a filtered view of it (below) |
+| 8 | 57 | `docs/OPEN-GAPS.md:2096` | an empty instrument reads downstream as a pass, so emptiness refuses |
+| 9 | 10 | `docs/OPEN-GAPS.md:47` | re-sweep documentation claims when the code they describe changes |
+| 10 | 9 | `docs/assurance-ledger-sprint-0.md:18` | a claim about existing behaviour carries a file and line, or is marked UNVERIFIED |
+| 11 | 23 | `docs/OPEN-GAPS.md:5280` | counts come from the artifact, never from a filtered view of it (below) |
 
 The one-line usages for #1–#10 are paraphrases of how the citations use each
 number; they are not the doctrines' text, which was never written down. Where
