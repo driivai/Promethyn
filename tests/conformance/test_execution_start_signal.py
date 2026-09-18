@@ -613,6 +613,16 @@ def test_the_execution_record_has_NO_typed_reason_field():
     assert names == {
         "executed", "subject_id", "detail", "refused", "started_ok",
         "candidate_started", "sandbox_name", "exit_status", "stdout",
+        # G24/#128: whether ``stdout`` is captured output AT ALL. NOT a typed
+        # reason and not option (2) — it carries no closed-set token and says
+        # nothing about why anything was refused. It exists because a returned
+        # prior result has no stdout to return (the ledger records no such
+        # column) and the first attempt said so with a sentence INSIDE
+        # ``stdout``, which candidate code can print verbatim. An in-band
+        # signal a consumer cannot distinguish from real output; the
+        # availability is its own fact, exactly as ``started_ok`` and
+        # ``candidate_started`` are two facts and not one.
+        "stdout_recorded",
     }, f"ExecutionResult's fields changed: {sorted(names)}"
     assert not {n for n in names if "reason" in n}, (
         "ExecutionResult gained a reason field — G35's 'as a typed reason, NO' "

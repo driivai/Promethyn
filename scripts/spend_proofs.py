@@ -189,15 +189,17 @@ MUTATIONS: tuple[tuple[str, tuple[tuple[str, str, str], ...], str], ...] = (
         ),
         "test_a_retained_approved_decision_handed_to_an_executor_twice_runs_ONCE",
     ),
-    # 9. THE OUT-OF-ORDER REFUSAL, DELETED. A completion with no open spend is
-    #    a broken history; reading it as a completion invents a state.
+    # 9. THE OUT-OF-ORDER REFUSAL, WIDENED AWAY. A completion with no open
+    #    spend is a broken history; reading it as a completion invents a state.
+    #    Expressed against the transition table, which is where the ordering
+    #    rules now live for all three events rather than in three branches.
     (
         "out-of-order-outcome-accepted",
         (
             (
                 SPEND,
-                "            if status != SPENT:\n",
-                "            if False:\n",
+                "    SPEND_OUTCOME_EVENT: frozenset({SPENT}),\n",
+                "    SPEND_OUTCOME_EVENT: frozenset({SPENT, UNSPENT, COMPLETED, RELEASED}),\n",
             ),
         ),
         "test_an_outcome_entry_with_no_open_spend_is_a_broken_history",
@@ -239,15 +241,39 @@ MUTATIONS: tuple[tuple[str, tuple[tuple[str, str, str], ...], str], ...] = (
         (
             (
                 SPEND,
-                "            if status != SPENT:\n"
-                "                raise SpendRecordMalformed(\n"
-                "                    f\"a chained {RELEASE_EVENT!r} entry under {subject!r} \"\n",
-                "            if False:\n"
-                "                raise SpendRecordMalformed(\n"
-                "                    f\"a chained {RELEASE_EVENT!r} entry under {subject!r} \"\n",
+                "    RELEASE_EVENT: frozenset({SPENT}),\n",
+                "    RELEASE_EVENT: frozenset({SPENT, COMPLETED}),\n",
             ),
         ),
         "test_a_release_cannot_UN_SPEND_a_completed_occurrence",
+    ),
+    # 12b. THE SPEND'S OWN ORDERING, WIDENED — the second review's finding. A
+    #      re-claim permitted from COMPLETED is what turned a reset mutex row
+    #      into a forged open spend and made the guarded release legal again.
+    (
+        "spend-permitted-after-a-completion",
+        (
+            (
+                SPEND,
+                "    SPEND_EVENT: frozenset({UNSPENT, RELEASED}),\n",
+                "    SPEND_EVENT: frozenset({UNSPENT, RELEASED, COMPLETED}),\n",
+            ),
+        ),
+        "test_resetting_the_row_and_RE_CLAIMING_does_not_reopen_the_release",
+    ),
+    # 12c. THE TABLE BYPASSED ENTIRELY. The lookup is what makes forgetting a
+    #      branch inexpressible; removing it restores three-checks-by-hand with
+    #      none of them present.
+    (
+        "transition-table-not-consulted",
+        (
+            (
+                SPEND,
+                "        allowed = _PERMITTED_FROM[event]\n        if status not in allowed:\n",
+                "        allowed = _PERMITTED_FROM[event]\n        if False:\n",
+            ),
+        ),
+        "test_every_sequence_of_three_events_is_permitted_or_refused_by_the_TABLE[completed-then-reclaimed]",
     ),
     # 13. THE EXECUTOR WALL'S CHECK-AND-SET, MADE NON-ATOMIC AGAIN. The lock
     #     replaced by a no-op context manager, so the two operations can
@@ -279,16 +305,18 @@ MUTATIONS: tuple[tuple[str, tuple[tuple[str, str, str], ...], str], ...] = (
         ),
         "test_the_check_and_set_in_consume_authorization_is_INSIDE_the_lock",
     ),
-    # 14. THE UNRECORDED STDOUT, SILENTLY DEFAULTED. "Never recorded" and
-    #     "printed nothing" collapse into the same bytes at the one point a
-    #     caller reads them — doctrine #1.
+    # 14. THE UNRECORDED STDOUT, REPORTED AS RECORDED. "Never recorded" and
+    #     "printed nothing" collapse at the one point a caller reads them —
+    #     doctrine #1. The signal is OUT OF BAND after the second review: a
+    #     sentence in ``stdout`` is one a candidate can print verbatim, so the
+    #     availability is its own field and this row flips that field.
     (
         "unrecorded-stdout-defaulted-to-empty",
         (
             (
                 CONTROLLER,
-                "                stdout=_STDOUT_NOT_RECORDED,\n",
-                '                stdout="",\n',
+                "                stdout_recorded=False,\n",
+                "                stdout_recorded=True,\n",
             ),
         ),
         "test_a_returned_prior_result_NAMES_the_stdout_it_cannot_have",

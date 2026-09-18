@@ -532,7 +532,14 @@ class ExecutionController:
                 refused=bool(row["refused"]),
                 sandbox_name=row["sandbox"] or "",
                 exit_status=row["exit_status"],
-                stdout=_STDOUT_NOT_RECORDED,
+                # OUT OF BAND. The sentence stays in ``detail``, where prose
+                # belongs and where no consumer reads captured output; the
+                # FACT that nothing was captured is its own field, because a
+                # candidate can print any sentence this one might have chosen.
+                # ``stdout`` is left empty rather than carrying a diagnostic a
+                # reader could mistake for the program's own.
+                stdout="",
+                stdout_recorded=False,
             )
         raise ExecutionNotAuthorized(
             _SPEND_REFUSAL_DETAIL[verdict].format(

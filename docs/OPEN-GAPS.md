@@ -5095,3 +5095,51 @@ exactly its job on a real occasion rather than in a test.
 that found all three landed on `afa32de`, #127's FIRST head. The head actually
 merged was `fd5cee2`. Nothing reviewed the merged head, and the three findings
 were against code that was already in it.
+
+### The SECOND review, which found the first fix incomplete — and the shape that ends it
+
+Review of #128 found the release fix **guarded one branch and left its
+sibling open**, so the identical bypass worked in two steps instead of one.
+Reproduced:
+
+1. execute; the occurrence is `completed`
+2. **delete** the `spent_authorizations` row — explicitly inside this module's
+   own stated threat model, which claims a reset row restores nothing
+3. `claim_authorization` again: it wins, because the row is gone, and the
+   **unconditional `COMPLETED -> SPENT`** made the fold agree
+4. `release_authorization`: now legal, because step 3 forged the open spend
+   the new guard requires
+5. execute again — **executor calls 2, rows 2, `verify_chain().ok` True**
+
+So the row-reset claim in the module docstring was true of the fold as a
+*lookup* and false of the fold as a *state machine*. The same defect, twice,
+in two different branches: an ordering rule applied to some events and not
+their siblings, where the bypass is simply to reach the unguarded one.
+
+**THE FIX IS THE SHAPE, NOT A THIRD GUARD.** Patching the branch that was
+named would have invited a fourth finding, so the permitted transitions are
+now DECLARED in one table (`_PERMITTED_FROM`) and the fold is a single lookup
+against it: `spend` only from `unspent` or `released`, `outcome` and `release`
+only from `spent`. Three `if` statements is three chances to forget the
+fourth; one table cannot have a branch missing from it. Twelve sequences are
+walked exhaustively, five of them permitted as the paired positives, and a
+separate test pins that the table covers exactly the events the fold folds —
+so a fourth event added to one and not the other raises a typed refusal rather
+than a `KeyError` or an unchecked fold.
+
+**The second P2: an in-band sentinel is not a signal.** The stdout limit was
+first stated with a sentence inside `stdout` itself, and candidate code can
+print that sentence verbatim — so a consumer reading the field as documented
+captured output could not tell the diagnostic from the real thing, and a retry
+reported non-empty text the program never emitted. The availability is now its
+own field (`ExecutionResult.stdout_recorded`) with `stdout` left empty; the
+prose stays in `detail`, where no consumer reads output. The same shape
+`started_ok` and `candidate_started` already have, for the same reason: two
+facts, not one.
+
+**What the table did to the proofs, measured.** `scripts/spend_proofs.py` went
+from 14 rows to **16**, and second-order survival from **9 of 14 to 16 of 16** —
+every row still red with every assert deleted. A fold that refuses a history
+raises, and a raise does not need an assertion to be observed. The structural
+fix made the evidence stronger, which is not why it was chosen and is worth
+recording.
