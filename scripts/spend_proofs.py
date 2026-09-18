@@ -343,8 +343,12 @@ MUTATIONS: tuple[tuple, ...] = (
         (
             (
                 MODELS,
-                "    stdout_recorded: bool = False\n",
-                "    stdout_recorded: bool = True\n",
+                # Re-stated after the whole trailing field block became
+                # keyword-only (#132's review round). The runner refused the
+                # old string rather than planting nothing, for the second time
+                # in two commits.
+                "    stdout_recorded: bool = field(default=False, kw_only=True)\n",
+                "    stdout_recorded: bool = field(default=True, kw_only=True)\n",
             ),
         ),
         "test_the_flag_defaults_to_the_fail_closed_answer",

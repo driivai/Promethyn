@@ -1085,40 +1085,56 @@ def _harness_flag_arguments():
 
 
 def test_the_two_harness_flags_are_KEYWORD_ONLY_on_the_record_class():
-    """The structural half of the third review round's second finding.
+    """The structural half of the third review round's second finding — and the
+    correction the FOURTH round made to it.
 
-    A positional claim is the one shape the rule above could not see, so the
-    class refuses it: neither flag occupies a positional slot. Measured before
-    the change — 0 of 22 constructions in the tree passed ANY positional
-    argument — so nothing depended on the old signature.
+    A positional claim is the one shape the derived rule could not see, so the
+    class refuses it. Marking only the two flags keyword-only did NOT refuse
+    it: ``dataclasses`` moves keyword-only fields to the end, so the trailing
+    fields slid forward into the vacated slots and the same call bound
+    ``sandbox_name=True`` and ``exit_status=True`` — a ``bool`` in a ``str``
+    field and a ``bool`` in an ``int | None`` field — with no error raised. A
+    false claim traded for a corrupted record, both silent.
+
+    So the rule is over the WHOLE TAIL: nothing after ``refused`` may be given
+    positionally, and the four slots that remain are the ones whose types a
+    mis-slotted argument could not survive anyway.
     """
 
     import dataclasses
 
+    import pytest
+
     from prometheus_protocol.swarm.models import ExecutionResult
 
-    keyword_only = {
-        f.name: f.kw_only
-        for f in dataclasses.fields(ExecutionResult)
-        if f.name in ("started_ok", "candidate_started")
-    }
-    assert keyword_only == {"started_ok": True, "candidate_started": True}
-    assert "started_ok" not in _positional_binding_order()
-    assert "candidate_started" not in _positional_binding_order()
+    fields = {f.name: f.kw_only for f in dataclasses.fields(ExecutionResult)}
+    assert fields == {
+        "executed": False,
+        "subject_id": False,
+        "detail": False,
+        "refused": False,
+        "started_ok": True,
+        "candidate_started": True,
+        "sandbox_name": True,
+        "exit_status": True,
+        "stdout": True,
+        "stdout_recorded": True,
+    }, f"the record class's positional surface changed: {fields}"
 
-    # And the behaviour, not only the metadata: the slots that used to be the
-    # two flags now bind elsewhere, and the flags keep the fail-closed default.
-    #
-    # CALLED THROUGH A LOCAL NAME, which is this repository's own convention for
-    # a control of this kind -- `test_evidence_and_judgment_cannot_be_built_
-    # positionally` in `test_open_gaps.py` does the same thing and says why:
-    # G2's positional sweep must not count a control as a construction site.
-    # Written the direct way first, it reddened that sweep, which is the
-    # correct behaviour of a ratchet whose ceiling for this class is zero.
+    # Exact, both directions: the positional surface is these four and no more.
+    assert _positional_binding_order() == ["executed", "subject_id", "detail", "refused"]
+
+    # And the behaviour, not only the metadata. CALLED THROUGH A LOCAL NAME,
+    # which is this repository's own convention for a control of this kind --
+    # `test_evidence_and_judgment_cannot_be_built_positionally` in
+    # `test_open_gaps.py` does the same and says why: G2's positional sweep
+    # must not count a control as a construction site.
     record = ExecutionResult
-    positional = record(False, "s", "", False, True, True)
-    assert positional.started_ok is False
-    assert positional.candidate_started is False
+    with pytest.raises(TypeError):
+        record(False, "s", "", False, True, True)
+    # The four that remain still work, and a keyword call is untouched.
+    assert record(True, "s", "d", False).detail == "d"
+    assert record(executed=True, subject_id="s", started_ok=True).started_ok is True
 
 
 def test_no_site_may_claim_a_harness_fact_it_did_not_MEASURE():

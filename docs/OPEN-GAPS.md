@@ -2823,6 +2823,10 @@ cause is not.
 the bounded table (25 review replies, 3 bodies, 1 comment) plus carriers 30 to
 60, not incremented.
 
+**CARRIER 61, AND A FOURTH ROUND.** The comment invoking a review on #132's
+head is carrier 61; the reply answering that round's finding is 62, counted at
+the next push. **Running total 61: 41 review replies, 13 bodies, 7 comments.**
+
 **AND THE RE-RUN MECHANISM APPLIES TO THIS ONE TOO**, which is why the record
 above is being pushed rather than only edited into the body: #132's three
 `build` jobs hold the frozen pre-edit body, and no re-run can reach the repaired

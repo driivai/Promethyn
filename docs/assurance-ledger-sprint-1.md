@@ -650,8 +650,13 @@ doctrine #8 in the shape the sprint document names as taxonomy mode 5.
 * `ExecutionResult.started_ok` and `.candidate_started` are now
   **`field(default=False, kw_only=True)`**. Measured first: **0 of 22**
   constructions in the tree pass any positional argument, so nothing depended on
-  the old signature. The class now refuses the shape outright — the fifth and
-  sixth slots bind elsewhere and the flags keep their fail-closed default.
+  the old signature.
+
+  > **CORRECTED by the fourth review round.** This bullet originally ended "the
+  > class now refuses the shape outright — the fifth and sixth slots bind
+  > elsewhere and the flags keep their fail-closed default." That sentence
+  > describes the bug and calls it the fix. It did not refuse the shape; it
+  > *rebound* it. See the section below.
 * The collector reads the positional slots **anyway**, with the binding order
   derived from `dataclasses.fields` on the live class, so the rule does not
   depend on the `kw_only` line staying and the two halves fail independently.
@@ -803,3 +808,90 @@ between 15:02 and 15:04Z, after it had merged at 14:56. They are accurate and
 they are answers to findings, but they answer them on a closed thread. A
 session that watches a pull request learns it has merged from an event, and an
 event that arrives late is indistinguishable from one that has not arrived.
+
+---
+
+# Fourth review round — the fix traded a false claim for a corrupted record
+
+One finding, on the head #132 was opened with, and it is the sharpest of the
+six. **The keyword-only fix of round 3 did not refuse the positional form. It
+rebound it** — and I observed that while making the change and wrote it up as
+the fix working.
+
+`dataclasses` moves keyword-only fields to the END of the signature. Marking
+only `started_ok` and `candidate_started` therefore slid the trailing fields
+FORWARD into the slots they vacated, so the very call the change existed to
+prohibit still succeeded:
+
+```
+ExecutionResult(False, "s", "", False, True, True)
+    sandbox_name = True   type bool   (declared str)
+    exit_status  = True   type bool   (declared int | None)
+    started_ok   = False
+```
+
+A `bool` in a `str` field and a `bool` in an `int | None` field, written into
+the audit record, with no error raised and the harness flags quietly at their
+defaults. **A false claim was traded for a corrupted record, and both are
+silent.** An external caller — the class is public, and G2's ratchet sweeps only
+this repository — would get the corruption with nothing at all to tell them.
+
+## The part that matters more than the defect
+
+I ran this. The probe output `the 5th/6th positionals now bind to: True True`
+is in this session's own record, and I read it as confirmation that the flags
+were protected. Every field after `started_ok` was outside the question I was
+asking, so a result that answered a different question — *what did the arguments
+hit instead?* — did not register as a result at all.
+
+That is this sprint's own subject one more time, and in the most direct form it
+has taken: **the population I was measuring did not include the fields that got
+hit.** Five of the previous six findings were a collector that could not see a
+member. This one is an author who could see it, printed it, and did not count it.
+No instrument failed here. The reading did.
+
+## The fix
+
+**Every field after `refused` is keyword-only**, so the positional form is a
+`TypeError` rather than a wrong value:
+
+```
+ExecutionResult.__init__() takes from 3 to 5 positional arguments but 7 were given
+```
+
+Four positional slots remain — `executed`, `subject_id`, `detail`, `refused` —
+and they are the ones whose types a mis-slotted argument could not survive
+anyway. Measured before the change, and unchanged by it: **0 of 22**
+constructions in the tree pass any positional argument.
+
+The pin now asserts the **rejection** rather than the rebinding, and pins the
+whole `kw_only` map rather than the two flags, so a field leaving the keyword-only
+tail is a red line. It calls through a local name, per the repository's own
+convention for such a control.
+
+## Executed proof
+
+```
+CONTROL    expect GREEN observed GREEN   the whole tail keyword-only
+CATCHES    expect RED   observed RED     the tail's kw_only removed
+REPRODUCE  expect GREEN observed GREEN   the pin as it was written then
+
+3 of 3 legs matched their expectation
+```
+
+`REPRODUCE` restores the pin from `b9b4107`, the head the finding was written
+against, so the "before" is the assertion that let this through rather than a
+paraphrase of it.
+
+## And I nearly did not read the finding
+
+The review that raised it ran automatically when #132 opened, on `b9b4107`. The
+review I had *asked* for, on the later head `1463165`, came back clean, and I
+reported that clean result as the round's outcome without checking whether an
+earlier review on the same pull request had left an open thread. **A clean
+review on the final head does not mean there are no open findings on the pull
+request**, and the merge rule this project runs on — a review on the final head
+with its findings answered — is satisfied only if "its findings" means every
+open one, not the ones from the round you invoked. Recorded, because the check-in
+that caught it was a re-read of the whole pull request rather than of the event
+that woke it.
