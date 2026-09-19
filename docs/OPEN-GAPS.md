@@ -5760,3 +5760,137 @@ elsewhere. Observed: 4 chains `valid` (lengths 8, 10, 8, 12), §2.4 totals
 entry's report said "no forged assessment" flatly. That was false at `7b506e1`
 and is withdrawn. It is true of the fixed harness, and it is now a test rather
 than a sentence.
+
+---
+
+## G58 — a floor on a population permits members to vanish, and permitted three to leave a credential-discovery sweep
+
+**The doctrine already existed at `tests/conformance/test_open_gaps.py:66` —
+"PINNED, not a floor. `>= 40` against a population of fifty permitted ten."
+This entry carries it through the tree.**
+
+### The population, and how it was derived
+
+Every `assert` and `if <cmp>: raise` guard in `scripts/`, `tests/`, `src/` and
+`adversarial/` whose comparison applies an INEQUALITY to a count expression —
+a `len`/`sum`/`.count` call, a name bound to one, or a `+= 1` counter.
+Equality pins are not in the population: they already refuse both directions,
+which is what this sweep establishes. **49 sites: 31 in `tests/`, 18 in `src/`.**
+
+**THE ENUMERATOR'S OWN BLIND SPOTS, found by reading and stated because the
+first version had exactly the defect this sprint is about.** A call-only walk
+reported **44** and missed five `+= 1` counters — including
+`test_prod_fix_2_revert_pins.py:122-123`, a real population pin — which is the
+"second shape the call walk cannot see" Sprint 0 already named. Widened, it
+reports 49. It still cannot see a count held in a dict subscript
+(`by_cat[category] >= 2` in `tests/unit/test_grounding_v2.py`, found by
+reading, converted anyway). **49 is a lower bound on the population, not the
+population.**
+
+### The exclusion rule, and what it excluded
+
+**24 sites excluded, by rule, listed by class rather than dropped silently:**
+
+| class | n | why |
+|---|---|---|
+| runtime input/arity guards in `src/` | 17 | a bound on untrusted or caller-supplied input (`if len(body) > MAX: raise`). An exact pin would be WRONG: the property is "anything beyond N is refused", not "exactly N exists", and no member of a tree population can vanish behind it |
+| the filter IS the property | 1 | Sprint 0's rule, reused verbatim: a spy count over calls the test itself provoked |
+| not a population count | 2 | a string's length, not a set's cardinality |
+| relational invariants | 3 | `len(a) < len(b)` between two derived populations; replacing the relation with a constant destroys the property |
+| enumerator false positive | 1 | `ledger/tip_anchor.py:175` compares a sequence NUMBER, not a cardinality |
+
+**25 in scope, all converted.** Re-running the enumerator over the converted
+tree reports **6** inequality sites left in `tests/`, which are exactly the six
+excluded rows above.
+
+### THE CANARY SWEEP WAS THE WORST, and the brief under-stated it
+
+`test_secret_canary_sweep.py:299` named FIVE credential fields exactly and
+floored the rest at `>= 7`. The population today is **TEN**, so the slack was
+**three**, not two: three credential-shaped fields could leave the sweep whose
+purpose is discovering them with nothing red. The five that were never named:
+`_SignerRequest.signing_key`, `AuditPage.next_token`,
+`ModelSigner._public_key`, `MigrationRunnerConfig.signing_key` and
+`SpendState.idempotency_key`. Now pinned as a SET, both directions.
+
+### Slack the floors permitted, measured at base `ce16a19`
+
+Worst first: git-ref accepted **377 behind `> 50`** (327); selectors **91
+behind `> 20`** (71); package modules **146 behind `> 100`** (45); CLI
+subcommands **13 behind `>= 3`** (10); SBOM components 22 behind `>= 20` (2).
+Two pins had **ZERO slack today** and were still converted, because a floor
+acquires slack the moment the population grows and from then on the original
+members can leave unnoticed: strict-boolean env names 13/13, and the canary
+assignment walker 3/3.
+
+**MEMBERSHIP for 11, a COUNT for 14**, chosen per site rather than uniformly. A
+count is the right answer where the pin only guards against collection loss and
+membership would be churn carrying no signal — the 146 module paths under the
+type gate are the clear case. Membership is the right answer wherever an
+identity is load-bearing: a verifier id a policy resolves by string, a reason
+code a caller triages on, a dependency in the bill of materials.
+
+### AN EXACT PIN CAUGHT A DEFECT THE FLOOR WAS CONCEALING, immediately
+
+`test_implementation_registry.py` read a LIVE registry, so its population was a
+function of test ORDER: **six** identities running alone, **SEVEN** after the
+rest of the suite, because `benchmarks/grounding_loop_demo.py:151` declares
+`human-grounding-review` and nothing else had imported it. **`>= 6` was green
+for both.** The derivation now imports the whole package and fails closed on an
+empty walk, so the population is deterministic at seven; both orderings were
+re-run.
+
+### AND THE MUTATION HARNESS REPORTED A FALSE SURVIVED
+
+`MutationWorktree.pytest` could score a mutation SURVIVED when it had never
+run. CPython validates a cached `.pyc` on the source's `(mtime, size)`; every
+numeric mutation here is the SAME SIZE as what it replaces (`= 45` -> `= 46`)
+and a runner rewrites many times per second, so a mutation applied inside the
+same filesystem-timestamp second imports the PREVIOUS bytecode. Measured: the
+same mutation came back CAUGHT alone and SURVIVED in a sequence, and WHICH row
+it struck moved between runs. `-p no:cacheprovider` is pytest's cache and never
+covered this. Fixed by purging `__pycache__` under the worktree before every
+run; **this is shared infrastructure, so all 20 runners in `scripts/` get it.**
+
+**It then bit the primary checkout too**, which is worth recording: two
+same-size `sed` edits made while debugging were restored, and the suite still
+read the mutated values from stale bytecode — two tests red against a source
+that was already correct. Any suite result taken across a same-size edit is
+suspect unless the cache was purged.
+
+### The proofs
+
+`scripts/floor_sweep_proofs.py`, wired into `ci.yml`. 21 rows, each measuring
+its own control first. Observed:
+
+```
+control 21/21 GREEN   shortfall 21/21 CAUGHT   excess 21/21 CAUGHT
+substitution 11 CAUGHT (membership) / 10 INERT (count)
+second-order 21/21 LOAD-BEARING
+first-order totals: CAUGHT 53, INERT 10, SURVIVED 0
+```
+
+SUBSTITUTION — the same-size swap — is the case a count passes, and on the ten
+deliberate COUNT pins it cannot reach the pin at all. **Reported INERT, never
+SURVIVED.** Sprint 0's probe was inert on 5 of 22 rows and printed SURVIVED,
+and "12 of 22 unproved" would have been wrong by five; here the ten inert rows
+are the stated cost of choosing a count, not ten gaps.
+
+**The runner refused two of its own defects before they became results**: a
+probe that replaced whole `assert` lines orphaned their multi-line messages so
+the module stopped parsing, on 15 of 21 rows — reported UNCLEAR rather than
+scored, which is the only reason it was visible; and a run that ERRORED was
+being scored SURVIVED, inventing a gap, the mirror of a false GREEN. Both
+fixed; ERROR and UNCLEAR are now outcomes that refuse.
+
+### What this cannot establish
+
+* An exact pin over a DERIVED population says nothing about members the
+  derivation cannot see — and the implementation-registry finding is exactly
+  that failure, caught only because the derivation was made eager.
+* A membership pin establishes that the set did not CHANGE, never that it is
+  CORRECT. Nothing here says the ten credential fields are the right ten.
+* The 24 excluded sites are excluded by the rule above. **If that rule is
+  wrong, this sweep is incomplete by exactly that many**, and the 49-site
+  population is itself a lower bound: two enumerator blind spots were found by
+  reading, so a third is likelier than not.

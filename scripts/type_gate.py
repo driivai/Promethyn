@@ -136,7 +136,12 @@ RECEIPT = REPO / "type-gate-receipt.json"
 #: ``adversarial/harness.py`` by path rather than importing it, precisely so
 #: that ``adversarial/`` stays outside mypy's scope and this pin moves by one
 #: file rather than by the whole harness.
-EXPECTED_CHECKED_FILES = 346
+#: 346 -> 347 on 2026-09-19 (PART 3, the floor sweep): ONE file,
+#: ``scripts/floor_sweep_proofs.py`` — the runner that mutates every population
+#: pin converted from a floor, in both directions. Observed by running the gate
+#: against the un-repinned value first, which refused at 347 with the new file
+#: present and nothing else changed.
+EXPECTED_CHECKED_FILES = 347
 
 _SUCCESS = re.compile(
     r"^Success: no issues found in (\d+) source files?$", re.MULTILINE

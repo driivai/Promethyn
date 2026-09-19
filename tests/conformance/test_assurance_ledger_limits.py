@@ -451,7 +451,7 @@ def test_the_tracker_states_an_entry_schema_that_nothing_enforces():
     entries = _tracker_entries()
     # 56 -> 57 on 2026-09-18: G56 (the fail-open harness facts). Re-measured
     # from the artifact after the entry landed, never predicted before it.
-    assert len(entries) == 58, (
+    assert len(entries) == 59, (
         f"the tracker now has {len(entries)} headings, not 58; re-measure §1.3"
     )
 
