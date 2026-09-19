@@ -167,10 +167,30 @@ class MutationWorktree:
         requires the red.
         """
 
+        # A STALE ``__pycache__`` CAN MAKE A MUTATION READ AS SURVIVED, and did.
+        # CPython validates a cached .pyc against the source's (mtime, size).
+        # Every numeric mutation this harness makes is the SAME SIZE as what it
+        # replaces ("= 45" -> "= 46"), and a runner rewrites and re-runs many
+        # times per second, so a mutation applied within the same filesystem
+        # timestamp second as the previous write is invisible to that check:
+        # the subprocess imports the PREVIOUS bytecode and the mutation reads
+        # as SURVIVED. Measured on 2026-09-19 while building the floor sweep:
+        # the same mutation came back CAUGHT run alone and SURVIVED inside a
+        # sequence, and which row it struck moved between runs — a false GREEN
+        # that is worse than no proof, and non-deterministic on top.
+        #
+        # ``-p no:cacheprovider`` is pytest's cache, which is a different
+        # thing and never covered this. Purging the interpreter's bytecode
+        # cache under the worktree before every run closes it; the worktree is
+        # disposable, so the recompile is cheap and paid once per probe.
+        for cached in self.path.rglob("__pycache__"):
+            shutil.rmtree(cached, ignore_errors=True)
+        env = self.environment()
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
         proc = subprocess.run(
             [sys.executable, "-m", "pytest", "-q", "--tb=no",
              "-p", "no:cacheprovider", *targets, *extra],
-            cwd=self.path, capture_output=True, text=True, env=self.environment(),
+            cwd=self.path, capture_output=True, text=True, env=env,
         )
         # ``FAILED <nodeid> - <message>``: split on the separator, not on the
         # first space, or a parametrised id containing a space ("returns FAIL")

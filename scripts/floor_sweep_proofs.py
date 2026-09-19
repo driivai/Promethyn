@@ -119,11 +119,21 @@ ROWS = [
              "RUNNERS_CARRYING_SELECTORS", "RUNNERS_CARRYING_SELECTORS = frozenset({",
              '    "spend_proofs.py",\n',
              "    assert set(runners) == RUNNERS_CARRYING_SELECTORS, ("),
-    _set_row("doctrine-cited-numbers", DOCTRINE,
-             "test_the_tree_cites_doctrines_and_the_index_has_rows",
-             "CITED_NUMBERS", "CITED_NUMBERS = frozenset({1, 2, 4, 5, 8, 9, 10",
-             "CITED_NUMBERS = frozenset({1, 2, 4, 5, 8, 9, 10, 11})",
-             "    assert set(_citations()) == CITED_NUMBERS, ("),
+    # Hand-written rather than ``_set_row``: this pin holds INTS, so injecting
+    # the string probe would be a syntax error rather than a mutation, and a
+    # file that will not parse is a DRIFT to refuse, never a result.
+    {
+        "label": "doctrine-cited-numbers", "file": DOCTRINE, "kind": "set",
+        "test": f"{DOCTRINE}::test_the_tree_cites_doctrines_and_the_index_has_rows",
+        "shortfall": ("CITED_NUMBERS = frozenset({1, 2, 4, 5, 8, 9, 10, 11})",
+                      "CITED_NUMBERS = frozenset({1, 2, 4, 5, 8, 9, 10, 11, 99})"),
+        "excess": ("CITED_NUMBERS = frozenset({1, 2, 4, 5, 8, 9, 10, 11})",
+                   "CITED_NUMBERS = frozenset({1, 2, 4, 5, 8, 9, 10})"),
+        # same SIZE, different membership: the case a count passes
+        "substitution": [("CITED_NUMBERS = frozenset({1, 2, 4, 5, 8, 9, 10, 11})",
+                          "CITED_NUMBERS = frozenset({1, 2, 4, 5, 8, 9, 10, 99})")],
+        "assertion": "    assert set(_citations()) == CITED_NUMBERS, (",
+    },
     _set_row("manifest-named-gaps", COMPOSITION,
              "test_the_manifest_records_what_it_deliberately_left_alone",
              "LEFT_AS_COUNTS_ONLY", "LEFT_AS_COUNTS_ONLY = frozenset({",
@@ -149,7 +159,7 @@ ROWS = [
                "    assert len(accepted) == ACCEPTED_SIZE, ("),
     _count_row("selector-total", SELECTORS,
                "test_the_runner_population_is_not_empty",
-               "TOTAL_SELECTORS = 91", 91,
+               "TOTAL_SELECTORS = 107", 107,
                "    assert sum(len(v) for v in runners.values()) == TOTAL_SELECTORS, ("),
     _count_row("prod-fix-2-wrapper", PRODFIX2,
                "test_the_runner_covers_both_halves_of_the_finding",
@@ -160,9 +170,8 @@ ROWS = [
                "VOCABULARY_MUTATIONS = 8", 8,
                "    assert vocabulary == VOCABULARY_MUTATIONS, ("),
     _count_row("grounding-items", GROUNDING,
-               "test_item_set_is_well_formed",
-               "    assert len(items) == 44", 44,
-               "    assert len(items) == 44"),
+               "test_item_set_is_well_formed", "GROUNDING_ITEMS = 44", 44,
+               "    assert len(items) == GROUNDING_ITEMS"),
     _count_row("grounding-v2-items", GROUNDINGV2,
                "test_v2_composition_is_as_declared", "V2_ITEMS = 64", 64,
                "    assert len(items) == V2_ITEMS"),
@@ -200,11 +209,20 @@ def main() -> int:
 
             def probe(edits):
                 try:
-                    red, _ = _run(tree, row, edits)
-                except MutationWorktreeError as exc:
+                    red, summary = _run(tree, row, edits)
+                except MutationWorktreeError:
                     tree.revert()
-                    return f"DRIFT({exc.__class__.__name__})"
-                return "CAUGHT" if test in red or any(test in r for r in red) else "SURVIVED"
+                    return "DRIFT"          # the string moved: refuse, never score
+                if test in red or any(test in r for r in red):
+                    return "CAUGHT"
+                # A run that ERRORED never exercised the pin, so calling it
+                # SURVIVED would invent a gap — the mirror of a false GREEN and
+                # just as wrong. Same for a summary this parser cannot read.
+                if "error" in summary.lower():
+                    return "ERROR"
+                if " passed" not in summary:
+                    return f"UNCLEAR({summary})"
+                return "SURVIVED"
 
             shortfall = probe([(f, *row["shortfall"])])
             excess = probe([(f, *row["excess"])])
@@ -227,7 +245,12 @@ def main() -> int:
                   f"{substitution:13} {second}")
 
     print(f"\nrows: {len(results)}")
-    bad = [r for r in results if r[1] != "GREEN" or "SURVIVED" in r[2:5] or "DRIFT" in str(r)]
+    bad = [
+        r for r in results
+        if r[1] != "GREEN"
+        or any(v in ("SURVIVED", "DRIFT", "ERROR") or v.startswith("UNCLEAR")
+               for v in r[2:6])
+    ]
     for r in bad:
         print("REFUSED:", r)
     counts = {
