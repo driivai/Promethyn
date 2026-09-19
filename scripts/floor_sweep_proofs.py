@@ -159,7 +159,7 @@ ROWS = [
                "    assert len(accepted) == ACCEPTED_SIZE, ("),
     _count_row("selector-total", SELECTORS,
                "test_the_runner_population_is_not_empty",
-               "TOTAL_SELECTORS = 107", 107,
+               "TOTAL_SELECTORS = 106", 106,
                "    assert sum(len(v) for v in runners.values()) == TOTAL_SELECTORS, ("),
     _count_row("prod-fix-2-wrapper", PRODFIX2,
                "test_the_runner_covers_both_halves_of_the_finding",

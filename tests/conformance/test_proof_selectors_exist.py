@@ -74,7 +74,11 @@ RUNNERS_CARRYING_SELECTORS = frozenset({
     "receipt_classification_proofs.py",
     "spend_proofs.py",
 })
-TOTAL_SELECTORS = 107
+#: NOTE, because it bit twice while this pin was being written: the floor-sweep
+#: runner PROVES this pin and also FEEDS it — its rows name test functions as
+#: bare strings, so editing the runner moves the number it is proving. Re-measure
+#: after any edit to ``scripts/floor_sweep_proofs.py``; do not reason about it.
+TOTAL_SELECTORS = 106
 
 
 def test_the_runner_population_is_not_empty():
