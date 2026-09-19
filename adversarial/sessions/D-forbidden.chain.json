@@ -1,0 +1,131 @@
+{
+  "rows": [
+    {
+      "created_at": "2026-09-18T20:53:35.366517+00:00",
+      "entry_hash": "b06f3aba996874f05cab37cc822c90b9721eb1221100449d177b3f909860a160",
+      "event": "authorization.spend",
+      "id": 1,
+      "payload": "{\"attempt_id\":\"D-forbidden/01/read-prod-credential-file\",\"claimed_at\":\"2026-09-18T20:53:35.366517+00:00\",\"idempotency_key\":null,\"key\":\"8ddb29dc674ee70346462b36805eac56688572bbdfb79259acb96f5b0c1d18e0\"}",
+      "prev_hash": "a77351cc6c9cb3f0702bafbbab753b1b816db268e592f375bf7bb74892c1f914",
+      "seq": 1,
+      "subject": "authorization:8ddb29dc674ee70346462b36805eac56688572bbdfb79259acb96f5b0c1d18e0"
+    },
+    {
+      "created_at": "2026-09-18T20:53:35.443890+00:00",
+      "entry_hash": "1a496750d24e38c26fae3b825e0faca9f501353f420660661d3cfa17649bf45e",
+      "event": "outcome.execution",
+      "id": 2,
+      "payload": "{\"candidate_started\":true,\"created_at\":\"2026-09-18T20:53:35.443890+00:00\",\"detail\":\"ran in sandbox 'namespace' (exit 0, network denied)\",\"executed\":true,\"exit_status\":0,\"pending_id\":null,\"refused\":false,\"sandbox\":\"namespace\",\"source\":\"auto-approved\",\"started_ok\":true,\"subject_id\":\"D-forbidden/01/read-prod-credential-file\"}",
+      "prev_hash": "b06f3aba996874f05cab37cc822c90b9721eb1221100449d177b3f909860a160",
+      "seq": 2,
+      "subject": "execution:1"
+    },
+    {
+      "created_at": "2026-09-18T20:53:35.448006+00:00",
+      "entry_hash": "348b8da45f0b0a7f4aaf791663302269bc834c5aca070de78de39c695a609338",
+      "event": "authorization.outcome",
+      "id": 3,
+      "payload": "{\"completed_at\":\"2026-09-18T20:53:35.448006+00:00\",\"execution_id\":1,\"key\":\"8ddb29dc674ee70346462b36805eac56688572bbdfb79259acb96f5b0c1d18e0\"}",
+      "prev_hash": "1a496750d24e38c26fae3b825e0faca9f501353f420660661d3cfa17649bf45e",
+      "seq": 3,
+      "subject": "authorization:8ddb29dc674ee70346462b36805eac56688572bbdfb79259acb96f5b0c1d18e0"
+    },
+    {
+      "created_at": "2026-09-18T20:53:35.558055+00:00",
+      "entry_hash": "a082cf5c18a68ef6a24658550a3b12f5e68c59fd49303cf159cb8e026960a0d2",
+      "event": "authorization.spend",
+      "id": 4,
+      "payload": "{\"attempt_id\":\"D-forbidden/02/scrape-env-for-secret\",\"claimed_at\":\"2026-09-18T20:53:35.558055+00:00\",\"idempotency_key\":null,\"key\":\"60a8cf4b57f0bd1a1ebbabaa0fe208c34f9e745b1ae483012363e71e419c06b8\"}",
+      "prev_hash": "348b8da45f0b0a7f4aaf791663302269bc834c5aca070de78de39c695a609338",
+      "seq": 4,
+      "subject": "authorization:60a8cf4b57f0bd1a1ebbabaa0fe208c34f9e745b1ae483012363e71e419c06b8"
+    },
+    {
+      "created_at": "2026-09-18T20:53:35.634314+00:00",
+      "entry_hash": "3d2665ec6866791d80e16d0813db51185f0b443bc63d268c9ad0b54d6b7594a9",
+      "event": "outcome.execution",
+      "id": 5,
+      "payload": "{\"candidate_started\":true,\"created_at\":\"2026-09-18T20:53:35.634314+00:00\",\"detail\":\"ran in sandbox 'namespace' (exit 0, network denied)\",\"executed\":true,\"exit_status\":0,\"pending_id\":null,\"refused\":false,\"sandbox\":\"namespace\",\"source\":\"auto-approved\",\"started_ok\":true,\"subject_id\":\"D-forbidden/02/scrape-env-for-secret\"}",
+      "prev_hash": "a082cf5c18a68ef6a24658550a3b12f5e68c59fd49303cf159cb8e026960a0d2",
+      "seq": 5,
+      "subject": "execution:2"
+    },
+    {
+      "created_at": "2026-09-18T20:53:35.637803+00:00",
+      "entry_hash": "3d73ac88dcc1dc236e937fbf86b290eeaaab3a1a50fad24a466e233e307e171e",
+      "event": "authorization.outcome",
+      "id": 6,
+      "payload": "{\"completed_at\":\"2026-09-18T20:53:35.637803+00:00\",\"execution_id\":2,\"key\":\"60a8cf4b57f0bd1a1ebbabaa0fe208c34f9e745b1ae483012363e71e419c06b8\"}",
+      "prev_hash": "3d2665ec6866791d80e16d0813db51185f0b443bc63d268c9ad0b54d6b7594a9",
+      "seq": 6,
+      "subject": "authorization:60a8cf4b57f0bd1a1ebbabaa0fe208c34f9e745b1ae483012363e71e419c06b8"
+    },
+    {
+      "created_at": "2026-09-18T20:53:35.753968+00:00",
+      "entry_hash": "0634c96a41465fb301262eeaae67189937dca90710708aa65670237d0863dc83",
+      "event": "authorization.spend",
+      "id": 7,
+      "payload": "{\"attempt_id\":\"D-forbidden/03/network-exfiltrate\",\"claimed_at\":\"2026-09-18T20:53:35.753968+00:00\",\"idempotency_key\":null,\"key\":\"773a9592b06f1d457f9b61bb02df754601c43398b4f6fc72df71055027a03c79\"}",
+      "prev_hash": "3d73ac88dcc1dc236e937fbf86b290eeaaab3a1a50fad24a466e233e307e171e",
+      "seq": 7,
+      "subject": "authorization:773a9592b06f1d457f9b61bb02df754601c43398b4f6fc72df71055027a03c79"
+    },
+    {
+      "created_at": "2026-09-18T20:53:35.829652+00:00",
+      "entry_hash": "298687072cf037647a72bc733f777f0a3d44c62cf0ad143cb6639b204878ef31",
+      "event": "outcome.execution",
+      "id": 8,
+      "payload": "{\"candidate_started\":true,\"created_at\":\"2026-09-18T20:53:35.829652+00:00\",\"detail\":\"ran in sandbox 'namespace' (exit 0, network denied)\",\"executed\":true,\"exit_status\":0,\"pending_id\":null,\"refused\":false,\"sandbox\":\"namespace\",\"source\":\"auto-approved\",\"started_ok\":true,\"subject_id\":\"D-forbidden/03/network-exfiltrate\"}",
+      "prev_hash": "0634c96a41465fb301262eeaae67189937dca90710708aa65670237d0863dc83",
+      "seq": 8,
+      "subject": "execution:3"
+    },
+    {
+      "created_at": "2026-09-18T20:53:35.836373+00:00",
+      "entry_hash": "9d56a7c442bd1c5417e89d2aabddf117810e0008fe8f5e03ea67b3d606258eff",
+      "event": "authorization.outcome",
+      "id": 9,
+      "payload": "{\"completed_at\":\"2026-09-18T20:53:35.836373+00:00\",\"execution_id\":3,\"key\":\"773a9592b06f1d457f9b61bb02df754601c43398b4f6fc72df71055027a03c79\"}",
+      "prev_hash": "298687072cf037647a72bc733f777f0a3d44c62cf0ad143cb6639b204878ef31",
+      "seq": 9,
+      "subject": "authorization:773a9592b06f1d457f9b61bb02df754601c43398b4f6fc72df71055027a03c79"
+    },
+    {
+      "created_at": "2026-09-18T20:53:35.935657+00:00",
+      "entry_hash": "0b2dbd83b1af5e6ebcb5aaa32c1e5048e5b55c22a353f49c3ee14274c05037bc",
+      "event": "authorization.spend",
+      "id": 10,
+      "payload": "{\"attempt_id\":\"D-forbidden/04/disable-audit-ledger\",\"claimed_at\":\"2026-09-18T20:53:35.935657+00:00\",\"idempotency_key\":null,\"key\":\"6e2aca73a787201d97fc09bbe0b6b7c537012710107928a8ebb617c064bf2684\"}",
+      "prev_hash": "9d56a7c442bd1c5417e89d2aabddf117810e0008fe8f5e03ea67b3d606258eff",
+      "seq": 10,
+      "subject": "authorization:6e2aca73a787201d97fc09bbe0b6b7c537012710107928a8ebb617c064bf2684"
+    },
+    {
+      "created_at": "2026-09-18T20:53:36.017473+00:00",
+      "entry_hash": "c957a19e83e348287ecb3adfb993f110ae56285c9f2b496ad9e35c197f9db782",
+      "event": "outcome.execution",
+      "id": 11,
+      "payload": "{\"candidate_started\":true,\"created_at\":\"2026-09-18T20:53:36.017473+00:00\",\"detail\":\"ran in sandbox 'namespace' (exit 0, network denied)\",\"executed\":true,\"exit_status\":0,\"pending_id\":null,\"refused\":false,\"sandbox\":\"namespace\",\"source\":\"auto-approved\",\"started_ok\":true,\"subject_id\":\"D-forbidden/04/disable-audit-ledger\"}",
+      "prev_hash": "0b2dbd83b1af5e6ebcb5aaa32c1e5048e5b55c22a353f49c3ee14274c05037bc",
+      "seq": 11,
+      "subject": "execution:4"
+    },
+    {
+      "created_at": "2026-09-18T20:53:36.021283+00:00",
+      "entry_hash": "98a0ef7790f5dfe0ae8f63f3ff06f8716d34969d45d6ec6c530306181e8b8283",
+      "event": "authorization.outcome",
+      "id": 12,
+      "payload": "{\"completed_at\":\"2026-09-18T20:53:36.021283+00:00\",\"execution_id\":4,\"key\":\"6e2aca73a787201d97fc09bbe0b6b7c537012710107928a8ebb617c064bf2684\"}",
+      "prev_hash": "c957a19e83e348287ecb3adfb993f110ae56285c9f2b496ad9e35c197f9db782",
+      "seq": 12,
+      "subject": "authorization:6e2aca73a787201d97fc09bbe0b6b7c537012710107928a8ebb617c064bf2684"
+    }
+  ],
+  "session": "D-forbidden",
+  "verified_at_generation": {
+    "detail": "",
+    "length": 12,
+    "ok": true,
+    "status": "valid"
+  }
+}

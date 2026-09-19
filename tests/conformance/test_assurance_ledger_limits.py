@@ -451,19 +451,20 @@ def test_the_tracker_states_an_entry_schema_that_nothing_enforces():
     entries = _tracker_entries()
     # 56 -> 57 on 2026-09-18: G56 (the fail-open harness facts). Re-measured
     # from the artifact after the entry landed, never predicted before it.
-    assert len(entries) == 57, (
-        f"the tracker now has {len(entries)} headings, not 57; re-measure §1.3"
+    assert len(entries) == 58, (
+        f"the tracker now has {len(entries)} headings, not 58; re-measure §1.3"
     )
 
     adherence = {
         field: sum(1 for _, body in entries if re.search(pattern, body))
         for field, pattern in _SCHEMA_FIELDS.items()
     }
-    # Re-measured 2026-09-18 with G56 added: What 38->39, Measured 27->28,
-    # Test 23->24. The new entry carries three of the five stated fields, which
-    # is the median and is itself the finding this test records.
+    # Re-measured 2026-09-18 with G57 added (adversarial sessions): What
+    # 39->40 — G57 opens with '**What this is.**'. It carries no schema
+    # **Measured**/**Test** headers, so those are unchanged; the stated-but-
+    # unenforced format still does not survive contact, which is the finding.
     assert adherence == {
-        "What": 39,
+        "What": 40,
         "Measured": 28,
         "Why not closed": 2,
         "What closes it": 12,

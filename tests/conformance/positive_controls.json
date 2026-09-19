@@ -688,6 +688,15 @@
         "test_a_pinned_snapshot_is_never_recomputed_from_the_tree_it_checks"
       ],
       "property": "every *_AT_SPRINT_0 snapshot is a measurement written down rather than an expression recomputed from the tree it checks, established by a sweep that really can recognise the recomputed form -- the pre-fix _UNREAD_AT_SPRINT_0, planted, must come back naming the live sources it was derived from (#131 review, finding 1)"
+    },
+    {
+      "module": "tests/conformance/test_adversarial_grader_isolation.py",
+      "positive": "test_the_grader_can_pass_at_all",
+      "negatives": [
+        "test_a_candidate_that_does_not_satisfy_the_grader_fails",
+        "test_no_forge_route_produces_a_passing_verdict"
+      ],
+      "property": "the adversarial harness's grader really can return PASS, so every FAIL it returns is evidence about the candidate rather than evidence of a grader that never passes -- the forge-resistance suite asserts five FAILs and without this positive control all five are consistent with an empty instrument (doctrine #8). Measured against the previous candidate-then-grader-in-one-interpreter composition, two of those five forges produced exit 0 (#133 review, P1)"
     }
   ]
 }
