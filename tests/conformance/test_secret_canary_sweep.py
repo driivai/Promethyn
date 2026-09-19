@@ -451,13 +451,14 @@ def test_no_assignment_sanction_outlives_what_it_excuses():
     assert stale == [], f"sanction for assignment(s) that no longer exist: {stale}"
 
 
-#: The files carrying a credential-shaped ``self.x = ...``, pinned by NAME
-#: rather than by ``file:line`` so the pin does not move when unrelated lines
-#: above one do. See the assertion below for why membership rather than a count.
-CREDENTIAL_ASSIGNMENT_FILES = frozenset({
-    "anchor_http.py",   # the ledger anchor token
-    "remote.py",        # the provider api_key
-    "signer.py",        # the signing key
+#: Every credential-shaped ``self.x = ...`` in the package, identified by
+#: PACKAGE-RELATIVE PATH plus ATTRIBUTE — not by basename, which collapses two
+#: modules sharing a filename, and not by ``file:line``, which moves whenever
+#: an unrelated line above it is edited. See the assertion below.
+CREDENTIAL_ASSIGNMENT_SITES = frozenset({
+    "chokepoint/signer.py:_key",        # the signing key
+    "ledger/anchor_http.py:_token",     # the ledger anchor token
+    "provider/remote.py:api_key",       # the provider api_key
 })
 
 
@@ -471,33 +472,40 @@ def test_the_assignment_sweep_is_not_vacuous():
 
     import ast
 
-    seen: list[str] = []
+    seen: set[str] = set()
     root = Path(prometheus_protocol.__path__[0])
     for path in sorted(root.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
-            if (
-                isinstance(node, ast.Assign)
-                and any(
-                    isinstance(t, ast.Attribute)
-                    and isinstance(t.value, ast.Name)
-                    and t.value.id == "self"
-                    and _CREDENTIAL_NAME.search(t.attr)
-                    for t in node.targets
-                )
-            ):
-                seen.append(f"{path.name}:{node.lineno}")
-    # MEMBERSHIP by FILE, not by count and not by ``file:line``. A line number
-    # moves whenever anything above it is edited, so pinning ``file:line`` would
-    # redden for reasons that are not the property; the FILES carrying a
-    # credential-shaped ``self.x = ...`` are the property. ``>= 3`` against the
-    # three below had ZERO slack today and acquires slack the moment a fourth
-    # site appears — which is when a site could start vanishing unnoticed.
+            if not isinstance(node, ast.Assign):
+                continue
+            for target in node.targets:
+                if (
+                    isinstance(target, ast.Attribute)
+                    and isinstance(target.value, ast.Name)
+                    and target.value.id == "self"
+                    and _CREDENTIAL_NAME.search(target.attr)
+                ):
+                    # PACKAGE-RELATIVE PATH + ATTRIBUTE, and neither half is
+                    # optional. The first version of this pin reduced each site
+                    # to its BASENAME, which collapses two different modules
+                    # that happen to share a filename: a credential assignment
+                    # added in ``new_area/signer.py`` folded into the existing
+                    # ``signer.py`` member and the set did not change, so the
+                    # pin did not refuse that excess — an exact pin that was
+                    # exact about the wrong thing (#134 review, P2). The
+                    # attribute is carried too, so a SECOND credential assigned
+                    # in an already-pinned module is its own member rather than
+                    # being absorbed by the first. The line number is still
+                    # excluded: it moves for reasons that are not the property.
+                    seen.add(f"{path.relative_to(root).as_posix()}:{target.attr}")
+    # MEMBERSHIP, both directions. ``>= 3`` against the three below had ZERO
+    # slack today and acquires slack the moment a fourth site appears — which
+    # is when a site could start vanishing unnoticed.
     # AUTHORITY: the package source, walked here by ast.
-    files = {entry.split(":")[0] for entry in seen}
-    assert files == CREDENTIAL_ASSIGNMENT_FILES, (
-        f"the assignment walker sees {sorted(files)}, pinned "
-        f"{sorted(CREDENTIAL_ASSIGNMENT_FILES)} — a site that left is a walker "
+    assert seen == CREDENTIAL_ASSIGNMENT_SITES, (
+        f"the assignment walker sees {sorted(seen)}, pinned "
+        f"{sorted(CREDENTIAL_ASSIGNMENT_SITES)} — a site that left is a walker "
         "that stopped seeing it or a credential that moved, and a site that "
         "arrived is a new credential assignment to answer for"
     )

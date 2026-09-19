@@ -294,6 +294,11 @@ jobs:
         # second-order pass that deletes the assertion to show which half of
         # the property it carries. A mutation that cannot reach the pin it
         # targets is reported INERT and never SURVIVED.
+        #
+        # "EVERY" is checked rather than claimed: the runner names each
+        # converted pin and refuses to run at all if one has no row, because a
+        # coverage claim nothing verifies is the same shape as a floor. It was
+        # short by four when that check was added (#134 review, P2).
         run: python scripts/floor_sweep_proofs.py
 
       - name: Receipt classification reverts (must be caught)

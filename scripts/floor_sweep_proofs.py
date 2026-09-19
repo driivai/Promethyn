@@ -84,11 +84,11 @@ ROWS = [
              "KNOWN_CREDENTIAL_FIELDS", "KNOWN_CREDENTIAL_FIELDS = frozenset({",
              '    "prometheus_protocol.ledger.spend.SpendState.idempotency_key",\n',
              "    assert not extra, ("),
-    _set_row("canary-assignment-files", CANARY,
+    _set_row("canary-assignment-sites", CANARY,
              "test_the_assignment_sweep_is_not_vacuous",
-             "CREDENTIAL_ASSIGNMENT_FILES", "CREDENTIAL_ASSIGNMENT_FILES = frozenset({",
-             '    "signer.py",        # the signing key\n',
-             "    assert files == CREDENTIAL_ASSIGNMENT_FILES, ("),
+             "CREDENTIAL_ASSIGNMENT_SITES", "CREDENTIAL_ASSIGNMENT_SITES = frozenset({",
+             '    "chokepoint/signer.py:_key",        # the signing key\n',
+             "    assert seen == CREDENTIAL_ASSIGNMENT_SITES, ("),
     _set_row("canary-cli-subcommands", CANARY,
              "test_the_cli_exposes_subcommands_to_sweep",
              "CLI_SUBCOMMANDS", "CLI_SUBCOMMANDS = frozenset({",
@@ -178,11 +178,73 @@ ROWS = [
     _count_row("grounding-v2-traps", GROUNDINGV2,
                "test_v2_composition_is_as_declared", "V2_TRAPS = 45", 45,
                "    assert len(traps) == V2_TRAPS"),
+    # THE FOUR ROWS THIS TABLE WAS MISSING (#134 review, P2). The CI step
+    # claims to mutate EVERY converted pin; it covered 21 of the 25, so
+    # ``V2_SUPPORTED``, ``V2_ENTAILED_SUBTLE``, ``V2_TRAP_DISTRIBUTION`` and
+    # ``REJECTED_SIZE`` could each have stopped being load-bearing with the
+    # sweep still reporting every row covered. The review named three; the
+    # fourth (``REJECTED_SIZE``) was found while answering it.
+    _count_row("grounding-v2-supported", GROUNDINGV2,
+               "test_v2_composition_is_as_declared", "V2_SUPPORTED = 19", 19,
+               "    assert len(supported) == V2_SUPPORTED"),
+    _count_row("grounding-v2-entailed-subtle", GROUNDINGV2,
+               "test_v2_composition_is_as_declared", "V2_ENTAILED_SUBTLE = 6", 6,
+               "    assert sum(1 for i in supported if i.category == \"entailed-subtle\") == V2_ENTAILED_SUBTLE"),
+    _count_row("git-ref-rejected", GITREF,
+               "test_the_corpus_is_not_trivially_small_or_one_sided",
+               "REJECTED_SIZE = 72", 72,
+               "    assert len(rejected) == REJECTED_SIZE, ("),
+    # A MAPPING, so substitution reaches it: swapping one family for another
+    # keeps the key count identical and the dict comparison still refuses.
+    {
+        "label": "grounding-v2-distribution", "file": GROUNDINGV2, "kind": "set",
+        "test": f"{GROUNDINGV2}::test_v2_composition_is_as_declared",
+        "shortfall": ("V2_TRAP_DISTRIBUTION = {",
+                      'V2_TRAP_DISTRIBUTION = {\n    "__floor_sweep_probe__": 1,'),
+        "excess": ('    "wrong-attribution": 4,\n', ""),
+        "substitution": [("V2_TRAP_DISTRIBUTION = {",
+                          'V2_TRAP_DISTRIBUTION = {\n    "__floor_sweep_probe__": 4,'),
+                         ('    "wrong-attribution": 4,\n', "")],
+        "assertion": "    assert by_cat == V2_TRAP_DISTRIBUTION, (by_cat, V2_TRAP_DISTRIBUTION)",
+    },
+
     _count_row("gold-flagship-family", GOLD,
                "test_flagship_unstated_inference_traps_are_present",
                "GOLD_UNSTATED_INFERENCE = 3", 3,
                "    assert cats.count(\"unstated-inference\") == GOLD_UNSTATED_INFERENCE"),
 ]
+
+
+#: EVERY named pin this sweep converted from a floor. The runner refuses to
+#: report unless each one is actually reached by some row's mutation strings.
+#:
+#: WHY THIS EXISTS. The CI step claims to mutate every converted pin, and for
+#: one revision it did not: four pins — V2_SUPPORTED, V2_ENTAILED_SUBTLE,
+#: V2_TRAP_DISTRIBUTION and REJECTED_SIZE — had no row anywhere, so each could
+#: have stopped being load-bearing while the sweep still reported every row
+#: covered (#134 review, P2). A claim about coverage that nothing checks is the
+#: same shape as a floor: it permits members to go missing quietly. Adding a
+#: conversion without a row now refuses here instead.
+COVERED_PINS = frozenset({
+    "KNOWN_CREDENTIAL_FIELDS", "CREDENTIAL_ASSIGNMENT_SITES", "CLI_SUBCOMMANDS",
+    "BOOLEAN_ENV_NAMES", "PINNED_REASON_CODES", "SHIPPED_IDENTITIES",
+    "SBOM_COMPONENTS", "EXPECTED_PACKAGE_MODULES", "CORPUS_SIZE",
+    "ACCEPTED_SIZE", "REJECTED_SIZE", "RUNNERS_CARRYING_SELECTORS",
+    "TOTAL_SELECTORS", "CITED_NUMBERS", "LEFT_AS_COUNTS_ONLY",
+    "WRAPPER_MUTATIONS", "VOCABULARY_MUTATIONS", "GROUNDING_ITEMS",
+    "V2_ITEMS", "V2_TRAPS", "V2_SUPPORTED", "V2_ENTAILED_SUBTLE",
+    "V2_TRAP_DISTRIBUTION", "GOLD_UNSTATED_INFERENCE", "GOLD_TRAP_CATEGORIES",
+})
+
+
+def _coverage_gap() -> set[str]:
+    """Pins named above that no row's mutations actually touch."""
+    touched = "\n".join(
+        str(row[key]) for row in ROWS
+        for key in ("shortfall", "excess", "substitution", "assertion")
+        if row.get(key) is not None
+    )
+    return {pin for pin in COVERED_PINS if pin not in touched}
 
 
 def _run(tree, row, edits):
@@ -194,6 +256,12 @@ def _run(tree, row, edits):
 
 
 def main() -> int:
+    missing = _coverage_gap()
+    if missing:
+        print(f"REFUSED before running: {len(missing)} converted pin(s) have no "
+              f"row in this runner: {sorted(missing)}")
+        return 1
+    print(f"coverage: {len(COVERED_PINS)} converted pins, all reached by {len(ROWS)} rows\n")
     results = []
     with MutationWorktree() as tree:
         print(f"worktree package: {tree.imported_package_file()}\n")
