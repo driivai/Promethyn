@@ -5887,15 +5887,21 @@ suspect unless the cache was purged.
 
 ### The proofs
 
-`scripts/floor_sweep_proofs.py`, wired into `ci.yml`. 21 rows, each measuring
-its own control first. Observed:
+`scripts/floor_sweep_proofs.py`, wired into `ci.yml`. **25 rows**, one per
+converted pin, each measuring its own control first. Observed:
 
 ```
-control 21/21 GREEN   shortfall 21/21 CAUGHT   excess 21/21 CAUGHT
-substitution 11 CAUGHT (membership) / 10 INERT (count)
-second-order 21/21 LOAD-BEARING
-first-order totals: CAUGHT 53, INERT 10, SURVIVED 0
+control 25/25 GREEN   shortfall 25/25 CAUGHT   excess 25/25 CAUGHT
+substitution 12 CAUGHT (membership) / 13 INERT (count)
+second-order 25/25 LOAD-BEARING
+first-order totals: CAUGHT 62, INERT 13, SURVIVED 0
 ```
+
+**It was 21 rows against 25 conversions when first written**, and the numbers
+above replace `53 / 10 / 21` recorded here before the review below. The runner
+now names every converted pin and REFUSES TO RUN if one has no row, because a
+coverage claim nothing verifies is the same shape as a floor — it permits
+members to go missing quietly.
 
 SUBSTITUTION — the same-size swap — is the case a count passes, and on the ten
 deliberate COUNT pins it cannot reach the pin at all. **Reported INERT, never
@@ -5910,11 +5916,35 @@ scored, which is the only reason it was visible; and a run that ERRORED was
 being scored SURVIVED, inventing a gap, the mirror of a false GREEN. Both
 fixed; ERROR and UNCLEAR are now outcomes that refuse.
 
+### THE REVIEW FOUND AN EXACT PIN THAT WAS EXACT ABOUT THE WRONG THING
+
+Two findings on `9dc0edaf`, both correct, both inside this sweep's own work.
+
+**The assignment-site pin did not refuse excess.** It reduced each credential
+assignment to its BASENAME, so two different modules sharing a filename
+collapsed into one member: a credential-shaped `self.x = ...` added in
+`new_area/signer.py` would fold into the existing `signer.py` and the set would
+not change. Converting a floor to an exact pin is not the property; the pin has
+to be exact about the thing that can go missing. Now identified by
+package-relative path plus ATTRIBUTE, so a second credential assigned in an
+already-pinned module is its own member rather than being absorbed by the
+first. The line number is still excluded: it moves for reasons that are not the
+property.
+
+**And the runner did not cover every pin it claimed to** — 21 rows against 25
+conversions. The review named three omissions; the fourth, `REJECTED_SIZE`, was
+found while answering it. Recorded because the claim had already been written
+into this entry, a commit message and a pull-request body before anything
+checked it.
+
 ### What this cannot establish
 
 * An exact pin over a DERIVED population says nothing about members the
   derivation cannot see — and the implementation-registry finding is exactly
   that failure, caught only because the derivation was made eager.
+* **An exact pin is only as good as the identity it pins.** The basename
+  finding above is that failure: the set was exact, refused shortfall, and
+  still did not refuse the excess it was written to refuse.
 * A membership pin establishes that the set did not CHANGE, never that it is
   CORRECT. Nothing here says the ten credential fields are the right ten.
 * The 24 excluded sites are excluded by the rule above. **If that rule is
