@@ -112,7 +112,26 @@ def test_the_tooling_exemption_is_exactly_the_installer_and_build_backend():
     )
 
 
+#: Every component the SBOM declares, pinned by MEMBERSHIP. A dependency that
+#: leaves the bill of materials without a word is the supply-chain failure this
+#: document exists to prevent, and ``>= 20`` against the twenty-two below
+#: permitted two to go. A count is worse than useless here: drop `cryptography`
+#: and add a transitive nobody reviewed, and twenty-two is still twenty-two.
+#: AUTHORITY: the generated SBOM artifact itself, not this test's author.
+SBOM_COMPONENTS = frozenset({
+    "PyYAML", "Pygments", "ast_serialize", "build", "cffi", "cryptography",
+    "iniconfig", "librt", "mypy", "mypy_extensions", "packaging", "pathspec",
+    "pip", "pluggy", "psycopg", "psycopg-binary", "pycparser",
+    "pyproject_hooks", "pytest", "setuptools", "types-PyYAML",
+    "typing_extensions",
+})
+
+
 def test_the_sbom_is_a_cyclonedx_document_with_components():
     document = json.loads(SBOM.read_text(encoding="utf-8"))
     assert document.get("bomFormat") == "CycloneDX", document.get("bomFormat")
-    assert len(document["components"]) >= 20, len(document["components"])
+    names = {component["name"] for component in document["components"]}
+    assert names == SBOM_COMPONENTS, (
+        f"SBOM components are {sorted(names)}, pinned {sorted(SBOM_COMPONENTS)} "
+        "— a dependency that left or arrived is reviewed here or nowhere"
+    )

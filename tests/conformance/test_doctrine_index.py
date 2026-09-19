@@ -44,11 +44,31 @@ def _indexed() -> dict[int, str]:
     return {int(n): cell.strip() for n, cell in _ROW.findall(DOCTRINE.read_text(encoding="utf-8"))}
 
 
+#: The doctrine numbers the tree CITES, and the numbers the index CARRIES.
+#: These differ by design: #3, #6 and #7 are indexed and marked "never cited",
+#: which the index is allowed to do in one direction only. Observed at base
+#: ce16a19 on 2026-09-19.
+CITED_NUMBERS = frozenset({1, 2, 4, 5, 8, 9, 10, 11})
+INDEXED_NUMBERS = frozenset({1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11})
+
+
 def test_the_tree_cites_doctrines_and_the_index_has_rows():
     """Doctrine #8: an empty derivation on either side reads as agreement."""
 
-    assert len(_citations()) >= 5, _citations().keys()
-    assert len(_indexed()) >= 5, _indexed()
+    # MEMBERSHIP of the doctrine NUMBERS on each side, not a count of them.
+    # Which doctrines the tree cites, and which the index carries, is the
+    # property this module exists to keep honest; ``>= 5`` against eight and
+    # eleven permitted three and six to disappear. A count also cannot see the
+    # substitution that matters here — stop citing #4 and start citing #6, and
+    # eight is still eight while the index is wrong about both.
+    # The per-number COUNTS are pinned exactly by the test below; this pins the
+    # sets those counts are taken over.
+    assert set(_citations()) == CITED_NUMBERS, (
+        f"the tree cites {sorted(_citations())}, pinned {sorted(CITED_NUMBERS)}"
+    )
+    assert set(_indexed()) == INDEXED_NUMBERS, (
+        f"the index carries {sorted(_indexed())}, pinned {sorted(INDEXED_NUMBERS)}"
+    )
 
 
 def test_every_cited_number_is_indexed_and_every_indexed_number_is_cited_or_marked_uncited():
