@@ -100,16 +100,37 @@ def test_mypy_checks_the_whole_source_tree_not_a_file_list():
         assert (REPO / tree).is_dir(), tree
 
 
+#: Modules under ``CHECKED_TREE``, observed. Read from the filesystem on
+#: 2026-09-19 at base ce16a19 and re-pinned in the change that moves it — the
+#: same discipline ``scripts/type_gate.py::EXPECTED_CHECKED_FILES`` follows.
+EXPECTED_PACKAGE_MODULES = 146
+
+
 def test_the_checked_tree_really_is_every_module_in_the_package():
     """``files = src/prometheus_protocol`` is only whole-tree if mypy walks it.
     Sanity-check that the directory holds substantially the whole package, so a
     future move of code OUT of it would be visible here rather than silently
     shrinking the gate."""
 
+    # A COUNT, deliberately, and this is the site where a count is the right
+    # answer: the property is "the package was not split out from under the
+    # gate", which is a question about the SIZE of the checked tree and not
+    # about which modules are in it. Pinning 146 module paths by name would
+    # redden on every ordinary file added inside the tree — churn carrying no
+    # signal about the property — whereas the total moving is exactly the
+    # signal. Shortfall AND excess both refuse, so a split that moves code out
+    # reddens and so does a second package appearing inside.
+    #
+    # 100 -> 146 on 2026-09-19: ``> 100`` against 146 was slack of 45, so a
+    # third of the package could have left the gate with nothing red. Re-pin
+    # this the way ``EXPECTED_CHECKED_FILES`` is re-pinned: from the observed
+    # count, in the change that moves it.
     modules = sorted((REPO / CHECKED_TREE).rglob("*.py"))
-    assert len(modules) > 100, (
-        f"only {len(modules)} module(s) under {CHECKED_TREE} — if the package "
-        "was split, the gate must be widened to cover the new location too"
+    assert len(modules) == EXPECTED_PACKAGE_MODULES, (
+        f"{len(modules)} module(s) under {CHECKED_TREE}, pinned "
+        f"{EXPECTED_PACKAGE_MODULES} — if the package was split, the gate must "
+        "be widened to cover the new location too; if a module was simply "
+        "added or removed, re-pin this in the same change"
     )
 
 

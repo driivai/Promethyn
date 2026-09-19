@@ -55,7 +55,7 @@ existing behaviour, carrying a file and line, that was never re-read.
 | 2 | 10 | `docs/OPEN-GAPS.md:3024` | refused, not degraded: a state the guard cannot establish is written as a refusal, not a clean one |
 | 3 | 0 | — | never cited in the tree |
 | 4 | 42 | `docs/OPEN-GAPS.md:358` | every negative has a positive control |
-| 5 | 23 | `docs/OPEN-GAPS.md:14` | a named gap is a passing test, so it cannot erode quietly |
+| 5 | 24 | `docs/OPEN-GAPS.md:14` | a named gap is a passing test, so it cannot erode quietly |
 | 6 | 0 | — | never cited in the tree |
 | 7 | 0 | — | never cited in the tree |
 | 8 | 63 | `docs/OPEN-GAPS.md:2096` | an empty instrument reads downstream as a pass, so emptiness refuses |

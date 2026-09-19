@@ -43,7 +43,10 @@ def test_confidence_parser_never_invents_a_number():
 
 def test_item_set_is_well_formed():
     items = build_grounding_items()
-    assert len(items) >= 40
+    # EXACT: ``>= 40`` against 44 permitted four items to leave the eval set
+    # with nothing red, which changes the number this eval reports for the
+    # same model. Re-pin from the observed set when it changes.
+    assert len(items) == 44
     ids = [i.item_id for i in items]
     claims = [i.claim for i in items]
     assert len(set(ids)) == len(ids)

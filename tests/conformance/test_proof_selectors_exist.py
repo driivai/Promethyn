@@ -64,14 +64,43 @@ def _runner_selectors() -> dict[str, set[str]]:
     return found
 
 
+#: The proof runners that carry selector strings, and the total they carry.
+#: Observed at base ce16a19 on 2026-09-19.
+RUNNERS_CARRYING_SELECTORS = frozenset({
+    "composed_message_revert_proofs.py",
+    "floor_sweep_proofs.py",
+    "matrix_agreement_proofs.py",
+    "reachability_build_proofs.py",
+    "receipt_classification_proofs.py",
+    "spend_proofs.py",
+})
+TOTAL_SELECTORS = 107
+
+
 def test_the_runner_population_is_not_empty():
     """Doctrine #8: an instrument that finds nothing reads as a pass."""
 
+    # MEMBERSHIP for the runners, because WHICH runners carry selectors is the
+    # property: ``>= 1`` against five permitted four to stop carrying them and
+    # still read as a pass, which is precisely "it stopped seeing them rather
+    # than that they stopped existing" going undetected.
+    # NOTE, measured: ``_runner_selectors`` drops runners with no selectors
+    # (``if selectors``), so five here is a filtered view of the seventeen
+    # ``scripts/*_proofs.py`` on disk. The filtered set is what this pin
+    # governs, and the disk-vs-workflow population is pinned separately below.
     runners = _runner_selectors()
-    assert len(runners) >= 1
-    assert sum(len(v) for v in runners.values()) > 20, (
-        "this sweep found almost no selectors, which means it stopped seeing "
-        "them rather than that they stopped existing"
+    assert set(runners) == RUNNERS_CARRYING_SELECTORS, (
+        f"runners carrying selectors are {sorted(runners)}, pinned "
+        f"{sorted(RUNNERS_CARRYING_SELECTORS)}"
+    )
+    # A COUNT for the selectors: the property is that the sweep still sees a
+    # substantial body of them, and their individual spellings are already
+    # asserted to exist as collected tests by the tests below. ``> 20`` against
+    # 91 was slack of 71.
+    assert sum(len(v) for v in runners.values()) == TOTAL_SELECTORS, (
+        f"{sum(len(v) for v in runners.values())} selectors, pinned "
+        f"{TOTAL_SELECTORS} — this sweep found a different number, which means "
+        "it stopped seeing them or they stopped existing; both need answering"
     )
 
 

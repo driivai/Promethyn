@@ -383,6 +383,26 @@ def test_the_config_helper_really_delegates_to_the_one_parser():
     assert "parse_env_bool(name, env.get(name), default=default)" in source, source
 
 
+#: Every boolean security flag the strict-parser rule governs, pinned by
+#: MEMBERSHIP. Replaces ``>= 13``, which had zero slack today and would have
+#: acquired it the moment a fourteenth flag landed.
+BOOLEAN_ENV_NAMES = {
+    "PROM_ALLOW_INSECURE_LOOPBACK",
+    "PROM_ALLOW_UNSAFE_EXEC",
+    "PROM_ALLOW_UNVERIFIED_SUBSTRATE",
+    "PROM_ENABLE_MODEL_JUDGE",
+    "PROM_REQUIRE_CONFIG_ATTESTATION",
+    "PROM_REQUIRE_CONTAINER",
+    "PROM_REQUIRE_DIGEST_PIN",
+    "PROM_REQUIRE_EXTERNAL_SIGNER",
+    "PROM_REQUIRE_LEDGER_ANCHOR",
+    "PROM_REQUIRE_PG",
+    "PROM_REQUIRE_PRIVILEGED",
+    "PROM_REQUIRE_SANDBOX",
+    "PROM_REQUIRE_VERIFIED_SUBSTRATE",
+}
+
+
 def test_no_boolean_security_setting_is_read_outside_the_strict_parser():
     """THE PROPERTY. Every read of a boolean security setting goes through
     ``core.booleans.parse_env_bool``, and nothing else reads one.
@@ -401,8 +421,20 @@ def test_no_boolean_security_setting_is_read_outside_the_strict_parser():
     convention every other one follows; it is not caught here.
     """
 
+    # MEMBERSHIP, both directions. ``>= 13`` against the thirteen below had
+    # ZERO slack today, which is not safety: it acquires slack the moment a
+    # fourteenth flag is added, and from then on one of the original thirteen
+    # can be deleted with nothing red. A count also cannot see SUBSTITUTION —
+    # delete PROM_REQUIRE_SANDBOX, add PROM_ALLOW_ANYTHING, and thirteen is
+    # still thirteen while every assertion below is now about a different set.
+    # AUTHORITY: the tree itself, walked by ``_boolean_env_names()``.
     names = _boolean_env_names()
-    assert len(names) >= 13, f"the derived name set collapsed to {sorted(names)}"
+    assert names == BOOLEAN_ENV_NAMES, (
+        f"the derived boolean env names are {sorted(names)}, pinned "
+        f"{sorted(BOOLEAN_ENV_NAMES)} — a flag that left is a reader that "
+        "stopped being strict, and a flag that arrived must be pinned here in "
+        "the change that adds it"
+    )
 
     offenders = []
     for root in ("src/prometheus_protocol", "scripts", "tests"):

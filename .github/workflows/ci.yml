@@ -286,6 +286,16 @@ jobs:
         # rows are carried by asserts alone rather than summing the two.
         run: python scripts/spend_proofs.py
 
+      - name: Population pins refuse shortfall AND excess (must be caught)
+        # PART 3's floor sweep. Every population pin converted from a floor to
+        # an exact pin, mutated on the pinned side in both directions —
+        # SHORTFALL (a member left the population) and EXCESS (one arrived) —
+        # plus SUBSTITUTION, the same-size swap a count cannot see, and a
+        # second-order pass that deletes the assertion to show which half of
+        # the property it carries. A mutation that cannot reach the pin it
+        # targets is reported INERT and never SURVIVED.
+        run: python scripts/floor_sweep_proofs.py
+
       - name: Receipt classification reverts (must be caught)
         # Both attack classes on the unreceipted/tampered split, the two read
         # scopes and the report vocabulary. The runner refuses a surviving

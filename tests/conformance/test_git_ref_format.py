@@ -181,6 +181,13 @@ def test_the_predicate_IS_stricter_than_git_and_that_is_deliberate():
     assert "@" in stricter
 
 
+#: The corpus and its two halves, observed at base ce16a19 on 2026-09-19.
+#: Re-pin from the observed split in the change that moves it.
+CORPUS_SIZE = 449
+ACCEPTED_SIZE = 377
+REJECTED_SIZE = 72
+
+
 def test_the_corpus_is_not_trivially_small_or_one_sided():
     """An instrument that returns an empty set reads downstream as a pass
     (doctrine #8). Both halves of the corpus must be non-trivial, or the
@@ -190,9 +197,28 @@ def test_the_corpus_is_not_trivially_small_or_one_sided():
     accepted = [n for n in corpus if is_usable_branch_name(n)]
     rejected = [n for n in corpus if not is_usable_branch_name(n)]
 
-    assert len(corpus) > 400
-    assert len(accepted) > 50, "nothing is accepted; the differential is vacuous"
-    assert len(rejected) > 20, "nothing is rejected; the differential is vacuous"
+    # COUNTS, exact, shortfall and excess both refused. Counts rather than
+    # membership because the corpus is enumerated by construction and its
+    # VALUE is that both halves stay large enough to be a differential; which
+    # particular name sits in which half is already asserted name-by-name by
+    # the differential tests above, so membership here would restate them.
+    #
+    # What the floors permitted, measured at base ce16a19: 449 / 377 / 72
+    # against > 400 / > 50 / > 20 — slack of 49, 327 and 52. The middle one is
+    # the worst in the tree: 327 accepted names could have stopped being
+    # generated and "nothing is accepted; the differential is vacuous" would
+    # still have read as a pass.
+    assert len(corpus) == CORPUS_SIZE, (len(corpus), CORPUS_SIZE)
+    assert len(accepted) == ACCEPTED_SIZE, (
+        f"{len(accepted)} accepted, pinned {ACCEPTED_SIZE}; the differential's "
+        "accepting half changed size and that is either a corpus change to "
+        "re-pin or a validator change to answer for"
+    )
+    assert len(rejected) == REJECTED_SIZE, (
+        f"{len(rejected)} rejected, pinned {REJECTED_SIZE}; the differential's "
+        "rejecting half changed size"
+    )
+    assert len(accepted) + len(rejected) == len(corpus), "the split lost a name"
 
 
 # ---------------------------------------------------------------------------

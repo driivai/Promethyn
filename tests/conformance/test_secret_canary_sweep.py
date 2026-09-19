@@ -284,19 +284,57 @@ def test_no_sanction_outlives_the_field_it_excuses():
     assert stale == [], f"sanction for field(s) that no longer exist: {stale}"
 
 
+#: EXACT MEMBERSHIP, not a floor and not a count.
+#:
+#: These are the credential-shaped fields the sweep discovers. The sweep exists
+#: to FIND them, so the set it finds is the property and a total is not: two
+#: sets of ten are indistinguishable by count, so a field removed and another
+#: added passes a count pin while the sweep's coverage has silently moved.
+#:
+#: What the previous form permitted, measured: it named five exactly and floored
+#: the rest at ``>= 7`` against a population of TEN, so THREE of the five
+#: unnamed fields could leave the sweep whose purpose is discovering them with
+#: nothing red.
+#:
+#: AUTHORITY: not this pin's author. ``_discovered_credential_fields()`` walks
+#: the package's own declarations, so this set is compared against what the
+#: runtime declares, both directions. Adding a credential-shaped field to the
+#: package is MEANT to redden here; the fix is to add it to this set in the
+#: same change, which is the review this pin exists to force.
+KNOWN_CREDENTIAL_FIELDS = frozenset({
+    "prometheus_protocol.attestation.runtime._SignerRequest.signing_key",
+    "prometheus_protocol.chokepoint.audit_source.AuditPage.next_token",
+    "prometheus_protocol.chokepoint.audit_source_model.ModelSigner._public_key",
+    "prometheus_protocol.chokepoint.runner.DbTarget.password",
+    "prometheus_protocol.chokepoint.runner.MigrationRunnerConfig.signing_key",
+    "prometheus_protocol.core.config.Config.api_key",
+    "prometheus_protocol.core.config.Config.config_attestation_token",
+    "prometheus_protocol.core.config.Config.judge_api_key",
+    "prometheus_protocol.core.config.Config.ledger_anchor_token",
+    "prometheus_protocol.ledger.spend.SpendState.idempotency_key",
+})
+
+
 def test_discovery_actually_finds_the_known_credential_fields():
-    """A discovery sweep that discovered nothing would pass every test above."""
+    """A discovery sweep that discovered nothing would pass every test above.
+
+    MEMBERSHIP, both directions, because SUBSTITUTION is the case a count
+    cannot see: swap one credential field for another and a count pin stays
+    green while the sweep is no longer watching what it was written to watch.
+    """
 
     discovered = set(_discovered_credential_fields())
-    for expected in (
-        "prometheus_protocol.core.config.Config.api_key",
-        "prometheus_protocol.core.config.Config.judge_api_key",
-        "prometheus_protocol.core.config.Config.ledger_anchor_token",
-        "prometheus_protocol.core.config.Config.config_attestation_token",
-        "prometheus_protocol.chokepoint.runner.DbTarget.password",
-    ):
-        assert expected in discovered, f"discovery missed {expected}"
-    assert len(discovered) >= 7, sorted(discovered)
+    missing = KNOWN_CREDENTIAL_FIELDS - discovered
+    extra = discovered - KNOWN_CREDENTIAL_FIELDS
+    assert not missing, (
+        f"the credential sweep no longer discovers {sorted(missing)} — either "
+        "the field left the package or the walker stopped seeing it, and both "
+        "are findings rather than reasons to shrink this set"
+    )
+    assert not extra, (
+        f"the sweep discovered credential-shaped field(s) this pin does not "
+        f"name: {sorted(extra)} — add them here in the change that adds them"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -413,6 +451,16 @@ def test_no_assignment_sanction_outlives_what_it_excuses():
     assert stale == [], f"sanction for assignment(s) that no longer exist: {stale}"
 
 
+#: The files carrying a credential-shaped ``self.x = ...``, pinned by NAME
+#: rather than by ``file:line`` so the pin does not move when unrelated lines
+#: above one do. See the assertion below for why membership rather than a count.
+CREDENTIAL_ASSIGNMENT_FILES = frozenset({
+    "anchor_http.py",   # the ledger anchor token
+    "remote.py",        # the provider api_key
+    "signer.py",        # the signing key
+})
+
+
 def test_the_assignment_sweep_is_not_vacuous():
     """It must be able to SEE the assignments it is judging.
 
@@ -439,9 +487,19 @@ def test_the_assignment_sweep_is_not_vacuous():
                 )
             ):
                 seen.append(f"{path.name}:{node.lineno}")
-    assert len(seen) >= 3, (
-        f"the assignment walker found only {seen}; it should see at least the "
-        "signer key, the provider api_key and the anchor token"
+    # MEMBERSHIP by FILE, not by count and not by ``file:line``. A line number
+    # moves whenever anything above it is edited, so pinning ``file:line`` would
+    # redden for reasons that are not the property; the FILES carrying a
+    # credential-shaped ``self.x = ...`` are the property. ``>= 3`` against the
+    # three below had ZERO slack today and acquires slack the moment a fourth
+    # site appears — which is when a site could start vanishing unnoticed.
+    # AUTHORITY: the package source, walked here by ast.
+    files = {entry.split(":")[0] for entry in seen}
+    assert files == CREDENTIAL_ASSIGNMENT_FILES, (
+        f"the assignment walker sees {sorted(files)}, pinned "
+        f"{sorted(CREDENTIAL_ASSIGNMENT_FILES)} — a site that left is a walker "
+        "that stopped seeing it or a credential that moved, and a site that "
+        "arrived is a new credential assignment to answer for"
     )
 
 
@@ -1145,10 +1203,32 @@ def _cli_subcommands() -> list[str]:
     return names
 
 
-def test_the_cli_exposes_subcommands_to_sweep():
-    """If discovery returned nothing, the CLI sweep below would be vacuous."""
+#: Every CLI subcommand the canary sweep below runs against. Pinned as a SET:
+#: the sweep's value is which subcommands it covers, and a count cannot tell a
+#: renamed subcommand from a dropped one.
+CLI_SUBCOMMANDS = frozenset({
+    "approve", "attest-config", "audit", "baseline", "cycle", "demo",
+    "migrate", "pending", "reject", "retry-execution", "status", "sweep",
+    "verify-config",
+})
 
-    assert len(_cli_subcommands()) >= 3, _cli_subcommands()
+
+def test_the_cli_exposes_subcommands_to_sweep():
+    """If discovery returned nothing, the CLI sweep below would be vacuous.
+
+    MEMBERSHIP: every subcommand named here is swept for canary leakage by
+    ``test_no_cli_subcommand_prints_the_canary``. A floor of ``>= 3`` against
+    the THIRTEEN below let ten subcommands leave that sweep silently, and a
+    count alone cannot tell a renamed subcommand from a dropped one.
+    AUTHORITY: the CLI parser's own registered choices, read by
+    ``_cli_subcommands()``.
+    """
+
+    assert set(_cli_subcommands()) == CLI_SUBCOMMANDS, (
+        f"CLI subcommands are {sorted(set(_cli_subcommands()))}, pinned "
+        f"{sorted(CLI_SUBCOMMANDS)} — a subcommand added without being pinned "
+        "here is a subcommand the canary sweep below never runs against"
+    )
 
 
 def test_no_cli_subcommand_prints_the_canary(monkeypatch, capsys, tmp_path):

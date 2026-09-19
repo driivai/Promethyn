@@ -415,8 +415,30 @@ def test_every_http_status_class_maps_to_a_distinguishable_reason():
     assert http_reason(401) != http_reason(403) != http_reason(429)
 
 
+#: The closed set of reason codes, pinned by MEMBERSHIP. Replaces a
+#: ``15 <= n <= 40`` tolerance band that permitted a quarter of the set to
+#: vanish silently.
+PINNED_REASON_CODES = frozenset({
+    "body_not_json", "body_not_object", "body_not_utf8", "config_refused",
+    "connect_failure", "content_not_string", "http_client_error",
+    "http_forbidden", "http_not_found", "http_rate_limited",
+    "http_server_error", "http_unauthorized", "malformed_http",
+    "redirect_refused", "response_shape", "response_too_large", "timeout",
+    "tls_failure", "unavailable", "unexpected_status",
+})
+
+
 def test_the_reason_code_set_is_small_enough_to_read_and_large_enough_to_triage():
     """A closed set nobody can read is a closed set nobody maintains."""
 
-    assert 15 <= len(REASON_CODES) <= 40, sorted(REASON_CODES)
+    # MEMBERSHIP, replacing a TOLERANCE BAND. ``15 <= n <= 40`` against the
+    # twenty below permitted five to disappear and twenty to appear without a
+    # word, and a band cannot see substitution at all. A reason code is part of
+    # this component's observable behaviour: one silently renamed changes what
+    # a caller can triage on. AUTHORITY: the module's own closed set.
+    assert set(REASON_CODES) == PINNED_REASON_CODES, (
+        f"REASON_CODES is {sorted(REASON_CODES)}, pinned "
+        f"{sorted(PINNED_REASON_CODES)} — a code that left is a triage path "
+        "that silently disappeared; one that arrived needs a line here"
+    )
     assert LOCAL_REASONS <= REASON_CODES

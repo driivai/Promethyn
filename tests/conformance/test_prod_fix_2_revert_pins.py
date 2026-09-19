@@ -100,6 +100,13 @@ def test_a_shortfall_or_an_excess_fails_the_runner(runner):
             runner.enforce_expected(caught, observed)
 
 
+#: The two halves of the PROD-FIX-2 mutation set, observed at base ce16a19 on
+#: 2026-09-19 (fifteen mutations in total). Re-pin from the runner when it
+#: changes, so a mutation set that shrinks is a review rather than a shrug.
+WRAPPER_MUTATIONS = 7
+VOCABULARY_MUTATIONS = 8
+
+
 def test_the_runner_covers_both_halves_of_the_finding(runner):
     """A runner that drifted into covering only the wrapper — the easy half —
     would still print a reassuring number.
@@ -119,8 +126,16 @@ def test_the_runner_covers_both_halves_of_the_finding(runner):
             wrapper += 1
         else:
             vocabulary += 1
-    assert wrapper >= 5, f"only {wrapper} wrapper mutations"
-    assert vocabulary >= 5, f"only {vocabulary} vocabulary mutations"
+    # EXACT, both halves. ``>= 5`` against seven and eight permitted two and
+    # three mutations to disappear from a runner whose value is the number of
+    # distinct defects it re-introduces; a shrinking mutation set reports the
+    # same "all caught" with less of the surface probed. Counts rather than
+    # membership: which mutation sits in which half is decided by the marker
+    # test just above, and the halves' sizes are what a floor left unguarded.
+    assert wrapper == WRAPPER_MUTATIONS, f"{wrapper} wrapper mutations, pinned {WRAPPER_MUTATIONS}"
+    assert vocabulary == VOCABULARY_MUTATIONS, (
+        f"{vocabulary} vocabulary mutations, pinned {VOCABULARY_MUTATIONS}"
+    )
 
 
 def test_the_runner_states_its_own_limit(runner):

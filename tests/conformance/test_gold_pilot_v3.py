@@ -53,11 +53,29 @@ def test_every_item_carries_source_claim_and_rationale():
         assert len(it.note.strip()) >= 20, f"{it.item_id} lacks a real gold rationale"
 
 
+#: The gold-pilot trap taxonomy, observed at base ce16a19 on 2026-09-19.
+GOLD_UNSTATED_INFERENCE = 3
+GOLD_TRAP_CATEGORIES = frozenset({
+    "causation-from-correlation", "hedge-stripping", "near-miss-aggregation",
+    "negation-flip", "partial-support", "quantifier-drift", "scope-creep",
+    "temporal-near-miss", "unstated-inference", "wrong-attribution",
+})
+
+
 def test_flagship_unstated_inference_traps_are_present():
     cats = [i.category for i in build_gold_pilot_v3() if i.gold == GOLD_NOT_SUPPORTED]
-    # the hardest / most important family must be represented, and broadly
-    assert cats.count("unstated-inference") >= 2
-    assert len(set(cats)) >= 7, "traps should span most of the taxonomy, not cluster"
+    # the hardest / most important family must be represented, and broadly.
+    # EXACT count for the flagship family (``>= 2`` against 3 let one go), and
+    # MEMBERSHIP for the taxonomy: "traps should span most of the taxonomy"
+    # is a claim about WHICH families are present, and ``>= 7`` against ten
+    # let three families disappear — or be swapped for three others — while
+    # the sentence still read as true.
+    assert cats.count("unstated-inference") == GOLD_UNSTATED_INFERENCE
+    assert set(cats) == GOLD_TRAP_CATEGORIES, (
+        f"trap taxonomy is {sorted(set(cats))}, pinned "
+        f"{sorted(GOLD_TRAP_CATEGORIES)} — traps should span the taxonomy, and "
+        "which families they span is the claim"
+    )
 
 
 def test_pilot_wires_into_the_grounding_harness_reference_side():

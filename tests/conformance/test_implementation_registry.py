@@ -235,9 +235,49 @@ def _is_by_reference(value: ast.expr) -> bool:
     return False
 
 
-def _shipped_declarations() -> dict[str, str]:
-    """identity -> site, for declarations whose site is inside the package."""
+def _import_whole_package() -> int:
+    """Import every module in the package, and say how many.
 
+    ``declarations()`` is a LIVE registry populated at import time, so what it
+    holds depends on which modules happen to have been imported — which made
+    this module's population a function of test ORDER. Measured at base
+    ce16a19: six identities when ``test_implementation_registry.py`` runs alone,
+    SEVEN when it runs after the rest of the suite, because
+    ``benchmarks/grounding_loop_demo.py`` declares ``human-grounding-review``
+    and nothing else had imported it.
+
+    The old floor ``>= 6`` was green for both, which is how a population that
+    changed size with the wind went unnoticed. Importing the whole package
+    makes the derivation deterministic; fail closed if the walk finds nothing,
+    because an empty authority must never read as agreement.
+    """
+
+    import importlib
+    import pkgutil
+
+    import prometheus_protocol
+
+    imported = 0
+    for module in pkgutil.walk_packages(
+        prometheus_protocol.__path__, "prometheus_protocol."
+    ):
+        try:
+            importlib.import_module(module.name)
+        except Exception:  # an unimportable module is not this test's subject
+            continue
+        imported += 1
+    assert imported > 0, "the package walk imported nothing; the authority is empty"
+    return imported
+
+
+def _shipped_declarations() -> dict[str, str]:
+    """identity -> site, for declarations whose site is inside the package.
+
+    Eager: see ``_import_whole_package`` for why a lazy read of a live registry
+    made this population depend on test order.
+    """
+
+    _import_whole_package()
     return {
         identity: site
         for identity, site in declarations().items()
@@ -399,14 +439,38 @@ def test_every_shipped_profile_names_only_implementations_the_package_reports_un
                 assert _reported_at(site) == name, (name, site)
 
 
+#: The verifier identities this package ships, pinned by MEMBERSHIP because a
+#: policy names an identity by string: one renamed is one no policy resolves.
+SHIPPED_IDENTITIES = frozenset({
+    "git-merge-check",
+    "grounding-judge",
+    "human-grounding-review",   # benchmarks/grounding_loop_demo.py:151
+    "model-judge",
+    "sql-result-equivalence",
+    "subprocess-tests",
+    "swarm-checks",
+})
+
+
 def test_every_declared_site_reports_its_identity_by_reference():
     """FORWARD. Every declaration inside the package resolves to a site that
     reports exactly that identity (a swapped reference reports another's), and
     the assignment at the site is a REFERENCE to the declaration, never a
     re-spelled literal (which a value check alone cannot distinguish)."""
 
+    # MEMBERSHIP, both directions. ``>= 6`` against the six below had ZERO
+    # slack today; the danger is not today but the first seventh declaration,
+    # after which any one of the six could be deleted with nothing red. And an
+    # identity is exactly the thing a count cannot watch: swap
+    # ``subprocess-tests`` for ``subprocess-checks`` and six is still six while
+    # every policy naming the old id now resolves to nothing.
+    # AUTHORITY: the package's own declarations, read by _shipped_declarations().
     shipped = _shipped_declarations()
-    assert len(shipped) >= 6, shipped
+    assert set(shipped) == SHIPPED_IDENTITIES, (
+        f"shipped verifier identities are {sorted(shipped)}, pinned "
+        f"{sorted(SHIPPED_IDENTITIES)} — an identity that left breaks every "
+        "policy naming it; one that arrived needs pinning in the same change"
+    )
     for identity, site in sorted(shipped.items()):
         assert _reported_at(site) == identity, (
             f"{site} is declared to report {identity!r} but reports "

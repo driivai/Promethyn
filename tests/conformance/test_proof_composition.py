@@ -194,13 +194,33 @@ def test_a_test_inside_a_class_counts_toward_its_module():
     assert _module_of("tests.conformance.test_x.TestThing") == "tests.conformance.test_x"
 
 
+#: The gaps the manifest deliberately leaves as counts only, pinned by name.
+#: ``_why`` is the section's own explanation and is a member of the mapping.
+LEFT_AS_COUNTS_ONLY = frozenset({
+    "_why",
+    "attestation-proofs",
+    "composed-message-proofs",
+    "prod-fix-1",
+    "prod-fix-2",
+    "substrate-proofs",
+})
+
+
 def test_the_manifest_records_what_it_deliberately_left_alone():
     """A named gap is a passing test (doctrine #5). The steps NOT converted are
     recorded with the reason, so "why isn't this one pinned" has an answer that
     is not silence."""
 
+    # MEMBERSHIP: this is the named-gap list, and WHICH gaps are named is the
+    # whole point of doctrine #5 — "why isn't this one pinned" must have an
+    # answer. ``> 1`` against six permitted four gaps to stop being named,
+    # which is the silence the entry exists to prevent.
     left = MANIFEST_DATA["_left_as_counts_only"]
-    assert len(left) > 1
+    assert set(left) == LEFT_AS_COUNTS_ONLY, (
+        f"the named-gap list is {sorted(left)}, pinned "
+        f"{sorted(LEFT_AS_COUNTS_ONLY)} — a gap that stopped being named is a "
+        "gap that stopped being answered for"
+    )
     for name, reason in left.items():
         if name == "_why":
             continue
