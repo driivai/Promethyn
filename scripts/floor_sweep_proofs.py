@@ -234,10 +234,22 @@ def main() -> int:
             else:
                 substitution = probe([(f, *m) for m in row["substitution"]])
 
-            # SECOND ORDER: delete the assertion, re-apply EXCESS. GREEN means
-            # the assertion carried the property; RED means something else did.
-            second = probe([(f, row["assertion"], "    assert True  # second-order"),
-                            (f, *row["excess"])])
+            # SECOND ORDER: neutralise the assertion, re-apply EXCESS. GREEN
+            # means the assertion carried the property; RED means something
+            # else did, and the runner names which rather than scoring it weak.
+            #
+            # Only the CONDITION is replaced, never the whole line: most of
+            # these asserts carry a multi-line message, so blanking the first
+            # line orphans its continuation and the file stops parsing. The
+            # first version of this probe did exactly that and produced
+            # "(no summary)" on 15 of 21 rows — refused, not scored, which is
+            # why it was visible at all.
+            assertion = row["assertion"]
+            indent = assertion[: len(assertion) - len(assertion.lstrip())]
+            disabled = (f"{indent}assert True, ("
+                        if assertion.rstrip().endswith(", (")
+                        else f"{indent}assert True")
+            second = probe([(f, assertion, disabled), (f, *row["excess"])])
             second = {"CAUGHT": "OTHER-CARRIES", "SURVIVED": "LOAD-BEARING"}.get(second, second)
 
             results.append((row["label"], control, shortfall, excess, substitution, second))
