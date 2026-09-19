@@ -2868,6 +2868,33 @@ meant:
 the bounded table (25 review replies, 3 bodies, 1 comment) plus carriers 30 to
 64, not incremented.
 
+**CARRIER 65, opening #134. 20 of 20 openings, and the remedy was used
+deliberately this time.** Opened with a ONE-LINE PLACEHOLDER body rather than
+the full report — the remedy this entry has prescribed since #113 — so nothing
+of substance sat in a payload CI was always going to refuse, and the rewrite
+was one call rather than a reconstruction. The created body carried the footer
+exactly as predicted, and the refusal names **two** tokens, which is the
+creation-tool fingerprint this entry recorded at carrier 39 rather than the
+one-token author-written shape of #114:
+
+```
+message hygiene passed: pr-title.txt (91 chars), no banned tokens
+message hygiene FAILED: pr-body.txt contains banned token(s) [two named]
+```
+
+Measured rather than assumed from the rate: `pr-text` ran twice on the same
+head — **failure** on the frozen created payload, **success** on the `edited`
+event after the rewrite — which is the two-check split this entry has now
+recorded six times, visible here as two rows of the same name disagreeing
+about one commit. The three `build` jobs hold the frozen OPEN payload and
+`matrix-agreement` skipped behind them; the commit carrying this paragraph is
+the push that clears them, and it carries real content because an empty commit
+is the remedy this repository forbids.
+
+**Running total 65: 42 review replies, 15 bodies, 8 comments**, recounted from
+the bounded table (25 review replies, 3 bodies, 1 comment) plus carriers 30 to
+65, not incremented.
+
 Carrier 64 is the ordinary shape: opened with the full body, read back carrying
 the footer, refused by `check_message_hygiene.py` naming **two** tokens — which
 is the creation-tool fingerprint this entry recorded at carrier 39, not the
